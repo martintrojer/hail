@@ -1,0 +1,26 @@
+# Editor / tool scratch files
+.m-reflow-*.md
+.m-reflow-*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / webapp
+node_modules/
+dist/
+.vite/
+
+# Local env
+.env
+.env.local
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
