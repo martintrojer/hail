@@ -1,0 +1,54 @@
+# Cloudflare Tunnel overlay for the canonical hail Compose stack.
+#
+# This file is an OVERLAY. Apply it on top of deploy/docker-compose.yml:
+#   podman compose -f docker-compose.yml -f docker-compose.cloudflare.yml up -d
+#   docker compose  -f docker-compose.yml -f docker-compose.cloudflare.yml up -d
+#
+# To use only the canonical stack:
+#   podman compose -f docker-compose.yml up -d
+#   docker compose  -f docker-compose.yml up -d
+#
+# This overlay adds a cloudflared service that exposes hail-api through a
+# Cloudflare Tunnel without opening any inbound HTTP ports on the host.
+# The tunnel is the ONLY public web surface; outside hail, your reverse-proxy
+# is on Cloudflare's edge.
+#
+# See ../docs/cloudflare-tunnel.md for both supported recipes:
+#   Recipe A: web-only tunnel with direct SMTP on port 25.
+#   Recipe B: Cloudflare Email Routing plus a custom relay path.
+
+services:
+  hail-api:
+    # Overlay override: do not publish hail-api:8080 on the host. cloudflared
+    # reaches hail-api over the Compose network at http://hail-api:8080.
+    ports: []
+
+  cloudflared:
+    # Required shape uses latest; production operators should pin after testing,
+    # for example: docker.io/cloudflare/cloudflared:2026.5.0
+    image: docker.io/cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      - "TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env (Cloudflare Zero Trust → Networks → Tunnels → create connector, copy token)}"
+    restart: unless-stopped
+    depends_on:
+      hail-api:
+        condition: service_started
+    networks:
+      - default
+
+  # Recipe B optional variant: Cloudflare Email Routing is your public MX.
+  # Uncomment this stalwart override only if you also move inbound SMTP off the
+  # public host ports and have built the custom relay/destination URL described
+  # in ../docs/cloudflare-tunnel.md Recipe B. Compose alone does not create that
+  # relay; Cloudflare Email Routing needs a verified destination or Worker/relay
+  # setup beyond this overlay.
+  #
+  # stalwart:
+  #   # Replace the canonical port list so SMTP/submission 25/465/587 are not
+  #   # public on the host. Cloudflare Email Routing handles MX externally. Keep
+  #   # IMAP 143/993 for direct clients unless you also choose to proxy IMAP
+  #   # through a tunnel.
+  #   ports: !override
+  #     - "143:143"     # IMAP STARTTLS (optional direct clients)
+  #     - "993:993"     # IMAP SSL
