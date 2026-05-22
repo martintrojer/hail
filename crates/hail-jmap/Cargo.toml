@@ -6,3 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+
+[dependencies]
+jmap-client = { version = "0.3", features = ["async", "websockets"] }
+secrecy = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros"] }
+tracing = "0.1"
