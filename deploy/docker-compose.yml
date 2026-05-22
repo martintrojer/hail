@@ -1,0 +1,93 @@
+# hail canonical Compose stack (Stalwart + hail-api + hail-worker)
+#
+# First run:
+#   1. cp .env.example .env
+#   2. Edit .env: generate HAIL_SERVER_KEY with `openssl rand -hex 32`
+#      and set HAIL_PUBLIC_URL to your public hail URL (no trailing slash).
+#   3. Review stalwart.example.toml and hail.example.toml before first boot.
+#   4. Start:  docker compose up -d --build
+#      or:     podman-compose up -d --build
+#
+# Operations:
+#   Logs:  docker compose logs -f
+#          podman-compose logs -f
+#   Stop:  docker compose down
+#          podman-compose down
+#
+# Env file:
+#   Compose reads deploy/.env automatically when commands are run from deploy/.
+#   See deploy/.env.example for required variables.
+#
+# Volume layout:
+#   stalwart-data -> /opt/stalwart   (Stalwart config/state/data)
+#   hail-data     -> /var/lib/hail   (hail SQLite sidecar: hail.db)
+#
+# Reverse proxy users: add a caddy or traefik service in your own override file;
+# docs/reverse-proxy.md covers that and it is intentionally out of scope here.
+# Cloudflare Tunnel users: see docker-compose.cloudflare.yml overlay (separate task).
+
+services:
+  stalwart:
+    # Operators should pin this image to a specific v0.16.x tag after testing.
+    image: docker.io/stalwartlabs/stalwart:latest
+    ports:
+      - "25:25"       # SMTP
+      - "465:465"     # submission SSL
+      - "587:587"     # submission STARTTLS
+      - "143:143"     # IMAP STARTTLS (optional but exposed for other clients)
+      - "993:993"     # IMAP SSL
+    volumes:
+      - stalwart-data:/opt/stalwart
+      # Copy+edit deploy/stalwart.example.toml before first boot; docs/quickstart explains the flow.
+      - ./stalwart.example.toml:/opt/stalwart/etc/config.toml:ro
+    restart: unless-stopped
+    healthcheck:
+      # TODO: replace with an exec-form Stalwart-native probe if the upstream image
+      # exposes one. This uses curl when present and validates JMAP on localhost:8080.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/jmap/.well-known/jmap >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  hail-api:
+    build:
+      context: ..
+      dockerfile: Containerfile
+    image: hail:local
+    depends_on:
+      stalwart:
+        condition: service_started
+    command: ["/usr/local/bin/hail-api"]
+    environment:
+      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
+      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_SERVER__BIND=0.0.0.0:8080
+      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
+      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
+    ports:
+      - "8080:8080"   # SPA + REST + WS (reverse-proxy / CF tunnel terminates TLS upstream)
+    volumes:
+      - hail-data:/var/lib/hail
+      - ./hail.example.toml:/etc/hail/hail.toml:ro
+    restart: unless-stopped
+
+  hail-worker:
+    image: hail:local
+    depends_on:
+      - stalwart
+      - hail-api       # hail-api runs migrations first; worker starts after it.
+    command: ["/usr/local/bin/hail-worker"]
+    environment:
+      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
+      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_SERVER__BIND=0.0.0.0:8080
+      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
+      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
+    volumes:
+      - hail-data:/var/lib/hail   # shared with hail-api (SQLite file)
+    restart: unless-stopped
+
+volumes:
+  stalwart-data: {}
+  hail-data: {}
