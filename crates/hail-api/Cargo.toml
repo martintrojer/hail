@@ -7,5 +7,40 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# When enabled, serves a Redoc HTML UI at /api/docs. Off by default so
+# production builds don't ship the Redoc bundle. See main.rs for the
+# rationale (size + minimal attack surface). The OpenAPI JSON spec at
+# /api/openapi.json is always served regardless of this flag.
+default = []
+dev-docs = ["dep:utoipa-redoc"]
+
 [dependencies]
 hail-core = { path = "../hail-core" }
+hail-db = { path = "../hail-db" }
+
+# Runtime + HTTP plumbing. Versions mirror hail-worker so the workspace
+# stays on a single set of tokio/axum/tower-http versions.
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+
+# Observability + serde.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# OpenAPI generation. `utoipa-axum` lets us use `OpenApiRouter` so each
+# `#[utoipa::path]` handler auto-registers its spec when mounted.
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+utoipa-redoc = { version = "6", features = ["axum"], optional = true }
+
+# Errors.
+anyhow = "1"
+thiserror = "2"
+
+# Re-exported here only so `AppState` can hold a `SqlitePool` directly.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
