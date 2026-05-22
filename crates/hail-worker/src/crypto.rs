@@ -1,15 +1,12 @@
-//! Temporary local crypto adapter.
+//! Local crypto adapter for the worker.
 //!
-//! `hail-core::crypto::open` is being built in parallel by the
-//! `auth-login` task (worker-1). To unblock this task we define a thin
-//! trait so the per-user supervisor can decrypt the session's
-//! `jmap_token_enc` blob via dependency injection — the production
-//! adapter and the test fake share one shape.
-//!
-//! TODO: swap [`HailCoreOpener`] for `hail_core::crypto::open` once the
-//! auth-login wave merges, and delete this module.
+//! The actual AES-256-GCM primitive lives in [`hail_core::crypto`]
+//! (shipped by the auth-login wave). This module is a thin adapter
+//! that wraps it behind a [`TokenDecryptor`] trait so the per-user
+//! supervisor can inject a fake in tests and the real opener in prod.
 
-use secrecy::SecretString;
+use hail_core::crypto::{self, KEY_LEN};
+use secrecy::{ExposeSecret, SecretString};
 
 /// Outcome of attempting to decrypt a JMAP token blob.
 ///
@@ -39,43 +36,53 @@ pub trait TokenDecryptor: Send + Sync {
     fn decrypt(&self, enc: &[u8]) -> Result<SecretString, DecryptError>;
 }
 
-/// Production adapter that will delegate to `hail_core::crypto::open`
-/// once auth-login lands. For now it panics on use, so any code that
-/// actually opens a JMAP session in a non-test context will surface a
-/// loud failure instead of a silent misroute. Tests inject a fake
-/// decryptor; the top-level supervisor wires this real one.
+/// Production adapter. Delegates to [`hail_core::crypto::open`] using
+/// a server key parsed at construction.
 pub struct HailCoreOpener {
-    /// Server key from `Config::secrets.server_key`. Retained for the
-    /// future call to `hail_core::crypto::open`.
-    _server_key: SecretString,
+    server_key: [u8; KEY_LEN],
 }
 
 impl HailCoreOpener {
     /// Construct an opener bound to the given server key material.
-    #[must_use]
-    pub fn new(server_key: SecretString) -> Self {
-        Self {
-            _server_key: server_key,
-        }
+    /// The key is parsed via [`hail_core::crypto::parse_server_key`]
+    /// (accepts 64-char hex or ≥32 raw bytes).
+    pub fn new(server_key: SecretString) -> Result<Self, hail_core::crypto::CryptoError> {
+        let key = crypto::parse_server_key(&server_key)?;
+        Ok(Self { server_key: key })
+    }
+}
+
+impl Drop for HailCoreOpener {
+    fn drop(&mut self) {
+        // Zero the in-memory key on drop. The `aes-gcm` crate already
+        // zeroizes its internal state; this is belt-and-suspenders for
+        // our own copy.
+        self.server_key.fill(0);
     }
 }
 
 impl TokenDecryptor for HailCoreOpener {
-    fn decrypt(&self, _enc: &[u8]) -> Result<SecretString, DecryptError> {
-        // Smoke-test / dev escape hatch: when `HAIL_INSECURE_DECRYPT=1`
-        // is set we hand back an empty bearer token. This lets the
-        // SIGINT-graceful-shutdown smoke test exercise the full
-        // per-user supervisor path (including the JMAP connect await)
-        // without depending on auth-login. NEVER set this in prod.
-        if std::env::var("HAIL_INSECURE_DECRYPT").as_deref() == Ok("1") {
-            return Ok(SecretString::from(String::new()));
+    fn decrypt(&self, enc: &[u8]) -> Result<SecretString, DecryptError> {
+        match crypto::open(enc, &self.server_key) {
+            Ok(plaintext) => match String::from_utf8(plaintext) {
+                Ok(s) => Ok(SecretString::from(s)),
+                Err(_) => Err(DecryptError::Malformed("plaintext is not valid utf-8")),
+            },
+            Err(crypto::CryptoError::Malformed) => {
+                Err(DecryptError::Malformed("ciphertext too short or malformed"))
+            }
+            Err(crypto::CryptoError::Decrypt) => Err(DecryptError::AuthFailed),
+            Err(crypto::CryptoError::InvalidKey(_)) | Err(crypto::CryptoError::Rng) => {
+                // Key was validated at construction and we don't generate
+                // a nonce here; reaching either branch means an internal
+                // invariant broke. Surface as AuthFailed.
+                Err(DecryptError::AuthFailed)
+            }
         }
-        // TODO: replace with `hail_core::crypto::open(self._server_key, enc)`
-        // once the auth-login wave lands. Until then a per-user
-        // supervisor that reaches this point fails fast.
-        todo!(
-            "hail_core::crypto::open is not yet on main; \
-             waiting on the auth-login task"
-        )
     }
 }
+
+// Silence dead_code warning on ExposeSecret import (used transitively via parse_server_key).
+const _: fn(&SecretString) = |s| {
+    let _ = s.expose_secret();
+};

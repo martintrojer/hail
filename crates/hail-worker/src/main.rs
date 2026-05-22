@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     let token_decryptor: Arc<dyn crypto::TokenDecryptor> =
         Arc::new(crypto::HailCoreOpener::new(
             config.secrets.server_key.clone(),
-        ));
+        )?);
     let state = Arc::new(AppState {
         db,
         config,
