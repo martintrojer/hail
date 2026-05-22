@@ -5,5 +5,7 @@
 //! grow.
 
 pub mod config;
+pub mod crypto;
 
 pub use config::{AdminConfig, Config, ConfigError, SecretsConfig, ServerConfig, StalwartConfig};
+pub use crypto::{CryptoError, KEY_LEN, NONCE_LEN, TAG_LEN, open, parse_server_key, seal};

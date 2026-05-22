@@ -14,5 +14,18 @@ secrecy = { version = "0.10", features = ["serde"] }
 thiserror = "2"
 url = { version = "2", features = ["serde"] }
 
+# DD-8: AES-256-GCM for wrapping JMAP tokens at rest. Pinned to 0.10
+# (latest stable line; uses the typed nonce API and `aead` 0.5).
+aes-gcm = "0.10"
+# Hex decode of the operator-provided server key + nonce-prefixed
+# ciphertexts in unit tests / fixtures.
+hex = "0.4"
+# CSPRNG for nonces. We use the OS RNG via `OsRng` so we don't have to
+# thread a seed through callers.
+rand = "0.9"
+# Constant-time byte comparisons (re-exported so downstream crates can
+# borrow the same version without separately depending on `subtle`).
+subtle = "2"
+
 [dev-dependencies]
 tempfile = "3"

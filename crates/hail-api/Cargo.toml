@@ -14,16 +14,24 @@ authors.workspace = true
 # /api/openapi.json is always served regardless of this flag.
 default = []
 dev-docs = ["dep:utoipa-redoc"]
+# Mount the `routes::test_stub` module (one 204-on-reach POST endpoint
+# behind the auth middleware). Used by `tests/auth.rs` to verify the
+# CSRF gate without coupling the test to a real downstream verb. The
+# production binary never enables this feature, and `main.rs` passes
+# `include_test_stubs=false` regardless.
+__test-stubs = []
 
 [dependencies]
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
+hail-jmap = { path = "../hail-jmap" }
 
 # Runtime + HTTP plumbing. Versions mirror hail-worker so the workspace
 # stays on a single set of tokio/axum/tower-http versions.
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 
 # Observability + serde.
@@ -43,4 +51,21 @@ anyhow = "1"
 thiserror = "2"
 
 # Re-exported here only so `AppState` can hold a `SqlitePool` directly.
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
+
+# Auth + cookies + crypto plumbing.
+secrecy = "0.10"
+rand = "0.9"
+hex = "0.4"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+subtle = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# Pull ourselves back in with the test-stub feature on. This is the
+# standard pattern for unblocking integration tests that need a
+# behind-the-firewall debug endpoint.
+hail-api = { path = ".", features = ["__test-stubs"] }
