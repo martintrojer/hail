@@ -1,0 +1,181 @@
+//! Integration tests for `hail_core::Config`.
+//!
+//! These tests mutate process env vars (a global). Cargo runs tests inside
+//! a single binary in parallel, so every test acquires `ENV_LOCK` first to
+//! serialize access. Without it, one test's `clear_hail_env` races another
+//! test's `set_var` and both see arbitrary state.
+
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+fn env_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    // Recover from poisoned mutex — a panicked test still left the env in a
+    // state we'll clean up at the top of the next test.
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+use hail_core::{Config, ConfigError};
+use secrecy::ExposeSecret;
+
+/// Clear every `HAIL_*` env var so prior tests / the host shell don't bleed
+/// into the current run. `remove_var` is `unsafe` on edition 2024 because
+/// concurrent access is UB; we accept the precondition (serial tests).
+fn clear_hail_env() {
+    let keys: Vec<String> = std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| k.starts_with("HAIL_"))
+        .collect();
+    for k in keys {
+        // SAFETY: serial single-thread test execution within this binary.
+        unsafe {
+            std::env::remove_var(&k);
+        }
+    }
+}
+
+/// Write a TOML to a temp file and return both the tempdir guard (so it
+/// outlives the test) and the path.
+fn write_toml(body: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("hail.toml");
+    fs::write(&path, body).expect("write toml");
+    (dir, path)
+}
+
+const VALID_KEY_HEX: &str =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; // 64 hex chars = 32 bytes
+
+const FULL_TOML: &str = r#"
+database_url = "sqlite::memory:"
+
+[stalwart]
+jmap_url = "http://stalwart.local:8080"
+management_url = "http://stalwart.local:8080/manage"
+
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://hail.test"
+
+[admin]
+email = "ops@hail.test"
+password_hash = "$argon2id$v=19$m=65536,t=3,p=1$abc$def"
+display_name = "Ops"
+
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+
+#[test]
+fn loads_full_toml_fields() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let (_dir, path) = write_toml(FULL_TOML);
+    let cfg = Config::load_from(Some(&path)).expect("load");
+
+    assert_eq!(cfg.database_url, "sqlite::memory:");
+    assert_eq!(cfg.stalwart.jmap_url, "http://stalwart.local:8080");
+    assert_eq!(
+        cfg.stalwart.management_url.as_deref(),
+        Some("http://stalwart.local:8080/manage")
+    );
+    assert_eq!(cfg.server.bind, "0.0.0.0:8080");
+    assert_eq!(cfg.server.public_url, "https://hail.test");
+
+    let admin = cfg.admin.as_ref().expect("[admin] present");
+    assert_eq!(admin.email, "ops@hail.test");
+    assert_eq!(admin.display_name.as_deref(), Some("Ops"));
+
+    assert_eq!(cfg.secrets.server_key.expose_secret(), VALID_KEY_HEX);
+}
+
+#[test]
+fn env_overrides_toml() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let override_key: &str =
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    // SAFETY: serial single-thread test execution.
+    unsafe {
+        std::env::set_var("HAIL_SECRETS__SERVER_KEY", override_key);
+        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://override:9999");
+    }
+    let (_dir, path) = write_toml(FULL_TOML);
+    let cfg = Config::load_from(Some(&path)).expect("load");
+
+    assert_eq!(cfg.secrets.server_key.expose_secret(), override_key);
+    assert_eq!(cfg.stalwart.jmap_url, "http://override:9999");
+    // Unrelated fields still come from TOML.
+    assert_eq!(cfg.server.bind, "0.0.0.0:8080");
+
+    clear_hail_env();
+}
+
+#[test]
+fn missing_server_key_errors_clearly() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = ""
+"#;
+    let (_dir, path) = write_toml(toml);
+    let err = Config::load_from(Some(&path)).expect_err("must reject empty key");
+    match err {
+        ConfigError::InvalidServerKey(msg) => {
+            assert!(
+                msg.contains("empty") || msg.contains("HAIL_SECRETS__SERVER_KEY"),
+                "expected guidance message, got: {msg}"
+            );
+        }
+        other => panic!("expected InvalidServerKey, got {other:?}"),
+    }
+}
+
+#[test]
+fn short_server_key_errors_with_byte_count() {
+    let _guard = env_lock();
+    clear_hail_env();
+    // 30 hex chars = 15 bytes — well below the 32-byte minimum.
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcd"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let err = Config::load_from(Some(&path)).expect_err("must reject short key");
+    assert!(matches!(err, ConfigError::InvalidServerKey(_)));
+}
+
+#[test]
+fn admin_block_optional() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let cfg = Config::load_from(Some(&path)).expect("load");
+    assert!(cfg.admin.is_none(), "no [admin] block => Config.admin == None");
+}

@@ -2,12 +2,11 @@
 //!
 //! Per design.md §8.2, `AppState` is wrapped in `Arc` and handed to every
 //! task (supervisor, scheduler, per-user EventSource streams). It owns the
-//! SQLite pool and the parsed `Config`. Per-user JMAP client caches will
+//! SQLite pool and the parsed [`Config`]. Per-user JMAP client caches will
 //! land here in the `jmap-eventsource` task.
 
+use hail_core::Config;
 use sqlx::SqlitePool;
-
-use crate::config::Config;
 
 /// Process-wide shared state. Cheap to clone via `Arc`.
 //
@@ -18,6 +17,6 @@ use crate::config::Config;
 pub struct AppState {
     /// SQLx pool against the hail sidecar database.
     pub db: SqlitePool,
-    /// Worker configuration loaded from the environment.
+    /// Worker configuration loaded from TOML + env.
     pub config: Config,
 }

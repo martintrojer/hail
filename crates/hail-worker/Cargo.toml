@@ -8,6 +8,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
 # hail-jmap is currently an empty crate; wired in now so future tasks (jmap-eventsource)
 # don't need to touch Cargo.toml. Verified to compile via `cargo check -p hail-jmap`.

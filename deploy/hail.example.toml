@@ -1,0 +1,63 @@
+# hail — operator configuration (example).
+#
+# This file is read by both `hail-api` and `hail-worker` on startup via the
+# unified `hail_core::Config::load()` loader (see crates/hail-core/src/config.rs).
+#
+# Discovery order:
+#   1. `$HAIL_CONFIG` if set and the file exists
+#   2. /etc/hail/hail.toml  (the canonical container path)
+#   3. ./hail.toml          (dev fallback)
+#
+# Every field below can be overridden by an environment variable prefixed
+# with `HAIL_`. Nested fields use a DOUBLE UNDERSCORE as separator:
+#
+#   database_url            ->  HAIL_DATABASE_URL
+#   stalwart.jmap_url       ->  HAIL_STALWART__JMAP_URL
+#   server.bind             ->  HAIL_SERVER__BIND
+#   secrets.server_key      ->  HAIL_SECRETS__SERVER_KEY   (preferred in prod)
+#
+# Env wins over TOML, so secrets can live outside the config file.
+
+# --- Sidecar database -------------------------------------------------------
+# sqlx URL for the SQLite sidecar. WAL mode + the rest of hail's pragmas are
+# applied in code (see `hail_db::connect`). For Docker Compose, point this at
+# the mounted volume.
+database_url = "sqlite:///var/lib/hail/hail.db"
+
+# --- Stalwart endpoints -----------------------------------------------------
+[stalwart]
+# JMAP HTTP endpoint. In Compose this is the service name + JMAP port.
+jmap_url = "http://stalwart:8080"
+# Stalwart management API. Optional — only used by admin surfaces.
+# management_url = "http://stalwart:8080/manage"
+
+# --- HTTP server (hail-api) -------------------------------------------------
+# hail-worker parses this section too (so a single TOML serves both bins) but
+# only `bind` and `public_url` are actually used by the API.
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://hail.example.com"
+
+# --- Admin (OPTIONAL) -------------------------------------------------------
+# Set this block to pre-provision the admin user from config (DD-9 in design.md).
+# DELETE THIS BLOCK to enable the first-run wizard at /setup instead.
+#
+# `password_hash` is an argon2 hash — never a plaintext password. Generate with:
+#   argon2 "$(pwgen -s 32 1)" -e -id -t 3 -m 16 -p 1
+# or set it out-of-band via HAIL_ADMIN__PASSWORD_HASH.
+#
+# [admin]
+# email = "you@example.com"
+# password_hash = "$argon2id$v=19$m=65536,t=3,p=1$...$..."
+# display_name = "Operator"
+
+# --- Secrets ----------------------------------------------------------------
+# AES-GCM key used to wrap JMAP tokens at rest (DD-8). Must decode to ≥ 32
+# bytes; hex encoding from `openssl rand -hex 32` is recommended.
+#
+# RECOMMENDED: leave this commented out in TOML and set the env var instead,
+# so the key isn't checked into the same file the rest of the deployment lives in:
+#   export HAIL_SECRETS__SERVER_KEY="$(openssl rand -hex 32)"
+#
+[secrets]
+# server_key = "REPLACE_ME_WITH_64_HEX_CHARS"  # set via HAIL_SECRETS__SERVER_KEY in prod

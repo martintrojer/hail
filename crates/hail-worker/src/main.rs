@@ -1,35 +1,34 @@
 //! `hail-worker` — tokio process for JMAP push consumption and scheduled jobs.
 //!
-//! This is the *skeleton*: runtime bootstrap, logging, sqlx pool, migrations,
-//! a placeholder supervisor task, and graceful shutdown on SIGINT/SIGTERM.
-//! JMAP EventSource subscriptions and screener routing arrive in follow-up
-//! tasks (`jmap-eventsource`, `screener-routing`).
+//! Skeleton: runtime bootstrap, logging, unified config (`hail_core::Config`),
+//! sqlx pool, migrations, a placeholder supervisor task, and graceful shutdown
+//! on SIGINT/SIGTERM. JMAP EventSource subscriptions and screener routing
+//! arrive in follow-up tasks (`jmap-eventsource`, `screener-routing`).
 
-mod config;
 mod state;
 mod supervisor;
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use hail_core::Config;
 use tokio::signal;
 use tokio::signal::unix::{SignalKind, signal as unix_signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Config;
 use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
 
-    let config = Config::from_env();
+    let config = Config::load().context("loading hail config (TOML + env)")?;
     info!(
         database_url = %config.database_url,
-        stalwart_url = %config.stalwart_url,
-        tick_secs = config.tick_secs,
+        stalwart_url = %config.stalwart.jmap_url,
+        bind = %config.server.bind,
         "hail-worker starting"
     );
 
