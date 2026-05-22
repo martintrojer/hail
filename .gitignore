@@ -24,3 +24,8 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+
+# tsc -b emits these adjacent to .ts files at config-level; webapp/vite-env.d.ts is hand-written and kept.
+*.tsbuildinfo
+webapp/vite.config.d.ts
+webapp/eslint.config.d.ts
