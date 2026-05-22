@@ -5,8 +5,12 @@
 //! on SIGINT/SIGTERM. JMAP EventSource subscriptions and screener routing
 //! arrive in follow-up tasks (`jmap-eventsource`, `screener-routing`).
 
+mod backoff;
+mod changes;
+mod crypto;
 mod state;
 mod supervisor;
+mod user;
 
 use std::sync::Arc;
 
@@ -40,7 +44,15 @@ async fn main() -> Result<()> {
         .context("running hail-db migrations")?;
     info!("db ready");
 
-    let state = Arc::new(AppState { db, config });
+    let token_decryptor: Arc<dyn crypto::TokenDecryptor> =
+        Arc::new(crypto::HailCoreOpener::new(
+            config.secrets.server_key.clone(),
+        ));
+    let state = Arc::new(AppState {
+        db,
+        config,
+        token_decryptor,
+    });
     let cancel = CancellationToken::new();
 
     // Placeholder supervisor — real subscription/scheduler logic lands later.
