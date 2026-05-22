@@ -1,0 +1,8 @@
+[package]
+name = "hail-core"
+description = "Domain types shared between hail-api and hail-worker."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true

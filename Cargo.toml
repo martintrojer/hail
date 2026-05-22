@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hail-core",
+    "crates/hail-db",
+    "crates/hail-jmap",
+    "crates/hail-api",
+    "crates/hail-worker",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/martintrojer/hail"
+authors = ["Martin Trojer <martin.trojer@gmail.com>"]

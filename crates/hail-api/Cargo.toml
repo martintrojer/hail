@@ -1,0 +1,8 @@
+[package]
+name = "hail-api"
+description = "Axum HTTP server: REST + WebSocket + SPA serving."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
