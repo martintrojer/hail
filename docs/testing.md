@@ -84,6 +84,86 @@ podman rm --force hail-stalwart-manual
 rm -rf "$root"
 ```
 
+## Local mail testbed
+
+`scripts/local-mail-testbed.sh` is the repeatable local/direct mail smoke
+harness. It targets Stalwart + hail on loopback only; it does not require
+Cloudflare, public DNS, or privileged host port 25.
+
+Dry-run the harness without containers:
+
+```bash
+scripts/local-mail-testbed.sh --dry-run
+```
+
+The dry-run validates the fixture import plan and prints the expected checks. A
+real run:
+
+1. builds `hail:local`;
+2. starts `scripts/local-mail-testbed.compose.yml` with the first available
+   compose provider (`podman compose`, `podman-compose`, then `docker compose`)
+   and a minimal loopback Stalwart config from
+   `scripts/local-stalwart-testbed.toml`;
+3. waits for Stalwart JMAP and hail API health;
+4. imports these synthetic inbound messages with JMAP `Email/import`:
+   - `personal-simple.eml`;
+   - `newsletter-tracking-pixel.eml`;
+   - `receipt-papertrail.eml`.
+
+```bash
+scripts/local-mail-testbed.sh
+```
+
+Useful URLs/checks once the stack is running:
+
+```bash
+curl -fsS http://127.0.0.1:18080/.well-known/jmap
+curl -fsS http://127.0.0.1:18081/api/health
+# Browser: http://127.0.0.1:18081
+```
+
+### Current provisioning blocker
+
+Automatic Stalwart domain/user provisioning is still intentionally blocked on
+pinning Stalwart's management API/auth bootstrap flow. The script starts the
+stack and then fails clearly before import if `HAIL_TESTBED_PASSWORD` is absent.
+It does **not** claim successful end-to-end mail injection until a real mailbox
+exists.
+
+Manual path for now:
+
+1. start the testbed:
+   ```bash
+   scripts/local-mail-testbed.sh
+   ```
+2. create domain `hail.test` and mailbox `alice@hail.test` in Stalwart's
+   WebUI/admin surface (or with the Stalwart CLI for the pinned image);
+3. rerun import against the existing stack:
+   ```bash
+   HAIL_TESTBED_PASSWORD='<password>' scripts/local-mail-testbed.sh --no-build
+   ```
+
+Override defaults when needed:
+
+```bash
+HAIL_TESTBED_EMAIL='alice@hail.test' \
+HAIL_TESTBED_PASSWORD='<password>' \
+HAIL_TESTBED_JMAP_URL='http://127.0.0.1:18080' \
+HAIL_TESTBED_HAIL_URL='http://127.0.0.1:18081' \
+  scripts/local-mail-testbed.sh --no-build
+```
+
+The corresponding gated Rust test exercises fixture loading by default and real
+JMAP import only when explicitly enabled:
+
+```bash
+cargo test -p hail-test --test local_mail_testbed
+
+HAIL_RUN_LOCAL_MAIL_TESTBED=1 \
+HAIL_TESTBED_PASSWORD='<password>' \
+  cargo test -p hail-test --test local_mail_testbed -- --nocapture
+```
+
 ## Provisioning TODO
 
 The next harness step is to replace the explicit placeholder with real
