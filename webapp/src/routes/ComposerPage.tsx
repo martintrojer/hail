@@ -48,9 +48,18 @@ function splitAddresses(value: string) {
   return value.split(/[;,]/).map((address) => address.trim()).filter(Boolean);
 }
 
-function toIsoDateTimeLocal(value: string) {
+function toFutureIsoDateTimeLocal(value: string, now = new Date()) {
   const date = new Date(value);
-  return value && !Number.isNaN(date.valueOf()) ? date.toISOString() : undefined;
+  if (!value || Number.isNaN(date.valueOf()) || date <= now) {
+    return undefined;
+  }
+  return date.toISOString();
+}
+
+function minSendAtDateTimeLocal(now = new Date()) {
+  const soon = new Date(now.getTime() + 60_000);
+  const offsetMs = soon.getTimezoneOffset() * 60_000;
+  return new Date(soon.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 function fileSizeLabel(size: number) {
@@ -71,6 +80,7 @@ function apiErrorMessage(error: unknown, fallback: string) {
   if (code === 'attachments_not_supported') {
     return 'Attachments are selected, but this server does not support sending attachments yet. Remove them and try again.';
   }
+  if (code === 'invalid_send_at') return 'Choose a future send-later time.';
   if (code.includes('recipient') || code.includes('to')) return 'Check recipient addresses and try again.';
   if (code.includes('subject')) return 'Check the subject and try again.';
   if (code.includes('body')) return 'Write a message body and try again.';
@@ -101,6 +111,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   const [sendError, setSendError] = useState<string | null>(null);
   const snapshotRef = useRef('');
 
+  const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
   const createDraft = useCreateDraftMutation(client);
   const updateDraft = useUpdateDraftMutation(client);
   const hasUnsupportedAttachments = attachments.length > 0;
@@ -205,9 +216,9 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   }
 
   function sendLater() {
-    const sendAt = toIsoDateTimeLocal(form.sendAt);
+    const sendAt = toFutureIsoDateTimeLocal(form.sendAt);
     if (!sendAt) {
-      setSendError('Choose a valid future send-later time.');
+      setSendError('Choose a future send-later time.');
       return;
     }
     send(buildComposeRequest(sendAt));
@@ -266,7 +277,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
                 <input id="compose-attachments" type="file" multiple onChange={onAttachmentsChange} className="mt-2 w-full rounded-lg border border-dashed border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-100 hover:border-slate-600" />
               </Field>
               <Field id="compose-send-at" label="Send later">
-                <input id="compose-send-at" type="datetime-local" value={form.sendAt} onChange={(event) => updateField('sendAt', event.target.value)} className={`mt-2 w-full ${inputClass}`} />
+                <input id="compose-send-at" type="datetime-local" value={form.sendAt} min={minSendAt} onChange={(event) => updateField('sendAt', event.target.value)} className={`mt-2 w-full ${inputClass}`} />
               </Field>
             </div>
 

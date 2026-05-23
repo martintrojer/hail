@@ -328,6 +328,62 @@ async fn compose_send_later_inserts_pending_row_without_submit() {
 }
 
 #[tokio::test]
+async fn compose_rejects_non_future_send_at_without_creating_draft() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    let send_at = Utc::now() - Duration::minutes(1);
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(compose_body(Some(send_at))),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_send_at");
+    assert!(composer.calls().is_empty());
+
+    let scheduled_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduled_sends")
+        .fetch_one(&state.db)
+        .await
+        .expect("scheduled count");
+    assert_eq!(scheduled_count, 0);
+}
+
+#[tokio::test]
+async fn reply_rejects_non_future_send_at_before_thread_lookup() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    let send_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/threads/thread-1/reply",
+        Some(&sid),
+        true,
+        Some(format!(
+            r#"{{"body_markdown":"Reply body","send_at":"{send_at}"}}"#
+        )),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_send_at");
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
 async fn compose_rejects_invalid_recipient() {
     let (state, key) = fixture_state().await;
     let sid = seed_session(&state, &key, "alice@example.org").await;

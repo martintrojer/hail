@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { fireEvent } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -39,6 +38,13 @@ class ComposerPageTestClient extends HailApiClient {
 
   override async sendCompose(body: ComposeRequest): Promise<ComposeResponse> {
     this.sendComposeCalls.push(body);
+    if (body.send_at) {
+      return {
+        status: 'pending',
+        scheduled_send_id: 1,
+        draft_email_id: 'draft-1',
+      };
+    }
     return {
       status: 'sent',
       email_id: 'email-1',
@@ -137,6 +143,11 @@ function selectAttachment() {
   });
 }
 
+function dateTimeLocalValue(date: Date) {
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
 describe('ComposerPage', () => {
   it('blocks sending while attachments are selected', async () => {
     const client = renderComposer();
@@ -157,7 +168,7 @@ describe('ComposerPage', () => {
     const client = renderComposer();
     await fillSendableFields();
     fireEvent.change(screen.getByLabelText('Send later'), {
-      target: { value: '2026-06-01T09:30' },
+      target: { value: dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)) },
     });
     selectAttachment();
 
@@ -189,5 +200,34 @@ describe('ComposerPage', () => {
       body_markdown: 'Report attached.',
       attachments: [],
     });
+  });
+
+  it('rejects stale send-later datetimes before calling the API', async () => {
+    const client = renderComposer();
+    await fillSendableFields();
+    fireEvent.change(screen.getByLabelText('Send later'), {
+      target: { value: '2000-01-01T00:00' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send later' }));
+
+    expect(await screen.findByText('Choose a future send-later time.')).toBeInTheDocument();
+    expect(client.sendComposeCalls).toHaveLength(0);
+  });
+
+  it('sends an ISO send_at when the datetime is future', async () => {
+    const sendAtValue = dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000));
+    const client = renderComposer();
+    await fillSendableFields();
+    fireEvent.change(screen.getByLabelText('Send later'), {
+      target: { value: sendAtValue },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send later' }));
+
+    await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
+    expect(client.sendComposeCalls[0]?.send_at).toBe(
+      new Date(sendAtValue).toISOString(),
+    );
   });
 });

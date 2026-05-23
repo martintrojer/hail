@@ -309,7 +309,10 @@ where
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
     };
-    let send_at = payload.send_at;
+    let send_at = match validate_send_at(payload.send_at) {
+        Ok(send_at) => send_at,
+        Err(error) => return bad_request(error),
+    };
     let message = match payload.into_message(None) {
         Ok(message) => message,
         Err(error) => return bad_request(error),
@@ -333,6 +336,10 @@ where
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
     };
+    let send_at = match validate_send_at(payload.send_at) {
+        Ok(send_at) => send_at,
+        Err(error) => return bad_request(error),
+    };
     let context = match composer
         .thread_context(&state, user.jmap_token.clone(), &thread_id)
         .await
@@ -341,7 +348,6 @@ where
         Ok(None) => return not_found(),
         Err(ComposeError::Provider(err)) => return provider_failed(user.id, err),
     };
-    let send_at = payload.send_at;
     let message = match payload.into_message(context) {
         Ok(message) => message,
         Err(error) => return bad_request(error),
@@ -359,7 +365,6 @@ async fn create_and_maybe_send<C>(
 where
     C: Composer,
 {
-    let schedule = send_at.filter(|at| *at > Utc::now());
     let draft_email_id = match composer
         .create_draft(state, user.jmap_token.clone(), &user.email, message)
         .await
@@ -367,7 +372,7 @@ where
         Ok(id) => id,
         Err(ComposeError::Provider(err)) => return provider_failed(user.id, err),
     };
-    if let Some(send_at) = schedule {
+    if let Some(send_at) = send_at {
         let scheduled_send_id =
             match insert_scheduled_send(state, user.id, &draft_email_id, send_at).await {
                 Ok(id) => id,
@@ -474,6 +479,13 @@ impl ReplyPayload {
                 references: context.references,
             }),
         })
+    }
+}
+
+fn validate_send_at(send_at: Option<DateTime<Utc>>) -> Result<Option<DateTime<Utc>>, &'static str> {
+    match send_at {
+        Some(send_at) if send_at <= Utc::now() => Err("invalid_send_at"),
+        other => Ok(other),
     }
 }
 
