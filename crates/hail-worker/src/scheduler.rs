@@ -23,10 +23,11 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use serde_json::json;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
-use crate::app_events::{WorkerAppEvent, publish_app_event};
+use crate::app_events::{WorkerAppEvent, publish_app_event, publish_app_event_payload};
 
 const STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS: i64 = 60 * 60;
 const STALE_SCHEDULED_SEND_CLAIM_ERROR: &str = "scheduled send processing claim is stale or missing claimed_at; submission state unknown; manual review required";
@@ -130,8 +131,28 @@ pub async fn process_due_scheduled_sends(
                 .with_context(|| format!("mark scheduled_send {} sent", row.id))?;
                 if result.rows_affected() > 0 {
                     sent += 1;
-                    if let Err(err) =
-                        publish_app_event(db, row.user_id, WorkerAppEvent::SendCompleted).await
+                    record_scheduled_send_audit(
+                        db,
+                        row.user_id,
+                        "compose.send_later.sent",
+                        json!({
+                            "scheduled_send_id": row.id,
+                            "draft_email_id": row.draft_email_id,
+                            "submission_id": submission_id,
+                            "sent_at": now_s,
+                        }),
+                    )
+                    .await;
+                    if let Err(err) = publish_app_event_payload(
+                        db,
+                        row.user_id,
+                        WorkerAppEvent::SendCompleted,
+                        json!({
+                            "scheduled_send_id": row.id,
+                            "draft_email_id": row.draft_email_id,
+                        }),
+                    )
+                    .await
                     {
                         warn!(
                             scheduled_send_id = row.id,
@@ -182,8 +203,28 @@ pub async fn process_due_scheduled_sends(
                 .await
                 .with_context(|| format!("mark scheduled_send {} failed", row.id))?;
                 if result.rows_affected() > 0 {
-                    if let Err(err) =
-                        publish_app_event(db, row.user_id, WorkerAppEvent::SendFailed).await
+                    record_scheduled_send_audit(
+                        db,
+                        row.user_id,
+                        "compose.send_later.failed",
+                        json!({
+                            "scheduled_send_id": row.id,
+                            "draft_email_id": row.draft_email_id,
+                            "error": message,
+                        }),
+                    )
+                    .await;
+                    if let Err(err) = publish_app_event_payload(
+                        db,
+                        row.user_id,
+                        WorkerAppEvent::SendFailed,
+                        json!({
+                            "scheduled_send_id": row.id,
+                            "draft_email_id": row.draft_email_id,
+                            "error": message,
+                        }),
+                    )
+                    .await
                     {
                         warn!(
                             scheduled_send_id = row.id,
@@ -207,20 +248,92 @@ pub async fn process_due_scheduled_sends(
     Ok(sent)
 }
 
-async fn recover_stale_scheduled_send_claims(db: &SqlitePool, now: DateTime<Utc>) -> Result<()> {
-    let cutoff = (now - Duration::seconds(STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS)).to_rfc3339();
-    let result = sqlx::query(
-        "UPDATE scheduled_sends \
-         SET status = 'failed', error = ? \
-         WHERE status = 'processing' AND (claimed_at IS NULL OR claimed_at <= ?)",
+async fn record_scheduled_send_audit(
+    db: &SqlitePool,
+    user_id: i64,
+    action: &str,
+    payload: serde_json::Value,
+) {
+    let payload_json = payload.to_string();
+    let now = Utc::now().to_rfc3339();
+    if let Err(err) = sqlx::query(
+        "INSERT INTO audit_log (user_id, action, payload_json, created_at) \
+         VALUES (?1, ?2, ?3, ?4)",
     )
-    .bind(STALE_SCHEDULED_SEND_CLAIM_ERROR)
-    .bind(&cutoff)
+    .bind(user_id)
+    .bind(action)
+    .bind(payload_json)
+    .bind(now)
     .execute(db)
     .await
-    .context("recover stale scheduled_send processing claims")?;
+    {
+        warn!(user_id, action, error = %err, "audit log write failed");
+    }
+}
 
-    let recovered = result.rows_affected();
+async fn recover_stale_scheduled_send_claims(db: &SqlitePool, now: DateTime<Utc>) -> Result<()> {
+    let cutoff = (now - Duration::seconds(STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS)).to_rfc3339();
+    let stale_rows = sqlx::query_as::<_, (i64, i64, String)>(
+        "SELECT id, user_id, draft_email_id \
+         FROM scheduled_sends \
+         WHERE status = 'processing' AND (claimed_at IS NULL OR claimed_at <= ?) \
+         ORDER BY id ASC",
+    )
+    .bind(&cutoff)
+    .fetch_all(db)
+    .await
+    .context("select stale scheduled_send processing claims")?;
+
+    let mut recovered = 0_u64;
+    for (id, user_id, draft_email_id) in stale_rows {
+        let result = sqlx::query(
+            "UPDATE scheduled_sends \
+             SET status = 'failed', error = ? \
+             WHERE id = ? AND status = 'processing' AND (claimed_at IS NULL OR claimed_at <= ?)",
+        )
+        .bind(STALE_SCHEDULED_SEND_CLAIM_ERROR)
+        .bind(id)
+        .bind(&cutoff)
+        .execute(db)
+        .await
+        .with_context(|| format!("recover stale scheduled_send {id} processing claim"))?;
+
+        if result.rows_affected() == 0 {
+            continue;
+        }
+        recovered += 1;
+        record_scheduled_send_audit(
+            db,
+            user_id,
+            "compose.send_later.failed",
+            json!({
+                "scheduled_send_id": id,
+                "draft_email_id": draft_email_id,
+                "error": STALE_SCHEDULED_SEND_CLAIM_ERROR,
+            }),
+        )
+        .await;
+        if let Err(err) = publish_app_event_payload(
+            db,
+            user_id,
+            WorkerAppEvent::SendFailed,
+            json!({
+                "scheduled_send_id": id,
+                "draft_email_id": draft_email_id,
+                "error": STALE_SCHEDULED_SEND_CLAIM_ERROR,
+            }),
+        )
+        .await
+        {
+            warn!(
+                scheduled_send_id = id,
+                user_id,
+                error = %err,
+                "failed to publish stale scheduled send failed app event"
+            );
+        }
+    }
+
     if recovered > 0 {
         warn!(
             recovered,

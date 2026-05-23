@@ -41,9 +41,23 @@ pub async fn publish_app_event(
     user_id: i64,
     event: WorkerAppEvent,
 ) -> Result<i64> {
-    hail_db::app_events::insert_app_event(db, Some(user_id), event.event_type(), "{}")
-        .await
-        .with_context(|| format!("publish app event {}", event.event_type()))
+    publish_app_event_payload(db, user_id, event, serde_json::json!({})).await
+}
+
+pub async fn publish_app_event_payload(
+    db: &SqlitePool,
+    user_id: i64,
+    event: WorkerAppEvent,
+    payload: serde_json::Value,
+) -> Result<i64> {
+    hail_db::app_events::insert_app_event(
+        db,
+        Some(user_id),
+        event.event_type(),
+        &payload.to_string(),
+    )
+    .await
+    .with_context(|| format!("publish app event {}", event.event_type()))
 }
 
 #[cfg(test)]

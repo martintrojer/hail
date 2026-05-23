@@ -424,14 +424,31 @@ async fn due_send_submits_and_marks_sent() {
             None
         )
     );
-    let event_type: String = sqlx::query_scalar(
-        "SELECT event_type FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    let event: (String, String) = sqlx::query_as(
+        "SELECT event_type, payload_json FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_one(&pool)
     .await
     .expect("app event");
-    assert_eq!(event_type, "send.completed");
+    assert_eq!(event.0, "send.completed");
+    let event_payload: serde_json::Value = serde_json::from_str(&event.1).expect("event payload");
+    assert_eq!(event_payload["scheduled_send_id"], id);
+    assert_eq!(event_payload["draft_email_id"], "draft-due");
+
+    let audit: (String, String) = sqlx::query_as(
+        "SELECT action, payload_json FROM audit_log WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("audit row");
+    assert_eq!(audit.0, "compose.send_later.sent");
+    let audit_payload: serde_json::Value = serde_json::from_str(&audit.1).expect("audit payload");
+    assert_eq!(audit_payload["scheduled_send_id"], id);
+    assert_eq!(audit_payload["draft_email_id"], "draft-due");
+    assert_eq!(audit_payload["submission_id"], "submission-draft-due");
+    assert_eq!(audit_payload["sent_at"], now.to_rfc3339());
 }
 
 #[tokio::test]
@@ -537,6 +554,31 @@ async fn permanent_failure_marks_failed_and_sets_error() {
             Some("invalid recipients".to_string())
         )
     );
+    let event: (String, String) = sqlx::query_as(
+        "SELECT event_type, payload_json FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("app event");
+    assert_eq!(event.0, "send.failed");
+    let event_payload: serde_json::Value = serde_json::from_str(&event.1).expect("event payload");
+    assert_eq!(event_payload["scheduled_send_id"], id);
+    assert_eq!(event_payload["draft_email_id"], "draft-permanent");
+    assert_eq!(event_payload["error"], "invalid recipients");
+
+    let audit: (String, String) = sqlx::query_as(
+        "SELECT action, payload_json FROM audit_log WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("audit row");
+    assert_eq!(audit.0, "compose.send_later.failed");
+    let audit_payload: serde_json::Value = serde_json::from_str(&audit.1).expect("audit payload");
+    assert_eq!(audit_payload["scheduled_send_id"], id);
+    assert_eq!(audit_payload["draft_email_id"], "draft-permanent");
+    assert_eq!(audit_payload["error"], "invalid recipients");
 }
 
 #[tokio::test]
@@ -707,6 +749,32 @@ async fn stale_processing_claim_fails_unknown_state_without_submit() {
         "unexpected error: {:?}",
         state.3
     );
+
+    let event: (String, String) = sqlx::query_as(
+        "SELECT event_type, payload_json FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("app event");
+    assert_eq!(event.0, "send.failed");
+    let event_payload: serde_json::Value = serde_json::from_str(&event.1).expect("event payload");
+    assert_eq!(event_payload["scheduled_send_id"], id);
+    assert_eq!(event_payload["draft_email_id"], "draft-stale-processing");
+    assert!(
+        event_payload["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("submission state unknown")),
+        "unexpected event payload: {event_payload}"
+    );
+    let audit_action: String = sqlx::query_scalar(
+        "SELECT action FROM audit_log WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("audit row");
+    assert_eq!(audit_action, "compose.send_later.failed");
 }
 
 #[tokio::test]
