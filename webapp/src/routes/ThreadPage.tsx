@@ -29,12 +29,12 @@ interface ThreadPageProps {
   threadId: string;
 }
 
-function formatParticipantName(participant: { name: string | null; email: string }) {
+function formatParticipantName(participant: { name?: string | null; email: string }) {
   return participant.name?.trim() || participant.email || 'Unknown';
 }
 
 function formatParticipantList(
-  participants: Array<{ name: string | null; email: string }>,
+  participants: Array<{ name?: string | null; email: string }>,
 ) {
   if (participants.length === 0) {
     return 'Unknown';

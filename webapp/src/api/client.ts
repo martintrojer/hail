@@ -1,4 +1,4 @@
-import type { paths } from './types';
+import type { components, paths } from './types';
 
 type ResponseBody<Response> = Response extends {
   content: { 'application/json': infer Body };
@@ -12,6 +12,10 @@ type HealthzSuccess = ResponseBody<
 type ReadyzSuccess = ResponseBody<paths['/readyz']['get']['responses']['200']>;
 type ReadyzUnavailable = ResponseBody<
   paths['/readyz']['get']['responses']['503']
+>;
+
+type ThreadGetSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}']['get']['responses']['200']
 >;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
@@ -121,32 +125,10 @@ export interface SearchParams {
   scope?: SearchScope;
 }
 
-export interface BlockedTracker {
-  src: string;
-  reason: string;
-}
-
-export interface ThreadParticipant {
-  name: string | null;
-  email: string;
-}
-
-export interface ThreadMessage {
-  email_id: string;
-  from: ThreadParticipant[];
-  to: ThreadParticipant[];
-  received_at: string | null;
-  html: string;
-  preview: string;
-  blocked_trackers: BlockedTracker[];
-}
-
-export interface ThreadViewResponse {
-  thread_id: string;
-  subject: string;
-  participants: ThreadParticipant[];
-  messages: ThreadMessage[];
-}
+export type BlockedTracker = components['schemas']['BlockedTrackerResponse'];
+export type ThreadParticipant = components['schemas']['Participant'];
+export type ThreadMessage = components['schemas']['ThreadMessageResponse'];
+export type ThreadViewResponse = ThreadGetSuccess;
 
 export interface PileItem {
   thread_id: string;

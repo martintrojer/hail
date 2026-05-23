@@ -86,9 +86,13 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> Str
 }
 
 fn app(state: AppState, assembler: Arc<FakeAssembler>) -> Router {
-    let protected = hail_api::routes::threads_view::router_with_assembler(assembler).layer(
-        axum::middleware::from_fn_with_state(state.clone(), require_auth),
-    );
+    let protected = Router::from(hail_api::routes::threads_view::router_with_assembler(
+        assembler,
+    ))
+    .layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        require_auth,
+    ));
     Router::new().merge(protected).with_state(state)
 }
 

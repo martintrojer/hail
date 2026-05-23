@@ -12,13 +12,16 @@ use std::sync::Arc;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::get};
+use axum::Json;
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::{
     plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history,
 };
 use secrecy::SecretString;
 use serde::Serialize;
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
@@ -184,28 +187,30 @@ pub struct AssembledMessage {
     pub preview: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Participant {
     pub name: Option<String>,
     pub email: String,
 }
 
+/// OpenAPI tag for thread document endpoints.
+pub const TAG: &str = "threads";
+
 /// Build protected thread-as-document routes.
-pub fn router() -> Router<AppState> {
+pub fn router() -> OpenApiRouter<AppState> {
     router_with_assembler(Arc::new(JmapThreadAssembler))
 }
 
 /// Test/helper router that injects a fake thread assembler.
-pub fn router_with_assembler<A>(assembler: Arc<A>) -> Router<AppState>
+pub fn router_with_assembler<A>(assembler: Arc<A>) -> OpenApiRouter<AppState>
 where
     A: ThreadAssembler,
 {
-    Router::new()
-        .route("/api/threads/{thread_id}", get(get_thread::<A>))
-        .layer(Extension(assembler))
+    let assembler: Arc<dyn ThreadAssembler> = assembler;
+    OpenApiRouter::new().routes(routes!(get_thread).layer(Extension(assembler)))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ThreadViewResponse {
     thread_id: String,
     subject: String,
@@ -213,31 +218,45 @@ struct ThreadViewResponse {
     messages: Vec<ThreadMessageResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ThreadMessageResponse {
     email_id: String,
     from: Vec<Participant>,
     to: Vec<Participant>,
+    #[schema(value_type = Option<String>, format = DateTime)]
     received_at: Option<DateTime<Utc>>,
     html: String,
     preview: String,
     blocked_trackers: Vec<BlockedTrackerResponse>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct BlockedTrackerResponse {
     src: String,
     reason: String,
 }
 
-async fn get_thread<A>(
+#[utoipa::path(
+    get,
+    path = "/api/threads/{thread_id}",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id to render as a sanitized document."),
+    ),
+    responses(
+        (status = 200, description = "Thread rendered as sanitized HTML messages.", body = ThreadViewResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread assembly failed."),
+    ),
+)]
+async fn get_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(assembler): Extension<Arc<A>>,
+    Extension(assembler): Extension<Arc<dyn ThreadAssembler>>,
     Path(thread_id): Path<String>,
 ) -> Response
-where
-    A: ThreadAssembler,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
