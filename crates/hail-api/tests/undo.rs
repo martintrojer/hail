@@ -143,6 +143,49 @@ impl UndoExecutor for FakeExecutor {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ExecutorFailure {
+    BadRequest,
+    NotImplemented,
+    Internal,
+}
+
+struct FailingExecutor {
+    failure: ExecutorFailure,
+    calls: Mutex<usize>,
+}
+
+impl FailingExecutor {
+    fn new(failure: ExecutorFailure) -> Self {
+        Self {
+            failure,
+            calls: Mutex::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        *self.calls.lock().expect("calls mutex")
+    }
+}
+
+#[async_trait]
+impl UndoExecutor for FailingExecutor {
+    async fn execute(
+        &self,
+        _state: &AppState,
+        _user: &AuthUser,
+
+        _undo: UndoActionPayload,
+    ) -> Result<(), UndoError> {
+        *self.calls.lock().expect("calls mutex") += 1;
+        match self.failure {
+            ExecutorFailure::BadRequest => Err(UndoError::bad_request("bad undo")),
+            ExecutorFailure::NotImplemented => Err(UndoError::not_implemented("unsupported undo")),
+            ExecutorFailure::Internal => Err(UndoError::internal("executor failed")),
+        }
+    }
+}
+
 #[tokio::test]
 async fn create_and_execute_undo_action() {
     let (state, key) = fixture_state().await;
@@ -542,6 +585,241 @@ async fn classify_undo_rejects_noop_classification_payload() {
 }
 
 #[tokio::test]
+async fn thread_archive_undo_restores_mailbox_snapshots() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "archive-move-undo@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let expected_snapshots = vec![
+        EmailMailboxSnapshot {
+            email_id: "email-1".to_string(),
+            mailbox_ids: vec!["inbox".to_string()],
+        },
+        EmailMailboxSnapshot {
+            email_id: "email-2".to_string(),
+            mailbox_ids: vec!["inbox".to_string(), "custom".to_string()],
+        },
+    ];
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.archive",
+        serde_json::json!({
+            "email_mailbox_ids": [
+                { "email_id": "email-1", "mailbox_ids": ["inbox"] },
+                { "email_id": "email-2", "mailbox_ids": ["inbox", "custom"] }
+            ]
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(restorer.mailbox_calls(), vec![expected_snapshots]);
+}
+
+#[tokio::test]
+async fn thread_trash_undo_restores_mailbox_snapshots() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "trash-move-undo@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let expected_snapshots = vec![EmailMailboxSnapshot {
+        email_id: "email-1".to_string(),
+        mailbox_ids: vec!["inbox".to_string(), "custom".to_string()],
+    }];
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.trash",
+        serde_json::json!({
+            "email_mailbox_ids": [
+                { "email_id": "email-1", "mailbox_ids": ["inbox", "custom"] }
+            ]
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(restorer.mailbox_calls(), vec![expected_snapshots]);
+}
+
+#[tokio::test]
+async fn thread_move_undo_without_snapshots_returns_501() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "missing-snapshot-undo@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.archive",
+        serde_json::json!({ "thread_id": "thread-1" }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    assert!(restorer.mailbox_calls().is_empty());
+}
+
+#[tokio::test]
+async fn unsupported_action_returns_501() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "unsupported-undo@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.snooze",
+        serde_json::json!({ "thread_id": "thread-1" }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(Arc::new(
+            FakeThreadRestorer::default(),
+        ))),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn executor_bad_request_failure_returns_400() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "executor-bad-request@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "test.action",
+        serde_json::json!({ "ok": true }),
+    )
+    .await
+    .unwrap();
+    let executor = Arc::new(FailingExecutor::new(ExecutorFailure::BadRequest));
+
+    let resp = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(executor.calls(), 1);
+}
+
+#[tokio::test]
+async fn executor_not_implemented_failure_returns_501() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "executor-not-implemented@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "test.action",
+        serde_json::json!({ "ok": true }),
+    )
+    .await
+    .unwrap();
+    let executor = Arc::new(FailingExecutor::new(ExecutorFailure::NotImplemented));
+
+    let resp = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
+    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(executor.calls(), 1);
+}
+
+#[tokio::test]
+async fn executor_internal_failure_returns_500() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "executor-internal@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "test.action",
+        serde_json::json!({ "ok": true }),
+    )
+    .await
+    .unwrap();
+    let executor = Arc::new(FailingExecutor::new(ExecutorFailure::Internal));
+
+    let resp = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(executor.calls(), 1);
+}
+
+#[tokio::test]
+async fn executor_failure_consumes_undo_token() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "executor-consume@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "test.action",
+        serde_json::json!({ "ok": true }),
+    )
+    .await
+    .unwrap();
+    let executor = Arc::new(FailingExecutor::new(ExecutorFailure::Internal));
+
+    let first = post_undo(state.clone(), executor.clone(), Some(&sid), true, &undo.id).await;
+    assert_eq!(first.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let second = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
+    assert_eq!(second.status(), StatusCode::GONE);
+    assert_eq!(executor.calls(), 1);
+}
+
+#[tokio::test]
+async fn invalid_undo_id_returns_404_without_executing() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "invalid-id-undo@example.org").await;
+    let executor = Arc::new(FakeExecutor::default());
+
+    let resp = post_undo(state, executor.clone(), Some(&sid), true, "not-an-undo-id").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert!(executor.calls().is_empty());
+}
+
+#[tokio::test]
+async fn no_auth_returns_401_for_well_formed_undo_id() {
+    let (state, key) = fixture_state().await;
+    let (user_id, _sid) = seed_session(&state, &key, "no-auth-undo@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.trash",
+        serde_json::json!({ "thread_id": "thread-1" }),
+    )
+    .await
+    .unwrap();
+    let executor = Arc::new(FakeExecutor::default());
+
+    let resp = post_undo(state, executor.clone(), None, true, &undo.id).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(executor.calls().is_empty());
+}
+
+#[tokio::test]
 async fn screener_decision_undo_restores_previous_row() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "screener-undo@example.org").await;
@@ -602,10 +880,18 @@ async fn screener_decision_undo_restores_previous_row() {
 #[derive(Default)]
 struct FakeThreadRestorer {
     classify_calls: Mutex<Vec<(String, String)>>,
+    mailbox_calls: Mutex<Vec<Vec<EmailMailboxSnapshot>>>,
     keyword_calls: Mutex<Vec<(String, String, bool)>>,
 }
 
 impl FakeThreadRestorer {
+    fn mailbox_calls(&self) -> Vec<Vec<EmailMailboxSnapshot>> {
+        self.mailbox_calls
+            .lock()
+            .expect("mailbox calls mutex")
+            .clone()
+    }
+
     fn keyword_calls(&self) -> Vec<(String, String, bool)> {
         self.keyword_calls
             .lock()
@@ -634,8 +920,12 @@ impl ThreadUndoRestorer for FakeThreadRestorer {
         &self,
         _state: &AppState,
         _user: &AuthUser,
-        _snapshots: Vec<EmailMailboxSnapshot>,
+        snapshots: Vec<EmailMailboxSnapshot>,
     ) -> Result<(), UndoError> {
+        self.mailbox_calls
+            .lock()
+            .expect("mailbox calls mutex")
+            .push(snapshots);
         Ok(())
     }
 
