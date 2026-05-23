@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, State, rejection::JsonRejection};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::post};
@@ -212,13 +212,16 @@ async fn post_decision<B>(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
     Extension(backfill): Extension<Arc<B>>,
-    Json(body): Json<DecisionRequest>,
+    body: Result<Json<DecisionRequest>, JsonRejection>,
 ) -> Response
 where
     B: ScreenerBackfill,
 {
+    let Ok(Json(body)) = body else {
+        return bad_request("invalid_decision_body");
+    };
     let sender = normalize_sender(&body.sender);
-    if sender.is_empty() {
+    if !looks_like_sender(&sender) {
         return bad_request("invalid_sender");
     }
 
@@ -351,6 +354,25 @@ struct ScreenerRuleSnapshot {
 
 fn normalize_sender(sender: &str) -> String {
     sender.trim().to_ascii_lowercase()
+}
+
+fn looks_like_sender(sender: &str) -> bool {
+    if sender.is_empty()
+        || sender.len() > 320
+        || sender.contains(char::is_whitespace)
+        || sender.contains(['\r', '\n'])
+    {
+        return false;
+    }
+    let Some((local, domain)) = sender.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains("..")
 }
 
 fn bad_request(error: &'static str) -> Response {

@@ -150,6 +150,16 @@ struct BackfillCall {
 #[derive(Default)]
 struct FakeBackfill {
     calls: Mutex<Vec<BackfillCall>>,
+    fail: bool,
+}
+
+impl FakeBackfill {
+    fn failing() -> Self {
+        Self {
+            calls: Mutex::default(),
+            fail: true,
+        }
+    }
 }
 
 #[async_trait]
@@ -168,6 +178,9 @@ impl ScreenerBackfill for FakeBackfill {
             decision,
             classify_as,
         });
+        if self.fail {
+            return Err(ScreenerBackfillError("forced backfill failure".to_string()));
+        }
         Ok(())
     }
 }
@@ -498,4 +511,191 @@ async fn apply_to_history_calls_fake_backfill_once() {
             classify_as: Some(Classification::Papertrail)
         }
     );
+}
+
+#[tokio::test]
+async fn decision_response_undo_payload_snapshots_previous_rule() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "undo-existing@example.org").await;
+    let first_seen_at = Utc::now() - Duration::days(3);
+    seed_rule(
+        &state,
+        user_id,
+        "sender@example.org",
+        "allow",
+        Some("feed"),
+        first_seen_at,
+    )
+    .await;
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"sender@example.org","decision":"deny","apply_to_history":false}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["undo"]["action"], "screener.decision");
+    let undo_id = json["undo"]["id"].as_str().unwrap();
+
+    let payload_json: String =
+        sqlx::query_scalar("SELECT payload_json FROM undo_actions WHERE id = ?1")
+            .bind(undo_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+    assert_eq!(payload["sender"], "sender@example.org");
+    assert_eq!(payload["previous_rule"]["decision"], "allow");
+    assert_eq!(payload["previous_rule"]["classify_as"], "feed");
+    assert!(payload["previous_rule"]["decided_at"].is_null());
+    assert_eq!(
+        payload["previous_rule"]["first_seen_at"],
+        serde_json::json!(first_seen_at)
+    );
+}
+
+#[tokio::test]
+async fn decision_response_undo_payload_marks_new_sender_for_delete() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "undo-new@example.org").await;
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"new@example.org","decision":"approve","apply_to_history":false}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["undo"]["action"], "screener.decision");
+    let undo_id = json["undo"]["id"].as_str().unwrap();
+
+    let payload_json: String =
+        sqlx::query_scalar("SELECT payload_json FROM undo_actions WHERE id = ?1")
+            .bind(undo_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+    assert_eq!(payload["sender"], "new@example.org");
+    assert!(payload["previous_rule"].is_null());
+}
+
+#[tokio::test]
+async fn backfill_failure_returns_500_after_persisting_decision_without_audit_or_undo() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "backfill-fail@example.org").await;
+    let backfill = Arc::new(FakeBackfill::failing());
+
+    let resp = request_with_backfill(
+        state.clone(),
+        backfill.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"sender@example.org","decision":"approve","classify_as":"papertrail","apply_to_history":true}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "allow");
+    assert_eq!(row.1.as_deref(), Some("papertrail"));
+    assert_eq!(backfill.calls.lock().unwrap().len(), 1);
+
+    let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(audit_count, 0);
+    let undo_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM undo_actions")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(undo_count, 0);
+}
+
+#[tokio::test]
+async fn invalid_sender_returns_400_without_persisting_or_backfill() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "invalid-sender@example.org").await;
+
+    for body in [
+        r#"{"sender":"","decision":"deny","apply_to_history":true}"#,
+        r#"{"sender":"not-an-email","decision":"deny","apply_to_history":true}"#,
+        r#"{"sender":"bad domain@example.org","decision":"deny","apply_to_history":true}"#,
+        r#"{"sender":"bad@example","decision":"deny","apply_to_history":true}"#,
+    ] {
+        let backfill = Arc::new(FakeBackfill::default());
+        let resp = request_with_backfill(
+            state.clone(),
+            backfill.clone(),
+            Method::POST,
+            "/api/screener/decisions",
+            Some(&sid),
+            true,
+            Some(body),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{body}");
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], "invalid_sender", "{body}");
+        assert!(backfill.calls.lock().unwrap().is_empty(), "{body}");
+    }
+
+    let rule_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM screener_rules")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(rule_count, 0);
+}
+
+#[tokio::test]
+async fn malformed_decision_bodies_return_400_without_persisting_or_backfill() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "bad-body@example.org").await;
+
+    for body in [
+        "not-json",
+        r#"{"sender":"sender@example.org","decision":"approve"}"#,
+        r#"{"sender":"sender@example.org","decision":"approve","apply_to_history":"yes"}"#,
+        r#"{"decision":"approve","apply_to_history":false}"#,
+    ] {
+        let backfill = Arc::new(FakeBackfill::default());
+        let resp = request_with_backfill(
+            state.clone(),
+            backfill.clone(),
+            Method::POST,
+            "/api/screener/decisions",
+            Some(&sid),
+            true,
+            Some(body),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{body}");
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], "invalid_decision_body", "{body}");
+        assert!(backfill.calls.lock().unwrap().is_empty(), "{body}");
+    }
+
+    let rule_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM screener_rules")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(rule_count, 0);
 }
