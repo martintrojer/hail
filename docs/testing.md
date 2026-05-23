@@ -116,7 +116,7 @@ real run:
    compose provider (`podman compose`, `podman-compose`, then `docker compose`)
    and a minimal loopback Stalwart config from
    `scripts/local-stalwart-testbed.toml`;
-3. waits for Stalwart JMAP and hail API health;
+3. waits for Stalwart JMAP and hail API readiness;
 4. imports these synthetic inbound messages with JMAP `Email/import`:
    - `personal-simple.eml`;
    - `newsletter-tracking-pixel.eml`;
@@ -130,7 +130,7 @@ Useful URLs/checks once the stack is running:
 
 ```bash
 curl -fsS http://127.0.0.1:18080/.well-known/jmap
-curl -fsS http://127.0.0.1:18081/api/health
+curl -fsS http://127.0.0.1:18081/readyz
 # Browser: http://127.0.0.1:18081
 ```
 

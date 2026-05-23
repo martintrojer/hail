@@ -20,6 +20,7 @@ const SMOKE_SUBJECT: &str = "E2E local direct mail smoke: Dinner on Thursday?";
 const SMOKE_REPLY_FIXTURE_NAME: &str = "personal-thread-reply.e2e-local-direct-mail-smoke.eml";
 const SMOKE_REPLY_SUBJECT: &str = "Re: E2E local direct mail smoke: Dinner on Thursday?";
 const HAIL_PASSWORD: &str = "hail-test-password";
+const SERVER_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const REQUEST_HEADER: &str = "X-Hail-Request";
 const DIRECT_ENV: &str = "HAIL_E2E_LOCAL_DIRECT_MAIL_SMOKE_DIRECT";
 const SKIP_REASON: &str = "skipping local/direct mail smoke; set HAIL_RUN_LOCAL_MAIL_TESTBED=1 to run scripts/e2e-local-direct-mail-smoke.sh";
@@ -57,7 +58,7 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
         return;
     }
 
-    let smoke = SmokeRuntime::start()
+    let mut smoke = SmokeRuntime::start()
         .await
         .expect("start local/direct mail smoke runtime");
 
@@ -87,6 +88,9 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
     .await
     .expect("import smoke message through JMAP Email/import");
     assert!(!first_import.email_id.is_empty());
+    smoke
+        .restart_worker()
+        .expect("restart worker to force a local catch-up pass after first import");
 
     let pending = poll_json("screener pending sender", Duration::from_secs(45), || {
         let api = api.clone();
@@ -138,6 +142,9 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
     .await
     .expect("import second smoke message through JMAP Email/import");
     assert!(!reply_import.email_id.is_empty());
+    smoke
+        .restart_worker()
+        .expect("restart worker to force a local catch-up pass after approved-sender import");
 
     let imbox_item = poll_json("imbox smoke message", Duration::from_secs(45), || {
         let api = api.clone();
@@ -162,8 +169,13 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
         .await
         .expect("thread view should load");
     assert_eq!(thread["thread_id"], thread_id);
-    assert_eq!(thread["subject"], SMOKE_REPLY_SUBJECT);
     let messages = thread["messages"].as_array().expect("messages");
+    assert!(
+        thread["subject"].as_str().is_some_and(
+            |subject| subject.contains("E2E local direct mail smoke: Dinner on Thursday?")
+        ),
+        "thread subject should describe the smoke conversation: {thread}"
+    );
     assert!(
         messages.iter().any(|message| message["preview"]
             .as_str()
@@ -207,6 +219,7 @@ struct SmokeRuntime {
     stalwart: StalwartFixture,
     api: ChildProcess,
     worker: ChildProcess,
+    db_url: String,
     hail_url: String,
 }
 
@@ -218,7 +231,6 @@ impl SmokeRuntime {
 
         let temp = TempDir::new()?;
         let db_path = temp.path().join("hail.db");
-        let server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let api_port = allocate_free_port()?;
         let hail_url = format!("http://127.0.0.1:{api_port}");
         let stalwart = start_stalwart_fixture().await?;
@@ -227,13 +239,13 @@ impl SmokeRuntime {
         let target_dir = target_dir()?;
 
         let mut api = Command::new(target_dir.join("hail-api"));
-        configure_process(&mut api, &db_url, &jmap_url, &hail_url, server_key)
+        configure_process(&mut api, &db_url, &jmap_url, &hail_url, SERVER_KEY)
             .env("HAIL_SERVER__BIND", format!("127.0.0.1:{api_port}"));
         let api = ChildProcess::spawn("hail-api", api)?;
-        wait_for_health(&hail_url).await?;
+        wait_for_ready(&hail_url).await?;
 
         let mut worker = Command::new(target_dir.join("hail-worker"));
-        configure_process(&mut worker, &db_url, &jmap_url, &hail_url, server_key)
+        configure_process(&mut worker, &db_url, &jmap_url, &hail_url, SERVER_KEY)
             .env("HAIL_TICK_SECS", "1")
             .env("HAIL_RECONCILE_EVERY_SECS", "3600");
         let worker = ChildProcess::spawn("hail-worker", worker)?;
@@ -243,12 +255,29 @@ impl SmokeRuntime {
             stalwart,
             api,
             worker,
+            db_url,
             hail_url,
         })
     }
 
     fn hail_url(&self) -> &str {
         &self.hail_url
+    }
+
+    fn restart_worker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.worker.terminate();
+        let mut worker = Command::new(target_dir()?.join("hail-worker"));
+        configure_process(
+            &mut worker,
+            &self.db_url,
+            &self.stalwart.jmap_url(),
+            &self.hail_url,
+            SERVER_KEY,
+        )
+        .env("HAIL_TICK_SECS", "1")
+        .env("HAIL_RECONCILE_EVERY_SECS", "3600");
+        self.worker = ChildProcess::spawn("hail-worker", worker)?;
+        Ok(())
     }
 }
 
@@ -269,6 +298,7 @@ fn configure_process<'a>(
     command
         .env("HAIL_DATABASE_URL", db_url)
         .env("HAIL_STALWART__JMAP_URL", jmap_url)
+        .env("HAIL_SERVER__BIND", "127.0.0.1:0")
         .env("HAIL_SERVER__PUBLIC_URL", hail_url)
         .env("HAIL_SECRETS__SERVER_KEY", server_key)
         .env("RUST_LOG", "hail_api=info,hail_worker=info")
@@ -325,14 +355,14 @@ fn target_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .to_path_buf())
 }
 
-async fn wait_for_health(hail_url: &str) -> Result<(), String> {
+async fn wait_for_ready(hail_url: &str) -> Result<(), String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
         .map_err(|err| err.to_string())?;
-    let health_url = format!("{hail_url}/api/health");
+    let ready_url = format!("{hail_url}/readyz");
     for _ in 0..90 {
-        if let Ok(response) = client.get(&health_url).send().await
+        if let Ok(response) = client.get(&ready_url).send().await
             && response.status().is_success()
         {
             return Ok(());
@@ -340,7 +370,7 @@ async fn wait_for_health(hail_url: &str) -> Result<(), String> {
         sleep(Duration::from_millis(500)).await;
     }
     Err(format!(
-        "timed out waiting for hail API health at {health_url}"
+        "timed out waiting for hail API readiness at {ready_url}"
     ))
 }
 

@@ -86,7 +86,7 @@ Would import into:  ${HAIL_TESTBED_EMAIL} at ${HAIL_TESTBED_JMAP_URL}
 Expected URLs/checks after a real run:
   hail SPA/API:        ${HAIL_TESTBED_HAIL_URL}
   Stalwart JMAP:      ${HAIL_TESTBED_JMAP_URL}/.well-known/jmap
-  API health:         curl -fsS ${HAIL_TESTBED_HAIL_URL}/api/health
+  API readiness:      curl -fsS ${HAIL_TESTBED_HAIL_URL}/readyz
   Login as:           ${HAIL_TESTBED_EMAIL} / <HAIL_TESTBED_PASSWORD>
   Expected fixtures:  personal-simple.eml, newsletter-tracking-pixel.eml, receipt-papertrail.eml
 EOF
@@ -127,14 +127,14 @@ for _ in $(seq 1 60); do
 done
 curl -fsS "${HAIL_TESTBED_JMAP_URL}/.well-known/jmap" >/dev/null
 
-echo "==> waiting for hail API health at ${HAIL_TESTBED_HAIL_URL}/api/health"
+echo "==> waiting for hail API readiness at ${HAIL_TESTBED_HAIL_URL}/readyz"
 for _ in $(seq 1 60); do
-  if curl -fsS "${HAIL_TESTBED_HAIL_URL}/api/health" >/dev/null 2>&1; then
+  if curl -fsS "${HAIL_TESTBED_HAIL_URL}/readyz" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-curl -fsS "${HAIL_TESTBED_HAIL_URL}/api/health" >/dev/null
+curl -fsS "${HAIL_TESTBED_HAIL_URL}/readyz" >/dev/null
 
 if [[ -z "${HAIL_TESTBED_PASSWORD:-}" ]]; then
   cat >&2 <<EOF
@@ -171,7 +171,7 @@ Local mail testbed ready.
   Login:         ${HAIL_TESTBED_EMAIL} / <HAIL_TESTBED_PASSWORD>
 
 Expected API checks:
-  curl -fsS ${HAIL_TESTBED_HAIL_URL}/api/health
+  curl -fsS ${HAIL_TESTBED_HAIL_URL}/readyz
   Browser login should show imported synthetic mail after screener/routing workers process it.
   Imported fixtures: personal-simple.eml, newsletter-tracking-pixel.eml, receipt-papertrail.eml
 EOF
