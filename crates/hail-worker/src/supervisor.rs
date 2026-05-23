@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
@@ -89,15 +90,18 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     // Reconcile immediately so the first tick doesn't burn a full
     // cadence before users come online. Also run scheduled jobs once
     // so overdue bubble-ups and scheduled sends fire promptly after worker restart.
-    reconcile(&state, &cancel, &mut running, &mut tasks, &mut next_run_id).await;
-    run_scheduler_tick(&state, &bubble_jmap, &send_submitter).await;
-    run_reconciliation_if_due(
-        &state,
-        &thread_verifier,
-        &mut next_reconcile_at,
-        reconcile_secs,
-    )
-    .await;
+    if reconcile(&state, &cancel, &mut running, &mut tasks, &mut next_run_id).await
+        && run_scheduler_tick(&state, &bubble_jmap, &send_submitter, &cancel).await
+    {
+        run_reconciliation_if_due(
+            &state,
+            &thread_verifier,
+            &mut next_reconcile_at,
+            reconcile_secs,
+            &cancel,
+        )
+        .await;
+    }
 
     loop {
         tokio::select! {
@@ -108,17 +112,31 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             }
             _ = sleep(tick) => {
                 reap_finished_user_tasks(&mut running, &mut tasks);
-                reconcile(
+                if !reconcile(
                     &state,
                     &cancel,
                     &mut running,
                     &mut tasks,
                     &mut next_run_id,
                 )
-                .await;
-                run_scheduler_tick(&state, &bubble_jmap, &send_submitter).await;
-                run_reconciliation_if_due(&state, &thread_verifier, &mut next_reconcile_at, reconcile_secs)
-                    .await;
+                .await
+                {
+                    break;
+                }
+                if !run_scheduler_tick(&state, &bubble_jmap, &send_submitter, &cancel).await {
+                    break;
+                }
+                if !run_reconciliation_if_due(
+                    &state,
+                    &thread_verifier,
+                    &mut next_reconcile_at,
+                    reconcile_secs,
+                    &cancel,
+                )
+                .await
+                {
+                    break;
+                }
             }
             // Reap any finished per-user tasks so the JoinSet doesn't
             // grow unbounded across user churn.
@@ -173,19 +191,35 @@ async fn run_scheduler_tick(
     state: &AppState,
     bubble_jmap: &LiveBubbleJmapOps,
     send_submitter: &LiveSendSubmitter,
-) {
+    cancel: &CancellationToken,
+) -> bool {
     let now = chrono::Utc::now();
-    match process_due_bubble_ups(&state.db, bubble_jmap, now).await {
-        Ok(fired) if fired > 0 => info!(fired, "scheduler: bubble-ups processed"),
-        Ok(_) => {}
-        Err(e) => warn!(error = %e, "scheduler: bubble-up tick failed"),
+    match cancel_or_complete(cancel, process_due_bubble_ups(&state.db, bubble_jmap, now)).await {
+        Some(Ok(fired)) if fired > 0 => info!(fired, "scheduler: bubble-ups processed"),
+        Some(Ok(_)) => {}
+        Some(Err(e)) => warn!(error = %e, "scheduler: bubble-up tick failed"),
+        None => {
+            info!("scheduler: bubble-up tick cancelled");
+            return false;
+        }
     }
 
-    match process_due_scheduled_sends(&state.db, send_submitter, now).await {
-        Ok(sent) if sent > 0 => info!(sent, "scheduler: scheduled sends processed"),
-        Ok(_) => {}
-        Err(e) => warn!(error = %e, "scheduler: scheduled-send tick failed"),
+    match cancel_or_complete(
+        cancel,
+        process_due_scheduled_sends(&state.db, send_submitter, now),
+    )
+    .await
+    {
+        Some(Ok(sent)) if sent > 0 => info!(sent, "scheduler: scheduled sends processed"),
+        Some(Ok(_)) => {}
+        Some(Err(e)) => warn!(error = %e, "scheduler: scheduled-send tick failed"),
+        None => {
+            info!("scheduler: scheduled-send tick cancelled");
+            return false;
+        }
     }
+
+    true
 }
 
 async fn run_reconciliation_if_due(
@@ -193,17 +227,18 @@ async fn run_reconciliation_if_due(
     verifier: &LiveThreadVerifier,
     next_run_at: &mut chrono::DateTime<chrono::Utc>,
     every_secs: u64,
-) {
+    cancel: &CancellationToken,
+) -> bool {
     let now = chrono::Utc::now();
     if now < *next_run_at {
-        return;
+        return true;
     }
 
     let interval = chrono::Duration::seconds(every_secs.max(1) as i64);
     *next_run_at = now + interval;
 
-    match process_reconciliation(&state.db, verifier, now).await {
-        Ok(report) => info!(
+    match cancel_or_complete(cancel, process_reconciliation(&state.db, verifier, now)).await {
+        Some(Ok(report)) => info!(
             users_checked = report.users_checked,
             thread_ids_checked = report.thread_ids_checked,
             stack_positions_checked = report.stack_positions_checked,
@@ -212,7 +247,24 @@ async fn run_reconciliation_if_due(
             bubble_ups_deleted = report.bubble_ups_deleted,
             "reconciliation: sidecar thread refs processed"
         ),
-        Err(e) => warn!(error = %e, "reconciliation: tick failed"),
+        Some(Err(e)) => warn!(error = %e, "reconciliation: tick failed"),
+        None => {
+            info!("reconciliation: tick cancelled");
+            return false;
+        }
+    }
+
+    true
+}
+
+async fn cancel_or_complete<T>(
+    cancel: &CancellationToken,
+    future: impl Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        output = future => Some(output),
     }
 }
 
@@ -262,12 +314,16 @@ async fn reconcile(
     running: &mut HashMap<i64, RunningUserTask>,
     tasks: &mut JoinSet<(i64, u64)>,
     next_run_id: &mut u64,
-) {
-    let active = match active_user_ids(&state.db).await {
-        Ok(ids) => ids,
-        Err(e) => {
+) -> bool {
+    let active = match cancel_or_complete(parent_cancel, active_user_ids(&state.db)).await {
+        Some(Ok(ids)) => ids,
+        Some(Err(e)) => {
             warn!(error = %e, "supervisor: active-user query failed");
-            return;
+            return true;
+        }
+        None => {
+            info!("supervisor: active-user reconciliation cancelled");
+            return false;
         }
     };
 
@@ -282,6 +338,8 @@ async fn reconcile(
             spawn_user_task(tasks, user_id, run_id, task_state, child);
         },
     );
+
+    true
 }
 
 fn reconcile_active_users(
@@ -369,6 +427,30 @@ async fn active_user_ids(db: &SqlitePool) -> Result<Vec<i64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancel_or_complete_returns_none_when_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(50),
+            cancel_or_complete(&cancel, std::future::pending::<()>()),
+        )
+        .await
+        .expect("cancel branch should complete promptly");
+
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn cancel_or_complete_returns_completed_output() {
+        let cancel = CancellationToken::new();
+
+        let result = cancel_or_complete(&cancel, async { 7 }).await;
+
+        assert_eq!(result, Some(7));
+    }
 
     #[tokio::test]
     async fn reap_finished_user_task_removes_running_entry() {
