@@ -21,7 +21,6 @@ const scopeOptions: Array<{ value: SearchScope; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'mail', label: 'Mail' },
   { value: 'notes', label: 'Notes' },
-  { value: 'clips', label: 'Clips' },
 ];
 
 function errorMessage(error: Error) {
@@ -283,7 +282,7 @@ export function SearchPage() {
           type="search"
           value={draftQuery}
           onChange={(event) => setDraftQuery(event.target.value)}
-          placeholder="Search mail, notes, and clips"
+          placeholder="Search mail and notes"
           autoComplete="off"
           data-hail-search-input="true"
           className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-50 outline-none ring-sky-400 transition focus:border-sky-400 focus:ring-2"
