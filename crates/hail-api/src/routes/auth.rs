@@ -27,9 +27,10 @@
 //!
 //! `me`: served behind the auth middleware, returns the `AuthUser` view.
 
+use std::future::Future;
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, Extension, State};
+use axum::extract::{ConnectInfo, Extension, FromRequest, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::post};
@@ -37,10 +38,13 @@ use chrono::{Duration, Utc};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "__test-stubs")]
+use std::sync::Arc;
+
 use crate::middleware::auth::AuthUser;
 use crate::middleware::session::{
-    SESSION_TTL_DAYS, basic_bearer, build_session_cookie, clear_session_cookie, new_session_id,
-    session_cookie_value,
+    SESSION_TTL_DAYS, basic_bearer, build_session_cookie,
+    clear_session_cookie, new_session_id, session_cookie_value,
 };
 use crate::state::AppState;
 
@@ -86,9 +90,28 @@ pub fn protected_router() -> Router<AppState> {
 async fn login(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(body): Json<LoginRequest>,
+    request: Request,
 ) -> Response {
+    let headers = request.headers().clone();
+    let body = match parse_login_request(request, &state).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+
+    login_impl(state, addr, headers, body, authenticate_login).await
+}
+
+async fn login_impl<F, Fut>(
+    state: AppState,
+    addr: SocketAddr,
+    headers: HeaderMap,
+    body: LoginRequest,
+    authenticate: F,
+) -> Response
+where
+    F: FnOnce(String, String, SecretString) -> Fut,
+    Fut: Future<Output = Result<String, String>>,
+{
     // Rate-limit BEFORE we touch Stalwart so spraying credentials is
     // cheap to absorb. We key on the connecting peer's IP — fine for our
     // single-host deployment, where there is no upstream proxy
@@ -107,19 +130,22 @@ async fn login(
     let password = body.password;
 
     // 1. Validate with Stalwart.
-    let session =
-        match hail_jmap::login_basic(&state.config.stalwart.jmap_url, &email, password.clone())
-            .await
-        {
-            Ok(s) => s,
-            Err(err) => {
-                // GENERIC error to the client (design.md §10.1 logging hygiene);
-                // detailed reason to the trace log so an operator can debug.
-                tracing::info!(error = %err, "login: jmap auth failed");
-                return invalid_credentials();
-            }
-        };
-    let jmap_account_id = session.account_id().to_string();
+    let session = match authenticate(
+        state.config.stalwart.jmap_url.clone(),
+        email.clone(),
+        password.clone(),
+    )
+    .await
+    {
+        Ok(account_id) => account_id,
+        Err(err) => {
+            // GENERIC error to the client (design.md §10.1 logging hygiene);
+            // detailed reason to the trace log so an operator can debug.
+            tracing::info!(error = %err, "login: jmap auth failed");
+            return invalid_credentials();
+        }
+    };
+    let jmap_account_id = session;
 
     // 2. Upsert user. Inside one transaction so the "first user becomes
     // admin" check can't race with a concurrent first login.
@@ -230,6 +256,65 @@ async fn login(
         body,
     )
         .into_response()
+}
+
+async fn authenticate_login(
+    jmap_url: String,
+    email: String,
+    password: SecretString,
+) -> Result<String, String> {
+    let session = hail_jmap::login_basic(&jmap_url, &email, password)
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(session.account_id().to_string())
+}
+
+async fn parse_login_request(request: Request, state: &AppState) -> Result<LoginRequest, Response> {
+    Json::<LoginRequest>::from_request(request, state)
+        .await
+        .map(|Json(body)| body)
+        .map_err(|_rejection| {
+            (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                r#"{"error":"bad_request"}"#,
+            )
+                .into_response()
+        })
+}
+
+#[cfg(feature = "__test-stubs")]
+pub type TestLoginProvider = Arc<
+    dyn Fn(
+            String,
+            String,
+            SecretString,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[cfg(feature = "__test-stubs")]
+pub async fn test_login_with_provider(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    request: Request,
+    provider: TestLoginProvider,
+) -> Response {
+    let body = match parse_login_request(request, &state).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+
+    login_impl(
+        state,
+        addr,
+        headers,
+        body,
+        move |jmap_url, email, password| provider(jmap_url, email, password),
+    )
+    .await
 }
 
 /// `POST /api/auth/logout`. Always 204. We delete the row if the cookie
