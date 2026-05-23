@@ -1,9 +1,13 @@
-//! Safe inbound email HTML rendering helpers.
+//! Mail rendering primitives shared by API and worker code.
 //!
 //! This module owns the server-side defense for message bodies shown in the
 //! thread pane: obvious tracking images are removed and counted, then the
 //! remaining fragment is passed through `ammonia` so untrusted senders cannot
-//! execute script in the SPA origin.
+//! execute script in the SPA origin. It also exposes quote/history stripping
+//! helpers for the thread-as-document view.
+
+pub mod quote;
+pub use quote::{StrippedText, strip_quoted_history};
 
 use std::borrow::Cow;
 
