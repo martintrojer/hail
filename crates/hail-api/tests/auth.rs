@@ -1,26 +1,29 @@
-//! Integration tests for the auth middleware + login/logout/me pipeline.
+//! Integration tests for auth middleware plus the login/logout/me pipeline.
 //!
-//! These deliberately do NOT exercise `POST /api/auth/login` end-to-end:
-//! that handler talks to a real Stalwart, which we don't have in CI.
-//! Instead we:
-//!   * insert a session row by hand (with an encrypted token built via
-//!     `hail_core::seal` — the same code the live handler uses), then
-//!   * fire requests at the router via `tower::ServiceExt::oneshot` and
-//!     check the auth middleware does its job.
+//! Login route coverage uses a tiny test-only seam in `routes::auth` to
+//! avoid depending on a live Stalwart while still exercising request
+//! extraction, rate limiting, user/session writes, cookies, and admin
+//! promotion semantics. The middleware tests seed session rows directly with
+//! encrypted tokens and fire requests at the production router via
+//! `tower::ServiceExt::oneshot`.
 //!
 //! Pattern follows existing crates' tests: a fresh in-memory SQLite per
 //! test, migrations run, deterministic state.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration as StdDuration;
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
+use hail_core::{Config, KEY_LEN, parse_server_key};
 use hail_db::connect;
 use http_body_util::BodyExt;
+use serde_json::json;
 use tower::ServiceExt;
 
 /// Build a fully-initialized `AppState` against a fresh in-memory SQLite.
@@ -48,6 +51,7 @@ async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
         std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
         std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
         std::env::set_var("HAIL_SECRETS__SERVER_KEY", &server_key_hex);
+        std::env::remove_var("HAIL_ADMIN__EMAIL");
     }
     let config = Config::load_from(None).expect("load config");
 
@@ -58,6 +62,21 @@ async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
         login_limiter: Arc::new(IpRateLimiter::default()),
         events: hail_api::events::AppEventBus::default(),
     };
+    (state, key)
+}
+
+async fn fixture_state_with_admin(admin_email: Option<&str>) -> (AppState, [u8; KEY_LEN]) {
+    let (mut state, key) = fixture_state().await;
+    unsafe {
+        if let Some(email) = admin_email {
+            std::env::set_var("HAIL_ADMIN__EMAIL", email);
+        } else {
+            std::env::remove_var("HAIL_ADMIN__EMAIL");
+        }
+    }
+    state.config = Config::load_from(None).expect("reload config with admin override");
+    state.server_key =
+        Arc::new(parse_server_key(&state.config.secrets.server_key).expect("parse server key"));
     (state, key)
 }
 
@@ -107,6 +126,295 @@ async fn seed_session(
     .await
     .expect("insert session");
     session_id
+}
+
+fn login_request(body: Body) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .unwrap()
+}
+
+async fn login_with_provider(
+    state: AppState,
+    request: Request<Body>,
+    provider: hail_api::routes::auth::TestLoginProvider,
+) -> axum::response::Response {
+    hail_api::routes::auth::test_login_with_provider(
+        axum::extract::State(state),
+        ConnectInfo("127.0.0.1:10000".parse().unwrap()),
+        request.headers().clone(),
+        request,
+        provider,
+    )
+    .await
+}
+
+async fn valid_login(
+    state: AppState,
+    email: &str,
+    password: &str,
+    provider: hail_api::routes::auth::TestLoginProvider,
+) -> axum::response::Response {
+    let request = login_request(Body::from(
+        json!({ "email": email, "password": password }).to_string(),
+    ));
+    login_with_provider(state, request, provider).await
+}
+
+fn ok_provider(
+    account_id: &'static str,
+    calls: Arc<AtomicUsize>,
+) -> hail_api::routes::auth::TestLoginProvider {
+    Arc::new(move |_jmap_url, _email, _password| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move { Ok(account_id.to_owned()) })
+    })
+}
+
+#[tokio::test]
+async fn malformed_json_returns_400_and_does_not_call_provider() {
+    let (state, _key) = fixture_state().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = ok_provider("acct-unused", calls.clone());
+
+    let request = login_request(Body::from(r#"{"email":"alice@example.org""#));
+    let resp = login_with_provider(state, request, provider).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn malformed_payload_returns_400_and_does_not_call_provider() {
+    let (state, _key) = fixture_state().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = ok_provider("acct-unused", calls.clone());
+
+    let request = login_request(Body::from(
+        json!({ "email": "alice@example.org" }).to_string(),
+    ));
+    let resp = login_with_provider(state, request, provider).await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn rate_limiter_returns_429_after_attempts_without_calling_provider() {
+    let (mut state, _key) = fixture_state().await;
+    state.login_limiter = Arc::new(IpRateLimiter::new(2, StdDuration::from_secs(60)));
+    let calls = Arc::new(AtomicUsize::new(0));
+
+    for _ in 0..2 {
+        let resp = valid_login(
+            state.clone(),
+            "alice@example.org",
+            "correct horse battery staple",
+            ok_provider("acct", calls.clone()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = valid_login(
+        state,
+        "alice@example.org",
+        "correct horse battery staple",
+        ok_provider("acct", calls.clone()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn login_upserts_existing_user_account_id() {
+    let (state, _key) = fixture_state().await;
+    sqlx::query(
+        "INSERT INTO users (email, jmap_account_id, is_admin, created_at)
+         VALUES (?1, ?2, 0, ?3)",
+    )
+    .bind("alice@example.org")
+    .bind("old-account")
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .expect("seed user");
+
+    let resp = valid_login(
+        state.clone(),
+        " Alice@Example.Org ",
+        "correct horse battery staple",
+        ok_provider("new-account", Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (count, account_id): (i64, String) = sqlx::query_as(
+        "SELECT COUNT(*), MAX(jmap_account_id) FROM users WHERE email = 'alice@example.org'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .expect("select user");
+    assert_eq!(count, 1);
+    assert_eq!(account_id, "new-account");
+}
+
+#[tokio::test]
+async fn first_login_without_config_admin_becomes_admin() {
+    let (state, _key) = fixture_state().await;
+
+    let resp = valid_login(
+        state.clone(),
+        "alice@example.org",
+        "correct horse battery staple",
+        ok_provider("acct-alice", Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let is_admin: i64 = sqlx::query_scalar("SELECT is_admin FROM users WHERE email = ?1")
+        .bind("alice@example.org")
+        .fetch_one(&state.db)
+        .await
+        .expect("select user");
+    assert_eq!(is_admin, 1);
+}
+
+#[tokio::test]
+async fn first_login_with_config_admin_does_not_promote_other_user() {
+    let (state, _key) = fixture_state_with_admin(Some("admin@example.org")).await;
+
+    let resp = valid_login(
+        state.clone(),
+        "alice@example.org",
+        "correct horse battery staple",
+        ok_provider("acct-alice", Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let is_admin: i64 = sqlx::query_scalar("SELECT is_admin FROM users WHERE email = ?1")
+        .bind("alice@example.org")
+        .fetch_one(&state.db)
+        .await
+        .expect("select user");
+    assert_eq!(is_admin, 0);
+}
+
+#[tokio::test]
+async fn configured_admin_login_is_promoted() {
+    let (state, _key) = fixture_state_with_admin(Some("admin@example.org")).await;
+
+    let resp = valid_login(
+        state.clone(),
+        "Admin@Example.Org",
+        "correct horse battery staple",
+        ok_provider("acct-admin", Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (email, is_admin): (String, i64) =
+        sqlx::query_as("SELECT email, is_admin FROM users WHERE email = ?1")
+            .bind("admin@example.org")
+            .fetch_one(&state.db)
+            .await
+            .expect("select user");
+    assert_eq!(email, "admin@example.org");
+    assert_eq!(is_admin, 1);
+}
+
+#[tokio::test]
+async fn fake_provider_called_once_on_valid_login() {
+    let (state, _key) = fixture_state().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+
+    let resp = valid_login(
+        state,
+        "alice@example.org",
+        "correct horse battery staple",
+        ok_provider("acct-alice", calls.clone()),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn successful_login_sets_cookie_and_creates_session() {
+    let (state, key) = fixture_state().await;
+
+    let resp = valid_login(
+        state.clone(),
+        "alice@example.org",
+        "correct horse battery staple",
+        ok_provider("acct-alice", Arc::new(AtomicUsize::new(0))),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("set-cookie")
+        .to_str()
+        .expect("cookie header");
+    assert!(
+        cookie.contains("HttpOnly"),
+        "cookie missing HttpOnly: {cookie}"
+    );
+
+    let (session_count, encrypted_token): (i64, Vec<u8>) =
+        sqlx::query_as("SELECT COUNT(*), MAX(jmap_token_enc) FROM sessions")
+            .fetch_one(&state.db)
+            .await
+            .expect("select session");
+    assert_eq!(session_count, 1);
+    let token = hail_core::open(&encrypted_token, &key).expect("decrypt token");
+    let token = String::from_utf8(token).expect("utf8 token");
+    assert_eq!(
+        token,
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"alice@example.org:correct horse battery staple"
+        )
+    );
+}
+
+#[tokio::test]
+async fn auth_failure_returns_401_and_does_not_create_user_or_session() {
+    let (state, _key) = fixture_state().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: hail_api::routes::auth::TestLoginProvider =
+        Arc::new(move |_jmap_url, _email, _password| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err("invalid credentials".to_owned()) })
+        });
+
+    let resp = valid_login(
+        state.clone(),
+        "alice@example.org",
+        "wrong password",
+        provider,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await
+        .expect("count users");
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+        .fetch_one(&state.db)
+        .await
+        .expect("count sessions");
+    assert_eq!(user_count, 0);
+    assert_eq!(session_count, 0);
 }
 
 #[tokio::test]
@@ -225,8 +533,16 @@ async fn logout_deletes_session_row_and_clears_cookie() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    let cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(cookie.contains("Max-Age=0"), "logout must clear cookie: {cookie}");
+    let cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        cookie.contains("Max-Age=0"),
+        "logout must clear cookie: {cookie}"
+    );
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE id = ?1")
         .bind(&sid)
@@ -312,7 +628,12 @@ async fn login_cookie_carries_all_security_flags() {
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    let cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+    let cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cookie.contains("HttpOnly"));
     assert!(cookie.contains("Secure"));
     assert!(cookie.contains("SameSite=Lax"));
