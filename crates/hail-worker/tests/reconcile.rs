@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -21,6 +21,7 @@ use reconcile::{ReconcileReport, ThreadVerifier, process_reconciliation};
 #[derive(Debug, Default)]
 struct FakeThreadVerifier {
     existing_by_user: HashMap<i64, HashSet<String>>,
+    fail_by_user: HashMap<i64, &'static str>,
 }
 
 impl FakeThreadVerifier {
@@ -31,11 +32,20 @@ impl FakeThreadVerifier {
         );
         self
     }
+
+    fn with_failure(mut self, user_id: i64, message: &'static str) -> Self {
+        self.fail_by_user.insert(user_id, message);
+        self
+    }
 }
 
 #[async_trait]
 impl ThreadVerifier for FakeThreadVerifier {
     async fn existing_threads(&self, user_id: i64, ids: &[String]) -> Result<HashSet<String>> {
+        if let Some(message) = self.fail_by_user.get(&user_id) {
+            return Err(anyhow!(*message));
+        }
+
         let allowed = self.existing_by_user.get(&user_id);
         Ok(ids
             .iter()
@@ -220,6 +230,45 @@ async fn wrong_user_isolation() {
     assert_eq!(report.users_checked, 2);
     assert_eq!(report.stack_positions_deleted, 1);
     assert_eq!(report.bubble_ups_deleted, 1);
+}
+
+#[tokio::test]
+async fn verifier_error_leaves_all_sidecar_refs_untouched() {
+    let (pool, _guard, alice, bob) = setup_db().await;
+    insert_stack(&pool, alice, "reply_later", "alice-stack-missing", 1).await;
+    insert_bubble(&pool, alice, "alice-bubble-missing", None).await;
+    insert_stack(&pool, bob, "set_aside", "bob-stack-unchecked", 1).await;
+    insert_bubble(&pool, bob, "bob-bubble-unchecked", None).await;
+    let verifier = FakeThreadVerifier::default()
+        // Alice verifies successfully with no existing ids, so her refs would be
+        // deleted if reconciliation applied deletes before every user's JMAP
+        // check had succeeded.
+        .with_existing(alice, &[])
+        .with_failure(bob, "synthetic JMAP verifier failure");
+
+    let err = process_reconciliation(&pool, &verifier, Utc::now())
+        .await
+        .expect_err("reconcile should fail on verifier error");
+    let err = format!("{err:#}");
+
+    assert!(
+        err.contains(&format!("verify JMAP threads for user {bob}")),
+        "error should include user context, got: {err}"
+    );
+    assert!(
+        err.contains("synthetic JMAP verifier failure"),
+        "error should preserve verifier source, got: {err}"
+    );
+    assert_eq!(stack_threads(&pool, alice).await, vec!["alice-stack-missing"]);
+    assert_eq!(
+        pending_bubble_threads(&pool, alice).await,
+        vec!["alice-bubble-missing"]
+    );
+    assert_eq!(stack_threads(&pool, bob).await, vec!["bob-stack-unchecked"]);
+    assert_eq!(
+        pending_bubble_threads(&pool, bob).await,
+        vec!["bob-bubble-unchecked"]
+    );
 }
 
 #[tokio::test]
