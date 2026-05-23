@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Link,
   Outlet,
@@ -15,7 +15,8 @@ import {
   useSetupAdminMutation,
   useSetupState,
 } from './api/query';
-import { AuthProvider, useAuth } from './auth/AuthProvider';
+import { AuthProvider } from './auth/AuthProvider';
+import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 
 function AppShell() {
@@ -26,7 +27,7 @@ function AppShell() {
   );
 }
 
-function CenteredPage({ children }: { children: React.ReactNode }) {
+function CenteredPage({ children }: { children: ReactNode }) {
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-12 text-slate-50">
       <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-md flex-col justify-center">
@@ -323,38 +324,22 @@ function SetupPage() {
   );
 }
 
-function ImboxPage() {
-  const { user, logout, logoutLoading } = useAuth();
+function ProtectedPlaceholderPage({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return <MailAppShell title={title} description={description} />;
+}
 
+function ImboxPage() {
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-8 text-slate-50">
-      <section className="mx-auto max-w-4xl">
-        <header className="flex items-center justify-between gap-4 border-b border-slate-800 pb-6">
-          <div>
-            <p className="text-sm font-medium uppercase tracking-[0.35em] text-sky-300">
-              hail
-            </p>
-            <h1 className="mt-2 text-4xl font-semibold tracking-tight">Imbox</h1>
-          </div>
-          <button
-            type="button"
-            onClick={logout}
-            disabled={logoutLoading}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {logoutLoading ? 'Signing out…' : 'Logout'}
-          </button>
-        </header>
-        <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
-          <p className="text-sm text-slate-400">Signed in as</p>
-          <p className="mt-1 text-lg font-medium">{user?.email}</p>
-          <p className="mt-6 text-slate-300">
-            Mail lists arrive later. This placeholder proves the authenticated
-            shell is wired up.
-          </p>
-        </div>
-      </section>
-    </main>
+    <MailAppShell
+      title="Imbox"
+      description="Important mail from approved people lands here."
+    />
   );
 }
 
@@ -403,21 +388,113 @@ const setupRoute = createRoute({
   component: SetupPage,
 });
 
+async function requireAuth() {
+  try {
+    return await queryClient.ensureQueryData({
+      queryKey: ['hail', 'auth', 'me'],
+      queryFn: () => defaultApiClient.me(),
+      retry: false,
+    });
+  } catch {
+    throw redirect({ to: '/login' });
+  }
+}
+
 const imboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/imbox',
-  beforeLoad: async () => {
-    try {
-      await queryClient.ensureQueryData({
-        queryKey: ['hail', 'auth', 'me'],
-        queryFn: () => defaultApiClient.me(),
-        retry: false,
-      });
-    } catch {
-      throw redirect({ to: '/login' });
-    }
-  },
+  beforeLoad: requireAuth,
   component: ImboxPage,
+});
+
+const feedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/feed',
+  beforeLoad: requireAuth,
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Feed"
+      description="Newsletters and recurring reading can collect here."
+    />
+  ),
+});
+
+const paperTrailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/papertrail',
+  beforeLoad: requireAuth,
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Paper Trail"
+      description="Receipts, statements, and reference mail will land here."
+    />
+  ),
+});
+
+const screenerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/screener',
+  beforeLoad: requireAuth,
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Screener"
+      description="Unknown senders wait here for approve or deny decisions."
+    />
+  ),
+});
+
+const setAsideRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/set-aside',
+  beforeLoad: requireAuth,
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Set Aside"
+      description="Threads you want nearby but not in the Imbox will stack here."
+    />
+  ),
+});
+
+const replyLaterRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reply-later',
+  beforeLoad: requireAuth,
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Reply Later"
+      description="Mail that needs a response can wait in this pile."
+    />
+  ),
+});
+
+const searchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/search',
+  beforeLoad: requireAuth,
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Search"
+      description="Unified mail search will render here."
+    />
+  ),
+});
+
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin',
+  beforeLoad: async () => {
+    const me = await requireAuth();
+    if (!me.user.is_admin) {
+      throw redirect({ to: '/imbox' });
+    }
+    return me;
+  },
+  component: () => (
+    <ProtectedPlaceholderPage
+      title="Admin"
+      description="Instance users, domains, and operator settings will render here."
+    />
+  ),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -425,6 +502,13 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
   imboxRoute,
+  feedRoute,
+  paperTrailRoute,
+  screenerRoute,
+  setAsideRoute,
+  replyLaterRoute,
+  searchRoute,
+  adminRoute,
 ]);
 
 export const router = createRouter({
