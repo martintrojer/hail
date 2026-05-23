@@ -63,7 +63,6 @@ webapp_dir = "/tmp/hail-webapp"
 
 [admin]
 email = "ops@hail.test"
-password_hash = "$argon2id$v=19$m=65536,t=3,p=1$abc$def"
 display_name = "Ops"
 
 [secrets]

@@ -43,15 +43,17 @@ public_url = "https://hail.example.com"
 
 # --- Admin (OPTIONAL) -------------------------------------------------------
 # Uncomment AND set to disable the first-run wizard at /setup. Leave commented
-# to enable the wizard. Both paths create the same hail admin DB state (DD-9).
+# to enable the wizard.
 #
-# `password_hash` is an argon2 hash — never a plaintext password. Generate with:
-#   argon2 "$(pwgen -s 32 1)" -e -id -t 3 -m 16 -p 1
-# or set it out-of-band via HAIL_ADMIN__PASSWORD_HASH.
+# Stalwart remains the source of truth for passwords and account creation. Hail
+# does not use an admin password/hash from this file and does not seed a fake
+# local user at startup. Instead, when this email successfully logs in through
+# Stalwart/JMAP, hail upserts the local users row with Stalwart's real
+# jmap_account_id and marks it is_admin=1. This makes the config-file path
+# converge with the wizard path without storing duplicate password state.
 #
 # [admin]
 # email = "you@example.com"
-# password_hash = "$argon2id$v=19$m=65536,t=3,p=1$...$..."
 # display_name = "Operator"
 
 # --- Secrets ----------------------------------------------------------------

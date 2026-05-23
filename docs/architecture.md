@@ -305,7 +305,11 @@ unset and use `/setup`.
 
 **Why:** both camps matter in self-hosting. The rule is precise: the wizard is
 active only when no admin user exists **and** `[admin]` is absent from config.
-Both paths converge on the same database state.
+For the config-file path, Stalwart remains the source of truth: hail does not
+store or verify an admin password hash and does not seed a fake user row at
+startup. The configured admin email is elevated to `is_admin=1` on its first
+successful Stalwart/JMAP login, using the real `jmap_account_id` from that
+session. Both paths converge on the same database state.
 
 ### 6.10 Cloudflare Tunnel support is MVP, not polish
 

@@ -82,15 +82,18 @@ pub struct ServerConfig {
     pub webapp_dir: Option<PathBuf>,
 }
 
-/// Pre-provisioned admin user. Setting this block opts out of the wizard
-/// (DD-9). `password_hash` is an argon2 hash — never a plaintext password.
-/// The wizard path writes the same fields directly to `hail.db`.
+/// Pre-provisioned admin login. Setting this block opts out of the wizard
+/// (DD-9). Stalwart remains the password/account source of truth: hail does
+/// not create a local user row until this email successfully logs in through
+/// JMAP, at which point the row is marked `is_admin=1` using the real
+/// `jmap_account_id` returned by Stalwart.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminConfig {
     /// Admin login email.
     pub email: String,
-    /// argon2 password hash. Optional only so a TOML can list the email
-    /// while the operator sets the hash via `HAIL_ADMIN__PASSWORD_HASH`.
+    /// Deprecated/no-op. Hail authenticates configured admins against
+    /// Stalwart on login and never reads this value. Kept only so older
+    /// configs/env can continue to parse while operators remove it.
     #[serde(default)]
     pub password_hash: Option<String>,
     /// Display name shown in the UI.

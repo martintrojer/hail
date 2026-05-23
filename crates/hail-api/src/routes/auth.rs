@@ -2,9 +2,9 @@
 //!
 //! Login flow (design.md §7.3, §10):
 //!   1. Validate credentials against Stalwart via `hail_jmap::login_basic`.
-//!   2. Upsert the `users` row (first login becomes `is_admin=1` iff the
-//!      operator did not pre-provision an `[admin]` in `hail.toml` AND
-//!      no admin exists yet — DD-9).
+//!   2. Upsert the `users` row. If `[admin]` is configured in `hail.toml`,
+//!      that Stalwart-authenticated email is elevated on successful login;
+//!      otherwise the first successful login becomes admin (DD-9).
 //!   3. Synthesize a JMAP bearer token. For Stalwart, the bearer token
 //!      IS the Basic credentials base64-encoded (`base64("user:pass")`);
 //!      Stalwart's HTTP layer accepts that under both `Authorization:
@@ -111,21 +111,18 @@ async fn login(
     let password = body.password;
 
     // 1. Validate with Stalwart.
-    let session = match hail_jmap::login_basic(
-        &state.config.stalwart.jmap_url,
-        &email,
-        password.clone(),
-    )
-    .await
-    {
-        Ok(s) => s,
-        Err(err) => {
-            // GENERIC error to the client (design.md §10.1 logging hygiene);
-            // detailed reason to the trace log so an operator can debug.
-            tracing::info!(error = %err, "login: jmap auth failed");
-            return invalid_credentials();
-        }
-    };
+    let session =
+        match hail_jmap::login_basic(&state.config.stalwart.jmap_url, &email, password.clone())
+            .await
+        {
+            Ok(s) => s,
+            Err(err) => {
+                // GENERIC error to the client (design.md §10.1 logging hygiene);
+                // detailed reason to the trace log so an operator can debug.
+                tracing::info!(error = %err, "login: jmap auth failed");
+                return invalid_credentials();
+            }
+        };
     let jmap_account_id = session.account_id().to_string();
 
     // 2. Upsert user. Inside one transaction so the "first user becomes
@@ -139,39 +136,25 @@ async fn login(
         }
     };
 
-    // "First user becomes admin" applies only when the operator did NOT
-    // pre-provision an `[admin]` block (DD-9). Otherwise the admin is
-    // expected to come from the `/setup` wizard (separate task) or a
-    // manual `users` row.
-    let admin_preprovisioned = state.config.admin.is_some();
-    let any_admin_exists: bool =
-        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users WHERE is_admin = 1)")
-            .fetch_one(&mut *tx)
-            .await
-            .map(|n| n != 0)
-            .unwrap_or(true); // err on the side of NOT auto-elevating.
-
-    let promote_to_admin = !admin_preprovisioned && !any_admin_exists;
-
-    let upsert_sql = "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
-                      VALUES (?1, ?2, ?3, ?4) \
-                      ON CONFLICT(email) DO UPDATE SET jmap_account_id = excluded.jmap_account_id \
-                      RETURNING id, email, display_name, is_admin";
-    let (user_id, db_email, display_name, is_admin_int): (i64, String, Option<String>, i64) =
-        match sqlx::query_as(upsert_sql)
-            .bind(&email)
-            .bind(&jmap_account_id)
-            .bind(if promote_to_admin { 1_i64 } else { 0_i64 })
-            .bind(now)
-            .fetch_one(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, "login: user upsert failed");
-                return internal();
-            }
-        };
+    let (user_id, db_email, display_name, is_admin_int) = match upsert_authenticated_user(
+        &mut tx,
+        state
+            .config
+            .admin
+            .as_ref()
+            .map(|admin| admin.email.as_str()),
+        &email,
+        &jmap_account_id,
+        now,
+    )
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, "login: user upsert failed");
+            return internal();
+        }
+    };
 
     // 3. Synthesize the JMAP bearer token: base64("email:password").
     // Stalwart accepts the same blob under `Authorization: Bearer …`,
@@ -299,6 +282,62 @@ async fn me(State(state): State<AppState>, Extension(user): Extension<AuthUser>)
     Json(UserEnvelope { user: view }).into_response()
 }
 
+async fn upsert_authenticated_user(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    config_admin_email: Option<&str>,
+    email: &str,
+    jmap_account_id: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<(i64, String, Option<String>, i64), sqlx::Error> {
+    let any_admin_exists: bool =
+        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM users WHERE is_admin = 1)")
+            .fetch_one(&mut **tx)
+            .await
+            .map(|n| n != 0)
+            .unwrap_or(true); // err on the side of NOT auto-elevating.
+
+    // Admin bootstrap policy:
+    //
+    // * With `[admin]`, Stalwart remains the source of truth. We do not
+    //   seed a fake hail user at startup because `users.jmap_account_id`
+    //   must come from a real JMAP login. Instead, the configured email is
+    //   elevated on its first successful Stalwart login (and on later
+    //   logins if an existing local row somehow lost `is_admin`).
+    // * Without `[admin]`, preserve the first-run fallback: the first
+    //   successful login becomes admin if no admin row exists.
+    let promote_to_admin = should_promote_to_admin(config_admin_email, email, any_admin_exists);
+
+    sqlx::query_as(
+        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(email) DO UPDATE SET \
+           jmap_account_id = excluded.jmap_account_id, \
+           is_admin = CASE \
+             WHEN excluded.is_admin = 1 THEN 1 \
+             ELSE users.is_admin \
+           END \
+         RETURNING id, email, display_name, is_admin",
+    )
+    .bind(email)
+    .bind(jmap_account_id)
+    .bind(if promote_to_admin { 1_i64 } else { 0_i64 })
+    .bind(now)
+    .fetch_one(&mut **tx)
+    .await
+}
+
+fn should_promote_to_admin(
+    config_admin_email: Option<&str>,
+    login_email: &str,
+    any_admin_exists: bool,
+) -> bool {
+    if let Some(admin_email) = config_admin_email {
+        return admin_email.trim().eq_ignore_ascii_case(login_email);
+    }
+
+    !any_admin_exists
+}
+
 /// Build the `Set-Cookie` value for a fresh session. We hardcode every
 /// flag in design.md §10.1 so the security posture is obvious from this
 /// single line:
@@ -364,6 +403,105 @@ fn internal() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn memory_tx() -> sqlx::Transaction<'static, sqlx::Sqlite> {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .expect("open memory db");
+        sqlx::query(
+            "CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                jmap_account_id TEXT NOT NULL,
+                display_name TEXT,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .expect("create users");
+        db.begin().await.expect("begin tx")
+    }
+
+    #[tokio::test]
+    async fn configured_admin_login_inserts_admin_with_real_account_id() {
+        let mut tx = memory_tx().await;
+        let (_id, email, _display_name, is_admin) = upsert_authenticated_user(
+            &mut tx,
+            Some("Operator@Example.Org"),
+            "operator@example.org",
+            "acct-real",
+            Utc::now(),
+        )
+        .await
+        .expect("upsert user");
+
+        assert_eq!(email, "operator@example.org");
+        assert_eq!(is_admin, 1);
+        let account_id: String = sqlx::query_scalar("SELECT jmap_account_id FROM users")
+            .fetch_one(&mut *tx)
+            .await
+            .expect("select account id");
+        assert_eq!(account_id, "acct-real");
+    }
+
+    #[tokio::test]
+    async fn configured_admin_login_elevates_existing_non_admin_row() {
+        let mut tx = memory_tx().await;
+        sqlx::query(
+            "INSERT INTO users (email, jmap_account_id, is_admin, created_at)
+             VALUES ('operator@example.org', 'old-acct', 0, ?1)",
+        )
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await
+        .expect("seed user");
+
+        let (_id, _email, _display_name, is_admin) = upsert_authenticated_user(
+            &mut tx,
+            Some("operator@example.org"),
+            "operator@example.org",
+            "new-acct",
+            Utc::now(),
+        )
+        .await
+        .expect("upsert user");
+
+        assert_eq!(is_admin, 1);
+        let (account_id, is_admin): (String, i64) =
+            sqlx::query_as("SELECT jmap_account_id, is_admin FROM users")
+                .fetch_one(&mut *tx)
+                .await
+                .expect("select user");
+        assert_eq!(account_id, "new-acct");
+        assert_eq!(is_admin, 1);
+    }
+
+    #[test]
+    fn configured_admin_email_promotes_even_when_admin_exists() {
+        assert!(should_promote_to_admin(
+            Some("Operator@Example.Org"),
+            "operator@example.org",
+            true,
+        ));
+    }
+
+    #[test]
+    fn configured_admin_does_not_promote_other_users() {
+        assert!(!should_promote_to_admin(
+            Some("operator@example.org"),
+            "alice@example.org",
+            false,
+        ));
+    }
+
+    #[test]
+    fn first_login_promotes_only_without_configured_admin_and_existing_admin() {
+        assert!(should_promote_to_admin(None, "alice@example.org", false));
+        assert!(!should_promote_to_admin(None, "bob@example.org", true));
+    }
 
     #[test]
     fn cookie_carries_all_security_flags() {
