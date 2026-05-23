@@ -55,8 +55,9 @@ public_url = "https://hail.example.com"
 # display_name = "Operator"
 
 # --- Secrets ----------------------------------------------------------------
-# AES-GCM key used to wrap JMAP tokens at rest (DD-8). Must decode to ≥ 32
-# bytes; hex encoding from `openssl rand -hex 32` is recommended.
+# AES-GCM key used to wrap JMAP tokens at rest (DD-8). Prefer 64 hex
+# characters from `openssl rand -hex 32`; non-hex raw strings of at least
+# 32 bytes are also accepted.
 #
 # RECOMMENDED: leave this commented out in TOML and set the env var instead,
 # so the key isn't checked into the same file the rest of the deployment lives in:

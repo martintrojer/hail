@@ -34,9 +34,10 @@ const FALLBACK_CONFIG_PATH: &str = "./hail.toml";
 const ENV_PREFIX: &str = "HAIL_";
 /// Nested separator inside env-var names. Figment translates this to `.`.
 const ENV_NESTED_SEP: &str = "__";
-/// Minimum decoded length of the AES-GCM server key, in bytes. DD-8 calls
-/// for a 256-bit key; we accept anything ≥ 32 bytes so operators can rotate
-/// to a larger key without code changes.
+/// Minimum usable length of the AES-GCM server key, in bytes. DD-8 calls
+/// for a 256-bit key; we accept either 32 decoded hex bytes or at least
+/// 32 non-hex raw bytes so operators can rotate to a larger raw key
+/// without code changes.
 const MIN_SERVER_KEY_BYTES: usize = 32;
 
 /// Top-level configuration. Cheap to clone (held inside `Arc<AppState>`).
@@ -101,8 +102,9 @@ pub struct AdminConfig {
 /// wrap JMAP tokens at rest (DD-8).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SecretsConfig {
-    /// 32+ bytes of key material. Hex (64 chars) or base64; `Config::load`
-    /// validates and reports a clear error if too short / malformed.
+    /// Key material for AES-256-GCM token encryption. Prefer 64 ASCII
+    /// hex characters from `openssl rand -hex 32`; non-hex raw strings of
+    /// at least 32 bytes are also accepted, with the first 32 bytes used.
     /// Stored as [`SecretString`] so it never lands in `Debug`/logs.
     pub server_key: SecretString,
 }
@@ -119,8 +121,8 @@ pub enum ConfigError {
     /// error verbatim — it already points at file + field.
     #[error(transparent)]
     Parse(#[from] figment::Error),
-    /// `secrets.server_key` decoded to fewer than `MIN_SERVER_KEY_BYTES`,
-    /// or was empty.
+    /// `secrets.server_key` was empty or does not provide at least
+    /// `MIN_SERVER_KEY_BYTES` of usable key material.
     #[error("invalid server_key: {0}")]
     InvalidServerKey(String),
 }
@@ -182,11 +184,10 @@ fn env_layer_empty() -> bool {
     std::env::vars().all(|(k, _)| !k.starts_with(ENV_PREFIX))
 }
 
-/// Validate the server key: non-empty, and at least 32 raw bytes after
-/// hex or base64 decoding. We try hex first (the common case from
-/// `openssl rand -hex 32`), then permissive base64; the raw byte length
-/// of the input string is also accepted so operators using e.g.
-/// `pwgen -s 64` get a sane fallback.
+/// Validate the server key: non-empty, and either 64+ hex characters
+/// (representing at least 32 bytes) or a non-hex raw string of at least
+/// 32 bytes. `parse_server_key` uses the decoded 64-character hex value
+/// or the first 32 raw bytes; it does not base64-decode keys.
 fn validate_server_key(key: &SecretString) -> Result<(), ConfigError> {
     let raw = key.expose_secret();
     if raw.is_empty() {
@@ -205,8 +206,8 @@ fn validate_server_key(key: &SecretString) -> Result<(), ConfigError> {
         )));
     }
 
-    // Fall back to raw byte length. Anything ≥ 32 bytes is acceptable
-    // entropy for an AES-256 key derived via HKDF at use site.
+    // Fall back to raw byte length. Anything ≥ 32 bytes is acceptable;
+    // parse_server_key will use the first 32 bytes directly.
     if raw.len() >= MIN_SERVER_KEY_BYTES {
         return Ok(());
     }
