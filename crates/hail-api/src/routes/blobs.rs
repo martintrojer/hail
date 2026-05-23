@@ -8,6 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use axum::extract::multipart::{MultipartError, MultipartRejection};
 use axum::extract::{DefaultBodyLimit, Extension, Multipart, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -47,12 +48,12 @@ impl BlobUploader for JmapBlobUploader {
         Box::pin(async move {
             let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
                 .await
-                .map_err(|err| BlobUploadError(err.to_string()))?;
+                .map_err(|err| BlobUploadError::new(err.to_string()))?;
             let response = session
                 .client()
                 .upload(Some(session.account_id()), bytes, content_type.as_deref())
                 .await
-                .map_err(|err| BlobUploadError(err.to_string()))?;
+                .map_err(|err| BlobUploadError::new(err.to_string()))?;
             Ok(UploadedBlob {
                 blob_id: response.blob_id().to_owned(),
                 size: response.size(),
@@ -64,6 +65,13 @@ impl BlobUploader for JmapBlobUploader {
 
 #[derive(Debug)]
 pub struct BlobUploadError(String);
+
+impl BlobUploadError {
+    /// Construct an upload failure without exposing backend details to clients.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
 
 /// Build protected blob routes.
 pub fn router() -> Router<AppState> {
@@ -99,12 +107,15 @@ async fn upload_blobs<U>(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
     Extension(uploader): Extension<Arc<U>>,
-    mut multipart: Multipart,
+    multipart: Result<Multipart, MultipartRejection>,
 ) -> Response
 where
     U: BlobUploader,
 {
     let mut blobs = Vec::new();
+    let Ok(mut multipart) = multipart else {
+        return bad_request();
+    };
 
     loop {
         let field = match multipart.next_field().await {
@@ -112,7 +123,7 @@ where
             Ok(None) => break,
             Err(err) => {
                 tracing::debug!(error = %err, "multipart parse failed");
-                return payload_too_large();
+                return multipart_error(err);
             }
         };
 
@@ -124,7 +135,7 @@ where
             Ok(bytes) => bytes,
             Err(err) => {
                 tracing::debug!(error = %err, "multipart file read failed");
-                return payload_too_large();
+                return multipart_error(err);
             }
         };
         if bytes.len() > MAX_FILE_BYTES {
@@ -132,7 +143,12 @@ where
         }
 
         let uploaded = match uploader
-            .upload(&state, user.jmap_token.clone(), bytes.to_vec(), content_type)
+            .upload(
+                &state,
+                user.jmap_token.clone(),
+                bytes.to_vec(),
+                content_type,
+            )
             .await
         {
             Ok(uploaded) => uploaded,
@@ -147,11 +163,28 @@ where
     (StatusCode::CREATED, Json(BlobUploadResponse { blobs })).into_response()
 }
 
+fn multipart_error(err: MultipartError) -> Response {
+    if err.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        payload_too_large()
+    } else {
+        bad_request()
+    }
+}
+
 fn payload_too_large() -> Response {
     (
         StatusCode::PAYLOAD_TOO_LARGE,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"payload_too_large"}"#,
+    )
+        .into_response()
+}
+
+fn bad_request() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"invalid_multipart"}"#,
     )
         .into_response()
 }
