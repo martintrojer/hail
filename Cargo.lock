@@ -992,6 +992,7 @@ dependencies = [
  "hail-jmap",
  "rand 0.9.4",
  "secrecy",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror",
