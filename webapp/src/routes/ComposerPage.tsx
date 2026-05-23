@@ -133,6 +133,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
     attachments: [],
   }), [form]);
 
+  const canSaveDraft = !replyToThreadId;
   const canSubmit = (Boolean(replyToThreadId) || draftPayload.to.length > 0)
     && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
     && form.body.trim().length > 0;
@@ -163,7 +164,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   }
 
   function saveDraft() {
-    if (!dirty || replyToThreadId || !canSubmit) return;
+    if (!dirty || !canSaveDraft) return;
     if (blockUnsupportedAttachments()) return;
 
     const snapshot = JSON.stringify(draftPayload);
@@ -286,7 +287,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-800 pt-4">
               <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
               <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
-              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSubmit || hasUnsupportedAttachments} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
+              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
               <p className="text-xs text-slate-500">{replyToThreadId ? 'Replies send through the thread reply API.' : savingDraft ? 'Autosaving…' : lastSavedAt ? `Saved ${lastSavedAt.toLocaleTimeString()}` : dirty ? 'Unsaved changes' : 'No draft saved yet'}</p>
             </div>
 

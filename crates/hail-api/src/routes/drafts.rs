@@ -254,14 +254,14 @@ where
 impl DraftPayload {
     fn into_create(self) -> Result<DraftCreate, &'static str> {
         validate_attachments(&self.attachments)?;
-        let to = self.to.ok_or("to_required")?;
-        let subject = self.subject.ok_or("subject_required")?;
-        let body_markdown = self.body_markdown.ok_or("body_markdown_required")?;
+        let to = self.to.unwrap_or_default();
+        let cc = self.cc.unwrap_or_default();
+        let bcc = self.bcc.unwrap_or_default();
+        let subject = self.subject.unwrap_or_default();
+        let body_markdown = self.body_markdown.unwrap_or_default();
 
         validate_recipients("to", &to)?;
-        let cc = self.cc.unwrap_or_default();
         validate_recipients("cc", &cc)?;
-        let bcc = self.bcc.unwrap_or_default();
         validate_recipients("bcc", &bcc)?;
         validate_subject(&subject)?;
         validate_body(&body_markdown)?;
