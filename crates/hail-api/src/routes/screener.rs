@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
+use crate::routes::undo::{UndoToken, create_undo_action};
 use crate::state::AppState;
 
 const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
@@ -110,6 +111,7 @@ struct DecisionResponse {
     sender: String,
     decision: &'static str,
     classify_as: Option<Classification>,
+    undo: Option<UndoToken>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -296,10 +298,34 @@ where
         tracing::warn!(user_id = user.id, sender = %sender, error = %err, "audit log write failed");
     }
 
+    let undo = match create_undo_action(
+        &state,
+        user.id,
+        "screener.decision",
+        serde_json::json!({
+            // TODO(undo executor): restore the previous screener row value
+            // instead of only exposing the generic token once action-specific
+            // compensation is implemented.
+            "sender": &sender,
+            "decision": decision.response_value(),
+            "classify_as": response_classify_as,
+            "apply_to_history": body.apply_to_history,
+        }),
+    )
+    .await
+    {
+        Ok(undo) => Some(undo),
+        Err(err) => {
+            tracing::warn!(user_id = user.id, sender = %sender, error = %err, "undo action create failed");
+            None
+        }
+    };
+
     Json(DecisionResponse {
         sender,
         decision: decision.response_value(),
         classify_as: response_classify_as,
+        undo,
     })
     .into_response()
 }
