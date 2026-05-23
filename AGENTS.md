@@ -24,6 +24,39 @@ Durable docs:
 
 This project uses `mu` as the live task DAG. Do not create `TODO.md`, `PLAN.md`, or markdown checklists for implementation tasks.
 
+**Critical rule: keep refining the DAG as you learn.** The initial task graph is not sacred and is not complete. When implementation reveals a missing prerequisite, split-out subtask, review gate, integration test, or follow-up, add it to mu immediately and wire edges. This is how we harness mu: the graph absorbs discovery so no agent has to keep the plan in memory.
+
+Examples:
+
+```bash
+# A large task reveals a reusable primitive that should land first.
+mu task add html-sanitize-trackers -w hail \
+  -t "Mail render primitive: sanitize inbound HTML and strip/count tracking pixels" \
+  -i 90 -e 1 \
+  -b auth-middleware,jmap-wrapper
+mu task block thread-assembly -w hail --by html-sanitize-trackers
+
+# A feature needs an E2E gate before v1 can ship.
+mu task add e2e-receive-screener-imbox -w hail \
+  -t "E2E smoke: receive/import mail, Screener pending, approve sender, Imbox visible" \
+  -i 95 -e 1 \
+  -b stalwart-integration-harness,screener-routing,views-screener,verbs-screener
+mu task block v1-ship -w hail --by e2e-receive-screener-imbox
+
+# A task was actually completed by a broader task.
+mu task close auth-middleware -w hail \
+  --evidence "superseded by auth-login; middleware implemented and tested there"
+```
+
+When adding tasks:
+
+- Give each task a concrete title and honest `impact` / `effort-days`.
+- Prefer smaller tasks with clear ownership over one vague umbrella task.
+- Add `--blocked-by` or `mu task block` edges immediately; do not leave dependency knowledge in prose.
+- If a task is discovered during implementation but should not block v1, add it and mark it `DEFERRED` with evidence.
+- If a task is no longer needed, `reject` or `close` it with evidence rather than deleting history.
+- Add final gates (E2E, security review, test review, docs sync) as tasks that block `v1-ship`; do not rely on the orchestrator remembering them.
+
 Common commands:
 
 ```bash
