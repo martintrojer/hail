@@ -20,6 +20,7 @@ import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { MailViewPage } from './routes/MailViewPage';
 import { ScreenerPage } from './routes/ScreenerPage';
+import { SearchPage } from './routes/SearchPage';
 import { ThreadPage } from './routes/ThreadPage';
 
 function AppShell() {
@@ -490,12 +491,7 @@ const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/search',
   beforeLoad: requireAuth,
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Search"
-      description="Unified mail search will render here."
-    />
-  ),
+  component: SearchPage,
 });
 
 const adminRoute = createRoute({

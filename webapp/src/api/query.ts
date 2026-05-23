@@ -18,6 +18,8 @@ import {
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
+  type SearchParams,
+  type SearchResponse,
   type SetupAdminRequest,
   type SetupState,
   type ThreadViewResponse,
@@ -120,6 +122,22 @@ export function usePapertrailView(
     queryKey: queryKeys.view('papertrail'),
     queryFn: () => client.getPapertrail(),
     ...options,
+  });
+}
+
+export function useSearch(
+  params: SearchParams,
+  client = defaultApiClient,
+  options?: QueryConfig<SearchResponse>,
+) {
+  const normalizedQuery = params.q.trim();
+  const scope = params.scope ?? 'all';
+
+  return useQuery({
+    queryKey: queryKeys.search(normalizedQuery, scope),
+    queryFn: () => client.search({ q: normalizedQuery, scope }),
+    ...options,
+    enabled: normalizedQuery.length >= 2 && (options?.enabled ?? true),
   });
 }
 
