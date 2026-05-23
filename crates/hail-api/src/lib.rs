@@ -71,7 +71,8 @@ pub fn build_router(state: AppState, include_test_stubs: bool) -> Router {
     // `mut` only when the test-stub merge below is compiled in; in
     // release builds the binding is never reassigned.
     #[cfg_attr(not(feature = "__test-stubs"), allow(unused_mut))]
-    let mut protected: Router<AppState> = routes::auth::protected_router();
+    let mut protected: Router<AppState> = routes::auth::protected_router()
+        .merge(routes::threads::router());
 
     #[cfg(feature = "__test-stubs")]
     if include_test_stubs {
