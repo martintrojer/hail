@@ -13,6 +13,48 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/blobs": {
+      "post": {
+        "tags": [
+          "blobs"
+        ],
+        "operationId": "upload_blobs",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Blobs uploaded to JMAP.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid multipart upload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "413": {
+            "description": "Upload too large."
+          },
+          "500": {
+            "description": "Blob upload failed."
+          }
+        }
+      }
+    },
     "/api/compose": {
       "post": {
         "tags": [
@@ -58,6 +100,121 @@
           },
           "500": {
             "description": "JMAP provider or scheduler failure."
+          }
+        }
+      }
+    },
+    "/api/contacts/{address}": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "operationId": "get_contact",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "description": "Email address to inspect.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contact detail with optional note.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Contact lookup failed."
+          }
+        }
+      }
+    },
+    "/api/contacts/{address}/note": {
+      "put": {
+        "tags": [
+          "contacts"
+        ],
+        "operationId": "put_note",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "description": "Email address whose note should be saved.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutNoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Contact note saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactNote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contact note payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Contact note save failed."
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "operationId": "delete_note",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "description": "Email address whose note should be deleted.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Contact note deleted."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Contact note delete failed."
           }
         }
       }
@@ -151,6 +308,45 @@
         }
       }
     },
+    "/api/screener/decisions": {
+      "post": {
+        "tags": [
+          "screener"
+        ],
+        "operationId": "post_decision",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Screener decision saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid screener decision payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Screener decision failed."
+          }
+        }
+      }
+    },
     "/api/threads/{thread_id}": {
       "get": {
         "tags": [
@@ -190,6 +386,201 @@
           },
           "500": {
             "description": "Thread assembly failed."
+          }
+        }
+      }
+    },
+    "/api/threads/{thread_id}/archive": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "archive_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread archived.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadVerbResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Thread archive failed."
+          }
+        }
+      }
+    },
+    "/api/threads/{thread_id}/bubble-up": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "bubble_up",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BubbleUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Thread bubble-up scheduled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BubbleUpResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bubble-up payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Bubble-up scheduling failed."
+          }
+        }
+      }
+    },
+    "/api/threads/{thread_id}/classify": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "classify_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Thread reclassified.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadVerbResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id or classification."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Thread classify failed."
+          }
+        }
+      }
+    },
+    "/api/threads/{thread_id}/mark": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "mark_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Thread read/unread state updated."
+          },
+          "400": {
+            "description": "Invalid mark payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Thread mark failed."
           }
         }
       }
@@ -257,13 +648,475 @@
         }
       }
     },
+    "/api/threads/{thread_id}/reply-later": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "reply_later",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread added to Reply Later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadVerbResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Reply Later failed."
+          }
+        }
+      }
+    },
+    "/api/threads/{thread_id}/set-aside": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "set_aside",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread added to Set Aside.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadVerbResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Set Aside failed."
+          }
+        }
+      }
+    },
+    "/api/threads/{thread_id}/trash": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "trash_thread",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread moved to trash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadVerbResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "Thread trash failed."
+          }
+        }
+      }
+    },
+    "/api/undo/{id}": {
+      "post": {
+        "tags": [
+          "undo"
+        ],
+        "operationId": "post_undo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Opaque 64-character undo token id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Undo token consumed and action executed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UndoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Undo payload is invalid."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Undo token not found."
+          },
+          "410": {
+            "description": "Undo token expired or was already used."
+          },
+          "500": {
+            "description": "Undo execution failed."
+          },
+          "501": {
+            "description": "Undo action is not implemented."
+          }
+        }
+      }
+    },
+    "/api/views/feed": {
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "get_feed",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feed mail view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailViewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "JMAP mail view lookup failed."
+          }
+        }
+      }
+    },
+    "/api/views/imbox": {
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "get_imbox",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Imbox mail view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailViewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "JMAP mail view lookup failed."
+          }
+        }
+      }
+    },
+    "/api/views/papertrail": {
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "get_papertrail",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paper Trail mail view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailViewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "JMAP mail view lookup failed."
+          }
+        }
+      }
+    },
+    "/api/views/reply-later": {
+      "get": {
+        "tags": [
+          "piles"
+        ],
+        "operationId": "get_reply_later",
+        "responses": {
+          "200": {
+            "description": "Threads in the Reply Later pile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PileViewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Pile lookup failed."
+          }
+        }
+      }
+    },
+    "/api/views/screener": {
+      "get": {
+        "tags": [
+          "screener"
+        ],
+        "operationId": "get_screener",
+        "responses": {
+          "200": {
+            "description": "Pending screener senders.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreenerViewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Screener lookup failed."
+          }
+        }
+      }
+    },
+    "/api/views/search": {
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "get_search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unified mail/contact-note search.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid search query."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Search lookup failed."
+          }
+        }
+      }
+    },
+    "/api/views/set-aside": {
+      "get": {
+        "tags": [
+          "piles"
+        ],
+        "operationId": "get_set_aside",
+        "responses": {
+          "200": {
+            "description": "Threads in the Set Aside pile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PileViewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "Pile lookup failed."
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
           "system"
         ],
         "summary": "Liveness probe.",
-        "description": "Returns 204 No Content if the process is up enough to accept HTTP.\nIntended for container orchestrators (Kubernetes `livenessProbe`,\nDocker `HEALTHCHECK`, etc.) \u2014 a failing liveness check should\nrestart the container.",
+        "description": "Returns 204 No Content if the process is up enough to accept HTTP.\nIntended for container orchestrators (Kubernetes `livenessProbe`,\nDocker `HEALTHCHECK`, etc.) — a failing liveness check should\nrestart the container.",
         "operationId": "healthz",
         "responses": {
           "204": {
@@ -293,6 +1146,20 @@
   },
   "components": {
     "schemas": {
+      "BlobUploadResponse": {
+        "type": "object",
+        "required": [
+          "blobs"
+        ],
+        "properties": {
+          "blobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadedBlob"
+            }
+          }
+        }
+      },
       "BlockedTrackerResponse": {
         "type": "object",
         "required": [
@@ -305,6 +1172,54 @@
           },
           "src": {
             "type": "string"
+          }
+        }
+      },
+      "BubbleUpRequest": {
+        "type": "object",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BubbleUpResponse": {
+        "type": "object",
+        "required": [
+          "bubble_id",
+          "surface_at"
+        ],
+        "properties": {
+          "bubble_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "surface_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Classification": {
+        "type": "string",
+        "enum": [
+          "imbox",
+          "feed",
+          "papertrail"
+        ]
+      },
+      "ClassifyRequest": {
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/Classification"
           }
         }
       },
@@ -413,6 +1328,109 @@
           }
         ]
       },
+      "ContactNote": {
+        "type": "object",
+        "required": [
+          "markdown",
+          "updated_at"
+        ],
+        "properties": {
+          "markdown": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ContactResponse": {
+        "type": "object",
+        "required": [
+          "address",
+          "threads"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "note": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContactNote"
+              }
+            ]
+          },
+          "threads": {
+            "type": "array",
+            "items": {},
+            "description": "Placeholder for future contact thread history. The view tasks will\npopulate this with pre-shaped thread summaries; for now clients get\na stable empty array rather than needing a nullable/missing field."
+          }
+        }
+      },
+      "DecisionRequest": {
+        "type": "object",
+        "required": [
+          "sender",
+          "decision",
+          "apply_to_history"
+        ],
+        "properties": {
+          "apply_to_history": {
+            "type": "boolean"
+          },
+          "classify_as": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionResponse": {
+        "type": "object",
+        "required": [
+          "sender",
+          "decision"
+        ],
+        "properties": {
+          "classify_as": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Classification"
+              }
+            ]
+          },
+          "decision": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "undo": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UndoToken"
+              }
+            ]
+          }
+        }
+      },
       "DraftPayload": {
         "type": "object",
         "properties": {
@@ -480,6 +1498,87 @@
           }
         }
       },
+      "MailClassification": {
+        "type": "string",
+        "enum": [
+          "imbox",
+          "feed",
+          "papertrail"
+        ]
+      },
+      "MailViewItem": {
+        "type": "object",
+        "required": [
+          "thread_id",
+          "email_id",
+          "from",
+          "subject",
+          "preview",
+          "unread",
+          "classification"
+        ],
+        "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/MailClassification"
+          },
+          "email_id": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "preview": {
+            "type": "string"
+          },
+          "received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "unread": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MailViewResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailViewItem"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MarkRequest": {
+        "type": "object",
+        "required": [
+          "read"
+        ],
+        "properties": {
+          "read": {
+            "type": "boolean"
+          }
+        }
+      },
       "Participant": {
         "type": "object",
         "required": [
@@ -494,6 +1593,53 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "PileItem": {
+        "type": "object",
+        "required": [
+          "thread_id",
+          "position",
+          "added_at"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "preview": {},
+          "thread_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PileViewResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PileItem"
+            }
+          }
+        }
+      },
+      "PutNoteRequest": {
+        "type": "object",
+        "required": [
+          "markdown"
+        ],
+        "properties": {
+          "markdown": {
+            "type": "string"
           }
         }
       },
@@ -521,6 +1667,128 @@
             "format": "date-time"
           }
         }
+      },
+      "ScreenerSender": {
+        "type": "object",
+        "required": [
+          "sender",
+          "first_seen_at",
+          "message_count"
+        ],
+        "properties": {
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latest_preview": {},
+          "message_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sender": {
+            "type": "string"
+          }
+        }
+      },
+      "ScreenerViewResponse": {
+        "type": "object",
+        "required": [
+          "senders"
+        ],
+        "properties": {
+          "senders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenerSender"
+            }
+          }
+        }
+      },
+      "SearchResponse": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          }
+        }
+      },
+      "SearchResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "thread_id",
+              "email_id",
+              "from",
+              "subject",
+              "preview",
+              "type"
+            ],
+            "properties": {
+              "email_id": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "preview": {
+                "type": "string"
+              },
+              "received_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "thread_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "mail"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "address",
+              "markdown",
+              "updated_at",
+              "type"
+            ],
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "markdown": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "contact_note"
+                ]
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
       },
       "ThreadMessageResponse": {
         "type": "object",
@@ -569,6 +1837,21 @@
           }
         }
       },
+      "ThreadVerbResponse": {
+        "type": "object",
+        "properties": {
+          "undo": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UndoToken"
+              }
+            ]
+          }
+        }
+      },
       "ThreadViewResponse": {
         "type": "object",
         "required": [
@@ -597,6 +1880,61 @@
             "type": "string"
           }
         }
+      },
+      "UndoResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "UndoToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "expires_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "UploadedBlob": {
+        "type": "object",
+        "required": [
+          "blob_id",
+          "size",
+          "type"
+        ],
+        "properties": {
+          "blob_id": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string"
+          }
+        }
       }
     }
   },
@@ -606,12 +1944,40 @@
       "description": "Liveness, readiness, and operational probes."
     },
     {
+      "name": "blobs",
+      "description": "JMAP blob upload endpoints."
+    },
+    {
       "name": "compose",
       "description": "Compose, reply, and scheduled-send creation."
     },
     {
+      "name": "contacts",
+      "description": "Contact notes and contact detail views."
+    },
+    {
       "name": "drafts",
       "description": "Draft autosave create/update endpoints."
+    },
+    {
+      "name": "piles",
+      "description": "Saved thread piles such as Set Aside and Reply Later."
+    },
+    {
+      "name": "screener",
+      "description": "Screener pending sender view and decisions."
+    },
+    {
+      "name": "threads",
+      "description": "Thread mutation verbs."
+    },
+    {
+      "name": "undo",
+      "description": "Short-lived undo token execution."
+    },
+    {
+      "name": "views",
+      "description": "Mail list views and unified search."
     }
   ]
 }

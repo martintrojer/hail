@@ -19,6 +19,9 @@ use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
@@ -26,6 +29,9 @@ use crate::state::AppState;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
 const SEARCH_LIMIT: usize = 50;
+
+/// OpenAPI tag for mail views and search endpoints.
+pub const TAG: &str = "views";
 
 pub trait MailViewProvider: Send + Sync + 'static {
     fn list<'a>(
@@ -275,14 +281,25 @@ impl SearchProvider for JmapSearchProvider {
 }
 
 pub fn router() -> Router<AppState> {
-    router_with_providers(Arc::new(JmapMailViewProvider), Arc::new(JmapSearchProvider))
+    Router::from(openapi_router_with_providers(
+        Arc::new(JmapMailViewProvider),
+        Arc::new(JmapSearchProvider),
+    ))
+}
+
+/// Build the OpenAPI-tracked router for production mail views and search.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_providers(Arc::new(JmapMailViewProvider), Arc::new(JmapSearchProvider))
 }
 
 pub fn router_with_provider<P>(provider: Arc<P>) -> Router<AppState>
 where
     P: MailViewProvider,
 {
-    router_with_providers(provider, Arc::new(EmptySearchProvider))
+    Router::from(openapi_router_with_providers(
+        provider,
+        Arc::new(EmptySearchProvider),
+    ))
 }
 
 pub fn router_with_providers<P, S>(
@@ -293,16 +310,24 @@ where
     P: MailViewProvider,
     S: SearchProvider,
 {
-    Router::new()
-        .route("/api/views/imbox", axum::routing::get(get_imbox::<P>))
-        .route("/api/views/feed", axum::routing::get(get_feed::<P>))
-        .route(
-            "/api/views/papertrail",
-            axum::routing::get(get_papertrail::<P>),
-        )
-        .route("/api/views/search", axum::routing::get(get_search::<S>))
-        .layer(Extension(mail_provider))
-        .layer(Extension(search_provider))
+    Router::from(openapi_router_with_providers(mail_provider, search_provider))
+}
+
+fn openapi_router_with_providers<P, S>(
+    mail_provider: Arc<P>,
+    search_provider: Arc<S>,
+) -> OpenApiRouter<AppState>
+where
+    P: MailViewProvider,
+    S: SearchProvider,
+{
+    let mail_provider: Arc<dyn MailViewProvider> = mail_provider;
+    let search_provider: Arc<dyn SearchProvider> = search_provider;
+    OpenApiRouter::new()
+        .routes(routes!(get_imbox).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_papertrail).layer(Extension(mail_provider)))
+        .routes(routes!(get_search).layer(Extension(search_provider)))
 }
 
 struct EmptySearchProvider;
@@ -319,7 +344,7 @@ impl SearchProvider for EmptySearchProvider {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ToSchema)]
 pub enum MailView {
     Imbox,
     Feed,
@@ -344,7 +369,7 @@ impl MailView {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MailClassification {
     Imbox,
@@ -352,29 +377,31 @@ pub enum MailClassification {
     Papertrail,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MailViewItem {
     pub thread_id: String,
     pub email_id: String,
     pub from: String,
     pub subject: String,
     pub preview: String,
+    #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
     pub unread: bool,
     pub classification: MailClassification,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MailSearchResult {
     pub thread_id: String,
     pub email_id: String,
     pub from: String,
     pub subject: String,
     pub preview: String,
+    #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SearchResult {
     Mail {
@@ -383,11 +410,13 @@ enum SearchResult {
         from: String,
         subject: String,
         preview: String,
+        #[schema(value_type = Option<String>, format = DateTime)]
         received_at: Option<DateTime<Utc>>,
     },
     ContactNote {
         address: String,
         markdown: String,
+        #[schema(value_type = String, format = DateTime)]
         updated_at: DateTime<Utc>,
     },
 }
@@ -405,13 +434,13 @@ impl From<MailSearchResult> for SearchResult {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 struct ViewQuery {
     cursor: Option<String>,
     limit: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 struct SearchQuery {
     q: Option<String>,
     scope: Option<String>,
@@ -449,61 +478,98 @@ impl ViewQuery {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct MailViewResponse {
     items: Vec<MailViewItem>,
     next_cursor: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct SearchResponse {
     results: Vec<SearchResult>,
 }
 
-async fn get_imbox<P>(
+#[utoipa::path(
+    get,
+    path = "/api/views/imbox",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Imbox mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_imbox(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(provider): Extension<Arc<P>>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
     Query(query): Query<ViewQuery>,
 ) -> Response
-where
-    P: MailViewProvider,
 {
     get_view(state, user, provider, query, MailView::Imbox).await
 }
 
-async fn get_feed<P>(
+#[utoipa::path(
+    get,
+    path = "/api/views/feed",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Feed mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_feed(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(provider): Extension<Arc<P>>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
     Query(query): Query<ViewQuery>,
 ) -> Response
-where
-    P: MailViewProvider,
 {
     get_view(state, user, provider, query, MailView::Feed).await
 }
 
-async fn get_papertrail<P>(
+#[utoipa::path(
+    get,
+    path = "/api/views/papertrail",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Paper Trail mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_papertrail(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(provider): Extension<Arc<P>>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
     Query(query): Query<ViewQuery>,
 ) -> Response
-where
-    P: MailViewProvider,
 {
     get_view(state, user, provider, query, MailView::Papertrail).await
 }
 
-async fn get_search<S>(
+#[utoipa::path(
+    get,
+    path = "/api/views/search",
+    tag = TAG,
+    params(SearchQuery),
+    responses(
+        (status = 200, description = "Unified mail/contact-note search.", body = SearchResponse),
+        (status = 400, description = "Invalid search query."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Search lookup failed."),
+    ),
+)]
+async fn get_search(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(provider): Extension<Arc<S>>,
+    Extension(provider): Extension<Arc<dyn SearchProvider>>,
     Query(query): Query<SearchQuery>,
 ) -> Response
-where
-    S: SearchProvider,
 {
     let q = match query.q.as_deref().map(str::trim) {
         Some(q) if q.chars().count() >= 2 => q,
@@ -592,15 +658,13 @@ fn escape_like(value: &str) -> String {
     escaped
 }
 
-async fn get_view<P>(
+async fn get_view(
     state: AppState,
     user: AuthUser,
-    provider: Arc<P>,
+    provider: Arc<dyn MailViewProvider>,
     query: ViewQuery,
     view: MailView,
 ) -> Response
-where
-    P: MailViewProvider,
 {
     // TODO(cursor): implement opaque JMAP anchor/queryState pagination. v1 only
     // accepts and ignores the cursor parameter, returning `next_cursor: null`.
