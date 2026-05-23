@@ -74,4 +74,5 @@ futures-util = "0.3"
 # standard pattern for unblocking integration tests that need a
 # behind-the-firewall debug endpoint.
 hail-api = { path = ".", features = ["__test-stubs"] }
+hail-test = { path = "../hail-test" }
 tempfile = "3"
