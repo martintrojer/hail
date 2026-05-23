@@ -7,14 +7,14 @@
 //! helpers for the thread-as-document view.
 
 pub mod quote;
-pub use quote::{StrippedText, strip_quoted_history};
+pub use quote::{strip_quoted_history, StrippedText};
 
 use std::borrow::Cow;
 
 use ammonia::{Builder, UrlRelative};
 use html5ever::serialize::{SerializeOpts, TraversalScope};
 use html5ever::tendril::TendrilSink;
-use html5ever::{QualName, local_name, ns, parse_fragment, serialize};
+use html5ever::{local_name, ns, parse_fragment, serialize, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
 use regex::Regex;
 
@@ -54,7 +54,12 @@ fn sanitizer() -> Builder<'static> {
         // We render fragments inside hail, not standalone pages. Relative URLs in
         // remote email are ambiguous and can accidentally target our origin.
         .url_relative(UrlRelative::Deny)
-        .add_url_schemes(&["cid", "data"])
+        // Do not add a blanket `data:` URL scheme allowance here: ammonia
+        // applies scheme policy across URL attributes, so that would also make
+        // `data:` links clickable. Inline data images stay blocked unless we
+        // later add an explicit img-only data:image/png/jpeg/gif/webp base64
+        // predicate that rejects SVG and every non-image consumer.
+        .add_url_schemes(&["cid"])
         .attribute_filter(|element, attribute, value| match (element, attribute) {
             // Style attributes have a large CSS attack surface and are not in
             // ammonia's defaults. Keep that default even if upstream changes.
@@ -225,6 +230,43 @@ mod tests {
     }
 
     #[test]
+    fn strips_data_html_links() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">open</a>"#,
+        );
+
+        assert!(sanitized.html.contains(">open</a>"));
+        assert!(!sanitized.html.contains("href"));
+        assert!(!sanitized.html.contains("data:text/html"));
+    }
+
+    #[test]
+    fn strips_data_png_images_until_img_only_predicate_exists() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<img src="data:image/png;base64,iVBORw0KGgo=" alt="inline pixel">"#,
+        );
+
+        assert!(sanitized.html.contains("<img"));
+        assert!(sanitized.html.contains(r#"alt="inline pixel""#));
+        assert!(!sanitized.html.contains("src"));
+        assert!(!sanitized.html.contains("data:image/png"));
+        assert!(sanitized.blocked_trackers.is_empty());
+    }
+
+    #[test]
+    fn strips_data_svg_images() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<img src="data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+" alt="svg">"#,
+        );
+
+        assert!(sanitized.html.contains("<img"));
+        assert!(sanitized.html.contains(r#"alt="svg""#));
+        assert!(!sanitized.html.contains("src"));
+        assert!(!sanitized.html.contains("data:image/svg"));
+        assert!(!sanitized.html.contains("onload"));
+    }
+
+    #[test]
     fn strips_and_counts_tiny_tracking_pixels() {
         let sanitized = sanitize_and_strip_trackers(
             r#"<p>Hi</p><img src="https://tracker.example/open.gif" width="1" height="1">"#,
@@ -294,11 +336,9 @@ mod tests {
         let sanitized = sanitize_and_strip_trackers(r#"<a href="https://example.com">site</a>"#);
 
         assert!(sanitized.html.contains(r#"href="https://example.com""#));
-        assert!(
-            sanitized
-                .html
-                .contains(r#"rel="noopener noreferrer nofollow""#)
-        );
+        assert!(sanitized
+            .html
+            .contains(r#"rel="noopener noreferrer nofollow""#));
         assert!(sanitized.html.contains(r#"target="_blank""#));
     }
 }
