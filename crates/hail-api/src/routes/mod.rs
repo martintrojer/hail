@@ -16,6 +16,7 @@ pub mod screener;
 pub mod setup;
 pub mod threads;
 pub mod threads_view;
+pub mod undo;
 pub mod views;
 pub mod ws;
 

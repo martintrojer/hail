@@ -17,6 +17,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "user_prefs",
     "jmap_state",
     "audit_log",
+    "undo_actions",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -25,6 +26,7 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_stack_order",
     "idx_bubble_ups_pending",
     "idx_scheduled_sends_due",
+    "idx_undo_actions_user_live",
 ];
 
 /// Build a fresh DB URL backed by a unique temp file. We deliberately avoid

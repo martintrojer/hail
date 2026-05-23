@@ -19,6 +19,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::undo::{UndoToken, create_undo_action};
 use crate::state::AppState;
 
 const STACK_SET_ASIDE: &str = "set_aside";
@@ -274,6 +275,11 @@ impl Classification {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct ThreadVerbResponse {
+    undo: Option<UndoToken>,
+}
+
 #[derive(Debug, Deserialize)]
 struct MarkRequest {
     read: bool,
@@ -360,7 +366,10 @@ where
         .classify(&state, user.jmap_token.clone(), &thread_id, body.to)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let undo = create_thread_undo(&state, user.id, "thread.classify", &thread_id).await;
+            Json(ThreadVerbResponse { undo }).into_response()
+        }
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
@@ -446,7 +455,10 @@ where
     .await;
 
     match result {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            let undo = create_thread_undo(&state, user.id, "thread.stack", &thread_id).await;
+            Json(ThreadVerbResponse { undo }).into_response()
+        }
         Err(err) => {
             tracing::error!(user_id = user.id, thread_id = %thread_id, stack, error = %err, "stack position upsert failed");
             internal()
@@ -470,7 +482,10 @@ where
         .archive(&state, user.jmap_token.clone(), &thread_id)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let undo = create_thread_undo(&state, user.id, "thread.archive", &thread_id).await;
+            Json(ThreadVerbResponse { undo }).into_response()
+        }
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
@@ -492,7 +507,10 @@ where
         .trash(&state, user.jmap_token.clone(), &thread_id)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let undo = create_thread_undo(&state, user.id, "thread.trash", &thread_id).await;
+            Json(ThreadVerbResponse { undo }).into_response()
+        }
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
@@ -519,6 +537,30 @@ where
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
+}
+
+async fn create_thread_undo(
+    state: &AppState,
+    user_id: i64,
+    action: &str,
+    thread_id: &str,
+) -> Option<UndoToken> {
+    create_undo_action(
+        state,
+        user_id,
+        action,
+        serde_json::json!({
+            // TODO(undo executor): capture the previous mailbox/keyword/stack
+            // state and replay it for action-specific compensation.
+            "thread_id": thread_id,
+        }),
+    )
+    .await
+    .map_err(|err| {
+        tracing::warn!(user_id, thread_id = %thread_id, action, error = %err, "undo action create failed");
+        err
+    })
+    .ok()
 }
 
 async fn login(

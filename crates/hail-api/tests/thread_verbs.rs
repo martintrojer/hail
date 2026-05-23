@@ -342,7 +342,7 @@ async fn classify_calls_action_and_rejects_invalid_classification() {
         Some(r#"{"to":"feed"}"#),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         actions.calls(),
         vec![Call::Classify {
@@ -396,7 +396,7 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
         None,
     )
     .await;
-    assert_eq!(first.status(), StatusCode::NO_CONTENT);
+    assert_eq!(first.status(), StatusCode::OK);
     let second = post(
         state.clone(),
         actions.clone(),
@@ -406,7 +406,7 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
         None,
     )
     .await;
-    assert_eq!(second.status(), StatusCode::NO_CONTENT);
+    assert_eq!(second.status(), StatusCode::OK);
 
     let alice_row: (i64,) = sqlx::query_as(
         "SELECT position FROM stack_positions WHERE user_id = ?1 AND stack = 'set_aside' AND thread_id = 'shared'",
@@ -454,7 +454,7 @@ async fn reply_later_inserts_stack_row() {
         None,
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp.status(), StatusCode::OK);
 
     let row: (String, i64) = sqlx::query_as(
         "SELECT thread_id, position FROM stack_positions WHERE user_id = ?1 AND stack = 'reply_later'",
@@ -479,14 +479,22 @@ async fn archive_trash_and_mark_call_actions() {
     let (_user_id, sid) = seed_session(&state, &key, "verbs@example.org").await;
     let actions = Arc::new(FakeActions::default());
 
-    for (path, body) in [
-        ("/api/threads/thread-3/archive", None),
-        ("/api/threads/thread-3/trash", None),
-        ("/api/threads/thread-3/mark", Some(r#"{"read":true}"#)),
-        ("/api/threads/thread-3/mark", Some(r#"{"read":false}"#)),
+    for (path, body, expected) in [
+        ("/api/threads/thread-3/archive", None, StatusCode::OK),
+        ("/api/threads/thread-3/trash", None, StatusCode::OK),
+        (
+            "/api/threads/thread-3/mark",
+            Some(r#"{"read":true}"#),
+            StatusCode::NO_CONTENT,
+        ),
+        (
+            "/api/threads/thread-3/mark",
+            Some(r#"{"read":false}"#),
+            StatusCode::NO_CONTENT,
+        ),
     ] {
         let resp = post(state.clone(), actions.clone(), Some(&sid), true, path, body).await;
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert_eq!(resp.status(), expected);
     }
 
     assert_eq!(
