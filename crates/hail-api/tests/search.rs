@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::views::{
@@ -88,13 +88,23 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i6
 }
 
 async fn insert_note(state: &AppState, user_id: i64, address: &str, markdown: &str) {
+    insert_note_at(state, user_id, address, markdown, Utc::now()).await;
+}
+
+async fn insert_note_at(
+    state: &AppState,
+    user_id: i64,
+    address: &str,
+    markdown: &str,
+    updated_at: DateTime<Utc>,
+) {
     sqlx::query(
         "INSERT INTO contact_notes (user_id, address, markdown, updated_at) VALUES (?1, ?2, ?3, ?4)",
     )
     .bind(user_id)
     .bind(address)
     .bind(markdown)
-    .bind(Utc::now())
+    .bind(updated_at)
     .execute(&state.db)
     .await
     .expect("insert note");
@@ -206,6 +216,15 @@ fn mail_item() -> MailSearchResult {
     }
 }
 
+fn result_addresses(json: &Value) -> Vec<String> {
+    json["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .map(|item| item["address"].as_str().expect("address").to_string())
+        .collect()
+}
+
 #[tokio::test]
 async fn auth_required_returns_401() {
     let (state, _key) = fixture_state().await;
@@ -225,6 +244,24 @@ async fn short_q_returns_400() {
     let resp = request_search(state, search, Some(&sid), "/api/views/search?q=x").await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn trims_query_before_validation_and_mail_provider_search() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=%20%20needle%20%20&scope=mail",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
 }
 
 #[tokio::test]
@@ -296,6 +333,165 @@ async fn notes_search_finds_current_user_only() {
     assert_eq!(json["results"][0]["type"], "contact_note");
     assert_eq!(json["results"][0]["address"], "ada@example.org");
     assert_eq!(json["results"][0]["markdown"], "needle for alice");
+}
+
+#[tokio::test]
+async fn notes_search_escapes_like_wildcards() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    insert_note(
+        &state,
+        user_id,
+        "percent@example.org",
+        "literal 100% complete",
+    )
+    .await;
+    insert_note(
+        &state,
+        user_id,
+        "percent-false@example.org",
+        "100x should not match",
+    )
+    .await;
+    insert_note(
+        &state,
+        user_id,
+        "underscore@example.org",
+        "literal a_b marker",
+    )
+    .await;
+    insert_note(
+        &state,
+        user_id,
+        "underscore-false@example.org",
+        "axb should not match",
+    )
+    .await;
+    insert_note(
+        &state,
+        user_id,
+        "backslash@example.org",
+        r"literal path\to marker",
+    )
+    .await;
+    insert_note(
+        &state,
+        user_id,
+        "backslash-false@example.org",
+        "path/to should not match",
+    )
+    .await;
+    let search = Arc::new(FakeSearchProvider::default());
+
+    let resp = request_search(
+        state.clone(),
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=100%25&scope=notes",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        result_addresses(&json_body(resp).await),
+        vec!["percent@example.org"]
+    );
+
+    let resp = request_search(
+        state.clone(),
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=a_b&scope=notes",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        result_addresses(&json_body(resp).await),
+        vec!["underscore@example.org"]
+    );
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        r"/api/views/search?q=path%5Cto&scope=notes",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        result_addresses(&json_body(resp).await),
+        vec!["backslash@example.org"]
+    );
+    assert!(search.calls().is_empty());
+}
+
+#[tokio::test]
+async fn notes_search_orders_deterministically_and_limits_results() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let base = Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap();
+
+    insert_note_at(
+        &state,
+        user_id,
+        "z-latest@example.org",
+        "needle newest",
+        base + Duration::seconds(2),
+    )
+    .await;
+    insert_note_at(
+        &state,
+        user_id,
+        "tie-b@example.org",
+        "needle tie b",
+        base + Duration::seconds(1),
+    )
+    .await;
+    insert_note_at(
+        &state,
+        user_id,
+        "tie-a@example.org",
+        "needle tie a",
+        base + Duration::seconds(1),
+    )
+    .await;
+    for index in 0..49 {
+        insert_note_at(
+            &state,
+            user_id,
+            &format!("old-{index:02}@example.org"),
+            &format!("needle old {index}"),
+            base,
+        )
+        .await;
+    }
+    let search = Arc::new(FakeSearchProvider::default());
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=notes",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let addresses = result_addresses(&json);
+    assert_eq!(addresses.len(), 50);
+    assert_eq!(
+        &addresses[..5],
+        &[
+            "z-latest@example.org".to_string(),
+            "tie-a@example.org".to_string(),
+            "tie-b@example.org".to_string(),
+            "old-00@example.org".to_string(),
+            "old-01@example.org".to_string(),
+        ]
+    );
+    assert!(addresses.contains(&"old-46@example.org".to_string()));
+    assert!(!addresses.contains(&"old-47@example.org".to_string()));
+    assert!(!addresses.contains(&"old-48@example.org".to_string()));
+    assert!(search.calls().is_empty());
 }
 
 #[tokio::test]
