@@ -65,6 +65,33 @@ export interface MailViewResponse {
   next_cursor: string | null;
 }
 
+export interface BlockedTracker {
+  src: string;
+  reason: string;
+}
+
+export interface ThreadParticipant {
+  name: string | null;
+  email: string;
+}
+
+export interface ThreadMessage {
+  email_id: string;
+  from: ThreadParticipant[];
+  to: ThreadParticipant[];
+  received_at: string | null;
+  html: string;
+  preview: string;
+  blocked_trackers: BlockedTracker[];
+}
+
+export interface ThreadViewResponse {
+  thread_id: string;
+  subject: string;
+  participants: ThreadParticipant[];
+  messages: ThreadMessage[];
+}
+
 export interface ContactNote {
   markdown: string;
   updated_at: string;
@@ -253,6 +280,13 @@ export class HailApiClient {
   async getPapertrail(): Promise<MailViewResponse> {
     return this.#json<MailViewResponse>(
       await this.#request('/api/views/papertrail'),
+      200,
+    );
+  }
+
+  async getThread(threadId: string): Promise<ThreadViewResponse> {
+    return this.#json<ThreadViewResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}`),
       200,
     );
   }

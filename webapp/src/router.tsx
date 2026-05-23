@@ -20,6 +20,7 @@ import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { MailViewPage } from './routes/MailViewPage';
 import { ScreenerPage } from './routes/ScreenerPage';
+import { ThreadPage } from './routes/ThreadPage';
 
 function AppShell() {
   return (
@@ -336,27 +337,6 @@ function ProtectedPlaceholderPage({
   return <MailAppShell title={title} description={description} />;
 }
 
-function ThreadPlaceholderPage() {
-  const { threadId } = threadRoute.useParams();
-
-  return (
-    <MailAppShell
-      title="Thread"
-      description="Thread-as-document rendering is not wired yet."
-      reading={
-        <div className="flex min-h-80 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 text-center lg:min-h-full">
-          <p className="text-base font-semibold text-slate-200">
-            Thread selected
-          </p>
-          <p className="mt-2 max-w-sm break-all text-sm text-slate-400">
-            {threadId}
-          </p>
-        </div>
-      }
-    />
-  );
-}
-
 function ImboxPage() {
   return (
     <MailViewPage
@@ -500,7 +480,10 @@ const threadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/thread/$threadId',
   beforeLoad: requireAuth,
-  component: ThreadPlaceholderPage,
+  component: () => {
+    const { threadId } = threadRoute.useParams();
+    return <ThreadPage threadId={threadId} />;
+  },
 });
 
 const searchRoute = createRoute({
