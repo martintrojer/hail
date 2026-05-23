@@ -1,0 +1,46 @@
+[server]
+hostname = "mail.hail.test"
+
+[server.listener."http"]
+bind = ["0.0.0.0:8080"]
+protocol = "http"
+
+[server.listener."smtp"]
+bind = ["0.0.0.0:25"]
+protocol = "smtp"
+
+[storage]
+data = "sqlite"
+fts = "sqlite"
+lookup = "sqlite"
+blob = "filesystem"
+directory = "internal"
+
+[store."sqlite"]
+type = "sqlite"
+path = "/var/lib/stalwart/stalwart.sqlite3"
+
+[store."sqlite".pool]
+max-connections = 10
+workers = 10
+
+[store."filesystem"]
+type = "fs"
+path = "/var/lib/stalwart/blobs"
+depth = 2
+
+[directory."internal"]
+type = "internal"
+store = "sqlite"
+
+# Bootstrap/admin only. This local testbed does not yet automate domain/user
+# provisioning; see docs/testing.md for the explicit manual runbook.
+[authentication.fallback-admin]
+user = "admin"
+secret = "CHANGE_ME_WITH_OUTPUT_OF_STALWART_PWHASH"
+
+[tracer."stdout"]
+type = "stdout"
+level = "info"
+ansi = false
+enable = true

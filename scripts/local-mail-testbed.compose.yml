@@ -1,0 +1,52 @@
+# Compose stack used only by scripts/local-mail-testbed.sh.
+# It binds to high loopback ports so it can run without public DNS/Cloudflare
+# and without taking privileged host port 25.
+
+services:
+  stalwart:
+    image: docker.io/stalwartlabs/stalwart:latest
+    ports:
+      - "127.0.0.1:18080:8080" # JMAP/WebUI
+      - "127.0.0.1:10025:25"   # local SMTP, reserved for future SMTP injection
+    volumes:
+      - local-stalwart-data:/var/lib/stalwart
+      - ./local-stalwart-testbed.toml:/opt/stalwart/etc/config.toml:ro
+    restart: unless-stopped
+
+  hail-api:
+    image: hail:local
+    depends_on:
+      - stalwart
+    command: ["/usr/local/bin/hail-api"]
+    environment:
+      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
+      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_SERVER__BIND=0.0.0.0:8080
+      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-http://127.0.0.1:18081}
+      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY}
+    ports:
+      - "127.0.0.1:18081:8080"
+    volumes:
+      - local-hail-data:/var/lib/hail
+      - ../deploy/hail.example.toml:/etc/hail/hail.toml:ro
+    restart: unless-stopped
+
+  hail-worker:
+    image: hail:local
+    depends_on:
+      - stalwart
+      - hail-api
+    command: ["/usr/local/bin/hail-worker"]
+    environment:
+      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
+      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_SERVER__BIND=0.0.0.0:8080
+      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-http://127.0.0.1:18081}
+      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY}
+    volumes:
+      - local-hail-data:/var/lib/hail
+    restart: unless-stopped
+
+volumes:
+  local-stalwart-data: {}
+  local-hail-data: {}
