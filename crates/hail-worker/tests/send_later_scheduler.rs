@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
+use tokio::sync::Barrier;
 
 #[path = "../src/crypto.rs"]
 #[allow(dead_code)]
@@ -53,6 +54,47 @@ impl SendSubmitter for FakeSendSubmitter {
             .expect("results mutex")
             .remove(draft_email_id)
             .unwrap_or_else(|| Ok(Some(format!("submission-{draft_email_id}"))))
+    }
+}
+
+#[derive(Debug)]
+struct BlockingSubmitter {
+    calls: Mutex<Vec<(i64, String)>>,
+    first_call_entered: Barrier,
+    release_first_call: Barrier,
+}
+
+impl BlockingSubmitter {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            first_call_entered: Barrier::new(2),
+            release_first_call: Barrier::new(2),
+        }
+    }
+
+    fn calls(&self) -> Vec<(i64, String)> {
+        self.calls.lock().expect("calls mutex").clone()
+    }
+}
+
+#[async_trait]
+impl SendSubmitter for BlockingSubmitter {
+    async fn submit_draft(
+        &self,
+        user_id: i64,
+        draft_email_id: &str,
+    ) -> Result<Option<String>, SendSubmitError> {
+        let is_first_call = {
+            let mut calls = self.calls.lock().expect("calls mutex");
+            calls.push((user_id, draft_email_id.to_string()));
+            calls.len() == 1
+        };
+        if is_first_call {
+            self.first_call_entered.wait().await;
+            self.release_first_call.wait().await;
+        }
+        Ok(Some(format!("submission-{draft_email_id}")))
     }
 }
 
@@ -108,24 +150,25 @@ async fn insert_scheduled_send(
     draft_email_id: &str,
     send_at: DateTime<Utc>,
 ) -> i64 {
-    sqlx::query_scalar(
+    sqlx::query(
         "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
-         VALUES (?, ?, ?, 'pending', ?) RETURNING id",
+         VALUES (?, ?, ?, 'pending', ?)",
     )
     .bind(user_id)
     .bind(draft_email_id)
     .bind(send_at)
     .bind("2026-01-01T00:00:00Z")
-    .fetch_one(pool)
+    .execute(pool)
     .await
     .expect("insert scheduled_send")
+    .last_insert_rowid()
 }
 
 async fn scheduled_send_state(
     pool: &SqlitePool,
     id: i64,
-) -> (String, Option<String>, Option<String>) {
-    sqlx::query_as("SELECT status, sent_at, error FROM scheduled_sends WHERE id = ?")
+) -> (String, Option<String>, Option<String>, Option<String>) {
+    sqlx::query_as("SELECT status, claimed_at, sent_at, error FROM scheduled_sends WHERE id = ?")
         .bind(id)
         .fetch_one(pool)
         .await
@@ -147,7 +190,12 @@ async fn due_send_submits_and_marks_sent() {
     assert_eq!(submitter.calls(), vec![(user_id, "draft-due".to_string())]);
     assert_eq!(
         scheduled_send_state(&pool, id).await,
-        ("sent".to_string(), Some(now.to_rfc3339()), None)
+        (
+            "sent".to_string(),
+            Some(now.to_rfc3339()),
+            Some(now.to_rfc3339()),
+            None
+        )
     );
 }
 
@@ -167,7 +215,7 @@ async fn future_send_not_touched() {
     assert!(submitter.calls().is_empty());
     assert_eq!(
         scheduled_send_state(&pool, id).await,
-        ("pending".to_string(), None, None)
+        ("pending".to_string(), None, None, None)
     );
 }
 
@@ -199,7 +247,7 @@ async fn transient_failure_leaves_pending() {
     );
     assert_eq!(
         scheduled_send_state(&pool, id).await,
-        ("pending".to_string(), None, None)
+        ("pending".to_string(), None, None, None)
     );
 }
 
@@ -233,6 +281,7 @@ async fn permanent_failure_marks_failed_and_sets_error() {
         scheduled_send_state(&pool, id).await,
         (
             "failed".to_string(),
+            Some(now.to_rfc3339()),
             None,
             Some("invalid recipients".to_string())
         )
@@ -288,15 +337,54 @@ async fn multiple_due_rows_continue_after_failures() {
     assert_eq!(scheduled_send_state(&pool, first).await.0, "sent");
     assert_eq!(
         scheduled_send_state(&pool, transient).await,
-        ("pending".to_string(), None, None)
+        ("pending".to_string(), None, None, None)
     );
     assert_eq!(
         scheduled_send_state(&pool, permanent).await,
         (
             "failed".to_string(),
+            Some(now.to_rfc3339()),
             None,
             Some("invalid draft".to_string())
         )
     );
     assert_eq!(scheduled_send_state(&pool, last).await.0, "sent");
+}
+
+#[tokio::test]
+async fn competing_workers_only_submit_claimed_row_once() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send(&pool, user_id, "draft-race", now - Duration::minutes(1)).await;
+    let submitter = Arc::new(BlockingSubmitter::new());
+
+    let first_pool = pool.clone();
+    let first_submitter = submitter.clone();
+    let first = tokio::spawn(async move {
+        process_due_scheduled_sends(&first_pool, first_submitter.as_ref(), now)
+            .await
+            .expect("first process due")
+    });
+
+    submitter.first_call_entered.wait().await;
+
+    let second_sent = process_due_scheduled_sends(&pool, submitter.as_ref(), now)
+        .await
+        .expect("second process due");
+
+    submitter.release_first_call.wait().await;
+    let first_sent = first.await.expect("first worker join");
+
+    assert_eq!(first_sent, 1);
+    assert_eq!(second_sent, 0);
+    assert_eq!(submitter.calls(), vec![(user_id, "draft-race".to_string())]);
+    assert_eq!(
+        scheduled_send_state(&pool, id).await,
+        (
+            "sent".to_string(),
+            Some(now.to_rfc3339()),
+            Some(now.to_rfc3339()),
+            None
+        )
+    );
 }
