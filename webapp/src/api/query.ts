@@ -19,6 +19,7 @@ import {
   type ScreenerView,
   type SetupAdminRequest,
   type SetupState,
+  type ThreadViewResponse,
   type UserEnvelope,
 } from './client';
 import { queryKeys } from './queryKeys';
@@ -118,6 +119,19 @@ export function usePapertrailView(
     queryKey: queryKeys.view('papertrail'),
     queryFn: () => client.getPapertrail(),
     ...options,
+  });
+}
+
+export function useThread(
+  threadId: string,
+  client = defaultApiClient,
+  options?: QueryConfig<ThreadViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.thread(threadId),
+    queryFn: () => client.getThread(threadId),
+    ...options,
+    enabled: threadId.trim().length > 0 && (options?.enabled ?? true),
   });
 }
 
