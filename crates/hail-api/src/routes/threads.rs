@@ -22,6 +22,12 @@ use crate::middleware::auth::AuthUser;
 use crate::routes::undo::{UndoToken, create_undo_action};
 use crate::state::AppState;
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct StackPositionSnapshot {
+    position: i64,
+    added_at: DateTime<Utc>,
+}
+
 const STACK_SET_ASIDE: &str = "set_aside";
 const STACK_REPLY_LATER: &str = "reply_later";
 
@@ -498,6 +504,14 @@ where
         Err(ThreadActionError::Provider(err)) => return action_internal(user.id, &thread_id, err),
     }
 
+    let previous_position = match select_stack_position(&state, user.id, stack, &thread_id).await {
+        Ok(previous) => previous,
+        Err(err) => {
+            tracing::error!(user_id = user.id, thread_id = %thread_id, stack, error = %err, "stack position snapshot failed");
+            return internal();
+        }
+    };
+
     let now = Utc::now();
     let result = sqlx::query(
         "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
@@ -515,7 +529,15 @@ where
 
     match result {
         Ok(_) => {
-            let undo = create_thread_undo(&state, user.id, "thread.stack", &thread_id).await;
+            let undo = create_thread_stack_undo(
+                &state,
+                user.id,
+                &thread_id,
+                stack,
+                keyword,
+                previous_position,
+            )
+            .await;
             Json(ThreadVerbResponse { undo }).into_response()
         }
         Err(err) => {
@@ -621,28 +643,55 @@ async fn create_thread_classify_undo(
     .ok()
 }
 
-async fn create_thread_undo(
+async fn create_thread_stack_undo(
     state: &AppState,
     user_id: i64,
-    action: &str,
     thread_id: &str,
+    stack: &str,
+    keyword: &str,
+    previous_position: Option<StackPositionSnapshot>,
 ) -> Option<UndoToken> {
+    let previous_position = previous_position.map(|snapshot| {
+        serde_json::json!({
+            "position": snapshot.position,
+            "added_at": snapshot.added_at,
+        })
+    });
+
     create_undo_action(
         state,
         user_id,
-        action,
+        "thread.stack",
         serde_json::json!({
-            // TODO(undo executor): capture the previous mailbox/keyword/stack
-            // state and replay it for action-specific compensation.
             "thread_id": thread_id,
+            "stack": stack,
+            "keyword": keyword,
+            "previous_position": previous_position,
         }),
     )
     .await
     .map_err(|err| {
-        tracing::warn!(user_id, thread_id = %thread_id, action, error = %err, "undo action create failed");
+        tracing::warn!(user_id, thread_id = %thread_id, stack, error = %err, "undo action create failed");
         err
     })
     .ok()
+}
+
+async fn select_stack_position(
+    state: &AppState,
+    user_id: i64,
+    stack: &str,
+    thread_id: &str,
+) -> Result<Option<StackPositionSnapshot>, sqlx::Error> {
+    sqlx::query_as::<_, StackPositionSnapshot>(
+        "SELECT position, added_at FROM stack_positions \
+         WHERE user_id = ?1 AND stack = ?2 AND thread_id = ?3",
+    )
+    .bind(user_id)
+    .bind(stack)
+    .bind(thread_id)
+    .fetch_optional(&state.db)
+    .await
 }
 
 async fn login(

@@ -239,14 +239,122 @@ async fn undo_action_can_only_be_used_once() {
 }
 
 #[tokio::test]
-async fn unsupported_production_action_returns_501() {
+async fn thread_stack_undo_removes_new_stack_row_and_keyword() {
     let (state, key) = fixture_state().await;
-    let (user_id, sid) = seed_session(&state, &key, "unsupported@example.org").await;
+    let (user_id, sid) = seed_session(&state, &key, "stack-undo@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    sqlx::query(
+        "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+         VALUES (?1, 'set_aside', 'thread-1', 3, ?2)",
+    )
+    .bind(user_id)
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
     let undo = create_undo_action(
         &state,
         user_id,
         "thread.stack",
-        serde_json::json!({ "thread_id": "thread-1" }),
+        serde_json::json!({
+            "thread_id": "thread-1",
+            "stack": "set_aside",
+            "keyword": "$hail_setaside",
+            "previous_position": null,
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state.clone(),
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM stack_positions WHERE user_id = ?1 AND stack = 'set_aside' AND thread_id = 'thread-1'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        restorer.keyword_calls(),
+        vec![("thread-1".to_string(), "$hail_setaside".to_string(), false,)]
+    );
+}
+
+#[tokio::test]
+async fn thread_stack_undo_restores_existing_stack_position_without_clearing_keyword() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "stack-restore@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let original_added_at = Utc::now() - Duration::minutes(10);
+    sqlx::query(
+        "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+         VALUES (?1, 'reply_later', 'thread-2', 9, ?2)",
+    )
+    .bind(user_id)
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.stack",
+        serde_json::json!({
+            "thread_id": "thread-2",
+            "stack": "reply_later",
+            "keyword": "$hail_replylater",
+            "previous_position": {
+                "position": 4,
+                "added_at": original_added_at,
+            },
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state.clone(),
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let row: (i64, DateTime<Utc>) = sqlx::query_as(
+        "SELECT position, added_at FROM stack_positions WHERE user_id = ?1 AND stack = 'reply_later' AND thread_id = 'thread-2'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row, (4, original_added_at));
+    assert!(restorer.keyword_calls().is_empty());
+}
+
+#[tokio::test]
+async fn malformed_thread_stack_undo_returns_400() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "bad-stack-undo@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.stack",
+        serde_json::json!({
+            "thread_id": "thread-1",
+            "stack": "set_aside",
+            "keyword": "$hail_replylater",
+            "previous_position": null,
+        }),
     )
     .await
     .unwrap();
@@ -261,7 +369,7 @@ async fn unsupported_production_action_returns_501() {
         &undo.id,
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -387,6 +495,16 @@ async fn screener_decision_undo_restores_previous_row() {
 #[derive(Default)]
 struct FakeThreadRestorer {
     classify_calls: Mutex<Vec<(String, String)>>,
+    keyword_calls: Mutex<Vec<(String, String, bool)>>,
+}
+
+impl FakeThreadRestorer {
+    fn keyword_calls(&self) -> Vec<(String, String, bool)> {
+        self.keyword_calls
+            .lock()
+            .expect("keyword calls mutex")
+            .clone()
+    }
 }
 
 #[async_trait]
@@ -411,6 +529,21 @@ impl ThreadUndoRestorer for FakeThreadRestorer {
         _user: &AuthUser,
         _snapshots: Vec<EmailMailboxSnapshot>,
     ) -> Result<(), UndoError> {
+        Ok(())
+    }
+
+    async fn set_keyword(
+        &self,
+        _state: &AppState,
+        _user: &AuthUser,
+        thread_id: &str,
+        keyword: &str,
+        enabled: bool,
+    ) -> Result<(), UndoError> {
+        self.keyword_calls
+            .lock()
+            .expect("keyword calls mutex")
+            .push((thread_id.to_string(), keyword.to_string(), enabled));
         Ok(())
     }
 }

@@ -14,6 +14,7 @@ use hail_api::routes::threads::{
 use hail_api::state::AppState;
 use hail_core::{Config, KEY_LEN};
 use hail_db::connect;
+use http_body_util::BodyExt;
 use secrecy::SecretString;
 use tower::ServiceExt;
 
@@ -118,6 +119,11 @@ async fn post(
         .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
         .unwrap();
     app(state, actions).oneshot(req).await.unwrap()
+}
+
+async fn json_body(resp: axum::response::Response) -> serde_json::Value {
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 struct FakeVerifier {
@@ -414,6 +420,23 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
     )
     .await;
     assert_eq!(first.status(), StatusCode::OK);
+    let first_json = json_body(first).await;
+    assert_eq!(first_json["undo"]["action"], "thread.stack");
+    assert!(first_json["undo"]["id"].as_str().is_some());
+    assert_eq!(first_json["undo"]["id"].as_str().unwrap().len(), 64);
+    let undo_payload: String = sqlx::query_scalar(
+        "SELECT payload_json FROM undo_actions WHERE id = ?1 AND user_id = ?2 AND action = 'thread.stack'",
+    )
+    .bind(first_json["undo"]["id"].as_str().unwrap())
+    .bind(alice_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    let undo_payload: serde_json::Value = serde_json::from_str(&undo_payload).unwrap();
+    assert_eq!(undo_payload["thread_id"], "shared");
+    assert_eq!(undo_payload["stack"], "set_aside");
+    assert_eq!(undo_payload["keyword"], "$hail_setaside");
+    assert!(undo_payload["previous_position"].is_null());
     let second = post(
         state.clone(),
         actions.clone(),
@@ -424,6 +447,17 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
     )
     .await;
     assert_eq!(second.status(), StatusCode::OK);
+    let second_json = json_body(second).await;
+    let undo_payload: String = sqlx::query_scalar(
+        "SELECT payload_json FROM undo_actions WHERE id = ?1 AND user_id = ?2 AND action = 'thread.stack'",
+    )
+    .bind(second_json["undo"]["id"].as_str().unwrap())
+    .bind(alice_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    let undo_payload: serde_json::Value = serde_json::from_str(&undo_payload).unwrap();
+    assert_eq!(undo_payload["previous_position"]["position"], 8);
 
     let alice_row: (i64,) = sqlx::query_as(
         "SELECT position FROM stack_positions WHERE user_id = ?1 AND stack = 'set_aside' AND thread_id = 'shared'",
@@ -472,6 +506,23 @@ async fn reply_later_inserts_stack_row() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["undo"]["action"], "thread.stack");
+    assert!(json["undo"]["id"].as_str().is_some());
+
+    let undo_payload: String = sqlx::query_scalar(
+        "SELECT payload_json FROM undo_actions WHERE id = ?1 AND user_id = ?2 AND action = 'thread.stack'",
+    )
+    .bind(json["undo"]["id"].as_str().unwrap())
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    let undo_payload: serde_json::Value = serde_json::from_str(&undo_payload).unwrap();
+    assert_eq!(undo_payload["thread_id"], "thread-2");
+    assert_eq!(undo_payload["stack"], "reply_later");
+    assert_eq!(undo_payload["keyword"], "$hail_replylater");
+    assert!(undo_payload["previous_position"].is_null());
 
     let row: (String, i64) = sqlx::query_as(
         "SELECT thread_id, position FROM stack_positions WHERE user_id = ?1 AND stack = 'reply_later'",
