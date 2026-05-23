@@ -35,6 +35,13 @@ pub trait ThreadVerifier: Send + Sync + 'static {
 }
 
 pub trait ThreadActions: Send + Sync + 'static {
+    fn current_classification<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Classification>, ThreadActionError>> + Send + 'a>>;
+
     fn classify<'a>(
         &'a self,
         state: &'a AppState,
@@ -104,6 +111,33 @@ impl ThreadVerifier for JmapThreadVerifier {
 pub struct JmapThreadActions;
 
 impl ThreadActions for JmapThreadActions {
+    fn current_classification<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Classification>, ThreadActionError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let session = login(state, token).await?;
+            let email_ids = email_ids_in_thread(&session, thread_id).await?;
+            let mut request = session.client().build();
+            request
+                .get_email()
+                .ids(email_ids)
+                .properties([hail_jmap::jmap_client::email::Property::Keywords]);
+            let mut response = request.send_get_email().await.map_err(provider_error)?;
+            Ok(response.take_list().into_iter().find_map(|email| {
+                Classification::ALL.into_iter().find(|candidate| {
+                    email
+                        .keywords()
+                        .into_iter()
+                        .any(|kw| kw == candidate.keyword())
+                })
+            }))
+        })
+    }
+
     fn classify<'a>(
         &'a self,
         state: &'a AppState,
@@ -273,6 +307,14 @@ impl Classification {
             Self::Papertrail => "$hail_papertrail",
         }
     }
+
+    pub const fn db_value(self) -> &'static str {
+        match self {
+            Self::Imbox => "imbox",
+            Self::Feed => "feed",
+            Self::Papertrail => "papertrail",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -362,12 +404,29 @@ where
     let Ok(Json(body)) = body else {
         return bad_request("invalid_classification");
     };
+    let previous_classification = match actions
+        .current_classification(&state, user.jmap_token.clone(), &thread_id)
+        .await
+    {
+        Ok(Some(classification)) => Some(classification),
+        Ok(None) => {
+            tracing::debug!(user_id = user.id, thread_id = %thread_id, "thread classify undo unavailable: previous classification keyword missing");
+            None
+        }
+        Err(ThreadActionError::NotFound) => return not_found(),
+        Err(ThreadActionError::Provider(err)) => return action_internal(user.id, &thread_id, err),
+    };
     match actions
         .classify(&state, user.jmap_token.clone(), &thread_id, body.to)
         .await
     {
         Ok(()) => {
-            let undo = create_thread_undo(&state, user.id, "thread.classify", &thread_id).await;
+            let undo = match previous_classification {
+                Some(previous) if previous != body.to => {
+                    create_thread_classify_undo(&state, user.id, &thread_id, previous).await
+                }
+                _ => None,
+            };
             Json(ThreadVerbResponse { undo }).into_response()
         }
         Err(ThreadActionError::NotFound) => not_found(),
@@ -483,8 +542,8 @@ where
         .await
     {
         Ok(()) => {
-            let undo = create_thread_undo(&state, user.id, "thread.archive", &thread_id).await;
-            Json(ThreadVerbResponse { undo }).into_response()
+            tracing::debug!(user_id = user.id, thread_id = %thread_id, "archive undo unavailable: previous mailbox snapshot not captured");
+            Json(ThreadVerbResponse { undo: None }).into_response()
         }
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
@@ -508,8 +567,8 @@ where
         .await
     {
         Ok(()) => {
-            let undo = create_thread_undo(&state, user.id, "thread.trash", &thread_id).await;
-            Json(ThreadVerbResponse { undo }).into_response()
+            tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
+            Json(ThreadVerbResponse { undo: None }).into_response()
         }
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
@@ -537,6 +596,29 @@ where
         Err(ThreadActionError::NotFound) => not_found(),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
+}
+
+async fn create_thread_classify_undo(
+    state: &AppState,
+    user_id: i64,
+    thread_id: &str,
+    previous_classification: Classification,
+) -> Option<UndoToken> {
+    create_undo_action(
+        state,
+        user_id,
+        "thread.classify",
+        serde_json::json!({
+            "thread_id": thread_id,
+            "previous_classification": previous_classification.db_value(),
+        }),
+    )
+    .await
+    .map_err(|err| {
+        tracing::warn!(user_id, thread_id = %thread_id, error = %err, "undo action create failed");
+        err
+    })
+    .ok()
 }
 
 async fn create_thread_undo(

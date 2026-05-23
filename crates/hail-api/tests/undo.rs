@@ -4,10 +4,13 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, Utc};
-use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
+use chrono::{DateTime, Duration, Utc};
+use hail_api::middleware::auth::{AuthUser, CSRF_HEADER, require_auth};
 use hail_api::middleware::rate_limit::IpRateLimiter;
-use hail_api::routes::undo::{UndoActionPayload, UndoError, UndoExecutor, create_undo_action};
+use hail_api::routes::undo::{
+    ActionUndoExecutor, EmailMailboxSnapshot, ThreadUndoRestorer, UndoActionPayload, UndoError,
+    UndoExecutor, create_undo_action,
+};
 use hail_api::state::AppState;
 use hail_core::{Config, KEY_LEN};
 use hail_db::connect;
@@ -81,20 +84,27 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i6
     (user_id, session_id)
 }
 
-fn app(state: AppState, executor: Arc<FakeExecutor>) -> Router {
+fn app<E>(state: AppState, executor: Arc<E>) -> Router
+where
+    E: UndoExecutor,
+{
     let protected = hail_api::routes::undo::router_with_executor(executor).layer(
         axum::middleware::from_fn_with_state(state.clone(), require_auth),
     );
     Router::new().merge(protected).with_state(state)
 }
 
-async fn post_undo(
+async fn post_undo<E>(
     state: AppState,
-    executor: Arc<FakeExecutor>,
+    executor: Arc<E>,
+
     sid: Option<&str>,
     csrf: bool,
     id: &str,
-) -> axum::response::Response {
+) -> axum::response::Response
+where
+    E: UndoExecutor,
+{
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri(format!("/api/undo/{id}"));
@@ -124,7 +134,8 @@ impl UndoExecutor for FakeExecutor {
     async fn execute(
         &self,
         _state: &AppState,
-        _user: &hail_api::middleware::auth::AuthUser,
+        _user: &AuthUser,
+
         undo: UndoActionPayload,
     ) -> Result<(), UndoError> {
         self.calls.lock().expect("calls mutex").push(undo);
@@ -227,6 +238,182 @@ async fn undo_action_can_only_be_used_once() {
     assert_eq!(executor.calls().len(), 1);
 }
 
+#[tokio::test]
+async fn unsupported_production_action_returns_501() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "unsupported@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.stack",
+        serde_json::json!({ "thread_id": "thread-1" }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(Arc::new(
+            FakeThreadRestorer::default(),
+        ))),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn malformed_classify_undo_returns_400() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "badpayload@example.org").await;
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.classify",
+        serde_json::json!({ "thread_id": "thread-1" }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(Arc::new(
+            FakeThreadRestorer::default(),
+        ))),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn classify_undo_restores_previous_classification() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-undo@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.classify",
+        serde_json::json!({
+            "thread_id": "thread-1",
+            "previous_classification": "feed"
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        restorer
+            .classify_calls
+            .lock()
+            .expect("classify calls mutex")
+            .clone(),
+        vec![("thread-1".to_string(), "feed".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn screener_decision_undo_restores_previous_row() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "screener-undo@example.org").await;
+    let first_seen = Utc::now() - Duration::days(2);
+    let decided = Utc::now() - Duration::days(1);
+    sqlx::query(
+        "INSERT INTO screener_rules (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+         VALUES (?1, 'sender@example.org', 'deny', NULL, ?2, ?3)",
+    )
+    .bind(user_id)
+    .bind(Utc::now())
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "screener.decision",
+        serde_json::json!({
+            "sender": "sender@example.org",
+            "previous_rule": {
+                "decision": "allow",
+                "classify_as": "papertrail",
+                "decided_at": decided,
+                "first_seen_at": first_seen,
+            }
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state.clone(),
+        Arc::new(ActionUndoExecutor::new(Arc::new(
+            FakeThreadRestorer::default(),
+        ))),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let row: (String, Option<String>, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+        "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
+         WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "allow");
+    assert_eq!(row.1.as_deref(), Some("papertrail"));
+    assert_eq!(row.2, decided);
+    assert_eq!(row.3, first_seen);
+}
+
+#[derive(Default)]
+struct FakeThreadRestorer {
+    classify_calls: Mutex<Vec<(String, String)>>,
+}
+
+#[async_trait]
+impl ThreadUndoRestorer for FakeThreadRestorer {
+    async fn restore_classification(
+        &self,
+        _state: &AppState,
+        _user: &AuthUser,
+        thread_id: &str,
+        previous_classification: &str,
+    ) -> Result<(), UndoError> {
+        self.classify_calls
+            .lock()
+            .expect("classify calls mutex")
+            .push((thread_id.to_string(), previous_classification.to_string()));
+        Ok(())
+    }
+
+    async fn restore_mailboxes(
+        &self,
+        _state: &AppState,
+        _user: &AuthUser,
+        _snapshots: Vec<EmailMailboxSnapshot>,
+    ) -> Result<(), UndoError> {
+        Ok(())
+    }
+}
 #[tokio::test]
 async fn missing_csrf_returns_403() {
     let (state, key) = fixture_state().await;
