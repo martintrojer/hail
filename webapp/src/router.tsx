@@ -19,6 +19,7 @@ import { AuthProvider } from './auth/AuthProvider';
 import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { MailViewPage } from './routes/MailViewPage';
+import { ScreenerPage } from './routes/ScreenerPage';
 
 function AppShell() {
   return (
@@ -468,12 +469,7 @@ const screenerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/screener',
   beforeLoad: requireAuth,
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Screener"
-      description="Unknown senders wait here for approve or deny decisions."
-    />
-  ),
+  component: ScreenerPage,
 });
 
 const setAsideRoute = createRoute({
