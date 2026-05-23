@@ -180,7 +180,20 @@ cargo test -p hail-test --test e2e_local_direct_mail_smoke -- --nocapture
 HAIL_RUN_LOCAL_MAIL_TESTBED=1 scripts/e2e-local-direct-mail-smoke.sh
 ```
 
-The smoke does not fake success. When enabled it:
+`scripts/e2e-compose-send-later-smoke.sh` covers outbound compose + scheduled
+send-later through the same local Stalwart fixture:
+
+```bash
+# Default cargo test path: explicitly skips with the actionable reason.
+cargo test -p hail-test --test e2e_compose_send_later_smoke -- --nocapture
+
+# Real smoke: starts Stalwart plus local hail-api/hail-worker, schedules a draft,
+# waits for the worker to submit it via JMAP, then verifies scheduled-send state,
+# audit/app-event rows, and the JMAP EmailSubmission envelope.
+HAIL_RUN_LOCAL_MAIL_TESTBED=1 scripts/e2e-compose-send-later-smoke.sh
+```
+
+The receive smoke does not fake success. When enabled it:
 
 1. starts the Rust `start_stalwart_fixture()` local mail testbed and provisions
    `alice@hail.test` / `hail-test-password`;
