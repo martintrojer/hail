@@ -117,6 +117,8 @@ export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
 export type SearchResult = components['schemas']['SearchResult'];
+export type MailSearchResult = Extract<SearchResult, { type: 'mail' }>;
+export type ContactNoteSearchResult = Extract<SearchResult, { type: 'contact_note' }>;
 export type SearchResponse = SearchGetSuccess;
 
 export interface SearchParams {

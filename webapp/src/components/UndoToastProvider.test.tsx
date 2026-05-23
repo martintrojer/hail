@@ -87,7 +87,10 @@ describe('UndoToastProvider', () => {
   });
 
   it('calls the undo API, invalidates hail queries, and renders success', async () => {
-    const undo = vi.spyOn(defaultApiClient, 'undo').mockResolvedValue({ undone: true });
+    const undo = vi.spyOn(defaultApiClient, 'undo').mockResolvedValue({
+      id: 'undo-move-1',
+      action: 'thread.classify',
+    });
     const invalidateQueries = vi
       .spyOn(queryClient, 'invalidateQueries')
       .mockResolvedValue(undefined);
