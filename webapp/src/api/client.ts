@@ -189,6 +189,48 @@ export interface UploadedBlob {
   type: string;
 }
 
+export interface ComposeRequest {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body_markdown: string;
+  attachments?: unknown[];
+  send_at?: string;
+}
+
+export interface ReplyRequest {
+  body_markdown: string;
+  attachments?: unknown[];
+  send_at?: string;
+}
+
+export type ComposeResponse =
+  | {
+      status: 'sent';
+      email_id: string;
+      submission_id?: string | null;
+    }
+  | {
+      status: 'pending';
+      scheduled_send_id: number;
+      draft_email_id: string;
+    };
+
+export interface DraftRequest {
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  body_markdown?: string;
+  attachments?: unknown[];
+}
+
+export interface DraftResponse {
+  draft_id: string;
+  updated_at: string;
+}
+
 export interface BlobUploadResponse {
   blobs: UploadedBlob[];
 }
@@ -520,6 +562,56 @@ export class HailApiClient {
         },
       ),
       201,
+    );
+  }
+
+  async sendCompose(body: ComposeRequest): Promise<ComposeResponse> {
+    return this.#json<ComposeResponse>(
+      await this.#request('/api/compose', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      body.send_at ? 201 : 200,
+    );
+  }
+
+  async sendReply(
+    threadId: string,
+    body: ReplyRequest,
+  ): Promise<ComposeResponse> {
+    return this.#json<ComposeResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/reply`, {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      body.send_at ? 201 : 200,
+    );
+  }
+
+  async createDraft(body: DraftRequest): Promise<DraftResponse> {
+    return this.#json<DraftResponse>(
+      await this.#request('/api/drafts', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async updateDraft(
+    draftId: string,
+    body: DraftRequest,
+  ): Promise<DraftResponse> {
+    return this.#json<DraftResponse>(
+      await this.#request(`/api/drafts/${encodeURIComponent(draftId)}`, {
+        method: 'PATCH',
+        body,
+        mutating: true,
+      }),
+      200,
     );
   }
 

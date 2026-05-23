@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router';
 import { HailApiError, type ThreadMessage, type ThreadViewResponse } from '../api/client';
 import { useThread } from '../api/query';
 import { ContactNotePanel } from '../components/ContactNotePanel';
@@ -172,12 +173,28 @@ function primarySender(thread: ThreadViewResponse) {
 }
 
 function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
+  const navigate = useNavigate();
   const sender = primarySender(thread);
+
+  function reply() {
+    void navigate({ to: '/thread/$threadId/reply', params: { threadId: thread.thread_id } });
+  }
+
+  const replyButton = (
+    <button
+      type="button"
+      onClick={reply}
+      className="rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300"
+    >
+      Reply
+    </button>
+  );
 
   if (thread.messages.length === 0) {
     return (
       <div className="space-y-4">
         <ThreadSummary thread={thread} />
+        {replyButton}
         {sender ? (
           <ContactNotePanel address={sender.email} displayName={sender.name} />
         ) : null}
@@ -192,6 +209,7 @@ function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
   return (
     <div className="space-y-4">
       <ThreadSummary thread={thread} />
+      {replyButton}
       {sender ? (
         <ContactNotePanel address={sender.email} displayName={sender.name} />
       ) : null}

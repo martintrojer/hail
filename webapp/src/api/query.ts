@@ -15,7 +15,11 @@ import {
   type BubbleUpResponse,
   type ContactNote,
   type ContactResponse,
+  type ComposeRequest,
+  type ComposeResponse,
   type CreateAdminUserRequest,
+  type DraftRequest,
+  type DraftResponse,
   type LoginRequest,
   type MailViewResponse,
   type PileViewResponse,
@@ -400,5 +404,63 @@ export function useBubbleUpMutation(
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
+  });
+}
+
+export interface SendComposeMutationVariables {
+  threadId?: string;
+  request: ComposeRequest;
+}
+
+export function useSendComposeMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<SendComposeMutationVariables, ComposeResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId, request }) =>
+      threadId
+        ? client.sendReply(threadId, {
+            body_markdown: request.body_markdown,
+            attachments: request.attachments,
+            send_at: request.send_at,
+          })
+        : client.sendCompose(request),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      if (variables.threadId) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.thread(variables.threadId),
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useCreateDraftMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<DraftRequest, DraftResponse>,
+) {
+  return useMutation({
+    mutationFn: (request) => client.createDraft(request),
+    ...options,
+  });
+}
+
+export interface UpdateDraftMutationVariables {
+  draftId: string;
+  request: DraftRequest;
+}
+
+export function useUpdateDraftMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<UpdateDraftMutationVariables, DraftResponse>,
+) {
+  return useMutation({
+    mutationFn: ({ draftId, request }) => client.updateDraft(draftId, request),
+    ...options,
   });
 }

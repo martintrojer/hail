@@ -20,6 +20,7 @@ import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
+import { ComposerPage } from './routes/ComposerPage';
 import { MailViewPage } from './routes/MailViewPage';
 import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
@@ -371,13 +372,12 @@ function PaperTrailPage() {
   );
 }
 
-function ComposePlaceholderPage() {
-  return (
-    <ProtectedPlaceholderPage
-      title="Compose"
-      description="Composer is not built yet. The c shortcut will land here once drafting ships."
-    />
-  );
+function ComposePage() {
+  return <ComposerPage />;
+}
+
+function ThreadReplyPage({ threadId }: { threadId: string }) {
+  return <ComposerPage replyToThreadId={threadId} />;
 }
 
 const rootRoute = createRootRoute({
@@ -499,6 +499,16 @@ const threadRoute = createRoute({
   },
 });
 
+const threadReplyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/thread/$threadId/reply',
+  beforeLoad: requireAuth,
+  component: () => {
+    const { threadId } = threadReplyRoute.useParams();
+    return <ThreadReplyPage threadId={threadId} />;
+  },
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/search',
@@ -510,7 +520,7 @@ const composeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/compose',
   beforeLoad: requireAuth,
-  component: ComposePlaceholderPage,
+  component: ComposePage,
 });
 
 const adminRoute = createRoute({
@@ -531,6 +541,7 @@ const routeTree = rootRoute.addChildren([
   setAsideRoute,
   replyLaterRoute,
   threadRoute,
+  threadReplyRoute,
   searchRoute,
   composeRoute,
   adminRoute,

@@ -19,7 +19,7 @@ const shortcuts = [
   { keys: 'g then f', action: 'Go to Feed' },
   { keys: 'g then p', action: 'Go to Paper Trail' },
   { keys: 'g then s', action: 'Go to Screener' },
-  { keys: 'c', action: 'Compose (placeholder until composer ships)' },
+  { keys: 'c', action: 'Compose a new message' },
   { keys: 'j / k', action: 'Move focus through the visible mail list' },
   { keys: 'Esc', action: 'Close this help overlay' },
 ];
@@ -76,18 +76,13 @@ function focusMailListItem(direction: 1 | -1) {
 export function KeyboardShortcuts() {
   const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
-  const [composeNoticeOpen, setComposeNoticeOpen] = useState(false);
   const pendingGroupRef = useRef<string | null>(null);
   const groupTimerRef = useRef<number | null>(null);
-  const composeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       if (groupTimerRef.current !== null) {
         window.clearTimeout(groupTimerRef.current);
-      }
-      if (composeTimerRef.current !== null) {
-        window.clearTimeout(composeTimerRef.current);
       }
     };
   }, []);
@@ -109,18 +104,6 @@ export function KeyboardShortcuts() {
       clearPendingGroup();
       pendingGroupRef.current = key;
       groupTimerRef.current = window.setTimeout(clearPendingGroup, groupTimeoutMs);
-    }
-
-    function showComposeNotice() {
-      setComposeNoticeOpen(true);
-      if (composeTimerRef.current !== null) {
-        window.clearTimeout(composeTimerRef.current);
-      }
-      composeTimerRef.current = window.setTimeout(() => {
-        setComposeNoticeOpen(false);
-        composeTimerRef.current = null;
-      }, 3000);
-      console.info('Compose shortcut invoked; composer UI is not built yet.');
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -182,7 +165,6 @@ export function KeyboardShortcuts() {
       if (key === 'c' && !hasModifier) {
         event.preventDefault();
         navigateTo('/compose');
-        showComposeNotice();
         clearPendingGroup();
         return;
       }
@@ -270,14 +252,6 @@ export function KeyboardShortcuts() {
         </div>
       ) : null}
 
-      {composeNoticeOpen ? (
-        <div
-          role="status"
-          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-slate-100 shadow-2xl shadow-slate-950"
-        >
-          Composer is not built yet. Showing the compose placeholder.
-        </div>
-      ) : null}
     </>
   );
 }
