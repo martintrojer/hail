@@ -8,8 +8,7 @@ use sqlx::{Connection, SqliteConnection};
 mod screener;
 
 use screener::{
-    Classification, EmailEnvelope, JmapOps, RouteError, RouteOutcome, normalize_sender,
-    route_email,
+    Classification, EmailEnvelope, JmapOps, RouteError, RouteOutcome, normalize_sender, route_email,
 };
 
 #[derive(Debug, Default)]
@@ -23,8 +22,14 @@ struct FakeJmapOps {
 enum Call {
     GetOrCreateMailbox(String),
     GetMailboxByRole(String),
-    ApplyKeyword { email_id: String, keyword: String },
-    MoveToMailbox { email_id: String, mailbox_id: String },
+    ApplyKeyword {
+        email_id: String,
+        keyword: String,
+    },
+    MoveToMailbox {
+        email_id: String,
+        mailbox_id: String,
+    },
 }
 
 impl FakeJmapOps {
@@ -140,12 +145,16 @@ async fn user_id(pool: &sqlx::SqlitePool, email: &str) -> i64 {
 }
 
 fn envelope(from: &str) -> EmailEnvelope {
+    envelope_with_id(from, "email-1", vec!["inbox-id".to_string()])
+}
+
+fn envelope_with_id(from: &str, id: &str, mailbox_ids: Vec<String>) -> EmailEnvelope {
     EmailEnvelope {
-        id: "email-1".to_string(),
+        id: id.to_string(),
         thread_id: "thread-1".to_string(),
         from: from.to_string(),
         subject: "subject must not be info-logged".to_string(),
-        mailbox_ids: vec!["inbox-id".to_string()],
+        mailbox_ids,
         keywords: vec![],
         received_at: None,
         size: Some(123),
@@ -192,12 +201,24 @@ fn normalize_sender_cases() {
 #[tokio::test]
 async fn allow_rule_classifies_and_applies_keyword() {
     let (mut conn, _guard, alice_id, _) = setup_db().await;
-    insert_rule(&mut conn, alice_id, "sender@example.com", "allow", Some("imbox")).await;
+    insert_rule(
+        &mut conn,
+        alice_id,
+        "sender@example.com",
+        "allow",
+        Some("imbox"),
+    )
+    .await;
     let jmap = Arc::new(FakeJmapOps::new());
 
-    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &envelope("sender@example.com"))
-        .await
-        .expect("route");
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope("sender@example.com"),
+    )
+    .await
+    .expect("route");
 
     assert_eq!(
         outcome,
@@ -220,9 +241,14 @@ async fn deny_rule_moves_to_trash() {
     insert_rule(&mut conn, alice_id, "sender@example.com", "deny", None).await;
     let jmap = Arc::new(FakeJmapOps::new());
 
-    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &envelope("sender@example.com"))
-        .await
-        .expect("route");
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope("sender@example.com"),
+    )
+    .await
+    .expect("route");
 
     assert_eq!(outcome, RouteOutcome::Trashed);
     assert_eq!(
@@ -242,9 +268,14 @@ async fn no_rule_moves_to_screener_and_inserts_pending() {
     let (mut conn, _guard, alice_id, _) = setup_db().await;
     let jmap = Arc::new(FakeJmapOps::new());
 
-    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &envelope("new@example.com"))
-        .await
-        .expect("route");
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope("new@example.com"),
+    )
+    .await
+    .expect("route");
 
     assert_eq!(
         outcome,
@@ -274,9 +305,93 @@ async fn no_rule_moves_to_screener_and_inserts_pending() {
 }
 
 #[tokio::test]
+async fn pending_rule_moves_subsequent_message_to_screener() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_rule(&mut conn, alice_id, "sender@example.com", "pending", None).await;
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope_with_id(
+            "sender@example.com",
+            "email-2",
+            vec!["inbox-id".to_string()],
+        ),
+    )
+    .await
+    .expect("route");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "sender@example.com".to_string()
+        }
+    );
+    assert_eq!(
+        jmap.calls(),
+        vec![
+            Call::GetOrCreateMailbox("Screener".to_string()),
+            Call::MoveToMailbox {
+                email_id: "email-2".to_string(),
+                mailbox_id: "screener-id".to_string()
+            }
+        ]
+    );
+    let rule_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("sender@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("rule count");
+    assert_eq!(rule_count, 1);
+}
+
+#[tokio::test]
+async fn pending_rule_is_idempotent_when_message_already_in_screener() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_rule(&mut conn, alice_id, "sender@example.com", "pending", None).await;
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope_with_id(
+            "sender@example.com",
+            "email-2",
+            vec!["screener-id".to_string()],
+        ),
+    )
+    .await
+    .expect("route");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "sender@example.com".to_string()
+        }
+    );
+    assert_eq!(
+        jmap.calls(),
+        vec![Call::GetOrCreateMailbox("Screener".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn existing_hail_keyword_is_idempotent_skip() {
     let (mut conn, _guard, alice_id, _) = setup_db().await;
-    insert_rule(&mut conn, alice_id, "sender@example.com", "allow", Some("imbox")).await;
+    insert_rule(
+        &mut conn,
+        alice_id,
+        "sender@example.com",
+        "allow",
+        Some("imbox"),
+    )
+    .await;
     let mut env = envelope("sender@example.com");
     env.keywords.push("$hail_imbox".to_string());
     let jmap = Arc::new(FakeJmapOps::new());
@@ -292,12 +407,24 @@ async fn existing_hail_keyword_is_idempotent_skip() {
 #[tokio::test]
 async fn wrong_user_rule_does_not_affect_other_user() {
     let (mut conn, _guard, alice_id, bob_id) = setup_db().await;
-    insert_rule(&mut conn, alice_id, "sender@example.com", "allow", Some("feed")).await;
+    insert_rule(
+        &mut conn,
+        alice_id,
+        "sender@example.com",
+        "allow",
+        Some("feed"),
+    )
+    .await;
     let jmap = Arc::new(FakeJmapOps::new());
 
-    let outcome = route_email(&mut conn, jmap.as_ref(), bob_id, &envelope("sender@example.com"))
-        .await
-        .expect("route");
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        bob_id,
+        &envelope("sender@example.com"),
+    )
+    .await
+    .expect("route");
 
     assert_eq!(
         outcome,

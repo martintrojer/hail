@@ -120,8 +120,7 @@ impl JmapOps for JmapOpsLive {
     }
 
     async fn apply_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
-        self
-            .session
+        self.session
             .client()
             .email_set_keyword(email_id, keyword, true)
             .await?;
@@ -180,7 +179,8 @@ pub async fn route_email(
             })?;
             let classification = Classification::parse(&classify_as)
                 .ok_or(RouteError::InvalidClassification(classify_as))?;
-            jmap.apply_keyword(&env.id, classification.keyword()).await?;
+            jmap.apply_keyword(&env.id, classification.keyword())
+                .await?;
             Ok(RouteOutcome::Classified { classification })
         }
         Some((decision, _)) if decision == "deny" => {
@@ -191,13 +191,15 @@ pub async fn route_email(
             jmap.move_to_mailbox(&env.id, &trash_id).await?;
             Ok(RouteOutcome::Trashed)
         }
-        Some((decision, _)) if decision == "pending" => Ok(RouteOutcome::ScreenerPending {
-            sender: env.from.clone(),
-        }),
+        Some((decision, _)) if decision == "pending" => {
+            move_to_screener_if_needed(jmap, env).await?;
+            Ok(RouteOutcome::ScreenerPending {
+                sender: env.from.clone(),
+            })
+        }
         Some((decision, _)) => Err(RouteError::InvalidDecision(decision)),
         None => {
-            let screener_id = jmap.get_or_create_mailbox("Screener").await?;
-            jmap.move_to_mailbox(&env.id, &screener_id).await?;
+            move_to_screener_if_needed(jmap, env).await?;
             let first_seen_at = env.received_at.unwrap_or_else(Utc::now).to_rfc3339();
             sqlx::query(
                 "INSERT INTO screener_rules \
@@ -215,6 +217,21 @@ pub async fn route_email(
             })
         }
     }
+}
+
+async fn move_to_screener_if_needed(
+    jmap: &dyn JmapOps,
+    env: &EmailEnvelope,
+) -> Result<(), RouteError> {
+    let screener_id = jmap.get_or_create_mailbox("Screener").await?;
+    if env
+        .mailbox_ids
+        .iter()
+        .any(|mailbox_id| mailbox_id == &screener_id)
+    {
+        return Ok(());
+    }
+    jmap.move_to_mailbox(&env.id, &screener_id).await
 }
 
 fn parse_mailbox_role(role: &str) -> Result<Role, RouteError> {
