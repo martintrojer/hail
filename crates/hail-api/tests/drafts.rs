@@ -392,6 +392,257 @@ async fn invalid_recipient_returns_400_without_store_call() {
 }
 
 #[tokio::test]
+async fn create_rejects_attachments_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(
+            r#"{"to":["bob@example.org"],"subject":"x","body_markdown":"y","attachments":[{"name":"a.txt"}]}"#,
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "attachments_not_supported");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn update_rejects_attachments_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(r#"{"subject":"x","attachments":[{"name":"a.txt"}]}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "attachments_not_supported");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn create_rejects_invalid_cc_bcc_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    for (field, expected_error) in [("cc", "invalid_cc"), ("bcc", "invalid_bcc")] {
+        let body = serde_json::json!({
+            "to": ["bob@example.org"],
+            field: ["not-an-email"],
+            "subject": "x",
+            "body_markdown": "y",
+        })
+        .to_string();
+        let resp = request(
+            state.clone(),
+            store.clone(),
+            Method::POST,
+            "/api/drafts",
+            Some(&sid),
+            true,
+            Some(&body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(resp).await;
+        assert_eq!(body["error"], expected_error);
+    }
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn create_rejects_too_many_recipients_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    for (field, expected_error) in [
+        ("to", "too_many_to"),
+        ("cc", "too_many_cc"),
+        ("bcc", "too_many_bcc"),
+    ] {
+        let mut body = serde_json::json!({
+            "to": ["bob@example.org"],
+            "subject": "x",
+            "body_markdown": "y",
+        });
+        body[field] = serde_json::json!(recipient_list(201));
+        let body = body.to_string();
+        let resp = request(
+            state.clone(),
+            store.clone(),
+            Method::POST,
+            "/api/drafts",
+            Some(&sid),
+            true,
+            Some(&body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(resp).await;
+        assert_eq!(body["error"], expected_error);
+    }
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn create_rejects_subject_crlf_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let body = serde_json::json!({
+        "to": ["bob@example.org"],
+        "subject": "Hi\r\nBcc: attacker@example.org",
+        "body_markdown": "y",
+    })
+    .to_string();
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(&body),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "invalid_subject");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn update_rejects_subject_crlf_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let body = serde_json::json!({
+        "subject": "Hi\nInjected: header",
+    })
+    .to_string();
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(&body),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "invalid_subject");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn create_rejects_body_too_large_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let body = serde_json::json!({
+        "to": ["bob@example.org"],
+        "subject": "x",
+        "body_markdown": "x".repeat(1024 * 1024 + 1),
+    })
+    .to_string();
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(&body),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "body_too_large");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn update_rejects_body_too_large_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let body = serde_json::json!({
+        "body_markdown": "x".repeat(1024 * 1024 + 1),
+    })
+    .to_string();
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(&body),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "body_too_large");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn update_rejects_empty_patch_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(r#"{}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "empty_patch");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
 async fn update_rejects_invalid_cc_bcc_without_store_call() {
     let (state, key) = fixture_state().await;
     let sid = seed_session(&state, &key, "alice@example.org").await;
