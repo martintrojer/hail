@@ -12,19 +12,16 @@ use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::post};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
 use chrono::{Duration, Utc};
-use rand::TryRngCore;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use crate::middleware::session::{
+    SESSION_TTL_DAYS, basic_bearer, build_session_cookie, new_session_id,
+};
 use crate::routes::auth::UserView;
 use crate::state::AppState;
 
-const SESSION_TTL_DAYS: i64 = 30;
-const SESSION_MAX_AGE_SECS: i64 = SESSION_TTL_DAYS * 24 * 60 * 60;
-const SESSION_COOKIE: &str = "hail_session";
 static SETUP_PROVISION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
@@ -311,7 +308,7 @@ where
         display_name: db_display_name,
         is_admin: is_admin_int != 0,
     };
-    let cookie = build_session_cookie(&session_id, SESSION_MAX_AGE_SECS);
+    let cookie = build_session_cookie(&session_id);
     (
         StatusCode::CREATED,
         [
@@ -429,10 +426,6 @@ async fn create_stalwart_principal(
     )))
 }
 
-fn basic_bearer(email: &str, password: &SecretString) -> String {
-    B64.encode(format!("{}:{}", email, password.expose_secret()).as_bytes())
-}
-
 fn valid_email(email: &str) -> bool {
     let Some((local, domain)) = email.split_once('@') else {
         return false;
@@ -451,23 +444,6 @@ fn valid_domain(domain: &str) -> bool {
         && domain
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-}
-
-fn new_session_id() -> Result<String, ()> {
-    let mut id_bytes = [0u8; 32];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut id_bytes)
-        .map_err(|_| ())?;
-    Ok(hex::encode(id_bytes))
-}
-
-fn build_session_cookie(session_id: &str, max_age_secs: i64) -> String {
-    format!(
-        "{name}={value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={max_age}",
-        name = SESSION_COOKIE,
-        value = session_id,
-        max_age = max_age_secs,
-    )
 }
 
 fn invalid_input(field: &'static str) -> Response {

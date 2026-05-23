@@ -8,7 +8,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration as ChronoDuration, Utc};
-use hail_api::middleware::auth::SESSION_COOKIE;
+use hail_api::middleware::session::SESSION_COOKIE;
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::setup::{ProvisionError, ProvisionedUser, UserProvisioner};
 use hail_api::state::AppState;
