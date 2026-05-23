@@ -11,6 +11,7 @@ pub mod pile;
 pub mod screener;
 pub mod setup;
 pub mod threads;
+pub mod views;
 
 // `test_stub` is gated behind the `__test-stubs` feature so it never
 // ships in a release binary. `tests/auth.rs` enables this feature via
