@@ -8,10 +8,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{
-    Json, Router,
-    routing::get,
-};
+use axum::{Json, Router, routing::get};
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::sanitize_and_strip_trackers;
 use hail_jmap::jmap_client::core::set::SetObject;
@@ -22,7 +19,7 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::audit;
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AuthSession, AuthUser};
 use crate::state::AppState;
 
 const MAX_SUBJECT_CHARS: usize = 998;
@@ -356,10 +353,10 @@ struct ScheduledSendResponse {
 async fn compose(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
+    Extension(auth_session): Extension<AuthSession>,
     Extension(composer): Extension<Arc<dyn Composer>>,
     body: Result<Json<ComposePayload>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
     };
@@ -371,7 +368,15 @@ async fn compose(
         Ok(message) => message,
         Err(error) => return bad_request(error),
     };
-    create_and_maybe_send(&state, &user, composer.as_ref(), message, send_at).await
+    create_and_maybe_send(
+        &state,
+        &user,
+        &auth_session,
+        composer.as_ref(),
+        message,
+        send_at,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -394,11 +399,11 @@ async fn compose(
 async fn reply(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
+    Extension(auth_session): Extension<AuthSession>,
     Extension(composer): Extension<Arc<dyn Composer>>,
     Path(thread_id): Path<String>,
     body: Result<Json<ReplyPayload>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -421,7 +426,15 @@ async fn reply(
         Ok(message) => message,
         Err(error) => return bad_request(error),
     };
-    create_and_maybe_send(&state, &user, composer.as_ref(), message, send_at).await
+    create_and_maybe_send(
+        &state,
+        &user,
+        &auth_session,
+        composer.as_ref(),
+        message,
+        send_at,
+    )
+    .await
 }
 
 async fn list_scheduled_sends(
@@ -555,11 +568,11 @@ async fn cancel_scheduled_send(
 async fn create_and_maybe_send(
     state: &AppState,
     user: &AuthUser,
+    auth_session: &AuthSession,
     composer: &dyn Composer,
     message: OutboundMessage,
     send_at: Option<DateTime<Utc>>,
-) -> Response
-{
+) -> Response {
     let draft_email_id = match composer
         .create_draft(state, user.jmap_token.clone(), &user.email, message)
         .await
@@ -569,7 +582,9 @@ async fn create_and_maybe_send(
     };
     if let Some(send_at) = send_at {
         let scheduled_send_id =
-            match insert_scheduled_send(state, user.id, &draft_email_id, send_at).await {
+            match insert_scheduled_send(state, user.id, auth_session, &draft_email_id, send_at)
+                .await
+            {
                 Ok(id) => id,
                 Err(err) => {
                     tracing::warn!(user_id = user.id, error = %err, "scheduled send insert failed");
@@ -823,17 +838,21 @@ fn reply_subject(subject: &str) -> String {
 async fn insert_scheduled_send(
     state: &AppState,
     user_id: i64,
+    auth_session: &AuthSession,
     draft_email_id: &str,
     send_at: DateTime<Utc>,
 ) -> Result<i64, sqlx::Error> {
     let now = Utc::now();
     sqlx::query_scalar(
-        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
-         VALUES (?1, ?2, ?3, 'pending', ?4) RETURNING id",
+        "INSERT INTO scheduled_sends \
+         (user_id, draft_email_id, send_at, status, auth_session_id, auth_session_expires_at, created_at) \
+         VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6) RETURNING id",
     )
     .bind(user_id)
     .bind(draft_email_id)
     .bind(send_at)
+    .bind(auth_session.id.as_str())
+    .bind(auth_session.expires_at)
     .bind(now)
     .fetch_one(&state.db)
     .await

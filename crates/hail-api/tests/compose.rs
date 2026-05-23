@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::compose::{
@@ -324,13 +324,17 @@ async fn compose_send_later_inserts_pending_row_without_submit() {
     assert_eq!(json["draft_email_id"], "draft-1");
     assert_eq!(composer.calls().len(), 1);
 
-    let row: (String, String) =
-        sqlx::query_as("SELECT draft_email_id, status FROM scheduled_sends WHERE id = ?1")
-            .bind(json["scheduled_send_id"].as_i64().expect("id"))
-            .fetch_one(&state.db)
-            .await
-            .expect("scheduled row");
-    assert_eq!(row, ("draft-1".to_string(), "pending".to_string()));
+    let row: (String, String, Option<String>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT draft_email_id, status, auth_session_id, auth_session_expires_at FROM scheduled_sends WHERE id = ?1",
+    )
+    .bind(json["scheduled_send_id"].as_i64().expect("id"))
+    .fetch_one(&state.db)
+    .await
+    .expect("scheduled row");
+    assert_eq!(row.0, "draft-1");
+    assert_eq!(row.1, "pending");
+    assert_eq!(row.2.as_deref(), Some(sid.as_str()));
+    assert!(row.3.expect("session expiry") > Utc::now() + Duration::days(29));
 }
 
 #[tokio::test]

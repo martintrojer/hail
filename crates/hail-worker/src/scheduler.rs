@@ -11,9 +11,11 @@
 //! rest of the batch continues. Scheduled-send submission failures are classified
 //! by the [`SendSubmitter`]: transient failures (network/server/rate/no active
 //! session) are released back to pending for a later tick; permanent failures
-//! (accepted JMAP request rejects the draft/recipients/identity) become
-//! `status='failed'` with `error` set. A crashed worker can also leave a row in
-//! `processing` after taking the durable claim. Because an EmailSubmission call
+//! (accepted JMAP request rejects the draft/recipients/identity, or the
+//! scheduled send's accepting session is no longer available) become
+//! `status='failed'` or `status='auth_required'` with `error` set. A crashed
+//! worker can also leave a row in `processing` after taking the durable claim.
+//! Because an EmailSubmission call
 //! might already have reached JMAP, stale processing claims are not retried
 //! automatically; after the claim timeout, or when the claim timestamp is
 //! missing, the row is failed with an explicit unknown-submission-state error so
@@ -55,6 +57,8 @@ pub trait BubbleJmapOps: Send + Sync {
 pub enum SendSubmitError {
     #[error("transient submit failure: {0}")]
     Transient(String),
+    #[error("scheduled send requires fresh authentication: {0}")]
+    AuthRequired(String),
     #[error("permanent submit failure: {0}")]
     Permanent(String),
 }
@@ -66,6 +70,11 @@ impl SendSubmitError {
     }
 
     #[must_use]
+    pub fn auth_required(error: impl std::fmt::Display) -> Self {
+        Self::AuthRequired(error.to_string())
+    }
+
+    #[must_use]
     pub fn permanent(error: impl std::fmt::Display) -> Self {
         Self::Permanent(error.to_string())
     }
@@ -73,7 +82,9 @@ impl SendSubmitError {
     #[must_use]
     fn message(&self) -> &str {
         match self {
-            Self::Transient(message) | Self::Permanent(message) => message,
+            Self::Transient(message) | Self::Permanent(message) | Self::AuthRequired(message) => {
+                message
+            }
         }
     }
 }
@@ -82,6 +93,7 @@ impl SendSubmitError {
 pub trait SendSubmitter: Send + Sync {
     async fn submit_draft(
         &self,
+        scheduled_send_id: i64,
         user_id: i64,
         draft_email_id: &str,
     ) -> std::result::Result<Option<String>, SendSubmitError>;
@@ -115,7 +127,7 @@ pub async fn process_due_scheduled_sends(
         }
 
         match submitter
-            .submit_draft(row.user_id, &row.draft_email_id)
+            .submit_draft(row.id, row.user_id, &row.draft_email_id)
             .await
         {
             Ok(submission_id) => {
@@ -189,6 +201,37 @@ pub async fn process_due_scheduled_sends(
                     error = %message,
                     "scheduled send submit failed transiently; released for retry"
                 );
+            }
+            Err(SendSubmitError::AuthRequired(message)) => {
+                let result = sqlx::query(
+                    "UPDATE scheduled_sends \
+                     SET status = 'auth_required', error = ? \
+                     WHERE id = ? AND status = 'processing'",
+                )
+                .bind(&message)
+                .bind(row.id)
+                .execute(db)
+                .await
+                .with_context(|| format!("mark scheduled_send {} auth_required", row.id))?;
+                if result.rows_affected() > 0 {
+                    if let Err(err) =
+                        publish_app_event(db, row.user_id, WorkerAppEvent::SendFailed).await
+                    {
+                        warn!(
+                            scheduled_send_id = row.id,
+                            user_id = row.user_id,
+                            error = %err,
+                            "failed to publish scheduled send auth-required app event"
+                        );
+                    }
+                    warn!(
+                        scheduled_send_id = row.id,
+                        user_id = row.user_id,
+                        draft_email_id = %row.draft_email_id,
+                        error = %message,
+                        "scheduled send requires a fresh login before it can be retried"
+                    );
+                }
             }
             Err(err @ SendSubmitError::Permanent(_)) => {
                 let message = err.message().to_string();
@@ -585,6 +628,7 @@ pub(crate) mod live {
             }
         }
 
+        #[cfg(test)]
         pub(crate) async fn latest_active_token_and_email(
             &self,
             user_id: i64,
@@ -597,7 +641,7 @@ pub(crate) mod live {
                  ORDER BY s.last_used_at DESC LIMIT 1",
             )
             .bind(user_id)
-            .bind(now)
+            .bind(&now)
             .fetch_optional(&self.db)
             .await
             .map_err(|err| SendSubmitError::transient(format!("select active JMAP token: {err}")))?
@@ -612,16 +656,60 @@ pub(crate) mod live {
                 .map_err(|err| SendSubmitError::transient(format!("decrypt JMAP token: {err}")))?;
             Ok((token, email))
         }
+
+        pub(crate) async fn scheduled_token_and_email(
+            &self,
+            scheduled_send_id: i64,
+            user_id: i64,
+            draft_email_id: &str,
+        ) -> std::result::Result<(SecretString, String), SendSubmitError> {
+            let now = chrono::Utc::now().to_rfc3339();
+            let row: (Vec<u8>, String) = sqlx::query_as(
+                "SELECT s.jmap_token_enc, u.email FROM scheduled_sends ss \
+                 JOIN sessions s ON s.id = ss.auth_session_id \
+                 JOIN users u ON u.id = ss.user_id \
+                 WHERE ss.id = ? AND ss.user_id = ? AND ss.draft_email_id = ? \
+                   AND ss.status = 'processing' \
+                   AND ss.auth_session_expires_at > ? AND s.expires_at > ? \
+                 LIMIT 1",
+            )
+            .bind(scheduled_send_id)
+            .bind(user_id)
+            .bind(draft_email_id)
+            .bind(&now)
+            .bind(&now)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|err| {
+                SendSubmitError::transient(format!("select scheduled JMAP token: {err}"))
+            })?
+            .ok_or_else(|| {
+                SendSubmitError::auth_required(format!(
+                    "auth_required: scheduled send needs a fresh login for user {user_id}"
+                ))
+            })?;
+
+            let (enc, email) = row;
+            let token = self.token_decryptor.decrypt(&enc).map_err(|err| {
+                SendSubmitError::auth_required(format!(
+                    "auth_required: decrypt scheduled JMAP token: {err}"
+                ))
+            })?;
+            Ok((token, email))
+        }
     }
 
     #[async_trait]
     impl SendSubmitter for LiveSendSubmitter {
         async fn submit_draft(
             &self,
+            scheduled_send_id: i64,
             user_id: i64,
             draft_email_id: &str,
         ) -> std::result::Result<Option<String>, SendSubmitError> {
-            let (token, email) = self.latest_active_token_and_email(user_id).await?;
+            let (token, email) = self
+                .scheduled_token_and_email(scheduled_send_id, user_id, draft_email_id)
+                .await?;
             let session = hail_jmap::login_bearer(&self.jmap_url, token)
                 .await
                 .map_err(|err| SendSubmitError::transient(format!("JMAP login: {err}")))?;

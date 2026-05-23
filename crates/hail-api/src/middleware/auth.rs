@@ -4,9 +4,9 @@
 //!   1. Read the `hail_session` cookie.
 //!   2. Look up the row in `sessions`, verify `expires_at > now`,
 //!      bump `last_used_at`.
-//!   3. Decrypt `jmap_token_enc` with the server key and attach an
-//!      `AuthUser` (id, email, is_admin, plaintext JMAP token) as an
-//!      Axum `Extension`.
+//!   3. Decrypt `jmap_token_enc` with the server key and attach `AuthUser`
+//!      (id, email, is_admin, plaintext JMAP token) plus `AuthSession`
+//!      (session id and expiry) as Axum `Extension`s.
 //!   4. For mutating methods (POST/PUT/PATCH/DELETE) demand the
 //!      `X-Hail-Request: 1` header — same-origin defence belt-and-braces
 //!      with `SameSite=Lax` (CSRF, §10.1).
@@ -48,6 +48,15 @@ pub struct AuthUser {
     pub email: String,
     pub is_admin: bool,
     pub jmap_token: SecretString,
+}
+
+/// Authenticated session metadata inserted by [`require_auth`]. Handlers that
+/// accept durable work can persist this opaque reference/expiry without seeing
+/// or copying the plaintext JMAP token.
+#[derive(Clone)]
+pub struct AuthSession {
+    pub id: String,
+    pub expires_at: chrono::DateTime<Utc>,
 }
 
 /// Generic 401 body. Identical for every failure mode so a malicious
@@ -206,6 +215,10 @@ pub async fn require_auth(
         email,
         is_admin: is_admin != 0,
         jmap_token: token,
+    });
+    req.extensions_mut().insert(AuthSession {
+        id: session_id,
+        expires_at,
     });
 
     next.run(req).await

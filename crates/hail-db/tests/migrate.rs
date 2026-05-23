@@ -38,6 +38,8 @@ const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
     "draft_email_id",
     "send_at",
     "status",
+    "auth_session_id",
+    "auth_session_expires_at",
     "claimed_at",
     "sent_at",
     "error",
@@ -258,6 +260,36 @@ async fn scheduled_sends_has_processing_claim_schema() {
     .execute(&pool)
     .await
     .expect("processing scheduled_send should satisfy status check");
+
+    sqlx::query(
+        "INSERT INTO sessions \
+         (id, user_id, jmap_token_enc, expires_at, created_at, last_used_at) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    .bind(user_id)
+    .bind(vec![0u8; 16])
+    .bind("2026-02-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("session insert");
+
+    sqlx::query(
+        "INSERT INTO scheduled_sends \
+         (user_id, draft_email_id, send_at, status, auth_session_id, auth_session_expires_at, created_at) \
+         VALUES (?, ?, ?, 'auth_required', ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("draft-auth-required")
+    .bind("2026-01-02T00:00:00Z")
+    .bind("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    .bind("2026-02-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("auth_required scheduled_send should satisfy status check and session reference");
 }
 
 #[tokio::test]
