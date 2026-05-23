@@ -86,6 +86,7 @@ fn build_api_router(
     let mut protected: Router<AppState> = routes::auth::protected_router()
         .merge(routes::blobs::router())
         .merge(routes::contacts::router())
+        .merge(routes::drafts::router())
         .merge(routes::pile::router())
         .merge(routes::screener::router())
         .merge(routes::threads::router())
