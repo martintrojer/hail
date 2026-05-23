@@ -14,6 +14,13 @@ secrecy = { version = "0.10", features = ["serde"] }
 thiserror = "2"
 url = { version = "2", features = ["serde"] }
 
+# Inbound mail render pipeline: parse unsafe fragments, strip tracking
+# images, then sanitize before thread panes render inside the SPA origin.
+ammonia = "4"
+html5ever = "0.35"
+markup5ever_rcdom = "0.35"
+regex = "1"
+
 # DD-8: AES-256-GCM for wrapping JMAP tokens at rest. Pinned to 0.10
 # (latest stable line; uses the typed nonce API and `aead` 0.5).
 aes-gcm = "0.10"
