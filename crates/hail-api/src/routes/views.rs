@@ -1,9 +1,9 @@
-//! Mail list view endpoints for Imbox, Feed, and Paper Trail.
+//! Mail list and unified search endpoints.
 //!
-//! These views are sourced from Stalwart/JMAP by querying hail-owned
-//! classification keywords (`$hail_imbox`, `$hail_feed`, `$hail_papertrail`).
-//! Pending screener mail is therefore naturally excluded until the worker or
-//! screener verbs classify it with one of those mutually-exclusive keywords.
+//! Imbox, Feed, and Paper Trail are sourced from Stalwart/JMAP by querying
+//! hail-owned classification keywords (`$hail_imbox`, `$hail_feed`,
+//! `$hail_papertrail`). Unified search combines JMAP mail text search with
+//! hail-owned contact notes stored in SQLite.
 //! `cursor` is accepted for API compatibility but intentionally ignored for v1;
 //! responses always return `next_cursor: null`.
 
@@ -24,8 +24,8 @@ use crate::state::AppState;
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
+const SEARCH_LIMIT: usize = 50;
 
-/// Dependency-injection seam for JMAP-backed mail views.
 pub trait MailViewProvider: Send + Sync + 'static {
     fn list<'a>(
         &'a self,
@@ -36,9 +36,16 @@ pub trait MailViewProvider: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>>;
 }
 
-/// Production JMAP provider. It queries Email/query by the hail classification
-/// keyword, sorted by `receivedAt` descending, then hydrates the returned ids
-/// with the small property set needed by the list UI.
+pub trait SearchProvider: Send + Sync + 'static {
+    fn search<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        q: &'a str,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>>;
+}
+
 pub struct JmapMailViewProvider;
 
 impl MailViewProvider for JmapMailViewProvider {
@@ -115,15 +122,94 @@ impl MailViewProvider for JmapMailViewProvider {
 #[derive(Debug)]
 pub struct MailViewError(String);
 
-/// Build protected mail view routes.
-pub fn router() -> Router<AppState> {
-    router_with_provider(Arc::new(JmapMailViewProvider))
+#[derive(Debug)]
+pub struct SearchError(String);
+
+pub struct JmapSearchProvider;
+
+impl SearchProvider for JmapSearchProvider {
+    fn search<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        q: &'a str,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
+        Box::pin(async move {
+            use hail_jmap::jmap_client::core::query::Filter;
+            use hail_jmap::jmap_client::email::Property;
+            use hail_jmap::jmap_client::email::query as email_query;
+
+            let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
+                .await
+                .map_err(|err| SearchError(err.to_string()))?;
+
+            let mut request = session.client().build();
+            request
+                .query_email()
+                .filter(Filter::from(email_query::Filter::text(q.to_string())))
+                .sort([email_query::Comparator::received_at().descending()])
+                .limit(limit);
+            let mut query = request
+                .send_query_email()
+                .await
+                .map_err(|err| SearchError(err.to_string()))?;
+            let ids = query.take_ids();
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let props = [
+                Property::Id,
+                Property::ThreadId,
+                Property::From,
+                Property::Subject,
+                Property::Preview,
+                Property::ReceivedAt,
+            ];
+            let mut request = session.client().build();
+            request.get_email().ids(ids).properties(props);
+            let mut response = request
+                .send_get_email()
+                .await
+                .map_err(|err| SearchError(err.to_string()))?;
+
+            Ok(response
+                .take_list()
+                .into_iter()
+                .map(|email| MailSearchResult {
+                    thread_id: email.thread_id().unwrap_or_default().to_string(),
+                    email_id: email.id().unwrap_or_default().to_string(),
+                    from: format_from(email.from()),
+                    subject: email.subject().unwrap_or_default().to_string(),
+                    preview: email.preview().unwrap_or_default().to_string(),
+                    received_at: email
+                        .received_at()
+                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                })
+                .collect())
+        })
+    }
 }
 
-/// Test/helper router that injects a fake provider.
+pub fn router() -> Router<AppState> {
+    router_with_providers(Arc::new(JmapMailViewProvider), Arc::new(JmapSearchProvider))
+}
+
 pub fn router_with_provider<P>(provider: Arc<P>) -> Router<AppState>
 where
     P: MailViewProvider,
+{
+    router_with_providers(provider, Arc::new(EmptySearchProvider))
+}
+
+pub fn router_with_providers<P, S>(
+    mail_provider: Arc<P>,
+    search_provider: Arc<S>,
+) -> Router<AppState>
+where
+    P: MailViewProvider,
+    S: SearchProvider,
 {
     Router::new()
         .route("/api/views/imbox", axum::routing::get(get_imbox::<P>))
@@ -132,7 +218,23 @@ where
             "/api/views/papertrail",
             axum::routing::get(get_papertrail::<P>),
         )
-        .layer(Extension(provider))
+        .route("/api/views/search", axum::routing::get(get_search::<S>))
+        .layer(Extension(mail_provider))
+        .layer(Extension(search_provider))
+}
+
+struct EmptySearchProvider;
+
+impl SearchProvider for EmptySearchProvider {
+    fn search<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        _q: &'a str,
+        _limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,10 +282,85 @@ pub struct MailViewItem {
     pub classification: MailClassification,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MailSearchResult {
+    pub thread_id: String,
+    pub email_id: String,
+    pub from: String,
+    pub subject: String,
+    pub preview: String,
+    pub received_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SearchResult {
+    Mail {
+        thread_id: String,
+        email_id: String,
+        from: String,
+        subject: String,
+        preview: String,
+        received_at: Option<DateTime<Utc>>,
+    },
+    ContactNote {
+        address: String,
+        markdown: String,
+        updated_at: DateTime<Utc>,
+    },
+}
+
+impl From<MailSearchResult> for SearchResult {
+    fn from(item: MailSearchResult) -> Self {
+        Self::Mail {
+            thread_id: item.thread_id,
+            email_id: item.email_id,
+            from: item.from,
+            subject: item.subject,
+            preview: item.preview,
+            received_at: item.received_at,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ViewQuery {
     cursor: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+    scope: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchScope {
+    Mail,
+    Notes,
+    All,
+    Clips,
+}
+
+impl SearchScope {
+    fn parse(value: Option<&str>) -> Option<Self> {
+        match value.unwrap_or("all") {
+            "mail" => Some(Self::Mail),
+            "notes" => Some(Self::Notes),
+            "all" => Some(Self::All),
+            "clips" => Some(Self::Clips),
+            _ => None,
+        }
+    }
+
+    const fn includes_mail(self) -> bool {
+        matches!(self, Self::Mail | Self::All)
+    }
+
+    const fn includes_notes(self) -> bool {
+        matches!(self, Self::Notes | Self::All)
+    }
 }
 
 impl ViewQuery {
@@ -196,6 +373,11 @@ impl ViewQuery {
 struct MailViewResponse {
     items: Vec<MailViewItem>,
     next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResponse {
+    results: Vec<SearchResult>,
 }
 
 async fn get_imbox<P>(
@@ -232,6 +414,99 @@ where
     P: MailViewProvider,
 {
     get_view(state, user, provider, query, MailView::Papertrail).await
+}
+
+async fn get_search<S>(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<S>>,
+    Query(query): Query<SearchQuery>,
+) -> Response
+where
+    S: SearchProvider,
+{
+    let q = match query.q.as_deref().map(str::trim) {
+        Some(q) if q.chars().count() >= 2 => q,
+        _ => return bad_request("q_min_length"),
+    };
+    let scope = match SearchScope::parse(query.scope.as_deref()) {
+        Some(scope) => scope,
+        None => return bad_request("invalid_scope"),
+    };
+
+    let mut results = Vec::new();
+
+    if scope.includes_mail() {
+        let mail = match provider
+            .search(&state, user.jmap_token.clone(), q, SEARCH_LIMIT)
+            .await
+        {
+            Ok(mail) => mail,
+            Err(err) => {
+                tracing::warn!(user_id = user.id, error = %err.0, "mail search failed");
+                return internal();
+            }
+        };
+        results.extend(mail.into_iter().map(SearchResult::from));
+    }
+
+    if scope.includes_notes() {
+        let notes = match search_notes(&state, user.id, q).await {
+            Ok(notes) => notes,
+            Err(err) => {
+                tracing::error!(user_id = user.id, error = %err, "contact notes search failed");
+                return internal();
+            }
+        };
+        results.extend(notes);
+    }
+
+    Json(SearchResponse { results }).into_response()
+}
+
+async fn search_notes(
+    state: &AppState,
+    user_id: i64,
+    q: &str,
+) -> Result<Vec<SearchResult>, sqlx::Error> {
+    let pattern = format!("%{}%", escape_like(q));
+    let rows = sqlx::query_as::<_, (String, String, DateTime<Utc>)>(
+        "SELECT address, markdown, updated_at \
+         FROM contact_notes \
+         WHERE user_id = ?1 AND markdown LIKE ?2 ESCAPE '\\' \
+         ORDER BY updated_at DESC, address ASC \
+         LIMIT ?3",
+    )
+    .bind(user_id)
+    .bind(pattern)
+    .bind(SEARCH_LIMIT as i64)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(address, markdown, updated_at)| SearchResult::ContactNote {
+                address,
+                markdown,
+                updated_at,
+            },
+        )
+        .collect())
+}
+
+fn escape_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 async fn get_view<P>(
@@ -274,6 +549,15 @@ fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> 
             _ => address.email().to_string(),
         })
         .unwrap_or_default()
+}
+
+fn bad_request(error: &'static str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        [(header::CONTENT_TYPE, "application/json")],
+        format!(r#"{{"error":"{error}"}}"#),
+    )
+        .into_response()
 }
 
 fn internal() -> Response {
