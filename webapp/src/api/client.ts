@@ -18,6 +18,106 @@ type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
   : unknown;
 
+export interface UserView {
+  id: number;
+  email: string;
+  display_name: string | null;
+  is_admin: boolean;
+}
+
+export interface UserEnvelope {
+  user: UserView;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface SetupState {
+  wizard_active: boolean;
+  reason?: 'config_admin_set' | 'admin_user_exists';
+}
+
+export interface SetupAdminRequest {
+  email: string;
+  password: string;
+  display_name?: string | null;
+  domain: string;
+}
+
+export interface ContactNote {
+  markdown: string;
+  updated_at: string;
+}
+
+export interface ContactResponse {
+  address: string;
+  note: ContactNote | null;
+  threads: unknown[];
+}
+
+export interface PutContactNoteRequest {
+  markdown: string;
+}
+
+export interface BubbleUpRequest {
+  at: string;
+}
+
+export interface BubbleUpResponse {
+  bubble_id: number;
+  surface_at: string;
+}
+
+export interface UploadedBlob {
+  blob_id: string;
+  size: number;
+  type: string;
+}
+
+export interface BlobUploadResponse {
+  blobs: UploadedBlob[];
+}
+
+export type BlobUploadPart =
+  | Blob
+  | {
+      blob: Blob;
+      filename?: string;
+    };
+
+export type ScreenerDecision = 'approve' | 'deny';
+export type ScreenerClassification = 'imbox' | 'feed' | 'papertrail';
+
+export interface ScreenerPendingSender {
+  sender: string;
+  preview?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * TODO(spa-api-client): replace this hand-written shape once hail-api exports
+ * /api/views/screener in OpenAPI. The SPA must treat this as server-shaped data.
+ */
+export interface ScreenerView {
+  pending: ScreenerPendingSender[];
+  [key: string]: unknown;
+}
+
+/**
+ * TODO(spa-api-client): replace this hand-written request once hail-api exports
+ * /api/screener/decisions in OpenAPI.
+ */
+export interface ScreenerDecisionRequest {
+  sender: string;
+  decision: ScreenerDecision;
+  classify_as?: ScreenerClassification;
+  apply_to_history: boolean;
+}
+
+export type ScreenerDecisionResponse = void;
+
 export class HailApiError<Status extends number = number> extends Error {
   readonly name = 'HailApiError';
 
@@ -61,14 +161,202 @@ export class HailApiClient {
     throw await this.#error(response);
   }
 
-  async #request(pathname: keyof paths): Promise<Response> {
+  async login(body: LoginRequest): Promise<UserEnvelope> {
+    return this.#json<UserEnvelope>(
+      await this.#request('/api/auth/login', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async logout(): Promise<void> {
+    await this.#empty(
+      await this.#request('/api/auth/logout', {
+        method: 'POST',
+        mutating: true,
+      }),
+      204,
+    );
+  }
+
+  async me(): Promise<UserEnvelope> {
+    return this.#json<UserEnvelope>(await this.#request('/api/auth/me'), 200);
+  }
+
+  async getSetupState(): Promise<SetupState> {
+    return this.#json<SetupState>(
+      await this.#request('/api/setup/state'),
+      200,
+    );
+  }
+
+  async createSetupAdmin(body: SetupAdminRequest): Promise<UserEnvelope> {
+    return this.#json<UserEnvelope>(
+      await this.#request('/api/setup/admin', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async getScreenerView(): Promise<ScreenerView> {
+    return this.#json<ScreenerView>(
+      await this.#request('/api/views/screener'),
+      200,
+    );
+  }
+
+  async decideScreener(
+    body: ScreenerDecisionRequest,
+  ): Promise<ScreenerDecisionResponse> {
+    const response = await this.#request('/api/screener/decisions', {
+      method: 'POST',
+      body,
+      mutating: true,
+    });
+
+    if (response.status === 204) {
+      return undefined;
+    }
+    if (response.status === 200) {
+      await readResponseBody(response);
+      return undefined;
+    }
+
+    throw await this.#error(response);
+  }
+
+  async getContact(address: string): Promise<ContactResponse> {
+    return this.#json<ContactResponse>(
+      await this.#request(`/api/contacts/${encodeURIComponent(address)}`),
+      200,
+    );
+  }
+
+  async putContactNote(
+    address: string,
+    body: PutContactNoteRequest,
+  ): Promise<ContactNote> {
+    return this.#json<ContactNote>(
+      await this.#request(
+        `/api/contacts/${encodeURIComponent(address)}/note`,
+        {
+          method: 'PUT',
+          body,
+          mutating: true,
+        },
+      ),
+      200,
+    );
+  }
+
+  async deleteContactNote(address: string): Promise<void> {
+    await this.#empty(
+      await this.#request(`/api/contacts/${encodeURIComponent(address)}/note`, {
+        method: 'DELETE',
+        mutating: true,
+      }),
+      204,
+    );
+  }
+
+  async bubbleUpThread(
+    threadId: string,
+    body: BubbleUpRequest,
+  ): Promise<BubbleUpResponse> {
+    return this.#json<BubbleUpResponse>(
+      await this.#request(
+        `/api/threads/${encodeURIComponent(threadId)}/bubble-up`,
+        {
+          method: 'POST',
+          body,
+          mutating: true,
+        },
+      ),
+      201,
+    );
+  }
+
+  async uploadBlob(file: BlobUploadPart): Promise<UploadedBlob> {
+    const { blobs } = await this.uploadBlobs([file]);
+    const [blob] = blobs;
+    if (!blob) {
+      throw new Error('hail API returned no blob for upload');
+    }
+    return blob;
+  }
+
+  async uploadBlobs(files: Iterable<BlobUploadPart>): Promise<BlobUploadResponse> {
+    const formData = new FormData();
+    for (const file of files) {
+      if (file instanceof Blob) {
+        formData.append('file', file);
+      } else if (file.filename) {
+        formData.append('file', file.blob, file.filename);
+      } else {
+        formData.append('file', file.blob);
+      }
+    }
+
+    return this.#json<BlobUploadResponse>(
+      await this.#request('/api/blobs', {
+        method: 'POST',
+        body: formData,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async #json<T>(response: Response, expectedStatus: number): Promise<T> {
+    if (response.status !== expectedStatus) {
+      throw await this.#error(response);
+    }
+
+    return (await readResponseBody(response)) as T;
+  }
+
+  async #empty(response: Response, expectedStatus: number): Promise<void> {
+    if (response.status !== expectedStatus) {
+      throw await this.#error(response);
+    }
+  }
+
+  async #request(
+    pathname: string,
+    opts: {
+      method?: string;
+      body?: unknown;
+      mutating?: boolean;
+    } = {},
+  ): Promise<Response> {
     const url = new URL(pathname, this.#baseUrl);
+    const headers = new Headers({
+      accept: 'application/json',
+    });
+    let body: BodyInit | undefined;
+
+    if (opts.mutating) {
+      headers.set('X-Hail-Request', '1');
+    }
+
+    if (opts.body instanceof FormData) {
+      body = opts.body;
+    } else if (opts.body !== undefined) {
+      headers.set('content-type', 'application/json');
+      body = JSON.stringify(opts.body);
+    }
 
     return fetch(url, {
+      method: opts.method ?? 'GET',
       credentials: 'include',
-      headers: {
-        accept: 'application/json',
-      },
+      headers,
+      body,
     });
   }
 

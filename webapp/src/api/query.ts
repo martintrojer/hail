@@ -1,0 +1,183 @@
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationOptions,
+  type UseQueryOptions,
+} from '@tanstack/react-query';
+import {
+  HailApiClient,
+  type BubbleUpRequest,
+  type BubbleUpResponse,
+  type ContactNote,
+  type ContactResponse,
+  type LoginRequest,
+  type PutContactNoteRequest,
+  type ScreenerDecisionRequest,
+  type ScreenerDecisionResponse,
+  type ScreenerView,
+  type SetupState,
+  type UserEnvelope,
+} from './client';
+import { queryKeys } from './queryKeys';
+
+const defaultBaseUrl =
+  typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
+
+export const defaultApiClient = new HailApiClient({ baseUrl: defaultBaseUrl });
+
+type QueryConfig<TData> = Omit<
+  UseQueryOptions<TData, Error, TData, readonly unknown[]>,
+  'queryKey' | 'queryFn'
+>;
+
+type MutationConfig<TVariables, TData> = Omit<
+  UseMutationOptions<TData, Error, TVariables>,
+  'mutationFn'
+>;
+
+export function useMe(
+  client = defaultApiClient,
+  options?: QueryConfig<UserEnvelope>,
+) {
+  return useQuery({
+    queryKey: queryKeys.me(),
+    queryFn: () => client.me(),
+    ...options,
+  });
+}
+
+export function useSetupState(
+  client = defaultApiClient,
+  options?: QueryConfig<SetupState>,
+) {
+  return useQuery({
+    queryKey: queryKeys.setupState(),
+    queryFn: () => client.getSetupState(),
+    ...options,
+  });
+}
+
+export function useScreenerView(
+  client = defaultApiClient,
+  options?: QueryConfig<ScreenerView>,
+) {
+  return useQuery({
+    queryKey: queryKeys.screener(),
+    queryFn: () => client.getScreenerView(),
+    ...options,
+  });
+}
+
+export function useContact(
+  address: string,
+  client = defaultApiClient,
+  options?: QueryConfig<ContactResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.contact(address),
+    queryFn: () => client.getContact(address),
+    ...options,
+    enabled: address.trim().length > 0 && (options?.enabled ?? true),
+  });
+}
+
+export function useLoginMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<LoginRequest, UserEnvelope>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.login(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData(queryKeys.me(), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.setup() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useLogoutMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<void, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => client.logout(),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.removeQueries({ queryKey: queryKeys.auth() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.all });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useScreenerDecisionMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ScreenerDecisionRequest, ScreenerDecisionResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.decideScreener(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface ContactNoteMutationVariables {
+  address: string;
+  note: PutContactNoteRequest | null;
+}
+
+export function useContactNoteMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ContactNoteMutationVariables, ContactNote | void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ address, note }) =>
+      note === null
+        ? client.deleteContactNote(address)
+        : client.putContactNote(address, note),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.contact(variables.address),
+      });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface BubbleUpMutationVariables {
+  threadId: string;
+  request: BubbleUpRequest;
+}
+
+export function useBubbleUpMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<BubbleUpMutationVariables, BubbleUpResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId, request }) => client.bubbleUpThread(threadId, request),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
