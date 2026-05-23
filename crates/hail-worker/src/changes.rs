@@ -97,12 +97,60 @@ pub trait JmapChangeFetcher: Send + Sync {
 /// the supervisor's initial sync (before any push event) we walk
 /// every entry in [`TRACKED_TYPE_STATES`]. On a live push event we
 /// walk only what JMAP told us changed.
+#[cfg_attr(test, allow(dead_code))]
 pub async fn handle_changes(
     db: &SqlitePool,
     user_id: i64,
     fetcher: &dyn JmapChangeFetcher,
     jmap_ops: &dyn JmapOps,
     changed_types: &BTreeSet<String>,
+) -> Result<usize> {
+    handle_changes_with_mode(
+        db,
+        user_id,
+        fetcher,
+        jmap_ops,
+        changed_types,
+        ErrorMode::LogAndContinue,
+    )
+    .await
+}
+
+/// Strict variant used by startup/reconnect catch-up. Any TypeState fetch
+/// failure aborts the replay so the per-user supervisor backs off instead of
+/// opening EventSource with an unreplayed persisted cursor.
+pub async fn handle_changes_strict(
+    db: &SqlitePool,
+    user_id: i64,
+    fetcher: &dyn JmapChangeFetcher,
+    jmap_ops: &dyn JmapOps,
+    changed_types: &BTreeSet<String>,
+) -> Result<usize> {
+    handle_changes_with_mode(
+        db,
+        user_id,
+        fetcher,
+        jmap_ops,
+        changed_types,
+        ErrorMode::ReturnError,
+    )
+    .await
+}
+
+#[cfg_attr(test, allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+enum ErrorMode {
+    LogAndContinue,
+    ReturnError,
+}
+
+async fn handle_changes_with_mode(
+    db: &SqlitePool,
+    user_id: i64,
+    fetcher: &dyn JmapChangeFetcher,
+    jmap_ops: &dyn JmapOps,
+    changed_types: &BTreeSet<String>,
+    error_mode: ErrorMode,
 ) -> Result<usize> {
     let mut applied = 0usize;
     for type_state in changed_types {
@@ -116,15 +164,19 @@ pub async fn handle_changes(
         let changes = match fetcher.fetch(type_state, &cursor).await {
             Ok(c) => c,
             Err(e) => {
-                // Surface but don't abort the whole round — other
-                // type_states may still succeed.
                 warn!(
                     user_id,
                     type_state = %type_state,
                     error = %e,
                     "Email/changes round failed; will retry on next event"
                 );
-                continue;
+                match error_mode {
+                    ErrorMode::LogAndContinue => continue,
+                    ErrorMode::ReturnError => {
+                        return Err(e)
+                            .with_context(|| format!("fetch {type_state} changes during catchup"));
+                    }
+                }
             }
         };
 
@@ -151,14 +203,13 @@ pub async fn handle_changes(
 /// Load the stored cursor for `(user_id, type_state)`, or empty
 /// string if the row doesn't exist yet (first run).
 pub async fn load_cursor(db: &SqlitePool, user_id: i64, type_state: &str) -> Result<String> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT state FROM jmap_state WHERE user_id = ? AND type_state = ?",
-    )
-    .bind(user_id)
-    .bind(type_state)
-    .fetch_optional(db)
-    .await
-    .context("select jmap_state")?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT state FROM jmap_state WHERE user_id = ? AND type_state = ?")
+            .bind(user_id)
+            .bind(type_state)
+            .fetch_optional(db)
+            .await
+            .context("select jmap_state")?;
     Ok(row.map(|(s,)| s).unwrap_or_default())
 }
 
@@ -247,7 +298,10 @@ async fn route_envelopes(
 }
 
 fn route_envelope_from_change(env: &EmailEnvelope) -> Option<screener::EmailEnvelope> {
-    let from = env.from.first().map(|(_, addr)| screener::normalize_sender(addr))?;
+    let from = env
+        .from
+        .first()
+        .map(|(_, addr)| screener::normalize_sender(addr))?;
     if from.is_empty() {
         return None;
     }
