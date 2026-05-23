@@ -15,6 +15,7 @@ use hail_jmap::jmap_client::core::set::SetObject;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
+use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
@@ -375,6 +376,22 @@ where
                     return internal();
                 }
             };
+        if let Err(err) = audit::record(
+            &state.db,
+            user.id,
+            "compose.schedule",
+            &serde_json::json!({
+                "draft_email_id": draft_email_id,
+                "scheduled_send_id": scheduled_send_id,
+                "send_at": send_at,
+            }),
+        )
+        .await
+        {
+            tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+        }
+        // TODO(hail-worker): scheduled-send execution/failure is outside
+        // hail-api; add matching audit rows in the worker send-later path.
         return (
             StatusCode::CREATED,
             Json(ComposeResponse::Pending {
@@ -388,11 +405,26 @@ where
         .submit(state, user.jmap_token.clone(), &user.email, &draft_email_id)
         .await
     {
-        Ok(submission_id) => Json(ComposeResponse::Sent {
-            email_id: draft_email_id,
-            submission_id,
-        })
-        .into_response(),
+        Ok(submission_id) => {
+            if let Err(err) = audit::record(
+                &state.db,
+                user.id,
+                "compose.send",
+                &serde_json::json!({
+                    "email_id": draft_email_id,
+                    "submission_id": submission_id,
+                }),
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+            }
+            Json(ComposeResponse::Sent {
+                email_id: draft_email_id,
+                submission_id,
+            })
+            .into_response()
+        }
         Err(ComposeError::Provider(err)) => provider_failed(user.id, err),
     }
 }

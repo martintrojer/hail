@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
@@ -200,7 +201,19 @@ where
     }
 
     match management.add_domain(&state, &domain).await {
-        Ok(()) => (StatusCode::CREATED, Json(DomainResponse { domain })).into_response(),
+        Ok(()) => {
+            if let Err(err) = audit::record(
+                &state.db,
+                user.id,
+                "admin.domain.add",
+                &serde_json::json!({ "domain": domain }),
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+            }
+            (StatusCode::CREATED, Json(DomainResponse { domain })).into_response()
+        }
         Err(err) => management_error(err),
     }
 }
@@ -224,7 +237,19 @@ where
     }
 
     match management.delete_domain(&state, &domain).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Err(err) = audit::record(
+                &state.db,
+                user.id,
+                "admin.domain.delete",
+                &serde_json::json!({ "domain": domain }),
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(err) => management_error(err),
     }
 }
