@@ -200,32 +200,6 @@ export function SearchPage() {
   const [scope, setScope] = useState<SearchScope>('all');
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const isEditable =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        target?.isContentEditable === true;
-
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-
-      if (event.key === '/' && !isEditable) {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  useEffect(() => {
     const timeout = window.setTimeout(() => {
       setSubmittedQuery(draftQuery.trim());
     }, 350);
@@ -311,6 +285,7 @@ export function SearchPage() {
           onChange={(event) => setDraftQuery(event.target.value)}
           placeholder="Search mail, notes, and clips"
           autoComplete="off"
+          data-hail-search-input="true"
           className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-50 outline-none ring-sky-400 transition focus:border-sky-400 focus:ring-2"
         />
       </label>

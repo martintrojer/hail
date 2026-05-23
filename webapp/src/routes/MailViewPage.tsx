@@ -231,6 +231,7 @@ function ThreadLink({
       to="/thread/$threadId"
       params={{ threadId: item.thread_id }}
       className={className}
+      data-hail-mail-list-item="true"
       aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       {children}
