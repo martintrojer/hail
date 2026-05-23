@@ -84,6 +84,30 @@ impl JmapOps for NoopJmapOps {
     }
 }
 
+struct FailingRouteJmapOps {
+    move_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl JmapOps for FailingRouteJmapOps {
+    async fn get_or_create_mailbox(&self, _name: &str) -> Result<String, RouteError> {
+        Ok("screener-id".to_string())
+    }
+
+    async fn get_mailbox_by_role(&self, _role: &str) -> Result<Option<String>, RouteError> {
+        Ok(Some("trash-id".to_string()))
+    }
+
+    async fn apply_keyword(&self, _email_id: &str, _keyword: &str) -> Result<(), RouteError> {
+        Ok(())
+    }
+
+    async fn move_to_mailbox(&self, _email_id: &str, _mailbox_id: &str) -> Result<(), RouteError> {
+        self.move_calls.fetch_add(1, Ordering::SeqCst);
+        Err(RouteError::Jmap("scripted route failure".to_string()))
+    }
+}
+
 /// Fake fetcher that returns an error for every fetch.
 struct FailingFetcher;
 
@@ -270,6 +294,50 @@ async fn handle_changes_strict_returns_fetch_errors_without_advancing_cursor() {
         .await
         .expect("load_cursor");
     assert_eq!(stored, "state-before-error");
+}
+
+#[tokio::test]
+async fn handle_changes_returns_route_errors_without_advancing_cursor() {
+    let (pool, _guard, user_id) = setup_db().await;
+    upsert_cursor(&pool, user_id, "Email", "state-before-route-error")
+        .await
+        .expect("seed");
+
+    let fetcher = FakeFetcher {
+        response: EmailChanges {
+            new_state: "state-after-route-error".to_string(),
+            created: vec![EmailEnvelope {
+                id: "em-route-fail".to_string(),
+                thread_id: Some("t-route-fail".to_string()),
+                from: vec![(Some("Bob".to_string()), "bob@example.com".to_string())],
+                ..Default::default()
+            }],
+            updated: vec![],
+            destroyed: vec![],
+        },
+        calls: AtomicUsize::new(0),
+    };
+    let jmap_ops = FailingRouteJmapOps {
+        move_calls: AtomicUsize::new(0),
+    };
+    let mut types = BTreeSet::new();
+    types.insert("Email".to_string());
+
+    let err = handle_changes(&pool, user_id, &fetcher, &jmap_ops, &types)
+        .await
+        .expect_err("route failure must fail the change round");
+
+    assert!(
+        err.to_string()
+            .contains("route email em-route-fail through screener"),
+        "unexpected error context: {err:#}"
+    );
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(jmap_ops.move_calls.load(Ordering::SeqCst), 1);
+    let stored = load_cursor(&pool, user_id, "Email")
+        .await
+        .expect("load_cursor");
+    assert_eq!(stored, "state-before-route-error");
 }
 
 #[tokio::test]
