@@ -134,26 +134,86 @@ fn strip_trailing_plaintext_quote(html: &mut String) -> bool {
 
 fn has_trailing_history_after(html: &str, start: usize) -> bool {
     let after = &html[start..];
-    let visible = visible_text(after);
-    let trimmed = visible.trim();
-    if trimmed.is_empty() {
+    if visible_text(after).trim().is_empty() {
         return false;
     }
-    let lower = after.to_ascii_lowercase();
-    lower.contains("<blockquote")
-        || lower.contains("gmail_quote")
-        || lower.contains("type=\"cite\"")
-        || lower.contains("type='cite'")
-        || trimmed
-            .lines()
-            .any(|line| starts_with_quote_marker(line.trim()))
+
+    trailing_quote_element(after, "blockquote", |_| true)
+        || trailing_quote_element(after, "div", |attrs| {
+            class_attr(attrs).is_some_and(|class| has_class(&class, "gmail_quote"))
+        })
+        || trailing_plaintext_quote(after)
+}
+
+fn trailing_quote_element(html: &str, tag: &str, mut matches: impl FnMut(&str) -> bool) -> bool {
+    let start = skip_leading_history_boundary(html);
+    let rest = &html[start..];
+    let Some(open_start) = find_next_tag_start(rest, tag) else {
+        return false;
+    };
+    if visible_text(&rest[..open_start]).trim().is_empty() {
+        let Some(open_end) = find_tag_end(rest, open_start) else {
+            return false;
+        };
+        let open_tag = &rest[open_start..=open_end];
+        let attrs = open_tag
+            .strip_prefix('<')
+            .and_then(|s| s.strip_suffix('>'))
+            .and_then(|s| s.trim().strip_prefix(tag))
+            .unwrap_or_default();
+
+        if matches(attrs) {
+            if let Some(end) = find_matching_close(rest, tag, open_end + 1) {
+                return visible_text(&rest[end..]).trim().is_empty();
+            }
+        }
+    }
+    false
+}
+
+fn trailing_plaintext_quote(html: &str) -> bool {
+    let nonempty_lines = visible_text_lines(html)
+        .into_iter()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    !nonempty_lines.is_empty()
+        && nonempty_lines
+            .iter()
+            .all(|line| starts_with_quote_marker(line))
+}
+
+fn skip_leading_history_boundary(html: &str) -> usize {
+    let lower = html.to_ascii_lowercase();
+    let mut cursor = 0;
+
+    loop {
+        let rest = &lower[cursor..];
+        let trimmed = rest.trim_start();
+        cursor += rest.len() - trimmed.len();
+        let rest = &lower[cursor..];
+
+        let boundary = ["</div>", "</p>", "<br>", "<br/>", "<br />"]
+            .into_iter()
+            .find(|tag| rest.starts_with(tag));
+        if let Some(tag) = boundary {
+            cursor += tag.len();
+        } else {
+            return cursor;
+        }
+    }
 }
 
 fn outlook_header_score(html: &str) -> usize {
-    let visible = visible_text(html).to_ascii_lowercase();
+    let visible_lines = visible_text_lines(html);
     ["from:", "sent:", "to:", "subject:"]
         .iter()
-        .filter(|label| visible.contains(**label))
+        .filter(|label| {
+            visible_lines
+                .iter()
+                .any(|line| line.trim_start().to_ascii_lowercase().starts_with(**label))
+        })
         .count()
 }
 
@@ -378,9 +438,35 @@ fn visible_text(html: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+fn visible_text_lines(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut with_breaks = String::with_capacity(html.len());
+    let mut i = 0;
+
+    while i < html.len() {
+        if lower[i..].starts_with("<br")
+            || lower[i..].starts_with("<div")
+            || lower[i..].starts_with("</div")
+            || lower[i..].starts_with("<p")
+            || lower[i..].starts_with("</p")
+        {
+            with_breaks.push('\n');
+        }
+
+        let ch = html[i..].chars().next().expect("valid char boundary");
+        with_breaks.push(ch);
+        i += ch.len_utf8();
+    }
+
+    visible_text(&with_breaks)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{strip_quoted_history, StrippedText};
+    use super::{StrippedText, strip_quoted_history};
 
     #[test]
     fn gmail_quote_removed() {
@@ -440,6 +526,59 @@ mod tests {
     #[test]
     fn ordinary_blockquote_preserved_when_not_history() {
         let input = "<p>I keep this quote:</p><blockquote><p>Ship small, learn fast.</p></blockquote><p>Agree.</p>";
+
+        let stripped = strip_quoted_history(input);
+
+        assert_eq!(stripped.html, input);
+        assert!(!stripped.stripped);
+    }
+
+    #[test]
+    fn malformed_html_quote_marker_is_preserved_when_close_is_missing() {
+        let input = r#"<p>Fresh reply</p><div class="gmail_quote"><p>Unclosed quoted text"#;
+
+        let stripped = strip_quoted_history(input);
+
+        assert_eq!(stripped.html, input);
+        assert!(!stripped.stripped);
+    }
+
+    #[test]
+    fn nested_ordinary_blockquotes_are_preserved() {
+        let input = "<p>Book notes:</p><blockquote><p>Outer quotation</p><blockquote><p>Inner quotation</p></blockquote></blockquote><p>My comment.</p>";
+
+        let stripped = strip_quoted_history(input);
+
+        assert_eq!(stripped.html, input);
+        assert!(!stripped.stripped);
+    }
+
+    #[test]
+    fn gmail_quote_removes_only_quote_subtree() {
+        let input = r#"<div>Fresh reply</div><div class="gmail_quote"><div>On Tue, Bob wrote:</div><blockquote><p>old</p></blockquote></div><div>Fresh postscript</div>"#;
+
+        let stripped = strip_quoted_history(input);
+
+        assert_eq!(
+            stripped.html,
+            "<div>Fresh reply</div><div>Fresh postscript</div>"
+        );
+        assert!(stripped.stripped);
+    }
+
+    #[test]
+    fn outlook_header_words_in_user_prose_are_preserved() {
+        let input = "<div>Debugging note:</div><hr><p>The fields From:, Sent:, To:, and Subject: are required for imports.</p><p>Please keep reading.</p>";
+
+        let stripped = strip_quoted_history(input);
+
+        assert_eq!(stripped.html, input);
+        assert!(!stripped.stripped);
+    }
+
+    #[test]
+    fn on_wrote_line_in_middle_of_original_content_is_preserved() {
+        let input = "<p>Agenda:</p><p>On Tuesday, Alice wrote:</p><p>This is my own note about the phrase above.</p><p>&gt; example syntax, not a quoted reply</p><p>Conclusion stays visible.</p>";
 
         let stripped = strip_quoted_history(input);
 
