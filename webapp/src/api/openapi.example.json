@@ -13,6 +13,144 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/compose": {
+      "post": {
+        "tags": [
+          "compose"
+        ],
+        "operationId": "compose",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Message sent immediately.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Message draft scheduled for later delivery.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid compose payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "JMAP provider or scheduler failure."
+          }
+        }
+      }
+    },
+    "/api/drafts": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "operationId": "create_draft",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Draft created or autosaved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid draft payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "JMAP draft store failure."
+          }
+        }
+      }
+    },
+    "/api/drafts/{draft_id}": {
+      "patch": {
+        "tags": [
+          "drafts"
+        ],
+        "operationId": "update_draft",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "description": "JMAP draft email id to update.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Draft updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid draft id or payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "500": {
+            "description": "JMAP draft store failure."
+          }
+        }
+      }
+    },
     "/api/threads/{thread_id}": {
       "get": {
         "tags": [
@@ -56,13 +194,76 @@
         }
       }
     },
+    "/api/threads/{thread_id}/reply": {
+      "post": {
+        "tags": [
+          "compose"
+        ],
+        "operationId": "reply",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "description": "JMAP thread id to reply to.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Reply sent immediately.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Reply draft scheduled for later delivery.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id or reply payload."
+          },
+          "401": {
+            "description": "Missing or invalid session."
+          },
+          "404": {
+            "description": "Thread not found."
+          },
+          "500": {
+            "description": "JMAP provider or scheduler failure."
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
           "system"
         ],
         "summary": "Liveness probe.",
-        "description": "Returns 204 No Content if the process is up enough to accept HTTP.\nIntended for container orchestrators (Kubernetes `livenessProbe`,\nDocker `HEALTHCHECK`, etc.) — a failing liveness check should\nrestart the container.",
+        "description": "Returns 204 No Content if the process is up enough to accept HTTP.\nIntended for container orchestrators (Kubernetes `livenessProbe`,\nDocker `HEALTHCHECK`, etc.) \u2014 a failing liveness check should\nrestart the container.",
         "operationId": "healthz",
         "responses": {
           "204": {
@@ -107,6 +308,178 @@
           }
         }
       },
+      "ComposePayload": {
+        "type": "object",
+        "required": [
+          "to",
+          "subject",
+          "body_markdown"
+        ],
+        "properties": {
+          "attachments": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
+          "bcc": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "body_markdown": {
+            "type": "string"
+          },
+          "cc": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "send_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ComposeResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "scheduled_send_id",
+              "draft_email_id",
+              "status"
+            ],
+            "properties": {
+              "draft_email_id": {
+                "type": "string"
+              },
+              "scheduled_send_id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "email_id",
+              "status"
+            ],
+            "properties": {
+              "email_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "sent"
+                ]
+              },
+              "submission_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DraftPayload": {
+        "type": "object",
+        "properties": {
+          "attachments": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
+          "bcc": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "body_markdown": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cc": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DraftResponse": {
+        "type": "object",
+        "required": [
+          "draft_id",
+          "updated_at"
+        ],
+        "properties": {
+          "draft_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Participant": {
         "type": "object",
         "required": [
@@ -121,6 +494,31 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ReplyPayload": {
+        "type": "object",
+        "required": [
+          "body_markdown"
+        ],
+        "properties": {
+          "attachments": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
+          "body_markdown": {
+            "type": "string"
+          },
+          "send_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -206,6 +604,14 @@
     {
       "name": "system",
       "description": "Liveness, readiness, and operational probes."
+    },
+    {
+      "name": "compose",
+      "description": "Compose, reply, and scheduled-send creation."
+    },
+    {
+      "name": "drafts",
+      "description": "Draft autosave create/update endpoints."
     }
   ]
 }

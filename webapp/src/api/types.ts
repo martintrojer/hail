@@ -1,6 +1,54 @@
 // This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
+    "/api/compose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["compose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_draft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["update_draft"];
+        trace?: never;
+    };
     "/api/threads/{thread_id}": {
         parameters: {
             query?: never;
@@ -11,6 +59,22 @@ export interface paths {
         get: operations["get_thread"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/{thread_id}/reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reply"];
         delete?: never;
         options?: never;
         head?: never;
@@ -74,9 +138,50 @@ export interface components {
             reason: string;
             src: string;
         };
+        ComposePayload: {
+            attachments?: unknown[] | null;
+            bcc?: string[] | null;
+            body_markdown: string;
+            cc?: string[] | null;
+            /** Format: date-time */
+            send_at?: string | null;
+            subject: string;
+            to: string[];
+        };
+        ComposeResponse: {
+            draft_email_id: string;
+            /** Format: int64 */
+            scheduled_send_id: number;
+            /** @enum {string} */
+            status: "pending";
+        } | {
+            email_id: string;
+            /** @enum {string} */
+            status: "sent";
+            submission_id?: string | null;
+        };
+        DraftPayload: {
+            attachments?: unknown[] | null;
+            bcc?: string[] | null;
+            body_markdown?: string | null;
+            cc?: string[] | null;
+            subject?: string | null;
+            to?: string[] | null;
+        };
+        DraftResponse: {
+            draft_id: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         Participant: {
             email: string;
             name?: string | null;
+        };
+        ReplyPayload: {
+            attachments?: unknown[] | null;
+            body_markdown: string;
+            /** Format: date-time */
+            send_at?: string | null;
         };
         ThreadMessageResponse: {
             blocked_trackers: components["schemas"]["BlockedTrackerResponse"][];
@@ -103,6 +208,153 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    compose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposePayload"];
+            };
+        };
+        responses: {
+            /** @description Message sent immediately. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposeResponse"];
+                };
+            };
+            /** @description Message draft scheduled for later delivery. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposeResponse"];
+                };
+            };
+            /** @description Invalid compose payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP provider or scheduler failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftPayload"];
+            };
+        };
+        responses: {
+            /** @description Draft created or autosaved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftResponse"];
+                };
+            };
+            /** @description Invalid draft payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP draft store failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP draft email id to update. */
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftPayload"];
+            };
+        };
+        responses: {
+            /** @description Draft updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftResponse"];
+                };
+            };
+            /** @description Invalid draft id or payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP draft store failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_thread: {
         parameters: {
             query?: never;
@@ -146,6 +398,70 @@ export interface operations {
                 content?: never;
             };
             /** @description Thread assembly failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id to reply to. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplyPayload"];
+            };
+        };
+        responses: {
+            /** @description Reply sent immediately. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposeResponse"];
+                };
+            };
+            /** @description Reply draft scheduled for later delivery. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposeResponse"];
+                };
+            };
+            /** @description Invalid thread id or reply payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP provider or scheduler failure. */
             500: {
                 headers: {
                     [name: string]: unknown;

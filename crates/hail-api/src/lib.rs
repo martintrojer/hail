@@ -57,15 +57,28 @@ fn build_api_router(
     include_test_stubs: bool,
     webapp_dir: impl FnOnce(&AppState) -> PathBuf,
 ) -> Router {
-    // OpenAPI-tracked routes (health). Future view/verb tasks merge their
-    // own `OpenApiRouter::router()` here.
+    // OpenAPI-tracked public routes (health) are mounted directly. Protected
+    // route specs are merged into the document below, but their routers are
+    // mounted only in the auth-wrapped `protected` subtree.
     let api_router: OpenApiRouter<AppState> =
         OpenApiRouter::with_openapi(ApiDoc::openapi()).merge(routes::health::router());
     let (open_router, mut api) = api_router.with_state(state.clone()).split_for_parts();
-    let (_, thread_view_api) = routes::threads_view::router()
-        .with_state::<AppState>(state.clone())
-        .split_for_parts();
-    api.merge(thread_view_api);
+    for protected_api in [
+        routes::compose::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::drafts::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::threads_view::router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+    ] {
+        api.merge(protected_api);
+    }
 
     // Serialize once. The OpenAPI doc is immutable at runtime.
     let openapi_json =
