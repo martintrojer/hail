@@ -24,8 +24,8 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
 use crate::scheduler::{LiveBubbleJmapOps, process_due_bubble_ups};
-
 use crate::state::AppState;
 use crate::user::run_user_supervisor;
 
@@ -41,11 +41,27 @@ fn tick_secs() -> u64 {
         .unwrap_or(DEFAULT_TICK_SECS)
 }
 
+/// Nightly reconciliation must not inherit short smoke-test ticks. Keep this
+/// coarse unless explicitly overridden for dev/tests.
+const DEFAULT_RECONCILE_EVERY_SECS: u64 = 24 * 60 * 60;
+
+fn reconcile_every_secs() -> u64 {
+    env::var("HAIL_RECONCILE_EVERY_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_RECONCILE_EVERY_SECS)
+}
+
 /// Run the top-level supervisor loop until `cancel` is triggered.
 pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> {
     let secs = tick_secs();
     let tick = Duration::from_secs(secs);
-    info!(tick_secs = secs, "supervisor: starting");
+    let reconcile_secs = reconcile_every_secs();
+    info!(
+        tick_secs = secs,
+        reconcile_every_secs = reconcile_secs,
+        "supervisor: starting"
+    );
 
     let mut running: HashMap<i64, CancellationToken> = HashMap::new();
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -54,12 +70,20 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
         state.config.stalwart.jmap_url.clone(),
         state.token_decryptor.clone(),
     );
+    let thread_verifier = LiveThreadVerifier::new(
+        state.db.clone(),
+        state.config.stalwart.jmap_url.clone(),
+        state.token_decryptor.clone(),
+    );
+    let mut next_reconcile_at = chrono::Utc::now();
 
     // Reconcile immediately so the first tick doesn't burn a full
     // cadence before users come online. Also run scheduled jobs once
     // so overdue bubble-ups fire promptly after worker restart.
     reconcile(&state, &cancel, &mut running, &mut tasks).await;
     run_scheduler_tick(&state, &bubble_jmap).await;
+    run_reconciliation_if_due(&state, &thread_verifier, &mut next_reconcile_at, reconcile_secs)
+        .await;
 
     loop {
         tokio::select! {
@@ -71,6 +95,8 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             _ = sleep(tick) => {
                 reconcile(&state, &cancel, &mut running, &mut tasks).await;
                 run_scheduler_tick(&state, &bubble_jmap).await;
+                run_reconciliation_if_due(&state, &thread_verifier, &mut next_reconcile_at, reconcile_secs)
+                    .await;
             }
             // Reap any finished per-user tasks so the JoinSet doesn't
             // grow unbounded across user churn.
@@ -125,6 +151,34 @@ async fn run_scheduler_tick(state: &AppState, bubble_jmap: &LiveBubbleJmapOps) {
         Ok(fired) if fired > 0 => info!(fired, "scheduler: bubble-ups processed"),
         Ok(_) => {}
         Err(e) => warn!(error = %e, "scheduler: bubble-up tick failed"),
+    }
+}
+
+async fn run_reconciliation_if_due(
+    state: &AppState,
+    verifier: &LiveThreadVerifier,
+    next_run_at: &mut chrono::DateTime<chrono::Utc>,
+    every_secs: u64,
+) {
+    let now = chrono::Utc::now();
+    if now < *next_run_at {
+        return;
+    }
+
+    let interval = chrono::Duration::seconds(every_secs.max(1) as i64);
+    *next_run_at = now + interval;
+
+    match process_reconciliation(&state.db, verifier, now).await {
+        Ok(report) => info!(
+            users_checked = report.users_checked,
+            thread_ids_checked = report.thread_ids_checked,
+            stack_positions_checked = report.stack_positions_checked,
+            stack_positions_deleted = report.stack_positions_deleted,
+            bubble_ups_checked = report.bubble_ups_checked,
+            bubble_ups_deleted = report.bubble_ups_deleted,
+            "reconciliation: sidecar thread refs processed"
+        ),
+        Err(e) => warn!(error = %e, "reconciliation: tick failed"),
     }
 }
 
