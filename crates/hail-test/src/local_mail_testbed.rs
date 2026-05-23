@@ -77,21 +77,43 @@ pub async fn import_local_testbed_fixtures_via_jmap(
     import_fixtures_via_jmap(&session, &local_testbed_fixtures()?).await
 }
 
+/// Import arbitrary raw RFC822 bytes into a logged-in JMAP account's Inbox.
+pub async fn import_raw_message_via_jmap(
+    session: &hail_jmap::Session,
+    fixture_name: &'static str,
+    raw_message: Vec<u8>,
+) -> Result<ImportedEmail, LocalMailTestbedError> {
+    let inbox_id = inbox_id(session).await?;
+    let email = session
+        .client()
+        .email_import_account(
+            session.account_id(),
+            raw_message,
+            [inbox_id],
+            None::<Vec<String>>,
+            None,
+        )
+        .await
+        .map_err(jmap_error)?;
+
+    let email_id = email
+        .id()
+        .map(str::to_owned)
+        .ok_or(LocalMailTestbedError::MissingImportedEmailId { fixture_name })?;
+
+    Ok(ImportedEmail {
+        fixture_name,
+        email_id,
+        thread_id: email.thread_id().map(str::to_owned),
+    })
+}
+
 /// Import arbitrary fixtures into a logged-in JMAP account's Inbox.
 pub async fn import_fixtures_via_jmap(
     session: &hail_jmap::Session,
     fixtures: &[MailFixture],
 ) -> Result<Vec<ImportedEmail>, LocalMailTestbedError> {
-    let mut query = session
-        .client()
-        .mailbox_query(Some(Filter::role(Role::Inbox)), None::<Vec<_>>)
-        .await
-        .map_err(jmap_error)?;
-    let inbox_id = query
-        .take_ids()
-        .into_iter()
-        .next()
-        .ok_or(LocalMailTestbedError::MissingInbox)?;
+    let inbox_id = inbox_id(session).await?;
 
     let mut imported = Vec::with_capacity(fixtures.len());
     for fixture in fixtures {
@@ -107,12 +129,13 @@ pub async fn import_fixtures_via_jmap(
             .await
             .map_err(jmap_error)?;
 
-        let email_id = email
-            .id()
-            .map(str::to_owned)
-            .ok_or(LocalMailTestbedError::MissingImportedEmailId {
-                fixture_name: fixture.name,
-            })?;
+        let email_id =
+            email
+                .id()
+                .map(str::to_owned)
+                .ok_or(LocalMailTestbedError::MissingImportedEmailId {
+                    fixture_name: fixture.name,
+                })?;
         imported.push(ImportedEmail {
             fixture_name: fixture.name,
             email_id,
@@ -121,6 +144,19 @@ pub async fn import_fixtures_via_jmap(
     }
 
     Ok(imported)
+}
+
+async fn inbox_id(session: &hail_jmap::Session) -> Result<String, LocalMailTestbedError> {
+    let mut query = session
+        .client()
+        .mailbox_query(Some(Filter::role(Role::Inbox)), None::<Vec<_>>)
+        .await
+        .map_err(jmap_error)?;
+    query
+        .take_ids()
+        .into_iter()
+        .next()
+        .ok_or(LocalMailTestbedError::MissingInbox)
 }
 
 fn jmap_error(error: hail_jmap::jmap_client::Error) -> LocalMailTestbedError {

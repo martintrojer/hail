@@ -153,13 +153,53 @@ HAIL_TESTBED_HAIL_URL='http://127.0.0.1:18081' \
   scripts/local-mail-testbed.sh --no-build
 ```
 
-The corresponding gated Rust test exercises fixture loading by default and real
-JMAP import only when explicitly enabled:
+The corresponding gated Rust tests exercise fixture loading by default, real
+JMAP import only when explicitly enabled, and the end-to-end local/direct mail
+smoke through `hail-api`:
 
 ```bash
 cargo test -p hail-test --test local_mail_testbed
+cargo test -p hail-test --test e2e_local_direct_mail_smoke
 
 HAIL_RUN_LOCAL_MAIL_TESTBED=1 \
 HAIL_TESTBED_PASSWORD='<password>' \
   cargo test -p hail-test --test local_mail_testbed -- --nocapture
+```
+
+## Local/direct mail E2E smoke
+
+`scripts/e2e-local-direct-mail-smoke.sh` is the preferred automated local smoke
+for the core receive flow. It is env-gated because it starts a disposable
+Stalwart container and local `hail-api` / `hail-worker` processes:
+
+```bash
+# Default cargo test path: explicitly skips with the actionable reason.
+cargo test -p hail-test --test e2e_local_direct_mail_smoke -- --nocapture
+
+# Real smoke: starts Stalwart, injects mail via JMAP Email/import, asserts via hail API.
+HAIL_RUN_LOCAL_MAIL_TESTBED=1 scripts/e2e-local-direct-mail-smoke.sh
+```
+
+The smoke does not fake success. When enabled it:
+
+1. starts the Rust `start_stalwart_fixture()` local mail testbed and provisions
+   `alice@hail.test` / `hail-test-password`;
+2. starts `hail-api` and `hail-worker` against a temporary SQLite sidecar with
+   `HAIL_TICK_SECS=1`;
+3. injects a unique synthetic inbound message from
+   `maya.e2e-local-direct-mail-smoke@personal.example` through JMAP
+   `Email/import`;
+4. logs in to `hail-api`, waits for `/api/views/screener` to show the pending
+   sender, and approves the sender for Imbox;
+5. injects a second synthetic message from the approved sender; and
+6. asserts through hail API that `/api/views/imbox` contains the message and
+   `GET /api/threads/{thread_id}` renders the thread.
+
+If the enabled run fails before assertions because Podman or Stalwart bootstrap
+is unavailable, fix the reported host/tooling issue and rerun the exact command
+above. If you need to debug the older compose harness manually, run:
+
+```bash
+scripts/local-mail-testbed.sh --dry-run
+HAIL_TESTBED_PASSWORD='<password>' scripts/local-mail-testbed.sh --no-build
 ```
