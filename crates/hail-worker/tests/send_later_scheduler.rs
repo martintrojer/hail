@@ -186,6 +186,23 @@ async fn insert_scheduled_send_with_status(
     .last_insert_rowid()
 }
 
+async fn set_scheduled_send_claimed_at(pool: &SqlitePool, id: i64, claimed_at: DateTime<Utc>) {
+    sqlx::query("UPDATE scheduled_sends SET claimed_at = ? WHERE id = ?")
+        .bind(claimed_at)
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("set scheduled_send claimed_at");
+}
+
+async fn set_scheduled_send_claimed_at_null(pool: &SqlitePool, id: i64) {
+    sqlx::query("UPDATE scheduled_sends SET claimed_at = NULL WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("clear scheduled_send claimed_at");
+}
+
 async fn insert_scheduled_send(
     pool: &SqlitePool,
     user_id: i64,
@@ -589,6 +606,7 @@ async fn non_pending_due_rows_are_ignored() {
     let processing_id =
         insert_scheduled_send_with_status(&pool, user_id, "draft-processing", due, "processing")
             .await;
+    set_scheduled_send_claimed_at(&pool, processing_id, now).await;
     let submitter = FakeSendSubmitter::default();
 
     let sent = process_due_scheduled_sends(&pool, &submitter, now)
@@ -643,6 +661,139 @@ async fn duplicate_pending_rows_for_same_draft_are_claimed_independently() {
     );
     assert_eq!(scheduled_send_state(&pool, first).await.0, "sent");
     assert_eq!(scheduled_send_state(&pool, second).await.0, "sent");
+}
+
+#[tokio::test]
+async fn stale_processing_claim_fails_unknown_state_without_submit() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send_with_status(
+        &pool,
+        user_id,
+        "draft-stale-processing",
+        now - Duration::minutes(10),
+        "processing",
+    )
+    .await;
+    set_scheduled_send_claimed_at(&pool, id, now - Duration::hours(2)).await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 0);
+    assert!(submitter.calls().is_empty());
+    let state = scheduled_send_state(&pool, id).await;
+    assert_eq!(state.0, "failed");
+    assert_eq!(state.1, Some((now - Duration::hours(2)).to_rfc3339()));
+    assert_eq!(state.2, None);
+    assert!(
+        state
+            .3
+            .as_deref()
+            .is_some_and(|error| error.contains("submission state unknown")),
+        "unexpected error: {:?}",
+        state.3
+    );
+}
+
+#[tokio::test]
+async fn processing_claim_without_claimed_at_fails_unknown_state_without_submit() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send_with_status(
+        &pool,
+        user_id,
+        "draft-missing-claim-time",
+        now - Duration::minutes(10),
+        "processing",
+    )
+    .await;
+    set_scheduled_send_claimed_at_null(&pool, id).await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 0);
+    assert!(submitter.calls().is_empty());
+    let state = scheduled_send_state(&pool, id).await;
+    assert_eq!(state.0, "failed");
+    assert_eq!(state.1, None);
+    assert_eq!(state.2, None);
+    assert!(
+        state
+            .3
+            .as_deref()
+            .is_some_and(|error| error.contains("submission state unknown")),
+        "unexpected error: {:?}",
+        state.3
+    );
+}
+
+#[tokio::test]
+async fn recent_processing_claim_is_not_recovered_or_submitted() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send_with_status(
+        &pool,
+        user_id,
+        "draft-recent-processing",
+        now - Duration::minutes(10),
+        "processing",
+    )
+    .await;
+    let claimed_at = now - Duration::minutes(30);
+    set_scheduled_send_claimed_at(&pool, id, claimed_at).await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 0);
+    assert!(submitter.calls().is_empty());
+    assert_eq!(
+        scheduled_send_state(&pool, id).await,
+        (
+            "processing".to_string(),
+            Some(claimed_at.to_rfc3339()),
+            None,
+            None
+        )
+    );
+}
+
+#[tokio::test]
+async fn stale_claim_recovery_does_not_block_later_due_pending_rows() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let stale = insert_scheduled_send_with_status(
+        &pool,
+        user_id,
+        "draft-stale",
+        now - Duration::minutes(10),
+        "processing",
+    )
+    .await;
+    set_scheduled_send_claimed_at(&pool, stale, now - Duration::hours(2)).await;
+    let pending =
+        insert_scheduled_send(&pool, user_id, "draft-pending", now - Duration::minutes(1)).await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 1);
+    assert_eq!(
+        submitter.calls(),
+        vec![(user_id, "draft-pending".to_string())]
+    );
+    assert_eq!(scheduled_send_state(&pool, stale).await.0, "failed");
+    assert_eq!(scheduled_send_state(&pool, pending).await.0, "sent");
 }
 
 #[tokio::test]
