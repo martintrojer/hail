@@ -121,6 +121,98 @@ Always send `/new` before assigning unrelated follow-up work to an existing pane
 mu agent send worker-1 -w hail '/new'
 ```
 
+## Code review and test review gates
+
+This repo has two review skills available to agents:
+
+- `code-reviewer` — review production code for dead code, duplication,
+  unnecessary complexity, and non-idiomatic patterns.
+- `test-reviewer` — review tests for false confidence, excessive mocking,
+  weak assertions, and missing behavior coverage.
+
+Use them as explicit mu tasks. Do not treat review as an informal chat message.
+
+When to add review tasks:
+
+- After a feature cluster lands (for example: auth/session, worker/eventsource,
+  screener routing, composer/send-later, SPA shell/views).
+- After any large refactor.
+- Before `v1-ship`.
+- Whenever tests pass but the implementation relied heavily on mocks or fake
+  infrastructure.
+
+Review task naming convention:
+
+```text
+review-code-<area>
+review-tests-<area>
+```
+
+Examples:
+
+```bash
+mu task add review-code-auth -w hail \
+  -t "Code review: auth/session/setup API for simplicity, dead code, idiomatic Axum/sqlx" \
+  -i 80 -e 0.5 \
+  -b auth-login,setup-wizard-api
+
+mu task add review-tests-auth -w hail \
+  -t "Test review: auth/session/setup tests for false confidence and missing security cases" \
+  -i 85 -e 0.5 \
+  -b auth-login,setup-wizard-api
+
+mu task block mvp-security-review -w hail --by review-code-auth
+mu task block mvp-test-review -w hail --by review-tests-auth
+```
+
+How review findings become work:
+
+1. The reviewer writes findings in the task note, grouped as Critical /
+   Recommended / Suggestions.
+2. The orchestrator triages every finding:
+   - **Do now:** add a concrete fix task and wire blockers.
+   - **Defer:** add a task and mark it `DEFERRED` with evidence.
+   - **Reject:** add a note explaining why, or close/reject the proposed fix task
+     with evidence.
+3. Important: findings must not live only in review prose. If a finding needs
+   action, it becomes a mu task. If it does not need action, the triage reason is
+   recorded in the review task notes.
+4. The orchestrator, not the reviewer, decides priority and whether the finding
+   blocks v1.
+
+Human-in-the-loop smoke tests follow the same rule. When the operator is asked
+to try the app, their notes are not treated as chat-only feedback. Add a
+`human-smoke-*` task at the point where the feature is demoable, and add a
+follow-up `triage-human-smoke-notes` task that turns every operator note into
+mu tasks or explicit rejects/deferrals. Human smoke gates should block
+`v1-ship` when they validate core MVP behavior.
+
+Prefer concrete testbeds over vague manual testing. For mail features, maintain
+both:
+
+- a local/direct testbed that runs Stalwart + hail and injects synthetic emails
+  without Cloudflare or public DNS;
+- a Cloudflare-assisted testbed/runbook for Tunnel + Email Routing using the
+  operator's real CF account/domain when needed.
+
+Synthetic mail fixtures (newsletters, receipts, personal threads, attachments,
+tracking pixels, quoted replies) should be reusable across unit tests, local
+E2E, Cloudflare smoke, and human smoke. If a smoke test needs external
+credentials or DNS changes, model it as a human-in-the-loop mu task and make the
+operator steps explicit.
+
+Review tasks should be read-only unless explicitly assigned to fix issues. A
+reviewer's final action is usually:
+
+```bash
+mu task note review-code-foo -w hail "CRITICAL: ...\nRECOMMENDED: ...\nSUGGESTIONS: ...\nTRIAGE_HINTS: ..."
+mu task close review-code-foo -w hail --evidence "review complete; findings logged as task note"
+```
+
+If the reviewer discovers a security issue or test false-confidence issue that
+could invalidate a just-merged feature, they should say so loudly in the note;
+the orchestrator should immediately add a blocking fix task.
+
 ## Fedora host / toolbox tools
 
 This repo is developed on an immutable Fedora-style host. Do **not** assume every DNF-installed CLI exists directly on the host.
