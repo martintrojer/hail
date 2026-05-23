@@ -88,6 +88,7 @@ fn build_api_router(
         .merge(routes::admin_domains::router())
         .merge(routes::admin_users::router())
         .merge(routes::blobs::router())
+        .merge(routes::compose::router())
         .merge(routes::contacts::router())
         .merge(routes::drafts::router())
         .merge(routes::pile::router())

@@ -7,6 +7,7 @@ pub mod admin_domains;
 pub mod admin_users;
 pub mod auth;
 pub mod blobs;
+pub mod compose;
 pub mod contacts;
 pub mod drafts;
 pub mod health;
