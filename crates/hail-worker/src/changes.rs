@@ -279,8 +279,10 @@ async fn route_envelopes(
                         user_id,
                         email_id = %route_env.id,
                         error = %e,
-                        "route_email failed; will retry on next change"
+                        "route_email failed; cursor not advanced so change will retry"
                     );
+                    return Err(e)
+                        .with_context(|| format!("route email {} through screener", route_env.id));
                 }
             }
         }
