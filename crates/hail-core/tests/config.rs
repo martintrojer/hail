@@ -46,8 +46,7 @@ fn write_toml(body: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-const VALID_KEY_HEX: &str =
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; // 64 hex chars = 32 bytes
+const VALID_KEY_HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; // 64 hex chars = 32 bytes
 
 const FULL_TOML: &str = r#"
 database_url = "sqlite::memory:"
@@ -64,6 +63,10 @@ webapp_dir = "/tmp/hail-webapp"
 [admin]
 email = "ops@hail.test"
 display_name = "Ops"
+
+[setup]
+bootstrap_enabled = true
+bootstrap_token = "operator-only-bootstrap-token"
 
 [secrets]
 server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -84,11 +87,23 @@ fn loads_full_toml_fields() {
     );
     assert_eq!(cfg.server.bind, "0.0.0.0:8080");
     assert_eq!(cfg.server.public_url, "https://hail.test");
-    assert_eq!(cfg.server.webapp_dir.as_deref(), Some(std::path::Path::new("/tmp/hail-webapp")));
+    assert_eq!(
+        cfg.server.webapp_dir.as_deref(),
+        Some(std::path::Path::new("/tmp/hail-webapp"))
+    );
 
     let admin = cfg.admin.as_ref().expect("[admin] present");
     assert_eq!(admin.email, "ops@hail.test");
     assert_eq!(admin.display_name.as_deref(), Some("Ops"));
+    assert!(cfg.setup.bootstrap_enabled);
+    assert_eq!(
+        cfg.setup
+            .bootstrap_token
+            .as_ref()
+            .expect("setup bootstrap token")
+            .expose_secret(),
+        "operator-only-bootstrap-token"
+    );
 
     assert_eq!(cfg.secrets.server_key.expose_secret(), VALID_KEY_HEX);
 }
@@ -97,8 +112,7 @@ fn loads_full_toml_fields() {
 fn env_overrides_toml() {
     let _guard = env_lock();
     clear_hail_env();
-    let override_key: &str =
-        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    let override_key: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
     // SAFETY: serial single-thread test execution.
     unsafe {
         std::env::set_var("HAIL_SECRETS__SERVER_KEY", override_key);
@@ -163,6 +177,59 @@ server_key = "0123456789abcdef0123456789abcd"
 }
 
 #[test]
+fn setup_bootstrap_defaults_to_disabled() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let cfg = Config::load_from(Some(&path)).expect("load");
+    assert!(!cfg.setup.bootstrap_enabled);
+    assert!(cfg.setup.bootstrap_token.is_none());
+}
+
+#[test]
+fn setup_bootstrap_env_overrides_toml() {
+    let _guard = env_lock();
+    clear_hail_env();
+    unsafe {
+        std::env::set_var("HAIL_SETUP__BOOTSTRAP_ENABLED", "true");
+        std::env::set_var("HAIL_SETUP__BOOTSTRAP_TOKEN", "from-env-token");
+    }
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let cfg = Config::load_from(Some(&path)).expect("load");
+    assert!(cfg.setup.bootstrap_enabled);
+    assert_eq!(
+        cfg.setup
+            .bootstrap_token
+            .as_ref()
+            .expect("bootstrap token")
+            .expose_secret(),
+        "from-env-token"
+    );
+
+    clear_hail_env();
+}
+
+#[test]
 fn admin_block_optional() {
     let _guard = env_lock();
     clear_hail_env();
@@ -178,5 +245,8 @@ server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 "#;
     let (_dir, path) = write_toml(toml);
     let cfg = Config::load_from(Some(&path)).expect("load");
-    assert!(cfg.admin.is_none(), "no [admin] block => Config.admin == None");
+    assert!(
+        cfg.admin.is_none(),
+        "no [admin] block => Config.admin == None"
+    );
 }

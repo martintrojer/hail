@@ -2,7 +2,8 @@
 #
 # First run:
 #   1. cp .env.example .env
-#   2. Edit .env: generate HAIL_SERVER_KEY with `openssl rand -hex 32`
+#   2. Edit .env: generate HAIL_SERVER_KEY with `openssl rand -hex 32`,
+#      generate HAIL_SETUP_BOOTSTRAP_TOKEN with `openssl rand -hex 32`,
 #      and set HAIL_PUBLIC_URL to your public hail URL (no trailing slash).
 #   3. Review stalwart.example.toml and hail.example.toml before first boot.
 #   4. Start:  docker compose up -d --build
@@ -65,6 +66,8 @@ services:
       - HAIL_SERVER__BIND=0.0.0.0:8080
       - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
       - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
+      - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
+      - HAIL_SETUP__BOOTSTRAP_TOKEN=${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}
     ports:
       - "8080:8080"   # SPA + REST + WS (reverse-proxy / CF tunnel terminates TLS upstream)
     volumes:
@@ -84,6 +87,8 @@ services:
       - HAIL_SERVER__BIND=0.0.0.0:8080
       - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
       - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
+      - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
+      - HAIL_SETUP__BOOTSTRAP_TOKEN=${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}
     volumes:
       - hail-data:/var/lib/hail   # shared with hail-api (SQLite file)
     restart: unless-stopped

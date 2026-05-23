@@ -15,6 +15,7 @@ use axum::{Json, Router, routing::post};
 use chrono::{Duration, Utc};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::middleware::session::{
     SESSION_TTL_DAYS, basic_bearer, build_session_cookie, new_session_id,
@@ -44,6 +45,7 @@ struct SetupAdminRequest {
     password: SecretString,
     display_name: Option<String>,
     domain: String,
+    bootstrap_token: Option<SecretString>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +178,9 @@ where
     }
     if !email.ends_with(&format!("@{domain}")) {
         return invalid_input("email");
+    }
+    if !setup_bootstrap_authorized(&state, body.bootstrap_token.as_ref()) {
+        return forbidden_setup_bootstrap_required();
     }
 
     let now = Utc::now();
@@ -449,11 +454,36 @@ fn valid_domain(domain: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
+fn setup_bootstrap_authorized(state: &AppState, provided: Option<&SecretString>) -> bool {
+    if !state.config.setup.bootstrap_enabled {
+        return false;
+    }
+    let Some(expected) = state.config.setup.bootstrap_token.as_ref() else {
+        return false;
+    };
+    let Some(provided) = provided else {
+        return false;
+    };
+
+    let expected = expected.expose_secret().as_bytes();
+    let provided = provided.expose_secret().as_bytes();
+    !expected.is_empty() && expected.ct_eq(provided).into()
+}
+
 fn invalid_input(field: &'static str) -> Response {
     (
         StatusCode::BAD_REQUEST,
         [(header::CONTENT_TYPE, "application/json")],
         format!(r#"{{"error":"invalid_input","field":"{field}"}}"#),
+    )
+        .into_response()
+}
+
+fn forbidden_setup_bootstrap_required() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"setup_bootstrap_required"}"#,
     )
         .into_response()
 }

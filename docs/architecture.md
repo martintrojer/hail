@@ -307,8 +307,12 @@ unset and use `/setup`.
 - **Wizard only.** Friendly, but frustrating for config-management users.
 - **Config only.** Pure, but a poor first-run experience.
 
-**Why:** both camps matter in self-hosting. The rule is precise: the wizard is
+**Why:** both camps matter in self-hosting. The rule is precise: setup state is
 active only when no admin user exists **and** `[admin]` is absent from config.
+The mutating wizard POST has an additional operator-only bootstrap guard:
+`[setup].bootstrap_enabled = true` plus `bootstrap_token` (prefer
+`HAIL_SETUP__BOOTSTRAP_TOKEN`). `/api/setup/state` deliberately stays generic;
+without the token, an empty public deployment cannot be claimed.
 For the config-file path, Stalwart remains the source of truth: hail does not
 store or verify an admin password hash and does not seed a fake user row at
 startup. The configured admin email is elevated to `is_admin=1` on its first

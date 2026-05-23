@@ -107,6 +107,7 @@ export interface SetupAdminRequest {
   password: string;
   display_name?: string | null;
   domain: string;
+  bootstrap_token: string;
 }
 
 export type MailClassification = components['schemas']['MailClassification'];

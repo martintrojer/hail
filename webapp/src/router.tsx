@@ -197,6 +197,7 @@ function SetupPage() {
   const [displayName, setDisplayName] = useState('');
   const [domain, setDomain] = useState('');
   const [password, setPassword] = useState('');
+  const [bootstrapToken, setBootstrapToken] = useState('');
   const setupAdmin = useSetupAdminMutation(defaultApiClient, {
     onSuccess: () => {
       void navigate({ to: '/imbox' });
@@ -217,6 +218,7 @@ function SetupPage() {
       password,
       display_name: displayName.trim() || null,
       domain,
+      bootstrap_token: bootstrapToken,
     });
   }
 
@@ -268,9 +270,19 @@ function SetupPage() {
       >
         <h2 className="text-2xl font-semibold">First-run setup</h2>
         <p className="mt-2 text-sm text-slate-400">
-          Create the first admin account for this hail instance.
+          Create the first admin account for this hail instance. You need the
+          operator bootstrap token from the server environment/config.
         </p>
         <div className="mt-6 space-y-4">
+          <TextInput
+            id="setup-bootstrap-token"
+            label="Bootstrap token"
+            type="password"
+            value={bootstrapToken}
+            onChange={setBootstrapToken}
+            autoComplete="off"
+            placeholder="Paste HAIL_SETUP__BOOTSTRAP_TOKEN"
+          />
           <TextInput
             id="setup-email"
             label="Admin email"

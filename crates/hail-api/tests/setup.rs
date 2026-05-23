@@ -13,7 +13,7 @@ use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::middleware::session::SESSION_COOKIE;
 use hail_api::routes::setup::{ProvisionError, ProvisionedUser, UserProvisioner};
 use hail_api::state::AppState;
-use hail_core::{AdminConfig, Config, KEY_LEN};
+use hail_core::{AdminConfig, Config, KEY_LEN, SetupConfig};
 use hail_db::connect;
 use http_body_util::BodyExt;
 use secrecy::SecretString;
@@ -39,6 +39,10 @@ async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) 
     }
     let mut config = Config::load_from(None).expect("load config");
     config.admin = admin;
+    config.setup = SetupConfig {
+        bootstrap_enabled: true,
+        bootstrap_token: Some(SecretString::from("setup-test-bootstrap-token")),
+    };
 
     let state = AppState {
         db,
@@ -201,6 +205,14 @@ async fn get_json_with_cookie(
 }
 
 async fn post_admin(app: Router, body: &str) -> axum::response::Response {
+    post_admin_raw(
+        app,
+        &body_with_bootstrap_token(body, "setup-test-bootstrap-token"),
+    )
+    .await
+}
+
+async fn post_admin_raw(app: Router, body: &str) -> axum::response::Response {
     let req = Request::builder()
         .method(Method::POST)
         .uri("/api/setup/admin")
@@ -209,6 +221,12 @@ async fn post_admin(app: Router, body: &str) -> axum::response::Response {
         .body(Body::from(body.to_string()))
         .unwrap();
     app.oneshot(req).await.unwrap()
+}
+
+fn body_with_bootstrap_token(body: &str, token: &str) -> String {
+    let mut json: serde_json::Value = serde_json::from_str(body).expect("setup admin json body");
+    json["bootstrap_token"] = serde_json::Value::String(token.to_string());
+    json.to_string()
 }
 
 #[tokio::test]
@@ -253,6 +271,65 @@ async fn wizard_state_inactive_when_config_admin_set() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["wizard_active"], false);
     assert_eq!(json["reason"], "config_admin_set");
+}
+
+#[tokio::test]
+async fn post_setup_admin_requires_enabled_bootstrap_token() {
+    let (mut disabled_state, _key) = fixture_state(None).await;
+    disabled_state.config.setup.bootstrap_enabled = false;
+    let disabled_provisioner = Arc::new(FakeProvisioner::default());
+    let disabled = post_admin(
+        app_with_provisioner(disabled_state, disabled_provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+    )
+    .await;
+    assert_eq!(disabled.status(), StatusCode::FORBIDDEN);
+    assert_eq!(disabled_provisioner.call_count(), 0);
+    let bytes = disabled.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_bootstrap_required");
+
+    let (mut missing_token_state, _key) = fixture_state(None).await;
+    missing_token_state.config.setup.bootstrap_token = None;
+    let missing_token_provisioner = Arc::new(FakeProvisioner::default());
+    let missing_token = post_admin(
+        app_with_provisioner(missing_token_state, missing_token_provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+    )
+    .await;
+    assert_eq!(missing_token.status(), StatusCode::FORBIDDEN);
+    assert_eq!(missing_token_provisioner.call_count(), 0);
+}
+
+#[tokio::test]
+async fn post_setup_admin_rejects_missing_or_wrong_bootstrap_token() {
+    let (state, _key) = fixture_state(None).await;
+    let provisioner = Arc::new(FakeProvisioner::default());
+
+    let missing = post_admin_raw(
+        app_with_provisioner(state.clone(), provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+    assert_eq!(provisioner.call_count(), 0);
+    let bytes = missing.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_bootstrap_required");
+
+    let wrong = post_admin_raw(
+        app_with_provisioner(state, provisioner.clone()),
+        &body_with_bootstrap_token(
+            r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+            "wrong-token",
+        ),
+    )
+    .await;
+    assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
+    assert_eq!(provisioner.call_count(), 0);
+    let bytes = wrong.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_bootstrap_required");
 }
 
 #[tokio::test]

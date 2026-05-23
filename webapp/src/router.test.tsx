@@ -188,7 +188,10 @@ describe('SPA auth/router flows', () => {
 
     renderRouterAt('/setup');
 
-    fireEvent.change(await screen.findByLabelText('Admin email'), {
+    fireEvent.change(await screen.findByLabelText('Bootstrap token'), {
+      target: { value: 'operator-bootstrap-token' },
+    });
+    fireEvent.change(screen.getByLabelText('Admin email'), {
       target: { value: 'admin@example.com' },
     });
     fireEvent.change(screen.getByLabelText('Display name'), {
@@ -212,6 +215,7 @@ describe('SPA auth/router flows', () => {
         password: 'correct horse battery staple',
         display_name: 'Admin User',
         domain: 'example.com',
+        bootstrap_token: 'operator-bootstrap-token',
       },
     ]);
   });

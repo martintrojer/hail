@@ -285,6 +285,7 @@ describe('HailApiClient non-composer mutating requests', () => {
       password: 'correct horse battery staple',
       display_name: 'Admin',
       domain: 'example.org',
+      bootstrap_token: 'operator-bootstrap-token',
     };
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       jsonResponse(201, {
