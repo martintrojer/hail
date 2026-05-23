@@ -24,6 +24,8 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::scheduler::{LiveBubbleJmapOps, process_due_bubble_ups};
+
 use crate::state::AppState;
 use crate::user::run_user_supervisor;
 
@@ -47,10 +49,17 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
 
     let mut running: HashMap<i64, CancellationToken> = HashMap::new();
     let mut tasks: JoinSet<()> = JoinSet::new();
+    let bubble_jmap = LiveBubbleJmapOps::new(
+        state.db.clone(),
+        state.config.stalwart.jmap_url.clone(),
+        state.token_decryptor.clone(),
+    );
 
     // Reconcile immediately so the first tick doesn't burn a full
-    // cadence before users come online.
+    // cadence before users come online. Also run scheduled jobs once
+    // so overdue bubble-ups fire promptly after worker restart.
     reconcile(&state, &cancel, &mut running, &mut tasks).await;
+    run_scheduler_tick(&state, &bubble_jmap).await;
 
     loop {
         tokio::select! {
@@ -61,6 +70,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             }
             _ = sleep(tick) => {
                 reconcile(&state, &cancel, &mut running, &mut tasks).await;
+                run_scheduler_tick(&state, &bubble_jmap).await;
             }
             // Reap any finished per-user tasks so the JoinSet doesn't
             // grow unbounded across user churn.
@@ -108,6 +118,14 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
 
     info!("supervisor: shutdown complete");
     Ok(())
+}
+
+async fn run_scheduler_tick(state: &AppState, bubble_jmap: &LiveBubbleJmapOps) {
+    match process_due_bubble_ups(&state.db, bubble_jmap, chrono::Utc::now()).await {
+        Ok(fired) if fired > 0 => info!(fired, "scheduler: bubble-ups processed"),
+        Ok(_) => {}
+        Err(e) => warn!(error = %e, "scheduler: bubble-up tick failed"),
+    }
 }
 
 /// Reconcile `running` against the current set of active users in
