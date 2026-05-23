@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { HailApiError, type ComposeRequest, type ComposeResponse } from '../api/client';
+import { HailApiError, type HailApiClient, type ComposeRequest, type ComposeResponse } from '../api/client';
 import {
   defaultApiClient,
   useCreateDraftMutation,
@@ -21,6 +21,7 @@ interface ComposerPageProps {
   replyToThreadId?: string;
   initialTo?: string[];
   initialSubject?: string;
+  client?: HailApiClient;
 }
 
 interface ComposerForm {
@@ -40,6 +41,7 @@ interface AttachmentDraft {
 }
 
 const autosaveIntervalMs = 5000;
+const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
 const inputClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-50 outline-none ring-sky-400 transition placeholder:text-slate-600 focus:border-sky-400 focus:ring-2';
 
 function splitAddresses(value: string) {
@@ -81,7 +83,7 @@ function composeResultMessage(response: ComposeResponse) {
     : 'Sent.';
 }
 
-export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject = '' }: ComposerPageProps) {
+export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
   const navigate = useNavigate();
   const [form, setForm] = useState<ComposerForm>({
     to: initialTo.join(', '),
@@ -99,9 +101,10 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   const [sendError, setSendError] = useState<string | null>(null);
   const snapshotRef = useRef('');
 
-  const createDraft = useCreateDraftMutation();
-  const updateDraft = useUpdateDraftMutation();
-  const sendCompose = useSendComposeMutation(defaultApiClient, {
+  const createDraft = useCreateDraftMutation(client);
+  const updateDraft = useUpdateDraftMutation(client);
+  const hasUnsupportedAttachments = attachments.length > 0;
+  const sendCompose = useSendComposeMutation(client, {
     onSuccess: (response) => {
       setDirty(false);
       setSendError(null);
@@ -116,8 +119,6 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
     bcc: splitAddresses(form.bcc),
     subject: form.subject,
     body_markdown: form.body,
-    // Server currently rejects non-empty attachment metadata. The picker is kept
-    // in the UI, but compose/draft calls send an empty list until API support lands.
     attachments: [],
   }), [form]);
 
@@ -139,10 +140,20 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
       type: file.type || 'application/octet-stream',
     })));
     setDirty(true);
+    setSuccessMessage(null);
+    setSendError(null);
+  }
+
+  function blockUnsupportedAttachments() {
+    if (!hasUnsupportedAttachments) return false;
+    setSendError(unsupportedAttachmentMessage);
+    setSuccessMessage(null);
+    return true;
   }
 
   function saveDraft() {
     if (!dirty || replyToThreadId || !canSubmit) return;
+    if (blockUnsupportedAttachments()) return;
 
     const snapshot = JSON.stringify(draftPayload);
     if (snapshot === snapshotRef.current) {
@@ -182,6 +193,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   }
 
   function send(request: ComposeRequest) {
+    if (blockUnsupportedAttachments()) return;
     setSendError(null);
     setSuccessMessage(null);
     sendCompose.mutate({ threadId: replyToThreadId, request });
@@ -261,9 +273,9 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
             {attachments.length > 0 ? <AttachmentNotice attachments={attachments} /> : null}
 
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-800 pt-4">
-              <button type="submit" disabled={!canSubmit || sendCompose.isPending} className="rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
-              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || sendCompose.isPending} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
-              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSubmit} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
+              <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
+              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
+              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSubmit || hasUnsupportedAttachments} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
               <p className="text-xs text-slate-500">{replyToThreadId ? 'Replies send through the thread reply API.' : savingDraft ? 'Autosaving…' : lastSavedAt ? `Saved ${lastSavedAt.toLocaleTimeString()}` : dirty ? 'Unsaved changes' : 'No draft saved yet'}</p>
             </div>
 
@@ -284,7 +296,7 @@ function Field({ id, label, children }: { id: string; label: string; children: R
 function AttachmentNotice({ attachments }: { attachments: AttachmentDraft[] }) {
   return (
     <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
-      <p className="font-semibold">Attachment UI is ready; server send support is still pending.</p>
+      <p className="font-semibold">Attachments are not supported for sending or saving yet.</p>
       <ul className="mt-2 space-y-1 text-amber-50/90">
         {attachments.map((attachment) => <li key={attachment.id}>{attachment.name} · {fileSizeLabel(attachment.size)} · {attachment.type}</li>)}
       </ul>
