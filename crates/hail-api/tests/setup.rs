@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -14,6 +15,7 @@ use hail_core::{AdminConfig, Config, KEY_LEN};
 use hail_db::connect;
 use http_body_util::BodyExt;
 use secrecy::SecretString;
+use tokio::sync::Barrier;
 use tower::ServiceExt;
 
 async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) {
@@ -67,9 +69,17 @@ fn app_with_provisioner(state: AppState, provisioner: Arc<FakeProvisioner>) -> R
 #[derive(Default)]
 struct FakeProvisioner {
     calls: AtomicUsize,
+    delay: Option<Duration>,
 }
 
 impl FakeProvisioner {
+    fn with_delay(delay: Duration) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            delay: Some(delay),
+        }
+    }
+
     fn call_count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
@@ -85,6 +95,9 @@ impl UserProvisioner for FakeProvisioner {
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
+            if let Some(delay) = self.delay {
+                tokio::time::sleep(delay).await;
+            }
             Ok(ProvisionedUser {
                 jmap_account_id: format!("acct-{email}"),
                 bearer_token: SecretString::from("fake-bearer-token"),
@@ -197,6 +210,7 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
 #[tokio::test]
 async fn post_setup_admin_twice_returns_409_second_time_without_reprovisioning() {
     let (state, _key) = fixture_state(None).await;
+    let db = state.db.clone();
     let provisioner = Arc::new(FakeProvisioner::default());
     let first = post_admin(
         app_with_provisioner(state.clone(), provisioner.clone()),
@@ -216,6 +230,82 @@ async fn post_setup_admin_twice_returns_409_second_time_without_reprovisioning()
     let bytes = second.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "setup_disabled");
+
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(user_count, 1);
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(session_count, 1);
+}
+
+#[tokio::test]
+async fn concurrent_setup_admin_posts_only_provision_once() {
+    let (state, _key) = fixture_state(None).await;
+    let db = state.db.clone();
+    let provisioner = Arc::new(FakeProvisioner::with_delay(Duration::from_millis(50)));
+    let barrier = Arc::new(Barrier::new(3));
+
+    let first_state = state.clone();
+    let first_provisioner = provisioner.clone();
+    let first_barrier = barrier.clone();
+    let first = tokio::spawn(async move {
+        first_barrier.wait().await;
+        post_admin(
+            app_with_provisioner(first_state, first_provisioner),
+            r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        )
+        .await
+    });
+
+    let second_state = state;
+    let second_provisioner = provisioner.clone();
+    let second_barrier = barrier.clone();
+    let second = tokio::spawn(async move {
+        second_barrier.wait().await;
+        post_admin(
+            app_with_provisioner(second_state, second_provisioner),
+            r#"{"email":"bob@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        )
+        .await
+    });
+
+    barrier.wait().await;
+    let first = first.await.unwrap();
+    let second = second.await.unwrap();
+    let statuses = [first.status(), second.status()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CREATED)
+            .count(),
+        1,
+        "expected one created response, got {statuses:?}"
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CONFLICT)
+            .count(),
+        1,
+        "expected one conflict response, got {statuses:?}"
+    );
+    assert_eq!(provisioner.call_count(), 1);
+
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(user_count, 1);
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(session_count, 1);
 }
 
 #[tokio::test]
