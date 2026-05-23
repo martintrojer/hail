@@ -75,6 +75,10 @@ pub struct ServerConfig {
     pub bind: String,
     /// Externally-visible URL — used for cookie domain + same-origin CSRF.
     pub public_url: String,
+    /// Directory containing the built SPA bundle. If unset, hail-api checks
+    /// `HAIL_WEBAPP_DIR`, then falls back to `/srv/hail/webapp`.
+    #[serde(default)]
+    pub webapp_dir: Option<PathBuf>,
 }
 
 /// Pre-provisioned admin user. Setting this block opts out of the wizard

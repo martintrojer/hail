@@ -37,6 +37,9 @@ jmap_url = "http://stalwart:8080"
 [server]
 bind = "0.0.0.0:8080"
 public_url = "https://hail.example.com"
+# Directory containing the built SPA bundle. If unset, hail-api checks
+# HAIL_WEBAPP_DIR, then defaults to /srv/hail/webapp.
+# webapp_dir = "/srv/hail/webapp"
 
 # --- Admin (OPTIONAL) -------------------------------------------------------
 # Uncomment AND set to disable the first-run wizard at /setup. Leave commented

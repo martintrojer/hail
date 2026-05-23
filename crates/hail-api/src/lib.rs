@@ -14,9 +14,13 @@ pub mod openapi;
 pub mod routes;
 pub mod state;
 
-use axum::Router;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::routing::get;
+use axum::{Router, extract::Request};
+use std::path::{Path, PathBuf};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
@@ -43,6 +47,14 @@ use crate::state::AppState;
 /// stub) behind the auth middleware — used exclusively by `tests/auth.rs`
 /// to verify the CSRF gate.
 pub fn build_router(state: AppState, include_test_stubs: bool) -> Router {
+    build_api_router(state, include_test_stubs, resolve_webapp_dir)
+}
+
+fn build_api_router(
+    state: AppState,
+    include_test_stubs: bool,
+    webapp_dir: impl FnOnce(&AppState) -> PathBuf,
+) -> Router {
     // OpenAPI-tracked routes (health). Future view/verb tasks merge their
     // own `OpenApiRouter::router()` here.
     let api_router: OpenApiRouter<AppState> =
@@ -90,7 +102,7 @@ pub fn build_router(state: AppState, include_test_stubs: bool) -> Router {
         middleware::auth::require_auth,
     ));
 
-    Router::new()
+    let router = Router::new()
         // Public routes first — these MUST NOT carry the auth middleware.
         .merge(open_router) // /healthz, /readyz
         .route("/api/openapi.json", openapi_route)
@@ -98,6 +110,53 @@ pub fn build_router(state: AppState, include_test_stubs: bool) -> Router {
         .merge(routes::setup::router())
         // Protected routes, behind the auth middleware layer.
         .merge(protected)
-        .with_state(state)
-        .layer(TraceLayer::new_for_http())
+        .with_state(state.clone())
+        .layer(TraceLayer::new_for_http());
+
+    mount_spa_fallback(router, &webapp_dir(&state))
+}
+
+fn resolve_webapp_dir(state: &AppState) -> PathBuf {
+    state
+        .config
+        .server
+        .webapp_dir
+        .clone()
+        .or_else(|| std::env::var_os("HAIL_WEBAPP_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/srv/hail/webapp"))
+}
+
+fn mount_spa_fallback(router: Router, webapp_dir: &Path) -> Router {
+    if !webapp_dir.exists() {
+        tracing::warn!(path = %webapp_dir.display(), "webapp dir missing; SPA static serving disabled");
+        return router.fallback(api_only_not_found);
+    }
+
+    router.fallback_service(
+        // `not_found_service` forces the fallback response status back to
+        // 404 in tower-http 0.6; history-mode SPA routes need `200 OK`, so
+        // use the same ServeFile fallback without SetStatus wrapping.
+        ServeDir::new(webapp_dir)
+            .fallback(ServeFile::new(webapp_dir.join("index.html"))),
+    )
+    .layer(axum::middleware::from_fn(normalize_javascript_content_type))
+}
+
+async fn normalize_javascript_content_type(req: Request, next: Next) -> Response {
+    let is_js = req.uri().path().ends_with(".js");
+    let mut response = next.run(req).await;
+    if is_js && response.status().is_success() {
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/javascript"),
+        );
+    }
+    response
+}
+
+async fn api_only_not_found(uri: Uri) -> StatusCode {
+    if !uri.path().starts_with("/api/") {
+        tracing::debug!(path = %uri.path(), "SPA static serving disabled; returning 404");
+    }
+    StatusCode::NOT_FOUND
 }

@@ -59,6 +59,7 @@ management_url = "http://stalwart.local:8080/manage"
 [server]
 bind = "0.0.0.0:8080"
 public_url = "https://hail.test"
+webapp_dir = "/tmp/hail-webapp"
 
 [admin]
 email = "ops@hail.test"
@@ -84,6 +85,7 @@ fn loads_full_toml_fields() {
     );
     assert_eq!(cfg.server.bind, "0.0.0.0:8080");
     assert_eq!(cfg.server.public_url, "https://hail.test");
+    assert_eq!(cfg.server.webapp_dir.as_deref(), Some(std::path::Path::new("/tmp/hail-webapp")));
 
     let admin = cfg.admin.as_ref().expect("[admin] present");
     assert_eq!(admin.email, "ops@hail.test");
