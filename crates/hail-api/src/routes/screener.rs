@@ -21,6 +21,7 @@ use axum::{Json, Router, routing::post};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
@@ -277,6 +278,22 @@ where
             tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener history backfill failed");
             return internal();
         }
+    }
+
+    if let Err(err) = audit::record(
+        &state.db,
+        user.id,
+        "screener.decision",
+        &serde_json::json!({
+            "sender": &sender,
+            "decision": decision.response_value(),
+            "classify_as": response_classify_as,
+            "apply_to_history": body.apply_to_history,
+        }),
+    )
+    .await
+    {
+        tracing::warn!(user_id = user.id, sender = %sender, error = %err, "audit log write failed");
     }
 
     Json(DecisionResponse {

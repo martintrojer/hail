@@ -260,7 +260,7 @@ async fn add_uses_fake_management_and_normalizes_domain() {
     let management = Arc::new(FakeManagement::default());
 
     let resp = request(
-        state,
+        state.clone(),
         management.clone(),
         Method::POST,
         "/api/admin/domains",
@@ -274,6 +274,18 @@ async fn add_uses_fake_management_and_normalizes_domain() {
     let json = json_body(resp).await;
     assert_eq!(json["domain"], "example.org");
     assert_eq!(management.calls(), vec!["add:example.org"]);
+
+    let audit: (i64, String, String) =
+        sqlx::query_as("SELECT user_id, action, payload_json FROM audit_log")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(audit.0, 1);
+    assert_eq!(audit.1, "admin.domain.add");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&audit.2).unwrap(),
+        serde_json::json!({ "domain": "example.org" })
+    );
 }
 
 #[tokio::test]

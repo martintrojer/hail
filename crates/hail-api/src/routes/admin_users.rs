@@ -12,6 +12,7 @@ use chrono::Utc;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
 use crate::state::AppState;
@@ -256,7 +257,23 @@ where
     };
 
     match upsert_local_user(&state, managed, false).await {
-        Ok(user) => (StatusCode::CREATED, Json(UserEnvelope { user })).into_response(),
+        Ok(created_user) => {
+            if let Err(err) = audit::record(
+                &state.db,
+                user.id,
+                "admin.user.create",
+                &serde_json::json!({ "target_user_id": created_user.id, "email": created_user.email }),
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+            }
+            (
+                StatusCode::CREATED,
+                Json(UserEnvelope { user: created_user }),
+            )
+                .into_response()
+        }
         Err(err) => {
             tracing::error!(error = %err, "admin users: local create failed");
             internal()
@@ -293,7 +310,19 @@ where
         .execute(&state.db)
         .await
     {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            if let Err(err) = audit::record(
+                &state.db,
+                user.id,
+                "admin.user.delete",
+                &serde_json::json!({ "target_user_id": id, "email": email }),
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(err) => {
             tracing::error!(id, error = %err, "admin users: local delete failed");
             internal()
@@ -344,6 +373,17 @@ where
         .await
     {
         tracing::warn!(id, error = %err, "admin users: reset session invalidation failed");
+    }
+
+    if let Err(err) = audit::record(
+        &state.db,
+        user.id,
+        "admin.user.reset_password",
+        &serde_json::json!({ "target_user_id": id, "email": email }),
+    )
+    .await
+    {
+        tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
     }
 
     Json(UserEnvelope { user: user_view }).into_response()

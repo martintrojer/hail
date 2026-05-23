@@ -323,6 +323,23 @@ async fn approve_creates_or_updates_row_and_classify_as() {
     assert_eq!(row.0, "allow");
     assert_eq!(row.1.as_deref(), Some("feed"));
     assert!(row.2.is_some());
+
+    let audit: (i64, String, String) =
+        sqlx::query_as("SELECT user_id, action, payload_json FROM audit_log")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(audit.0, user_id);
+    assert_eq!(audit.1, "screener.decision");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&audit.2).unwrap(),
+        serde_json::json!({
+            "sender": "news@example.org",
+            "decision": "approve",
+            "classify_as": "feed",
+            "apply_to_history": false,
+        })
+    );
 }
 
 #[tokio::test]
