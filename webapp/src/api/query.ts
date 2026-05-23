@@ -31,6 +31,7 @@ import {
   type SearchResponse,
   type SetupAdminRequest,
   type SetupState,
+  type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
 } from './client';
@@ -378,6 +379,71 @@ export function useContactNoteMutation(
       void queryClient.invalidateQueries({
         queryKey: queryKeys.contact(variables.address),
       });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface ThreadVerbMutationVariables {
+  threadId: string;
+}
+
+export interface ClassifyThreadMutationVariables extends ThreadVerbMutationVariables {
+  to: 'imbox' | 'feed' | 'papertrail';
+}
+
+export function useClassifyThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ClassifyThreadMutationVariables, ThreadVerbResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId, to }) => client.classifyThread(threadId, to),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useArchiveThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, ThreadVerbResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.archiveThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useTrashThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, ThreadVerbResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.trashThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });

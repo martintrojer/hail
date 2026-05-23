@@ -5,6 +5,7 @@ import {
   type ScreenerPendingSender,
 } from '../api/client';
 import { useScreenerDecisionMutation, useScreenerView } from '../api/query';
+import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 
 const classificationOptions: Array<{
@@ -108,7 +109,20 @@ function PendingSenderCard({ sender }: { sender: ScreenerPendingSender }) {
   const selectId = useId();
   const [classifyAs, setClassifyAs] =
     useState<ScreenerClassification>('imbox');
-  const decision = useScreenerDecisionMutation();
+  const { showToast } = useUndoToast();
+  const decision = useScreenerDecisionMutation(undefined, {
+    onSuccess: (data, variables) => {
+      if (variables.decision !== 'deny') {
+        return;
+      }
+
+      showToast({
+        message: `Denied ${variables.sender}.`,
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Sender decision undone.',
+      });
+    },
+  });
   const isPending = decision.isPending;
   const preview = previewText(sender.latest_preview);
 
