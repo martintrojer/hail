@@ -1,24 +1,86 @@
-//! Screener view endpoint.
+//! Screener view + decision endpoints.
 //!
 //! `GET /api/views/screener` is backed by the sidecar `screener_rules`
 //! table. It deliberately returns `latest_preview: null` for now: once the
 //! API has a live JMAP integration test harness, enrich each pending sender
 //! via JMAP `Email/query` + `Email/get` against the hail-owned Screener
 //! mailbox so `message_count` and previews reflect actual pending messages.
+//!
+//! `POST /api/screener/decisions` writes the user's sender decision to the
+//! same table. Applying that decision to historical messages is injected via
+//! [`ScreenerBackfill`] so tests can assert calls without a live JMAP server;
+//! production is an explicit safe no-op until the JMAP backfill worker lands.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use axum::extract::{Extension, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
+use axum::{Json, Router, routing::post};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
+const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
+
+/// Dependency-injection seam for applying a screener decision to existing
+/// mail from the sender. Production is currently [`NoopScreenerBackfill`]
+/// because the endpoint must be safe without a live JMAP test server.
+#[async_trait]
+pub trait ScreenerBackfill: Send + Sync + 'static {
+    async fn apply(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        sender: &str,
+        decision: ScreenerDecision,
+        classify_as: Option<Classification>,
+    ) -> Result<(), ScreenerBackfillError>;
+}
+
+/// Production backfill implementation. Explicitly no-ops for v1 endpoint
+/// bring-up; a future JMAP-backed implementation should move/keyword old
+/// Screener messages in the same semantic way as the worker's routing path.
+pub struct NoopScreenerBackfill;
+
+#[async_trait]
+impl ScreenerBackfill for NoopScreenerBackfill {
+    async fn apply(
+        &self,
+        _state: &AppState,
+        _user: &AuthUser,
+        _sender: &str,
+        _decision: ScreenerDecision,
+        _classify_as: Option<Classification>,
+    ) -> Result<(), ScreenerBackfillError> {
+        tracing::debug!(
+            "screener history backfill requested; production implementation is TODO no-op"
+        );
+        Ok(())
+    }
+}
+
+/// Opaque backfill failure. Details stay in server logs only.
+#[derive(Debug)]
+pub struct ScreenerBackfillError(pub String);
+
 /// Build protected screener routes.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/views/screener", axum::routing::get(get_screener))
+    router_with_backfill(Arc::new(NoopScreenerBackfill))
+}
+
+/// Test/helper router that injects a fake backfill implementation.
+pub fn router_with_backfill<B>(backfill: Arc<B>) -> Router<AppState>
+where
+    B: ScreenerBackfill,
+{
+    Router::new()
+        .route("/api/views/screener", axum::routing::get(get_screener))
+        .route("/api/screener/decisions", post(post_decision::<B>))
+        .layer(Extension(backfill))
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +94,78 @@ struct ScreenerSender {
     first_seen_at: DateTime<Utc>,
     message_count: i64,
     latest_preview: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DecisionRequest {
+    sender: String,
+    decision: String,
+    classify_as: Option<String>,
+    apply_to_history: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DecisionResponse {
+    sender: String,
+    decision: &'static str,
+    classify_as: Option<Classification>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenerDecision {
+    Approve,
+    Deny,
+}
+
+impl ScreenerDecision {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "approve" => Some(Self::Approve),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+
+    const fn response_value(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Deny => "deny",
+        }
+    }
+
+    const fn db_value(self) -> &'static str {
+        match self {
+            Self::Approve => "allow",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Classification {
+    Imbox,
+    Feed,
+    Papertrail,
+}
+
+impl Classification {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "imbox" => Some(Self::Imbox),
+            "feed" => Some(Self::Feed),
+            "papertrail" => Some(Self::Papertrail),
+            _ => None,
+        }
+    }
+
+    const fn db_value(self) -> &'static str {
+        match self {
+            Self::Imbox => "imbox",
+            Self::Feed => "feed",
+            Self::Papertrail => "papertrail",
+        }
+    }
 }
 
 async fn get_screener(
@@ -69,6 +203,101 @@ async fn get_screener(
         .collect();
 
     Json(ScreenerViewResponse { senders }).into_response()
+}
+
+async fn post_decision<B>(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(backfill): Extension<Arc<B>>,
+    Json(body): Json<DecisionRequest>,
+) -> Response
+where
+    B: ScreenerBackfill,
+{
+    let sender = normalize_sender(&body.sender);
+    if sender.is_empty() {
+        return bad_request("invalid_sender");
+    }
+
+    let Some(decision) = ScreenerDecision::parse(&body.decision) else {
+        return bad_request("invalid_decision");
+    };
+
+    // Product default: approving without `classify_as` routes future mail to
+    // Imbox. Clients may still send an explicit classification.
+    let classify_as = match decision {
+        ScreenerDecision::Approve => match body.classify_as.as_deref() {
+            Some(raw) => match Classification::parse(raw) {
+                Some(classification) => classification,
+                None => return bad_request("invalid_classify_as"),
+            },
+            None => DEFAULT_APPROVAL_CLASSIFICATION,
+        },
+        ScreenerDecision::Deny => match body.classify_as.as_deref() {
+            Some(raw) if Classification::parse(raw).is_none() => {
+                return bad_request("invalid_classify_as");
+            }
+            _ => DEFAULT_APPROVAL_CLASSIFICATION,
+        },
+    };
+
+    let response_classify_as = match decision {
+        ScreenerDecision::Approve => Some(classify_as),
+        ScreenerDecision::Deny => None,
+    };
+
+    let now = Utc::now();
+    let classify_as_db = response_classify_as.map(Classification::db_value);
+    if let Err(err) = sqlx::query(
+        "INSERT INTO screener_rules \
+         (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
+         ON CONFLICT(user_id, sender_address) DO UPDATE SET \
+           decision = excluded.decision, \
+           classify_as = excluded.classify_as, \
+           decided_at = excluded.decided_at",
+    )
+    .bind(user.id)
+    .bind(&sender)
+    .bind(decision.db_value())
+    .bind(classify_as_db)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener decision upsert failed");
+        return internal();
+    }
+
+    if body.apply_to_history {
+        if let Err(err) = backfill
+            .apply(&state, &user, &sender, decision, response_classify_as)
+            .await
+        {
+            tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener history backfill failed");
+            return internal();
+        }
+    }
+
+    Json(DecisionResponse {
+        sender,
+        decision: decision.response_value(),
+        classify_as: response_classify_as,
+    })
+    .into_response()
+}
+
+fn normalize_sender(sender: &str) -> String {
+    sender.trim().to_ascii_lowercase()
+}
+
+fn bad_request(error: &'static str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        [(header::CONTENT_TYPE, "application/json")],
+        format!(r#"{{"error":"{error}"}}"#),
+    )
+        .into_response()
 }
 
 fn internal() -> Response {
