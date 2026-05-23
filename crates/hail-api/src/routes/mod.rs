@@ -3,6 +3,7 @@
 //! `Router<AppState>` (for routes we don't want in the public spec —
 //! login/logout/me).
 
+pub mod admin_domains;
 pub mod auth;
 pub mod blobs;
 pub mod contacts;
