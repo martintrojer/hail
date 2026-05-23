@@ -16,6 +16,7 @@ pub mod setup;
 pub mod threads;
 pub mod threads_view;
 pub mod views;
+pub mod ws;
 
 // `test_stub` is gated behind the `__test-stubs` feature so it never
 // ships in a release binary. `tests/auth.rs` enables this feature via

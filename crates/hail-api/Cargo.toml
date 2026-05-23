@@ -28,7 +28,7 @@ hail-jmap = { path = "../hail-jmap" }
 
 # Runtime + HTTP plumbing. Versions mirror hail-worker so the workspace
 # stays on a single set of tokio/axum/tower-http versions.
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tower = "0.5"
@@ -67,6 +67,8 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "h
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
 # Pull ourselves back in with the test-stub feature on. This is the
 # standard pattern for unblocking integration tests that need a
 # behind-the-firewall debug endpoint.

@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
         config,
         server_key: Arc::new(server_key),
         login_limiter: Arc::new(IpRateLimiter::default()),
+        events: hail_api::events::AppEventBus::default(),
     };
 
     let router = hail_api::build_router(state.clone(), false);
