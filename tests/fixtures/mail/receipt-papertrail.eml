@@ -1,0 +1,53 @@
+From: Paper Trail Books <receipts@papertrail-books.example>
+To: Alex Rivera <alex@hail.test>
+Subject: Receipt for order PT-1042
+Date: Wed, 21 May 2025 10:03:47 -0700
+Message-ID: <receipt-pt-1042@papertrail-books.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="papertrail-receipt-1042"
+X-Entity-Ref-ID: PT-1042
+X-Hail-Intended-View: Paper Trail
+X-Hail-Fixture-Use: transactional receipt classification and purchase detail extraction
+
+--papertrail-receipt-1042
+Content-Type: text/plain; charset=UTF-8
+
+Paper Trail Books
+Receipt PT-1042
+
+Thanks for your order, Alex.
+
+Items:
+- The Rust Programming Language, 2nd Edition — $39.00
+- Field Notes Memo Book — $12.00
+
+Subtotal: $51.00
+Tax: $4.08
+Total: $55.08
+Paid with Visa ending in 4242.
+
+Shipping to:
+Alex Rivera
+100 Imbox Lane
+Portland, OR 97205
+
+--papertrail-receipt-1042
+Content-Type: text/html; charset=UTF-8
+
+<!doctype html>
+<html>
+  <body>
+    <h1>Receipt PT-1042</h1>
+    <p>Thanks for your order, Alex.</p>
+    <table>
+      <tr><th>Item</th><th>Price</th></tr>
+      <tr><td>The Rust Programming Language, 2nd Edition</td><td>$39.00</td></tr>
+      <tr><td>Field Notes Memo Book</td><td>$12.00</td></tr>
+      <tr><td>Tax</td><td>$4.08</td></tr>
+      <tr><td><strong>Total</strong></td><td><strong>$55.08</strong></td></tr>
+    </table>
+    <p>Paid with Visa ending in 4242.</p>
+  </body>
+</html>
+
+--papertrail-receipt-1042--

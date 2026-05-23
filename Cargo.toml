@@ -6,6 +6,7 @@ members = [
     "crates/hail-jmap",
     "crates/hail-api",
     "crates/hail-worker",
+    "crates/hail-test",
 ]
 
 [workspace.package]

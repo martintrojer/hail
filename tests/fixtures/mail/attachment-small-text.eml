@@ -1,0 +1,30 @@
+From: Jordan Kim <jordan@studio.example>
+To: Alex Rivera <alex@hail.test>
+Subject: Draft notes attached
+Date: Thu, 22 May 2025 09:26:13 -0700
+Message-ID: <attachment-small-text-20250522@studio.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="studio-notes-20250522"
+X-Hail-Intended-View: Imbox
+X-Hail-Fixture-Use: small text attachment for attachment listing and download smoke tests
+
+--studio-notes-20250522
+Content-Type: text/plain; charset=UTF-8
+
+Hi Alex,
+
+Attaching the short notes from yesterday's planning call. Nothing sensitive,
+just the three bullets we agreed to turn into tasks.
+
+Jordan
+
+--studio-notes-20250522
+Content-Type: text/plain; charset=UTF-8; name="planning-notes.txt"
+Content-Disposition: attachment; filename="planning-notes.txt"
+Content-Transfer-Encoding: base64
+
+UGxhbm5pbmcgbm90ZXMKLSBDb25maXJtIHNjb3BlIGZvciB0aGUgbG9jYWwgbWFpbCB0ZXN0
+YmVkCi0gUmV1c2Ugc3ludGhldGljIFJGQzgyMiBmaXh0dXJlcwotIEtlZXAgc21va2UgdGVz
+dHMgZGV0ZXJtaW5pc3RpYwo=
+
+--studio-notes-20250522--

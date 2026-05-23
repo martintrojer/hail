@@ -1,0 +1,38 @@
+From: Northwind Weekly <news@northwind.example>
+To: Alex Rivera <alex@hail.test>
+Subject: This week: new produce boxes and a spring recipe
+Date: Wed, 21 May 2025 08:15:00 -0700
+Message-ID: <newsletter-20250521@northwind.example>
+List-ID: Northwind Weekly <weekly.northwind.example>
+List-Unsubscribe: <mailto:unsubscribe@northwind.example?subject=unsubscribe>, <https://northwind.example/unsubscribe/u/abc123>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="northwind-weekly-20250521"
+X-Hail-Intended-View: Feed
+X-Hail-Fixture-Use: newsletter classification plus tracking pixel detection and stripping
+
+--northwind-weekly-20250521
+Content-Type: text/plain; charset=UTF-8
+
+Northwind Weekly
+
+Fresh asparagus, strawberries, and a one-pan spring pasta recipe are in this
+week's box.
+
+Read more: https://northwind.example/newsletter/2025-05-21?utm_source=email
+
+--northwind-weekly-20250521
+Content-Type: text/html; charset=UTF-8
+
+<!doctype html>
+<html>
+  <body>
+    <table role="presentation" width="100%">
+      <tr><td><h1>Northwind Weekly</h1></td></tr>
+      <tr><td><p>Fresh asparagus, strawberries, and a one-pan spring pasta recipe are in this week's box.</p></td></tr>
+      <tr><td><a href="https://northwind.example/newsletter/2025-05-21?utm_source=email&utm_medium=newsletter">Read the full issue</a></td></tr>
+    </table>
+    <img src="https://track.northwind.example/open.gif?recipient=alex%40hail.test&campaign=2025-05-21" width="1" height="1" alt="" style="display:none" />
+  </body>
+</html>
+
+--northwind-weekly-20250521--

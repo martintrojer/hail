@@ -1,0 +1,45 @@
+From: Sam Carter <sam@contoso.example>
+To: Alex Rivera <alex@hail.test>
+Subject: RE: Budget approval
+Date: Fri, 23 May 2025 08:04:09 -0700
+Message-ID: <quoted-outlook-20250523@contoso.example>
+In-Reply-To: <budget-approval-20250522@hail.test>
+References: <budget-approval-20250522@hail.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="outlook-quoted-20250523"
+X-Hail-Intended-View: Imbox
+X-Hail-Fixture-Use: Outlook-style quoted reply stripping and horizontal-rule quote boundary
+
+--outlook-quoted-20250523
+Content-Type: text/plain; charset=UTF-8
+
+Approved. Please keep the invoice in Paper Trail once it arrives.
+
+Sam
+
+-----Original Message-----
+From: Alex Rivera <alex@hail.test>
+Sent: Thursday, May 22, 2025 4:44 PM
+To: Sam Carter <sam@contoso.example>
+Subject: Budget approval
+
+Can you approve the $55.08 book order for the prototype documentation shelf?
+
+--outlook-quoted-20250523
+Content-Type: text/html; charset=UTF-8
+
+<html>
+  <body>
+    <p>Approved. Please keep the invoice in Paper Trail once it arrives.</p>
+    <p>Sam</p>
+    <div style="border:none;border-top:solid #E1E1E1 1.0pt;padding:3.0pt 0 0 0">
+      <p><b>From:</b> Alex Rivera &lt;alex@hail.test&gt;<br>
+      <b>Sent:</b> Thursday, May 22, 2025 4:44 PM<br>
+      <b>To:</b> Sam Carter &lt;sam@contoso.example&gt;<br>
+      <b>Subject:</b> Budget approval</p>
+    </div>
+    <p>Can you approve the $55.08 book order for the prototype documentation shelf?</p>
+  </body>
+</html>
+
+--outlook-quoted-20250523--
