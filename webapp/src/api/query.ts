@@ -16,6 +16,7 @@ import {
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
+  type SetupAdminRequest,
   type SetupState,
   type UserEnvelope,
 } from './client';
@@ -55,6 +56,23 @@ export function useSetupState(
     queryKey: queryKeys.setupState(),
     queryFn: () => client.getSetupState(),
     ...options,
+  });
+}
+
+export function useSetupAdminMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<SetupAdminRequest, UserEnvelope>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.createSetupAdmin(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData(queryKeys.me(), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.setup() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
 }
 
