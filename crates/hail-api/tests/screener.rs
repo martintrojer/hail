@@ -41,6 +41,7 @@ async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
             config: Config::load_from(None).unwrap(),
             server_key: Arc::new(key),
             login_limiter: Arc::new(IpRateLimiter::default()),
+            events: hail_api::events::AppEventBus::default(),
         },
         key,
     )

@@ -9,6 +9,7 @@
 //! `tests/auth.rs` exercise the exact same router stack without binding
 //! a real TCP listener — they hand-craft requests via `tower::ServiceExt`.
 
+pub mod events;
 pub mod middleware;
 pub mod openapi;
 pub mod routes;
@@ -93,7 +94,8 @@ fn build_api_router(
         .merge(routes::screener::router())
         .merge(routes::threads::router())
         .merge(routes::threads_view::router())
-        .merge(routes::views::router());
+        .merge(routes::views::router())
+        .merge(routes::ws::router());
 
     #[cfg(feature = "__test-stubs")]
     if include_test_stubs {

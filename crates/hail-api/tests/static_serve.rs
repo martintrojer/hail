@@ -32,6 +32,7 @@ async fn fixture_state(webapp_dir: Option<std::path::PathBuf>) -> AppState {
         config,
         server_key: Arc::new(key),
         login_limiter: Arc::new(IpRateLimiter::default()),
+        events: hail_api::events::AppEventBus::default(),
     }
 }
 

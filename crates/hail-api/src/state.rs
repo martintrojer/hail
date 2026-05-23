@@ -28,6 +28,10 @@ pub struct AppState {
     /// In-memory rate limiter for `/api/auth/login` (5 attempts / 60s
     /// per remote IP). See `middleware::rate_limit`.
     pub login_limiter: Arc<crate::middleware::rate_limit::IpRateLimiter>,
+    /// Process-local event fan-out for `/api/ws`. This is not a
+    /// worker/API cross-process bus yet; see `events.rs` for the bridge
+    /// TODO and use `events.sender()` for future internal publishers.
+    pub events: crate::events::AppEventBus,
 }
 
 impl std::fmt::Debug for AppState {
