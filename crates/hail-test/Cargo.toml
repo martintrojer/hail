@@ -1,0 +1,11 @@
+[package]
+name = "hail-test"
+description = "Reusable test fixtures and helpers for hail integration and smoke tests."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror = "2"
