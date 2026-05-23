@@ -58,7 +58,7 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
         return;
     }
 
-    let mut smoke = SmokeRuntime::start()
+    let smoke = SmokeRuntime::start()
         .await
         .expect("start local/direct mail smoke runtime");
 
@@ -88,9 +88,6 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
     .await
     .expect("import smoke message through JMAP Email/import");
     assert!(!first_import.email_id.is_empty());
-    smoke
-        .restart_worker()
-        .expect("restart worker to force a local catch-up pass after first import");
 
     let pending = poll_json("screener pending sender", Duration::from_secs(45), || {
         let api = api.clone();
@@ -142,9 +139,6 @@ async fn local_direct_mail_smoke_flow_when_enabled() {
     .await
     .expect("import second smoke message through JMAP Email/import");
     assert!(!reply_import.email_id.is_empty());
-    smoke
-        .restart_worker()
-        .expect("restart worker to force a local catch-up pass after approved-sender import");
 
     let imbox_item = poll_json("imbox smoke message", Duration::from_secs(45), || {
         let api = api.clone();
@@ -218,8 +212,7 @@ struct SmokeRuntime {
     _temp: TempDir,
     stalwart: StalwartFixture,
     api: ChildProcess,
-    worker: ChildProcess,
-    db_url: String,
+    _worker: ChildProcess,
     hail_url: String,
 }
 
@@ -247,6 +240,7 @@ impl SmokeRuntime {
         let mut worker = Command::new(target_dir.join("hail-worker"));
         configure_process(&mut worker, &db_url, &jmap_url, &hail_url, SERVER_KEY)
             .env("HAIL_TICK_SECS", "1")
+            .env("HAIL_IMPORT_CATCHUP_SECS", "1")
             .env("HAIL_RECONCILE_EVERY_SECS", "3600");
         let worker = ChildProcess::spawn("hail-worker", worker)?;
 
@@ -254,8 +248,7 @@ impl SmokeRuntime {
             _temp: temp,
             stalwart,
             api,
-            worker,
-            db_url,
+            _worker: worker,
             hail_url,
         })
     }
@@ -263,28 +256,12 @@ impl SmokeRuntime {
     fn hail_url(&self) -> &str {
         &self.hail_url
     }
-
-    fn restart_worker(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.worker.terminate();
-        let mut worker = Command::new(target_dir()?.join("hail-worker"));
-        configure_process(
-            &mut worker,
-            &self.db_url,
-            &self.stalwart.jmap_url(),
-            &self.hail_url,
-            SERVER_KEY,
-        )
-        .env("HAIL_TICK_SECS", "1")
-        .env("HAIL_RECONCILE_EVERY_SECS", "3600");
-        self.worker = ChildProcess::spawn("hail-worker", worker)?;
-        Ok(())
-    }
 }
 
 impl Drop for SmokeRuntime {
     fn drop(&mut self) {
         self.api.terminate();
-        self.worker.terminate();
+        self._worker.terminate();
     }
 }
 

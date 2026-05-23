@@ -20,7 +20,7 @@ use hail_jmap::jmap_client::email::Property;
 use hail_jmap::jmap_client::event_source::PushNotification;
 use secrecy::SecretString;
 use sqlx::SqlitePool;
-use tokio::time::sleep;
+use tokio::time::{MissedTickBehavior, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
@@ -34,6 +34,12 @@ use crate::state::AppState;
 /// EventSource keep-alive ping interval (seconds) — the task contract
 /// fixes this at 60s.
 const EVENT_SOURCE_PING_SECS: u32 = 60;
+
+/// Default periodic catch-up cadence while EventSource is connected. This is a
+/// safety net for JMAP servers/import paths that advance `Email/changes` state
+/// without reliably delivering an EventSource notification.
+const DEFAULT_LIVE_CATCHUP_SECS: u64 = 60;
+const LIVE_CATCHUP_ENV: &str = "HAIL_IMPORT_CATCHUP_SECS";
 
 /// Reasons a per-user supervisor stops itself for good rather than
 /// retrying. FATAL outcomes are logged at ERROR; the supervisor exits
@@ -147,6 +153,7 @@ async fn run_event_loop(
         &event_source,
         &mut backoff,
         &sleeper,
+        live_catchup_interval(),
         cancel,
     )
     .await
@@ -221,6 +228,7 @@ async fn run_event_loop_with(
     event_source: &dyn EventSourceProvider,
     backoff: &mut dyn ReconnectBackoff,
     sleeper: &dyn CancelSleeper,
+    live_catchup_interval: Duration,
     cancel: CancellationToken,
 ) -> Result<()> {
     let types = vec![
@@ -288,13 +296,38 @@ async fn run_event_loop_with(
             }
         };
 
-        // Inner loop: drain pushes until the stream ends or cancel.
+        // Inner loop: drain pushes until the stream ends or cancel. Also run a
+        // periodic strict catch-up while the EventSource is connected: Stalwart
+        // JMAP Email/import can advance Email/changes without a timely push, so
+        // polling the persisted cursor keeps imported/inbound mail routed
+        // without requiring a worker restart.
+        let mut catchup_interval = tokio::time::interval(live_catchup_interval);
+        catchup_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        catchup_interval.tick().await;
         loop {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
                     info!(user_id, "per-user supervisor: cancel during stream");
                     return Ok(());
+                }
+                _ = catchup_interval.tick() => {
+                    let catchup_res = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => {
+                            info!(user_id, "per-user supervisor: cancel during live catchup");
+                            return Ok(());
+                        }
+                        result = catchup_user(db, user_id, fetcher, jmap_ops, cancel.clone()) => result,
+                    };
+                    if let Err(e) = catchup_res {
+                        if is_auth_anyhow(&e) {
+                            error!(user_id, error = %e, "live catchup: auth revoked (FATAL)");
+                            return Ok(());
+                        }
+                        warn!(user_id, error = %e, "live catchup: failed; reconnecting");
+                        break;
+                    }
                 }
                 next = stream.next() => {
                     match next {
@@ -360,6 +393,15 @@ async fn handle_notification(
     if let Err(e) = handle_changes(db, user_id, fetcher, jmap_ops, &changed_types).await {
         warn!(user_id, error = %e, "handle_changes failed for push event");
     }
+}
+
+fn live_catchup_interval() -> Duration {
+    let secs = std::env::var(LIVE_CATCHUP_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_LIVE_CATCHUP_SECS);
+    Duration::from_secs(secs)
 }
 
 /// Sleep for `delay`, returning early with `true` if cancellation
@@ -960,6 +1002,7 @@ mod tests {
             &events,
             &mut backoff,
             &sleeper,
+            Duration::from_secs(60),
             CancellationToken::new(),
         )
         .await
@@ -1009,6 +1052,7 @@ mod tests {
             &events,
             &mut backoff,
             &sleeper,
+            Duration::from_secs(60),
             CancellationToken::new(),
         )
         .await
@@ -1044,6 +1088,7 @@ mod tests {
             &events,
             &mut backoff,
             &sleeper,
+            Duration::from_secs(60),
             CancellationToken::new(),
         )
         .await
@@ -1052,6 +1097,82 @@ mod tests {
         assert_eq!(events.open_calls(), 1);
         assert_eq!(backoff.next_calls, 0);
         assert_eq!(sleeper.delays(), Vec::<Duration>::new());
+    }
+
+    #[tokio::test]
+    async fn live_catchup_replays_while_stream_is_open() {
+        let (db, _guard, user_id) = setup_db().await;
+        seed_cursors(&db, user_id).await;
+        let fetcher = RecordingFetcher::new();
+        let jmap_ops = NoopJmapOps;
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let events = PendingEventSource {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+        };
+        let mut backoff = RecordingBackoff::default();
+        let sleeper = RecordingSleeper::default();
+        let cancel = CancellationToken::new();
+
+        let run = run_event_loop_with(
+            &db,
+            user_id,
+            "acct-alice",
+            &fetcher,
+            &jmap_ops,
+            &events,
+            &mut backoff,
+            &sleeper,
+            Duration::from_millis(10),
+            cancel.clone(),
+        );
+        tokio::pin!(run);
+
+        tokio::select! {
+            res = &mut run => panic!("event loop completed before stream wait: {res:?}"),
+            received = entered_rx => received.expect("stream.next polled"),
+        }
+        assert_eq!(
+            fetcher.calls(),
+            vec![
+                "Email".to_string(),
+                "EmailDelivery".to_string(),
+                "Mailbox".to_string(),
+                "EmailSubmission".to_string(),
+            ],
+            "startup catch-up should run before opening EventSource"
+        );
+
+        tokio::select! {
+            res = &mut run => panic!("event loop completed before live catchup: {res:?}"),
+            result = tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if fetcher.calls().len() >= 8 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }) => result.expect("periodic live catch-up should run promptly"),
+        }
+
+        assert_eq!(
+            fetcher.calls(),
+            vec![
+                "Email".to_string(),
+                "EmailDelivery".to_string(),
+                "Mailbox".to_string(),
+                "EmailSubmission".to_string(),
+                "Email".to_string(),
+                "EmailDelivery".to_string(),
+                "Mailbox".to_string(),
+                "EmailSubmission".to_string(),
+            ],
+            "periodic catch-up should replay persisted cursors while EventSource stays open"
+        );
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(1), &mut run)
+            .await
+            .expect("cancel should preempt stream.next")
+            .expect("event loop result");
     }
 
     #[tokio::test]
@@ -1077,6 +1198,7 @@ mod tests {
             &events,
             &mut backoff,
             &sleeper,
+            Duration::from_secs(60),
             cancel.clone(),
         );
         tokio::pin!(run);
@@ -1115,6 +1237,7 @@ mod tests {
             &events,
             &mut backoff,
             &sleeper,
+            Duration::from_secs(60),
             cancel.clone(),
         );
         tokio::pin!(run);

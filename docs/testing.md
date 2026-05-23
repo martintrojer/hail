@@ -185,7 +185,8 @@ The smoke does not fake success. When enabled it:
 1. starts the Rust `start_stalwart_fixture()` local mail testbed and provisions
    `alice@hail.test` / `hail-test-password`;
 2. starts `hail-api` and `hail-worker` against a temporary SQLite sidecar with
-   `HAIL_TICK_SECS=1`;
+   `HAIL_TICK_SECS=1` and `HAIL_IMPORT_CATCHUP_SECS=1` so imported mail is
+   routed by the worker's live catch-up loop without restarting the worker;
 3. injects a unique synthetic inbound message from
    `maya.e2e-local-direct-mail-smoke@personal.example` through JMAP
    `Email/import`;

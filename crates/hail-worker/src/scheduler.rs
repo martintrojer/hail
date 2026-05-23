@@ -629,6 +629,7 @@ pub(crate) mod live {
         }
 
         #[cfg(test)]
+        #[allow(dead_code)]
         pub(crate) async fn latest_active_token_and_email(
             &self,
             user_id: i64,
