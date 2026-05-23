@@ -252,6 +252,12 @@ fn compose_body(send_at: Option<chrono::DateTime<Utc>>) -> String {
     )
 }
 
+fn recipient_list(count: usize) -> Vec<String> {
+    (0..count)
+        .map(|idx| format!("user{idx}@example.org"))
+        .collect()
+}
+
 #[tokio::test]
 async fn compose_send_now_creates_draft_and_submits() {
     let (state, key) = fixture_state().await;
@@ -401,6 +407,159 @@ async fn compose_rejects_invalid_recipient() {
     .await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_to");
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn compose_rejects_attachments_without_creating_draft() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(
+            r#"{"to":["bob@example.org"],"subject":"Hi","body_markdown":"Body","attachments":[{"name":"a.txt"}]}"#
+                .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "attachments_not_supported");
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn compose_rejects_invalid_cc_bcc_without_creating_draft() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    for (field, expected_error) in [("cc", "invalid_cc"), ("bcc", "invalid_bcc")] {
+        let body = serde_json::json!({
+            "to": ["bob@example.org"],
+            field: ["not-an-email"],
+            "subject": "Hi",
+            "body_markdown": "Body",
+        })
+        .to_string();
+        let resp = request(
+            state.clone(),
+            composer.clone(),
+            Method::POST,
+            "/api/compose",
+            Some(&sid),
+            true,
+            Some(body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], expected_error);
+    }
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn compose_rejects_too_many_recipients_without_creating_draft() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    for (field, expected_error) in [
+        ("to", "too_many_to"),
+        ("cc", "too_many_cc"),
+        ("bcc", "too_many_bcc"),
+    ] {
+        let mut body = serde_json::json!({
+            "to": ["bob@example.org"],
+            "subject": "Hi",
+            "body_markdown": "Body",
+        });
+        body[field] = serde_json::json!(recipient_list(201));
+        let resp = request(
+            state.clone(),
+            composer.clone(),
+            Method::POST,
+            "/api/compose",
+            Some(&sid),
+            true,
+            Some(body.to_string()),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], expected_error);
+    }
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn compose_rejects_subject_crlf_without_creating_draft() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let body = serde_json::json!({
+        "to": ["bob@example.org"],
+        "subject": "Hi\r\nBcc: attacker@example.org",
+        "body_markdown": "Body",
+    })
+    .to_string();
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(body),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_subject");
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn compose_rejects_body_too_large_without_creating_draft() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let body = serde_json::json!({
+        "to": ["bob@example.org"],
+        "subject": "Hi",
+        "body_markdown": "x".repeat(1024 * 1024 + 1),
+    })
+    .to_string();
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(body),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "body_too_large");
     assert!(composer.calls().is_empty());
 }
 
