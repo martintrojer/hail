@@ -141,6 +141,8 @@ fn blocked_tracker_for(handle: &Handle) -> Option<BlockedTracker> {
         Some("image is hidden by inline style")
     } else if tracking_url(&src) {
         Some("image URL looks like a tracking beacon")
+    } else if is_remote_http_image(&src) {
+        Some("remote image blocked by default")
     } else {
         None
     }?;
@@ -177,6 +179,11 @@ fn is_hidden_style(style: &str) -> bool {
         .collect();
 
     normalized.contains("display:none") || normalized.contains("visibility:hidden")
+}
+
+fn is_remote_http_image(src: &str) -> bool {
+    let src = src.trim_start().to_ascii_lowercase();
+    src.starts_with("http://") || src.starts_with("https://")
 }
 
 fn tracking_url(src: &str) -> bool {
@@ -244,17 +251,29 @@ mod tests {
     }
 
     #[test]
-    fn preserves_normal_images() {
+    fn strips_and_counts_remote_http_images() {
         let sanitized = sanitize_and_strip_trackers(
             r#"<p>Logo</p><img src="https://example.com/logo.png" width="640" height="320" alt="Logo">"#,
         );
 
-        assert!(sanitized.html.contains(r#"<img"#));
-        assert!(
-            sanitized
-                .html
-                .contains(r#"src="https://example.com/logo.png""#)
+        assert!(!sanitized.html.contains(r#"<img"#));
+        assert!(!sanitized.html.contains("https://example.com/logo.png"));
+        assert_eq!(sanitized.blocked_trackers.len(), 1);
+        assert_eq!(
+            sanitized.blocked_trackers[0].src,
+            "https://example.com/logo.png"
         );
+        assert!(sanitized.blocked_trackers[0].reason.contains("remote image"));
+    }
+
+    #[test]
+    fn preserves_cid_images() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<p>Logo</p><img src="cid:logo" width="640" height="320" alt="Logo">"#,
+        );
+
+        assert!(sanitized.html.contains(r#"<img"#));
+        assert!(sanitized.html.contains(r#"src="cid:logo""#));
         assert!(sanitized.html.contains(r#"alt="Logo""#));
         assert!(sanitized.blocked_trackers.is_empty());
     }
