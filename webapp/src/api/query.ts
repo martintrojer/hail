@@ -13,6 +13,7 @@ import {
   type ContactResponse,
   type LoginRequest,
   type MailViewResponse,
+  type PileViewResponse,
   type PutContactNoteRequest,
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
@@ -132,6 +133,28 @@ export function useThread(
     queryFn: () => client.getThread(threadId),
     ...options,
     enabled: threadId.trim().length > 0 && (options?.enabled ?? true),
+  });
+}
+
+export function useSetAsideView(
+  client = defaultApiClient,
+  options?: QueryConfig<PileViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('set-aside'),
+    queryFn: () => client.getSetAside(),
+    ...options,
+  });
+}
+
+export function useReplyLaterView(
+  client = defaultApiClient,
+  options?: QueryConfig<PileViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('reply-later'),
+    queryFn: () => client.getReplyLater(),
+    ...options,
   });
 }
 

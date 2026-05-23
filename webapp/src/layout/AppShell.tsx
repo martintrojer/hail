@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useAuth } from '../auth/AuthProvider';
+import { Pile } from './Pile';
 
 const navItems = [
   { label: 'Imbox', to: '/imbox' },
@@ -144,6 +145,7 @@ export function AppShell({
           {reading ?? <ReadingPlaceholder />}
         </main>
       </div>
+      <Pile />
     </div>
   );
 }

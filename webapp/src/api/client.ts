@@ -48,6 +48,7 @@ export interface SetupAdminRequest {
 
 export type MailClassification = 'imbox' | 'feed' | 'papertrail';
 export type MailViewKind = MailClassification;
+export type PileViewKind = 'set-aside' | 'reply-later';
 
 export interface MailViewItem {
   thread_id: string;
@@ -90,6 +91,17 @@ export interface ThreadViewResponse {
   subject: string;
   participants: ThreadParticipant[];
   messages: ThreadMessage[];
+}
+
+export interface PileItem {
+  thread_id: string;
+  position: number;
+  added_at: string;
+  preview?: unknown;
+}
+
+export interface PileViewResponse {
+  items: PileItem[];
 }
 
 export interface ContactNote {
@@ -287,6 +299,20 @@ export class HailApiClient {
   async getThread(threadId: string): Promise<ThreadViewResponse> {
     return this.#json<ThreadViewResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}`),
+      200,
+    );
+  }
+
+  async getSetAside(): Promise<PileViewResponse> {
+    return this.#json<PileViewResponse>(
+      await this.#request('/api/views/set-aside'),
+      200,
+    );
+  }
+
+  async getReplyLater(): Promise<PileViewResponse> {
+    return this.#json<PileViewResponse>(
+      await this.#request('/api/views/reply-later'),
       200,
     );
   }
