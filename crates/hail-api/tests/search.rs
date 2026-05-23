@@ -240,7 +240,7 @@ async fn notes_search_finds_current_user_only() {
 }
 
 #[tokio::test]
-async fn scope_filters_notes_mail_all_and_clips() {
+async fn scope_filters_notes_mail_and_all() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     insert_note(&state, user_id, "ada@example.org", "needle note").await;
@@ -287,6 +287,12 @@ async fn scope_filters_notes_mail_all_and_clips() {
     assert_eq!(json["results"][0]["type"], "mail");
     assert_eq!(json["results"][1]["type"], "contact_note");
     assert_eq!(all.calls(), vec![("needle".to_string(), 50)]);
+}
+
+#[tokio::test]
+async fn clips_scope_returns_400_unsupported_without_searching_mail() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
 
     let clips = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
     let resp = request_search(
@@ -296,10 +302,29 @@ async fn scope_filters_notes_mail_all_and_clips() {
         "/api/views/search?q=needle&scope=clips",
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = json_body(resp).await;
-    assert_eq!(json["results"].as_array().unwrap().len(), 0);
+    assert_eq!(json["error"], "clips_unsupported");
     assert!(clips.calls().is_empty());
+}
+
+#[tokio::test]
+async fn unknown_scope_returns_400_invalid_scope() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=bogus",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_scope");
+    assert!(search.calls().is_empty());
 }
 
 #[tokio::test]

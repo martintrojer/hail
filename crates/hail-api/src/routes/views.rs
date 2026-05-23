@@ -340,7 +340,6 @@ enum SearchScope {
     Mail,
     Notes,
     All,
-    Clips,
 }
 
 impl SearchScope {
@@ -349,7 +348,6 @@ impl SearchScope {
             "mail" => Some(Self::Mail),
             "notes" => Some(Self::Notes),
             "all" => Some(Self::All),
-            "clips" => Some(Self::Clips),
             _ => None,
         }
     }
@@ -429,6 +427,9 @@ where
         Some(q) if q.chars().count() >= 2 => q,
         _ => return bad_request("q_min_length"),
     };
+    if query.scope.as_deref() == Some("clips") {
+        return bad_request("clips_unsupported");
+    }
     let scope = match SearchScope::parse(query.scope.as_deref()) {
         Some(scope) => scope,
         None => return bad_request("invalid_scope"),
