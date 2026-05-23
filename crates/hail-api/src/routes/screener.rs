@@ -236,12 +236,12 @@ where
             },
             None => DEFAULT_APPROVAL_CLASSIFICATION,
         },
-        ScreenerDecision::Deny => match body.classify_as.as_deref() {
-            Some(raw) if Classification::parse(raw).is_none() => {
+        ScreenerDecision::Deny => {
+            if body.classify_as.is_some() {
                 return bad_request("invalid_classify_as");
             }
-            _ => DEFAULT_APPROVAL_CLASSIFICATION,
-        },
+            DEFAULT_APPROVAL_CLASSIFICATION
+        }
     };
 
     let response_classify_as = match decision {
