@@ -18,6 +18,7 @@ import {
 import { AuthProvider } from './auth/AuthProvider';
 import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
+import { MailViewPage } from './routes/MailViewPage';
 
 function AppShell() {
   return (
@@ -334,11 +335,53 @@ function ProtectedPlaceholderPage({
   return <MailAppShell title={title} description={description} />;
 }
 
-function ImboxPage() {
+function ThreadPlaceholderPage() {
+  const { threadId } = threadRoute.useParams();
+
   return (
     <MailAppShell
+      title="Thread"
+      description="Thread-as-document rendering is not wired yet."
+      reading={
+        <div className="flex min-h-80 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 text-center lg:min-h-full">
+          <p className="text-base font-semibold text-slate-200">
+            Thread selected
+          </p>
+          <p className="mt-2 max-w-sm break-all text-sm text-slate-400">
+            {threadId}
+          </p>
+        </div>
+      }
+    />
+  );
+}
+
+function ImboxPage() {
+  return (
+    <MailViewPage
+      view="imbox"
       title="Imbox"
       description="Important mail from approved people lands here."
+    />
+  );
+}
+
+function FeedPage() {
+  return (
+    <MailViewPage
+      view="feed"
+      title="Feed"
+      description="Newsletters and recurring reading can collect here."
+    />
+  );
+}
+
+function PaperTrailPage() {
+  return (
+    <MailViewPage
+      view="papertrail"
+      title="Paper Trail"
+      description="Receipts, statements, and reference mail will land here."
     />
   );
 }
@@ -411,24 +454,14 @@ const feedRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/feed',
   beforeLoad: requireAuth,
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Feed"
-      description="Newsletters and recurring reading can collect here."
-    />
-  ),
+  component: FeedPage,
 });
 
 const paperTrailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/papertrail',
   beforeLoad: requireAuth,
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Paper Trail"
-      description="Receipts, statements, and reference mail will land here."
-    />
-  ),
+  component: PaperTrailPage,
 });
 
 const screenerRoute = createRoute({
@@ -465,6 +498,13 @@ const replyLaterRoute = createRoute({
       description="Mail that needs a response can wait in this pile."
     />
   ),
+});
+
+const threadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/thread/$threadId',
+  beforeLoad: requireAuth,
+  component: ThreadPlaceholderPage,
 });
 
 const searchRoute = createRoute({
@@ -507,6 +547,7 @@ const routeTree = rootRoute.addChildren([
   screenerRoute,
   setAsideRoute,
   replyLaterRoute,
+  threadRoute,
   searchRoute,
   adminRoute,
 ]);

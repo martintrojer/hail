@@ -5,6 +5,8 @@ export const queryKeys = {
   setup: () => [...queryKeys.all, 'setup'] as const,
   setupState: () => [...queryKeys.setup(), 'state'] as const,
   views: () => [...queryKeys.all, 'views'] as const,
+  view: (view: 'imbox' | 'feed' | 'papertrail') =>
+    [...queryKeys.views(), view] as const,
   screener: () => [...queryKeys.views(), 'screener'] as const,
   contacts: () => [...queryKeys.all, 'contacts'] as const,
   contact: (address: string) =>
