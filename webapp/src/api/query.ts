@@ -179,6 +179,7 @@ export function useScreenerDecisionMutation(
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });

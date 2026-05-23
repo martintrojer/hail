@@ -111,7 +111,9 @@ export type ScreenerClassification = 'imbox' | 'feed' | 'papertrail';
 
 export interface ScreenerPendingSender {
   sender: string;
-  preview?: unknown;
+  first_seen_at: string;
+  message_count: number;
+  latest_preview?: unknown;
   [key: string]: unknown;
 }
 
@@ -120,7 +122,7 @@ export interface ScreenerPendingSender {
  * /api/views/screener in OpenAPI. The SPA must treat this as server-shaped data.
  */
 export interface ScreenerView {
-  pending: ScreenerPendingSender[];
+  senders: ScreenerPendingSender[];
   [key: string]: unknown;
 }
 
@@ -135,7 +137,11 @@ export interface ScreenerDecisionRequest {
   apply_to_history: boolean;
 }
 
-export type ScreenerDecisionResponse = void;
+export type ScreenerDecisionResponse = {
+  sender: string;
+  decision: ScreenerDecision;
+  classify_as?: ScreenerClassification | null;
+};
 
 export class HailApiError<Status extends number = number> extends Error {
   readonly name = 'HailApiError';
@@ -254,21 +260,14 @@ export class HailApiClient {
   async decideScreener(
     body: ScreenerDecisionRequest,
   ): Promise<ScreenerDecisionResponse> {
-    const response = await this.#request('/api/screener/decisions', {
-      method: 'POST',
-      body,
-      mutating: true,
-    });
-
-    if (response.status === 204) {
-      return undefined;
-    }
-    if (response.status === 200) {
-      await readResponseBody(response);
-      return undefined;
-    }
-
-    throw await this.#error(response);
+    return this.#json<ScreenerDecisionResponse>(
+      await this.#request('/api/screener/decisions', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      200,
+    );
   }
 
   async getContact(address: string): Promise<ContactResponse> {
