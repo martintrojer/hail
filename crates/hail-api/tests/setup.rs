@@ -7,7 +7,8 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
+use hail_api::middleware::auth::SESSION_COOKIE;
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::setup::{ProvisionError, ProvisionedUser, UserProvisioner};
 use hail_api::state::AppState;
@@ -66,6 +67,34 @@ fn app_with_provisioner(state: AppState, provisioner: Arc<FakeProvisioner>) -> R
     hail_api::routes::setup::router_with_provisioner(provisioner).with_state(state)
 }
 
+fn app_with_protected_auth_and_provisioner(
+    state: AppState,
+    provisioner: Arc<FakeProvisioner>,
+) -> Router {
+    let protected =
+        hail_api::routes::auth::protected_router().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            hail_api::middleware::auth::require_auth,
+        ));
+
+    Router::new()
+        .merge(hail_api::routes::setup::router_with_provisioner(
+            provisioner,
+        ))
+        .merge(protected)
+        .with_state(state)
+}
+
+fn session_cookie_value(set_cookie: &str) -> String {
+    let value = set_cookie
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .strip_prefix(&format!("{SESSION_COOKIE}="))
+        .expect("hail_session cookie");
+    value.to_string()
+}
+
 #[derive(Default)]
 struct FakeProvisioner {
     calls: AtomicUsize,
@@ -110,6 +139,23 @@ async fn get_json(app: Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let req = Request::builder()
         .method(Method::GET)
         .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn get_json_with_cookie(
+    app: Router,
+    uri: &str,
+    session_id: &str,
+) -> (StatusCode, serde_json::Value) {
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::COOKIE, format!("{SESSION_COOKIE}={session_id}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -175,10 +221,11 @@ async fn wizard_state_inactive_when_config_admin_set() {
 
 #[tokio::test]
 async fn post_setup_admin_succeeds_and_sets_session_cookie() {
-    let (state, _key) = fixture_state(None).await;
+    let (state, key) = fixture_state(None).await;
     let db = state.db.clone();
+    let api = app_with_protected_auth_and_provisioner(state, Arc::new(FakeProvisioner::default()));
     let resp = post_admin(
-        app(state),
+        api.clone(),
         r#"{"email":"Alice@Example.org","password":"correct horse battery","display_name":"Alice","domain":"example.org"}"#,
     )
     .await;
@@ -193,6 +240,9 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
     assert!(cookie.starts_with("hail_session="));
     assert!(cookie.contains("HttpOnly"));
     assert!(cookie.contains("SameSite=Lax"));
+    let session_id = session_cookie_value(&cookie);
+    assert_eq!(session_id.len(), 64);
+    assert!(session_id.bytes().all(|b| b.is_ascii_hexdigit()));
 
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -200,11 +250,37 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
     assert_eq!(json["user"]["display_name"], "Alice");
     assert_eq!(json["user"]["is_admin"], true);
 
-    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
-        .fetch_one(&db)
-        .await
-        .unwrap();
-    assert_eq!(session_count, 1);
+    let (me_status, me_json) = get_json_with_cookie(api, "/api/auth/me", &session_id).await;
+    assert_eq!(me_status, StatusCode::OK);
+    assert_eq!(me_json["user"]["email"], "alice@example.org");
+    assert_eq!(me_json["user"]["display_name"], "Alice");
+    assert_eq!(me_json["user"]["is_admin"], true);
+
+    let (row_session_id, user_id, token_enc, user_agent, expires_at, created_at, last_used_at): (
+        String,
+        i64,
+        Vec<u8>,
+        Option<String>,
+        chrono::DateTime<Utc>,
+        chrono::DateTime<Utc>,
+        chrono::DateTime<Utc>,
+    ) = sqlx::query_as(
+        "SELECT id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at \
+         FROM sessions WHERE id = ?1",
+    )
+    .bind(&session_id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(row_session_id, session_id);
+    assert!(user_id > 0);
+    let token_plain = hail_core::open(&token_enc, &key).expect("decrypt setup token");
+    assert_eq!(token_plain, b"fake-bearer-token");
+    assert_eq!(user_agent.as_deref(), Some("setup-test"));
+    assert!(expires_at > Utc::now() + ChronoDuration::days(29));
+    assert!(expires_at <= created_at + ChronoDuration::days(30) + ChronoDuration::seconds(1));
+    assert!(last_used_at >= created_at);
+    assert!(last_used_at <= Utc::now() + ChronoDuration::seconds(1));
 }
 
 #[tokio::test]
