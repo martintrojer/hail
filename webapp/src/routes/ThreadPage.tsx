@@ -1,5 +1,6 @@
 import { HailApiError, type ThreadMessage, type ThreadViewResponse } from '../api/client';
 import { useThread } from '../api/query';
+import { ContactNotePanel } from '../components/ContactNotePanel';
 import { AppShell } from '../layout/AppShell';
 
 interface ThreadPageProps {
@@ -153,11 +154,33 @@ function MessageCard({ message }: { message: ThreadMessage }) {
   );
 }
 
+function primarySender(thread: ThreadViewResponse) {
+  for (const message of thread.messages) {
+    const sender = message.from.find(
+      (participant) => participant.email.trim().length > 0,
+    );
+    if (sender) {
+      return sender;
+    }
+  }
+
+  return (
+    thread.participants.find(
+      (participant) => participant.email.trim().length > 0,
+    ) ?? null
+  );
+}
+
 function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
+  const sender = primarySender(thread);
+
   if (thread.messages.length === 0) {
     return (
       <div className="space-y-4">
         <ThreadSummary thread={thread} />
+        {sender ? (
+          <ContactNotePanel address={sender.email} displayName={sender.name} />
+        ) : null}
         <StateCard
           title="No messages in this thread"
           body="The server returned the thread but did not include any messages."
@@ -169,6 +192,9 @@ function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
   return (
     <div className="space-y-4">
       <ThreadSummary thread={thread} />
+      {sender ? (
+        <ContactNotePanel address={sender.email} displayName={sender.name} />
+      ) : null}
       <div className="space-y-4">
         {thread.messages.map((message) => (
           <MessageCard key={message.email_id} message={message} />
@@ -187,7 +213,11 @@ export function ThreadPage({ threadId }: ThreadPageProps) {
   } else if (query.isError) {
     reading = (
       <StateCard
-        title={query.error instanceof HailApiError && query.error.status === 404 ? 'Thread not found' : 'Could not load thread'}
+        title={
+          query.error instanceof HailApiError && query.error.status === 404
+            ? 'Thread not found'
+            : 'Could not load thread'
+        }
         body={errorCopy(query.error)}
       />
     );
