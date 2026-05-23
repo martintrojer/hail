@@ -64,7 +64,15 @@ fn build_api_router(
         OpenApiRouter::with_openapi(ApiDoc::openapi()).merge(routes::health::router());
     let (open_router, mut api) = api_router.with_state(state.clone()).split_for_parts();
     for protected_api in [
+        routes::blobs::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::compose::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::contacts::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
@@ -72,7 +80,27 @@ fn build_api_router(
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
+        routes::pile::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::screener::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::threads::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::threads_view::router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::undo::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
+        routes::views::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,

@@ -12,36 +12,55 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
+
+/// OpenAPI tag for saved thread piles.
+pub const TAG: &str = "piles";
 
 const STACK_SET_ASIDE: &str = "set_aside";
 const STACK_REPLY_LATER: &str = "reply_later";
 
 /// Build protected pile view routes.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/views/set-aside", axum::routing::get(get_set_aside))
-        .route(
-            "/api/views/reply-later",
-            axum::routing::get(get_reply_later),
-        )
+    Router::from(openapi_router())
 }
 
-#[derive(Debug, Serialize)]
+/// Build the OpenAPI-tracked router for protected pile view routes.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(get_set_aside))
+        .routes(routes!(get_reply_later))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 struct PileViewResponse {
     items: Vec<PileItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct PileItem {
     thread_id: String,
     position: i64,
+    #[schema(value_type = String, format = DateTime)]
     added_at: DateTime<Utc>,
     preview: Option<serde_json::Value>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/views/set-aside",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Threads in the Set Aside pile.", body = PileViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Pile lookup failed."),
+    ),
+)]
 async fn get_set_aside(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
@@ -49,6 +68,16 @@ async fn get_set_aside(
     get_stack(state, user, STACK_SET_ASIDE).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/views/reply-later",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Threads in the Reply Later pile.", body = PileViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Pile lookup failed."),
+    ),
+)]
 async fn get_reply_later(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,

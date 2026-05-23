@@ -12,16 +12,22 @@ use async_trait::async_trait;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use rand::TryRngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
 const UNDO_TTL_SECONDS: i64 = 10;
+
+/// OpenAPI tag for short-lived undo actions.
+pub const TAG: &str = "undo";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UndoActionKind {
@@ -154,16 +160,17 @@ impl NewUndoAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct UndoActionPayload {
     pub action: String,
     pub payload: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct UndoToken {
     pub id: String,
     pub action: String,
+    #[schema(value_type = String, format = DateTime)]
     pub expires_at: DateTime<Utc>,
 }
 
@@ -639,16 +646,29 @@ async fn email_ids_in_thread(
 }
 
 pub fn router() -> Router<AppState> {
-    router_with_executor(Arc::new(ActionUndoExecutor::default()))
+    Router::from(openapi_router_with_executor(Arc::new(
+        ActionUndoExecutor::default(),
+    )))
+}
+
+/// Build the OpenAPI-tracked router for production undo execution.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_executor(Arc::new(ActionUndoExecutor::default()))
 }
 
 pub fn router_with_executor<E>(executor: Arc<E>) -> Router<AppState>
 where
     E: UndoExecutor,
 {
-    Router::new()
-        .route("/api/undo/{id}", post(post_undo::<E>))
-        .layer(Extension(executor))
+    Router::from(openapi_router_with_executor(executor))
+}
+
+fn openapi_router_with_executor<E>(executor: Arc<E>) -> OpenApiRouter<AppState>
+where
+    E: UndoExecutor,
+{
+    let executor: Arc<dyn UndoExecutor> = executor;
+    OpenApiRouter::new().routes(routes!(post_undo).layer(Extension(executor)))
 }
 
 pub async fn create_undo_action(
@@ -707,14 +727,29 @@ struct UndoActionRow {
     used_at: Option<DateTime<Utc>>,
 }
 
-async fn post_undo<E>(
+#[utoipa::path(
+    post,
+    path = "/api/undo/{id}",
+    tag = TAG,
+    params(
+        ("id" = String, Path, description = "Opaque 64-character undo token id."),
+    ),
+    responses(
+        (status = 200, description = "Undo token consumed and action executed.", body = UndoResponse),
+        (status = 400, description = "Undo payload is invalid."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Undo token not found."),
+        (status = 410, description = "Undo token expired or was already used."),
+        (status = 501, description = "Undo action is not implemented."),
+        (status = 500, description = "Undo execution failed."),
+    ),
+)]
+async fn post_undo(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(executor): Extension<Arc<E>>,
+    Extension(executor): Extension<Arc<dyn UndoExecutor>>,
     Path(id): Path<String>,
 ) -> Response
-where
-    E: UndoExecutor,
 {
     if !looks_like_undo_id(&id) {
         return not_found();
@@ -818,7 +853,7 @@ where
     Json(UndoResponse { id, action }).into_response()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct UndoResponse {
     id: String,
     action: String,

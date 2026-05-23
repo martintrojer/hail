@@ -12,15 +12,21 @@ use axum::extract::multipart::{MultipartError, MultipartRejection};
 use axum::extract::{DefaultBodyLimit, Extension, Multipart, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router};
 use secrecy::SecretString;
 use serde::Serialize;
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
 const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
+
+/// OpenAPI tag for JMAP blob upload endpoints.
+pub const TAG: &str = "blobs";
 
 /// Dependency-injection seam for JMAP blob upload.
 pub trait BlobUploader: Send + Sync + 'static {
@@ -75,7 +81,12 @@ impl BlobUploadError {
 
 /// Build protected blob routes.
 pub fn router() -> Router<AppState> {
-    router_with_uploader(Arc::new(JmapBlobUploader))
+    Router::from(openapi_router_with_uploader(Arc::new(JmapBlobUploader)))
+}
+
+/// Build the OpenAPI-tracked router for production blob uploads.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_uploader(Arc::new(JmapBlobUploader))
 }
 
 /// Test/helper router that injects a fake uploader. The 100 MiB total request
@@ -84,13 +95,20 @@ pub fn router_with_uploader<U>(uploader: Arc<U>) -> Router<AppState>
 where
     U: BlobUploader,
 {
-    Router::new()
-        .route("/api/blobs", post(upload_blobs::<U>))
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
-        .layer(Extension(uploader))
+    Router::from(openapi_router_with_uploader(uploader))
 }
 
-#[derive(Debug, Clone, Serialize)]
+fn openapi_router_with_uploader<U>(uploader: Arc<U>) -> OpenApiRouter<AppState>
+where
+    U: BlobUploader,
+{
+    let uploader: Arc<dyn BlobUploader> = uploader;
+    OpenApiRouter::new()
+        .routes(routes!(upload_blobs).layer(Extension(uploader)))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UploadedBlob {
     pub blob_id: String,
     pub size: usize,
@@ -98,19 +116,30 @@ pub struct UploadedBlob {
     pub type_: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct BlobUploadResponse {
     blobs: Vec<UploadedBlob>,
 }
 
-async fn upload_blobs<U>(
+#[utoipa::path(
+    post,
+    path = "/api/blobs",
+    tag = TAG,
+    request_body(content = String, content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "Blobs uploaded to JMAP.", body = BlobUploadResponse),
+        (status = 400, description = "Invalid multipart upload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 413, description = "Upload too large."),
+        (status = 500, description = "Blob upload failed."),
+    ),
+)]
+async fn upload_blobs(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(uploader): Extension<Arc<U>>,
+    Extension(uploader): Extension<Arc<dyn BlobUploader>>,
     multipart: Result<Multipart, MultipartRejection>,
 ) -> Response
-where
-    U: BlobUploader,
 {
     let mut blobs = Vec::new();
     let Ok(mut multipart) = multipart else {

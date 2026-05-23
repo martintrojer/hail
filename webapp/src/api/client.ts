@@ -17,6 +17,39 @@ type ReadyzUnavailable = ResponseBody<
 type ThreadGetSuccess = ResponseBody<
   paths['/api/threads/{thread_id}']['get']['responses']['200']
 >;
+type BlobUploadSuccess = ResponseBody<
+  paths['/api/blobs']['post']['responses']['201']
+>;
+type ContactGetSuccess = ResponseBody<
+  paths['/api/contacts/{address}']['get']['responses']['200']
+>;
+type ContactNotePutSuccess = ResponseBody<
+  paths['/api/contacts/{address}/note']['put']['responses']['200']
+>;
+type ScreenerGetSuccess = ResponseBody<
+  paths['/api/views/screener']['get']['responses']['200']
+>;
+type ScreenerDecisionPostSuccess = ResponseBody<
+  paths['/api/screener/decisions']['post']['responses']['200']
+>;
+type PileGetSuccess = ResponseBody<
+  paths['/api/views/set-aside']['get']['responses']['200']
+>;
+type MailViewGetSuccess = ResponseBody<
+  paths['/api/views/imbox']['get']['responses']['200']
+>;
+type SearchGetSuccess = ResponseBody<
+  paths['/api/views/search']['get']['responses']['200']
+>;
+type BubbleUpPostSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/bubble-up']['post']['responses']['201']
+>;
+type ThreadVerbPostSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/classify']['post']['responses']['200']
+>;
+type UndoPostSuccess = ResponseBody<
+  paths['/api/undo/{id}']['post']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -76,49 +109,14 @@ export interface SetupAdminRequest {
   domain: string;
 }
 
-export type MailClassification = 'imbox' | 'feed' | 'papertrail';
+export type MailClassification = components['schemas']['MailClassification'];
 export type MailViewKind = MailClassification;
 export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
-
-export interface MailViewItem {
-  thread_id: string;
-  email_id: string;
-  from: string;
-  subject: string;
-  preview: string;
-  received_at: string | null;
-  unread: boolean;
-  classification: MailClassification;
-}
-
-export interface MailViewResponse {
-  items: MailViewItem[];
-  next_cursor: string | null;
-}
-
-export interface MailSearchResult {
-  type: 'mail';
-  thread_id: string;
-  email_id: string;
-  from: string;
-  subject: string;
-  preview: string;
-  received_at: string | null;
-}
-
-export interface ContactNoteSearchResult {
-  type: 'contact_note';
-  address: string;
-  markdown: string;
-  updated_at: string;
-}
-
-export type SearchResult = MailSearchResult | ContactNoteSearchResult;
-
-export interface SearchResponse {
-  results: SearchResult[];
-}
+export type MailViewItem = components['schemas']['MailViewItem'];
+export type MailViewResponse = MailViewGetSuccess;
+export type SearchResult = components['schemas']['SearchResult'];
+export type SearchResponse = SearchGetSuccess;
 
 export interface SearchParams {
   q: string;
@@ -130,46 +128,14 @@ export type ThreadParticipant = components['schemas']['Participant'];
 export type ThreadMessage = components['schemas']['ThreadMessageResponse'];
 export type ThreadViewResponse = ThreadGetSuccess;
 
-export interface PileItem {
-  thread_id: string;
-  position: number;
-  added_at: string;
-  preview?: unknown;
-}
-
-export interface PileViewResponse {
-  items: PileItem[];
-}
-
-export interface ContactNote {
-  markdown: string;
-  updated_at: string;
-}
-
-export interface ContactResponse {
-  address: string;
-  note: ContactNote | null;
-  threads: unknown[];
-}
-
-export interface PutContactNoteRequest {
-  markdown: string;
-}
-
-export interface BubbleUpRequest {
-  at: string;
-}
-
-export interface BubbleUpResponse {
-  bubble_id: number;
-  surface_at: string;
-}
-
-export interface UploadedBlob {
-  blob_id: string;
-  size: number;
-  type: string;
-}
+export type PileItem = components['schemas']['PileItem'];
+export type PileViewResponse = PileGetSuccess;
+export type ContactNote = ContactNotePutSuccess;
+export type ContactResponse = ContactGetSuccess;
+export type PutContactNoteRequest = components['schemas']['PutNoteRequest'];
+export type BubbleUpRequest = components['schemas']['BubbleUpRequest'];
+export type BubbleUpResponse = BubbleUpPostSuccess;
+export type UploadedBlob = components['schemas']['UploadedBlob'];
 
 export type ComposeRequest = components['schemas']['ComposePayload'];
 export type ReplyRequest = components['schemas']['ReplyPayload'];
@@ -177,9 +143,7 @@ export type ComposeResponse = components['schemas']['ComposeResponse'];
 export type DraftRequest = components['schemas']['DraftPayload'];
 export type DraftResponse = components['schemas']['DraftResponse'];
 
-export interface BlobUploadResponse {
-  blobs: UploadedBlob[];
-}
+export type BlobUploadResponse = BlobUploadSuccess;
 
 export type BlobUploadPart =
   | Blob
@@ -189,58 +153,17 @@ export type BlobUploadPart =
     };
 
 export type ScreenerDecision = 'approve' | 'deny';
-export type ScreenerClassification = 'imbox' | 'feed' | 'papertrail';
-
-export interface ScreenerPendingSender {
-  sender: string;
-  first_seen_at: string;
-  message_count: number;
-  latest_preview?: unknown;
-  [key: string]: unknown;
-}
-
-/**
- * TODO(spa-api-client): replace this hand-written shape once hail-api exports
- * /api/views/screener in OpenAPI. The SPA must treat this as server-shaped data.
- */
-export interface ScreenerView {
-  senders: ScreenerPendingSender[];
-  [key: string]: unknown;
-}
-
-/**
- * TODO(spa-api-client): replace this hand-written request once hail-api exports
- * /api/screener/decisions in OpenAPI.
- */
-export interface ScreenerDecisionRequest {
-  sender: string;
-  decision: ScreenerDecision;
-  classify_as?: ScreenerClassification;
-  apply_to_history: boolean;
-}
-
-export interface UndoToken {
-  id: string;
-  action: string;
-  expires_at: string;
-}
-
-export interface UndoResponse {
-  id: string;
-  action: string;
-}
-
+export type ScreenerClassification = components['schemas']['Classification'];
+export type ScreenerPendingSender = components['schemas']['ScreenerSender'];
+export type ScreenerView = ScreenerGetSuccess;
+export type ScreenerDecisionRequest = components['schemas']['DecisionRequest'];
+export type UndoToken = components['schemas']['UndoToken'];
+export type UndoResponse = UndoPostSuccess;
 export type UndoableResponse = {
   undo?: UndoToken | null;
 };
-
-export type ScreenerDecisionResponse = UndoableResponse & {
-  sender: string;
-  decision: ScreenerDecision;
-  classify_as?: ScreenerClassification | null;
-};
-
-export type ThreadVerbResponse = UndoableResponse;
+export type ScreenerDecisionResponse = ScreenerDecisionPostSuccess;
+export type ThreadVerbResponse = ThreadVerbPostSuccess;
 
 export class HailApiError<Status extends number = number> extends Error {
   readonly name = 'HailApiError';

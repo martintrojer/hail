@@ -17,14 +17,20 @@ use async_trait::async_trait;
 use axum::extract::{Extension, State, rejection::JsonRejection};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
+
+/// OpenAPI tag for screener sender-review endpoints.
+pub const TAG: &str = "screener";
 
 const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
 
@@ -71,7 +77,12 @@ pub struct ScreenerBackfillError(pub String);
 
 /// Build protected screener routes.
 pub fn router() -> Router<AppState> {
-    router_with_backfill(Arc::new(NoopScreenerBackfill))
+    Router::from(openapi_router_with_backfill(Arc::new(NoopScreenerBackfill)))
+}
+
+/// Build the OpenAPI-tracked router for production screener endpoints.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_backfill(Arc::new(NoopScreenerBackfill))
 }
 
 /// Test/helper router that injects a fake backfill implementation.
@@ -79,26 +90,34 @@ pub fn router_with_backfill<B>(backfill: Arc<B>) -> Router<AppState>
 where
     B: ScreenerBackfill,
 {
-    Router::new()
-        .route("/api/views/screener", axum::routing::get(get_screener))
-        .route("/api/screener/decisions", post(post_decision::<B>))
-        .layer(Extension(backfill))
+    Router::from(openapi_router_with_backfill(backfill))
 }
 
-#[derive(Debug, Serialize)]
+fn openapi_router_with_backfill<B>(backfill: Arc<B>) -> OpenApiRouter<AppState>
+where
+    B: ScreenerBackfill,
+{
+    let backfill: Arc<dyn ScreenerBackfill> = backfill;
+    OpenApiRouter::new()
+        .routes(routes!(get_screener))
+        .routes(routes!(post_decision).layer(Extension(backfill)))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 struct ScreenerViewResponse {
     senders: Vec<ScreenerSender>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ScreenerSender {
     sender: String,
+    #[schema(value_type = String, format = DateTime)]
     first_seen_at: DateTime<Utc>,
     message_count: i64,
     latest_preview: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct DecisionRequest {
     sender: String,
     decision: String,
@@ -106,7 +125,7 @@ struct DecisionRequest {
     apply_to_history: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct DecisionResponse {
     sender: String,
     decision: &'static str,
@@ -114,7 +133,7 @@ struct DecisionResponse {
     undo: Option<UndoToken>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ToSchema)]
 pub enum ScreenerDecision {
     Approve,
     Deny,
@@ -144,7 +163,7 @@ impl ScreenerDecision {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Classification {
     Imbox,
@@ -171,6 +190,16 @@ impl Classification {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/views/screener",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Pending screener senders.", body = ScreenerViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Screener lookup failed."),
+    ),
+)]
 async fn get_screener(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
@@ -208,14 +237,24 @@ async fn get_screener(
     Json(ScreenerViewResponse { senders }).into_response()
 }
 
-async fn post_decision<B>(
+#[utoipa::path(
+    post,
+    path = "/api/screener/decisions",
+    tag = TAG,
+    request_body(content = DecisionRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Screener decision saved.", body = DecisionResponse),
+        (status = 400, description = "Invalid screener decision payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Screener decision failed."),
+    ),
+)]
+async fn post_decision(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(backfill): Extension<Arc<B>>,
+    Extension(backfill): Extension<Arc<dyn ScreenerBackfill>>,
     body: Result<Json<DecisionRequest>, JsonRejection>,
 ) -> Response
-where
-    B: ScreenerBackfill,
 {
     let Ok(Json(body)) = body else {
         return bad_request("invalid_decision_body");

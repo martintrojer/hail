@@ -13,14 +13,20 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::undo::{NewUndoAction, ThreadStackUndoTarget, UndoToken, create_undo_action};
 use crate::state::AppState;
+
+/// OpenAPI tag for thread mutation endpoints.
+pub const TAG: &str = "threads";
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 struct StackPositionSnapshot {
@@ -246,14 +252,25 @@ pub enum ThreadActionError {
 }
 
 pub fn router() -> Router<AppState> {
-    router_with_deps(Arc::new(JmapThreadVerifier), Arc::new(JmapThreadActions))
+    Router::from(openapi_router_with_deps(
+        Arc::new(JmapThreadVerifier),
+        Arc::new(JmapThreadActions),
+    ))
+}
+
+/// Build the OpenAPI-tracked router for production thread verbs.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_deps(Arc::new(JmapThreadVerifier), Arc::new(JmapThreadActions))
 }
 
 pub fn router_with_verifier<V>(verifier: Arc<V>) -> Router<AppState>
 where
     V: ThreadVerifier,
 {
-    router_with_deps(verifier, Arc::new(JmapThreadActions))
+    Router::from(openapi_router_with_deps(
+        verifier,
+        Arc::new(JmapThreadActions),
+    ))
 }
 
 pub fn router_with_deps<V, A>(verifier: Arc<V>, actions: Arc<A>) -> Router<AppState>
@@ -261,44 +278,45 @@ where
     V: ThreadVerifier,
     A: ThreadActions,
 {
-    Router::new()
-        .route("/api/threads/{thread_id}/bubble-up", post(bubble_up::<V>))
-        .route(
-            "/api/threads/{thread_id}/classify",
-            post(classify_thread::<A>),
-        )
-        .route("/api/threads/{thread_id}/set-aside", post(set_aside::<A>))
-        .route(
-            "/api/threads/{thread_id}/reply-later",
-            post(reply_later::<A>),
-        )
-        .route(
-            "/api/threads/{thread_id}/archive",
-            post(archive_thread::<A>),
-        )
-        .route("/api/threads/{thread_id}/trash", post(trash_thread::<A>))
-        .route("/api/threads/{thread_id}/mark", post(mark_thread::<A>))
-        .layer(Extension(verifier))
-        .layer(Extension(actions))
+    Router::from(openapi_router_with_deps(verifier, actions))
 }
 
-#[derive(Debug, Deserialize)]
+fn openapi_router_with_deps<V, A>(verifier: Arc<V>, actions: Arc<A>) -> OpenApiRouter<AppState>
+where
+    V: ThreadVerifier,
+    A: ThreadActions,
+{
+    let verifier: Arc<dyn ThreadVerifier> = verifier;
+    let actions: Arc<dyn ThreadActions> = actions;
+    OpenApiRouter::new()
+        .routes(routes!(bubble_up).layer(Extension(verifier)))
+        .routes(routes!(classify_thread).layer(Extension(actions.clone())))
+        .routes(routes!(set_aside).layer(Extension(actions.clone())))
+        .routes(routes!(reply_later).layer(Extension(actions.clone())))
+        .routes(routes!(archive_thread).layer(Extension(actions.clone())))
+        .routes(routes!(trash_thread).layer(Extension(actions.clone())))
+        .routes(routes!(mark_thread).layer(Extension(actions)))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 struct BubbleUpRequest {
+    #[schema(value_type = String, format = DateTime)]
     at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct BubbleUpResponse {
     bubble_id: i64,
+    #[schema(value_type = String, format = DateTime)]
     surface_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct ClassifyRequest {
     to: Classification,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Classification {
     Imbox,
@@ -326,25 +344,39 @@ impl Classification {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ThreadVerbResponse {
     undo: Option<UndoToken>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct MarkRequest {
     read: bool,
 }
 
-async fn bubble_up<V>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/bubble-up",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    request_body(content = BubbleUpRequest, content_type = "application/json"),
+    responses(
+        (status = 201, description = "Thread bubble-up scheduled.", body = BubbleUpResponse),
+        (status = 400, description = "Invalid bubble-up payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Bubble-up scheduling failed."),
+    ),
+)]
+async fn bubble_up(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(verifier): Extension<Arc<V>>,
+    Extension(verifier): Extension<Arc<dyn ThreadVerifier>>,
     Path(thread_id): Path<String>,
     Json(body): Json<BubbleUpRequest>,
 ) -> Response
-where
-    V: ThreadVerifier,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
@@ -397,15 +429,29 @@ where
         .into_response()
 }
 
-async fn classify_thread<A>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/classify",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    request_body(content = ClassifyRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Thread reclassified.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id or classification."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread classify failed."),
+    ),
+)]
+async fn classify_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(actions): Extension<Arc<A>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
     body: Result<Json<ClassifyRequest>, JsonRejection>,
 ) -> Response
-where
-    A: ThreadActions,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
@@ -444,14 +490,27 @@ where
     }
 }
 
-async fn set_aside<A>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/set-aside",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread added to Set Aside.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Set Aside failed."),
+    ),
+)]
+async fn set_aside(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(actions): Extension<Arc<A>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response
-where
-    A: ThreadActions,
 {
     add_to_stack(
         state,
@@ -463,14 +522,27 @@ where
     .await
 }
 
-async fn reply_later<A>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/reply-later",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread added to Reply Later.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Reply Later failed."),
+    ),
+)]
+async fn reply_later(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(actions): Extension<Arc<A>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response
-where
-    A: ThreadActions,
 {
     add_to_stack(
         state,
@@ -482,15 +554,13 @@ where
     .await
 }
 
-async fn add_to_stack<A>(
+async fn add_to_stack(
     state: AppState,
     user: AuthUser,
-    actions: Arc<A>,
+    actions: Arc<dyn ThreadActions>,
     thread_id: String,
     target: ThreadStackUndoTarget,
 ) -> Response
-where
-    A: ThreadActions,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
@@ -544,14 +614,27 @@ where
     }
 }
 
-async fn archive_thread<A>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/archive",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread archived.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread archive failed."),
+    ),
+)]
+async fn archive_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(actions): Extension<Arc<A>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response
-where
-    A: ThreadActions,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
@@ -569,14 +652,27 @@ where
     }
 }
 
-async fn trash_thread<A>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/trash",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread moved to trash.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread trash failed."),
+    ),
+)]
+async fn trash_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(actions): Extension<Arc<A>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response
-where
-    A: ThreadActions,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
@@ -594,15 +690,29 @@ where
     }
 }
 
-async fn mark_thread<A>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/mark",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    request_body(content = MarkRequest, content_type = "application/json"),
+    responses(
+        (status = 204, description = "Thread read/unread state updated."),
+        (status = 400, description = "Invalid mark payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread mark failed."),
+    ),
+)]
+async fn mark_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(actions): Extension<Arc<A>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
     body: Result<Json<MarkRequest>, JsonRejection>,
 ) -> Response
-where
-    A: ThreadActions,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");

@@ -10,23 +10,32 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
+
+/// OpenAPI tag for contact note endpoints.
+pub const TAG: &str = "contacts";
 
 const MAX_MARKDOWN_BYTES: usize = 64 * 1024;
 
 /// Build protected contact routes.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/contacts/{address}", axum::routing::get(get_contact))
-        .route(
-            "/api/contacts/{address}/note",
-            axum::routing::put(put_note).delete(delete_note),
-        )
+    Router::from(openapi_router())
 }
 
-#[derive(Debug, Serialize)]
+/// Build the OpenAPI-tracked router for protected contact routes.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(get_contact))
+        .routes(routes!(put_note))
+        .routes(routes!(delete_note))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 struct ContactResponse {
     address: String,
     note: Option<ContactNote>,
@@ -36,17 +45,31 @@ struct ContactResponse {
     threads: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ContactNote {
     markdown: String,
+    #[schema(value_type = String, format = DateTime)]
     updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct PutNoteRequest {
     markdown: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/contacts/{address}",
+    tag = TAG,
+    params(
+        ("address" = String, Path, description = "Email address to inspect."),
+    ),
+    responses(
+        (status = 200, description = "Contact detail with optional note.", body = ContactResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Contact lookup failed."),
+    ),
+)]
 async fn get_contact(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
@@ -77,6 +100,21 @@ async fn get_contact(
     .into_response()
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/contacts/{address}/note",
+    tag = TAG,
+    params(
+        ("address" = String, Path, description = "Email address whose note should be saved."),
+    ),
+    request_body(content = PutNoteRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Contact note saved.", body = ContactNote),
+        (status = 400, description = "Invalid contact note payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Contact note save failed."),
+    ),
+)]
 async fn put_note(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
@@ -113,6 +151,19 @@ async fn put_note(
     Json(saved).into_response()
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/contacts/{address}/note",
+    tag = TAG,
+    params(
+        ("address" = String, Path, description = "Email address whose note should be deleted."),
+    ),
+    responses(
+        (status = 204, description = "Contact note deleted."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Contact note delete failed."),
+    ),
+)]
 async fn delete_note(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
