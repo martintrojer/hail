@@ -449,6 +449,44 @@ export function useTrashThreadMutation(
   });
 }
 
+export function useSetAsideThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, ThreadVerbResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.setAsideThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useReplyLaterThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, ThreadVerbResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.replyLaterThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
 export interface BubbleUpMutationVariables {
   threadId: string;
   request: BubbleUpRequest;

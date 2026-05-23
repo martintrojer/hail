@@ -356,6 +356,25 @@ describe('HailApiClient non-composer mutating requests', () => {
     expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
   });
 
+  it('sends CSRF header without JSON content type for stack thread verbs', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, { undo: null }))
+      .mockResolvedValueOnce(jsonResponse(200, { undo: null }));
+
+    await client.setAsideThread('thread/with spaces');
+    await client.replyLaterThread('thread/with spaces');
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/set-aside'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
+    expect(fetchSpy.mock.calls[1]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/reply-later'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[1]?.[1], 'POST');
+  });
+
   it('sends CSRF header and JSON body for contact note updates', async () => {
     const body: PutContactNoteRequest = { markdown: 'met at !!con' };
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
