@@ -3,16 +3,17 @@
 //! The scheduler owns hail-side state transitions for due rows:
 //! - `bubble_ups`: query due pending rows, ask JMAP to make the corresponding
 //!   thread unread, then stamp `fired_at`.
-//! - `scheduled_sends`: query due `status='pending'` rows, ask JMAP to submit
-//!   the saved draft, then mark sent or failed.
+//! - `scheduled_sends`: atomically claim due `status='pending'` rows as
+//!   `processing`, ask JMAP to submit the saved draft, then mark sent or failed.
 //!
 //! Failure policy is intentionally split by operation. Bubble-up JMAP failures
 //! are treated as transient per design.md §8.3: the row remains pending and the
 //! rest of the batch continues. Scheduled-send submission failures are classified
 //! by the [`SendSubmitter`]: transient failures (network/server/rate/no active
-//! session) remain pending for a later tick; permanent failures (accepted JMAP
-//! request rejects the draft/recipients/identity) become `status='failed'` with
-//! `error` set. In both cases, later due rows continue processing.
+//! session) are released back to pending for a later tick; permanent failures
+//! (accepted JMAP request rejects the draft/recipients/identity) become
+//! `status='failed'` with `error` set. In both cases, later due rows continue
+//! processing.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -77,9 +78,13 @@ pub trait SendSubmitter: Send + Sync {
 
 /// Process all pending scheduled sends whose `send_at` is due at or before `now`.
 ///
-/// Returns the number of rows successfully submitted. Transient submit failures
-/// leave the row pending for a later tick. Permanent failures mark the row
-/// `failed` and store the error string. Later due rows are always attempted.
+/// Each row is first atomically claimed with a durable `processing` state before
+/// the non-idempotent JMAP submission call. Competing worker ticks/processes
+/// that race on the same due row can observe it, but only one can transition it
+/// from `pending` to `processing`; losers skip submission. Transient submit
+/// failures release the row back to `pending` for a later tick. Permanent
+/// failures mark the row `failed` and store the error string. Later due rows are
+/// always attempted.
 pub async fn process_due_scheduled_sends(
     db: &SqlitePool,
     submitter: &dyn SendSubmitter,
@@ -90,6 +95,10 @@ pub async fn process_due_scheduled_sends(
 
     let mut sent = 0;
     for row in rows {
+        if !claim_scheduled_send(db, row.id, &now_s).await? {
+            continue;
+        }
+
         match submitter
             .submit_draft(row.user_id, &row.draft_email_id)
             .await
@@ -98,7 +107,7 @@ pub async fn process_due_scheduled_sends(
                 let result = sqlx::query(
                     "UPDATE scheduled_sends \
                      SET status = 'sent', sent_at = ?, error = NULL \
-                     WHERE id = ? AND status = 'pending'",
+                     WHERE id = ? AND status = 'processing'",
                 )
                 .bind(&now_s)
                 .bind(row.id)
@@ -117,19 +126,31 @@ pub async fn process_due_scheduled_sends(
                 }
             }
             Err(SendSubmitError::Transient(message)) => {
+                sqlx::query(
+                    "UPDATE scheduled_sends \
+                     SET status = 'pending', claimed_at = NULL, error = NULL \
+                     WHERE id = ? AND status = 'processing'",
+                )
+                .bind(row.id)
+                .execute(db)
+                .await
+                .with_context(|| {
+                    format!("release scheduled_send {} after transient failure", row.id)
+                })?;
                 warn!(
                     scheduled_send_id = row.id,
                     user_id = row.user_id,
                     draft_email_id = %row.draft_email_id,
                     error = %message,
-                    "scheduled send submit failed transiently; leaving pending"
+                    "scheduled send submit failed transiently; released for retry"
                 );
             }
             Err(err @ SendSubmitError::Permanent(_)) => {
                 let message = err.message().to_string();
                 let result = sqlx::query(
-                    "UPDATE scheduled_sends SET status = 'failed', error = ? \
-                     WHERE id = ? AND status = 'pending'",
+                    "UPDATE scheduled_sends \
+                     SET status = 'failed', error = ? \
+                     WHERE id = ? AND status = 'processing'",
                 )
                 .bind(&message)
                 .bind(row.id)
@@ -150,6 +171,20 @@ pub async fn process_due_scheduled_sends(
     }
 
     Ok(sent)
+}
+
+async fn claim_scheduled_send(db: &SqlitePool, id: i64, now: &str) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE scheduled_sends \
+         SET status = 'processing', claimed_at = ?, error = NULL \
+         WHERE id = ? AND status = 'pending'",
+    )
+    .bind(now)
+    .bind(id)
+    .execute(db)
+    .await
+    .with_context(|| format!("claim scheduled_send {id}"))?;
+    Ok(result.rows_affected() == 1)
 }
 
 async fn select_due_scheduled_sends(db: &SqlitePool, now: &str) -> Result<Vec<ScheduledSendRow>> {

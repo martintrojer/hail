@@ -29,6 +29,18 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_undo_actions_user_live",
 ];
 
+const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
+    "id",
+    "user_id",
+    "draft_email_id",
+    "send_at",
+    "status",
+    "claimed_at",
+    "sent_at",
+    "error",
+    "created_at",
+];
+
 /// Build a fresh DB URL backed by a unique temp file. We deliberately avoid
 /// `sqlite::memory:` because a multi-connection pool gives each connection
 /// its own private in-memory DB, which makes migrations invisible to later
@@ -193,6 +205,56 @@ async fn screener_rules_decision_check_enforced() {
     .await;
 
     assert!(bad.is_err(), "CHECK constraint on decision must reject `maybe`");
+}
+
+#[tokio::test]
+async fn scheduled_sends_has_processing_claim_schema() {
+    let (pool, _guard) = setup().await;
+
+    let rows = sqlx::query("PRAGMA table_info(scheduled_sends)")
+        .fetch_all(&pool)
+        .await
+        .expect("scheduled_sends table_info");
+    let columns: std::collections::HashSet<String> =
+        rows.iter().map(|r| r.get::<String, _>("name")).collect();
+
+    for column in EXPECTED_SCHEDULED_SEND_COLUMNS {
+        assert!(
+            columns.contains(*column),
+            "expected scheduled_sends column `{column}` missing; got {columns:?}"
+        );
+    }
+
+    sqlx::query(
+        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
+    )
+    .bind("schedule@example.com")
+    .bind("acct-schedule")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("user insert");
+
+    let user_id: i64 =
+        sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+            .bind("schedule@example.com")
+            .fetch_one(&pool)
+            .await
+            .expect("fetch user id");
+
+    sqlx::query(
+        "INSERT INTO scheduled_sends \
+         (user_id, draft_email_id, send_at, status, claimed_at, created_at) \
+         VALUES (?, ?, ?, 'processing', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("draft-processing")
+    .bind("2026-01-02T00:00:00Z")
+    .bind("2026-01-02T00:00:01Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("processing scheduled_send should satisfy status check");
 }
 
 #[tokio::test]
