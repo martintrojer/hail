@@ -161,6 +161,7 @@ enum Call {
 struct FakeActions {
     calls: Mutex<Vec<Call>>,
     missing: Mutex<Vec<String>>,
+    current_classification: Mutex<Option<Classification>>,
 }
 
 impl FakeActions {
@@ -191,6 +192,22 @@ impl FakeActions {
 }
 
 impl ThreadActions for FakeActions {
+    fn current_classification<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Classification>, ThreadActionError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.maybe_missing(thread_id)?;
+            Ok(*self
+                .current_classification
+                .lock()
+                .expect("current classification mutex"))
+        })
+    }
+
     fn classify<'a>(
         &'a self,
         _state: &'a AppState,

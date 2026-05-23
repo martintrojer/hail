@@ -37,7 +37,40 @@ pub struct UndoToken {
 }
 
 #[derive(Debug)]
-pub struct UndoError(pub String);
+pub struct UndoError {
+    pub message: String,
+    status: UndoErrorStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UndoErrorStatus {
+    BadRequest,
+    NotImplemented,
+    Internal,
+}
+
+impl UndoError {
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: UndoErrorStatus::Internal,
+        }
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: UndoErrorStatus::BadRequest,
+        }
+    }
+
+    pub fn not_implemented(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            status: UndoErrorStatus::NotImplemented,
+        }
+    }
+}
 
 #[async_trait]
 pub trait UndoExecutor: Send + Sync + 'static {
@@ -49,40 +82,282 @@ pub trait UndoExecutor: Send + Sync + 'static {
     ) -> Result<(), UndoError>;
 }
 
-/// Production executor stub. Tokens are persisted now so clients can expose an
-/// undo affordance; action-specific compensating JMAP/sidecar work should be
-/// implemented alongside each destructive mutation and matched on `undo.action`.
-pub struct NoopUndoExecutor;
+/// Production executor for action-specific v1 undo payloads.
+pub struct ActionUndoExecutor<R = JmapThreadUndoRestorer> {
+    thread_restorer: Arc<R>,
+}
+
+impl Default for ActionUndoExecutor<JmapThreadUndoRestorer> {
+    fn default() -> Self {
+        Self::new(Arc::new(JmapThreadUndoRestorer))
+    }
+}
+
+impl<R> ActionUndoExecutor<R> {
+    pub fn new(thread_restorer: Arc<R>) -> Self {
+        Self { thread_restorer }
+    }
+}
+
+pub struct JmapThreadUndoRestorer;
 
 #[async_trait]
-impl UndoExecutor for NoopUndoExecutor {
-    async fn execute(
+pub trait ThreadUndoRestorer: Send + Sync + 'static {
+    async fn restore_classification(
         &self,
-        _state: &AppState,
-        _user: &AuthUser,
-        undo: UndoActionPayload,
+        state: &AppState,
+        user: &AuthUser,
+        thread_id: &str,
+        previous_classification: &str,
+    ) -> Result<(), UndoError>;
+
+    async fn restore_mailboxes(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        snapshots: Vec<EmailMailboxSnapshot>,
+    ) -> Result<(), UndoError>;
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct EmailMailboxSnapshot {
+    pub email_id: String,
+    pub mailbox_ids: Vec<String>,
+}
+
+#[async_trait]
+impl ThreadUndoRestorer for JmapThreadUndoRestorer {
+    async fn restore_classification(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        thread_id: &str,
+        previous_classification: &str,
     ) -> Result<(), UndoError> {
-        tracing::debug!(action = %undo.action, "undo execution is currently a production no-op");
+        let previous = ClassificationKeyword::parse(previous_classification)
+            .ok_or_else(|| UndoError::bad_request("invalid_previous_classification"))?;
+        let session =
+            hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
+                .await
+                .map_err(|err| UndoError::internal(err.to_string()))?;
+        for email_id in email_ids_in_thread(&session, thread_id).await? {
+            for candidate in ClassificationKeyword::ALL {
+                session
+                    .client()
+                    .email_set_keyword(&email_id, candidate.keyword(), candidate == previous)
+                    .await
+                    .map_err(|err| UndoError::internal(err.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn restore_mailboxes(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        snapshots: Vec<EmailMailboxSnapshot>,
+    ) -> Result<(), UndoError> {
+        let session =
+            hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
+                .await
+                .map_err(|err| UndoError::internal(err.to_string()))?;
+        for snapshot in snapshots {
+            if snapshot.email_id.is_empty() || snapshot.mailbox_ids.is_empty() {
+                return Err(UndoError::bad_request("invalid_mailbox_snapshot"));
+            }
+            session
+                .client()
+                .email_set_mailboxes(&snapshot.email_id, snapshot.mailbox_ids)
+                .await
+                .map_err(|err| UndoError::internal(err.to_string()))?;
+        }
         Ok(())
     }
 }
 
-#[derive(Debug, Serialize)]
-struct UndoResponse {
-    id: String,
-    action: String,
+#[async_trait]
+impl<R> UndoExecutor for ActionUndoExecutor<R>
+where
+    R: ThreadUndoRestorer,
+{
+    async fn execute(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        undo: UndoActionPayload,
+    ) -> Result<(), UndoError> {
+        match undo.action.as_str() {
+            "thread.classify" => {
+                let payload: ThreadClassifyUndoPayload = serde_json::from_value(undo.payload)
+                    .map_err(|_| UndoError::bad_request("invalid_undo_payload"))?;
+                self.thread_restorer
+                    .restore_classification(
+                        state,
+                        user,
+                        &payload.thread_id,
+                        &payload.previous_classification,
+                    )
+                    .await
+            }
+            "thread.trash" | "thread.archive" => {
+                let payload: ThreadMoveUndoPayload = serde_json::from_value(undo.payload)
+                    .map_err(|_| UndoError::not_implemented("thread_move_undo_missing_snapshot"))?;
+                if payload.email_mailbox_ids.is_empty() {
+                    return Err(UndoError::not_implemented(
+                        "thread_move_undo_missing_snapshot",
+                    ));
+                }
+                self.thread_restorer
+                    .restore_mailboxes(state, user, payload.email_mailbox_ids)
+                    .await
+            }
+            "screener.decision" => restore_screener_decision(state, user, undo.payload).await,
+            _ => Err(UndoError::not_implemented("undo_action_not_supported")),
+        }
+    }
 }
 
-#[derive(Debug, sqlx::FromRow)]
-struct UndoActionRow {
-    action: String,
-    payload_json: String,
-    expires_at: DateTime<Utc>,
-    used_at: Option<DateTime<Utc>>,
+#[derive(Debug, Deserialize)]
+struct ThreadClassifyUndoPayload {
+    thread_id: String,
+    previous_classification: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadMoveUndoPayload {
+    email_mailbox_ids: Vec<EmailMailboxSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScreenerDecisionUndoPayload {
+    sender: String,
+    previous_rule: Option<ScreenerRuleSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScreenerRuleSnapshot {
+    decision: String,
+    classify_as: Option<String>,
+    decided_at: Option<DateTime<Utc>>,
+    first_seen_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClassificationKeyword {
+    Imbox,
+    Feed,
+    Papertrail,
+}
+
+impl ClassificationKeyword {
+    const ALL: [Self; 3] = [Self::Imbox, Self::Feed, Self::Papertrail];
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "imbox" => Some(Self::Imbox),
+            "feed" => Some(Self::Feed),
+            "papertrail" => Some(Self::Papertrail),
+            _ => None,
+        }
+    }
+
+    const fn keyword(self) -> &'static str {
+        match self {
+            Self::Imbox => "$hail_imbox",
+            Self::Feed => "$hail_feed",
+            Self::Papertrail => "$hail_papertrail",
+        }
+    }
+}
+
+async fn restore_screener_decision(
+    state: &AppState,
+    user: &AuthUser,
+    payload: Value,
+) -> Result<(), UndoError> {
+    let payload: ScreenerDecisionUndoPayload = serde_json::from_value(payload)
+        .map_err(|_| UndoError::bad_request("invalid_undo_payload"))?;
+    if payload.sender.trim().is_empty() {
+        return Err(UndoError::bad_request("invalid_sender"));
+    }
+
+    match payload.previous_rule {
+        Some(rule) => {
+            validate_screener_rule(&rule)?;
+            sqlx::query(
+                "INSERT INTO screener_rules \
+                 (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(user_id, sender_address) DO UPDATE SET \
+                   decision = excluded.decision, \
+                   classify_as = excluded.classify_as, \
+                   decided_at = excluded.decided_at, \
+                   first_seen_at = excluded.first_seen_at",
+            )
+            .bind(user.id)
+            .bind(&payload.sender)
+            .bind(&rule.decision)
+            .bind(&rule.classify_as)
+            .bind(rule.decided_at)
+            .bind(rule.first_seen_at)
+            .execute(&state.db)
+            .await
+            .map_err(|err| UndoError::internal(err.to_string()))?;
+        }
+        None => {
+            sqlx::query("DELETE FROM screener_rules WHERE user_id = ?1 AND sender_address = ?2")
+                .bind(user.id)
+                .bind(&payload.sender)
+                .execute(&state.db)
+                .await
+                .map_err(|err| UndoError::internal(err.to_string()))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_screener_rule(rule: &ScreenerRuleSnapshot) -> Result<(), UndoError> {
+    match rule.decision.as_str() {
+        "pending" | "deny" => {
+            if rule.classify_as.is_some() {
+                return Err(UndoError::bad_request("invalid_previous_rule"));
+            }
+        }
+        "allow" => match rule.classify_as.as_deref() {
+            Some("imbox" | "feed" | "papertrail") => {}
+            _ => return Err(UndoError::bad_request("invalid_previous_rule")),
+        },
+        _ => return Err(UndoError::bad_request("invalid_previous_rule")),
+    }
+    Ok(())
+}
+
+async fn email_ids_in_thread(
+    session: &hail_jmap::Session,
+    thread_id: &str,
+) -> Result<Vec<String>, UndoError> {
+    use hail_jmap::jmap_client::core::query::Filter;
+    use hail_jmap::jmap_client::email::query as email_query;
+
+    let mut query = session
+        .client()
+        .email_query(
+            Some(Filter::from(email_query::Filter::in_thread(thread_id))),
+            None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
+        )
+        .await
+        .map_err(|err| UndoError::internal(err.to_string()))?;
+    let ids = query.take_ids();
+    if ids.is_empty() {
+        return Err(UndoError::bad_request("thread_not_found"));
+    }
+    Ok(ids)
 }
 
 pub fn router() -> Router<AppState> {
-    router_with_executor(Arc::new(NoopUndoExecutor))
+    router_with_executor(Arc::new(ActionUndoExecutor::default()))
 }
 
 pub fn router_with_executor<E>(executor: Arc<E>) -> Router<AppState>
@@ -132,6 +407,14 @@ fn new_undo_id() -> Result<String, String> {
         .try_fill_bytes(&mut id_bytes)
         .map_err(|err| err.to_string())?;
     Ok(hex::encode(id_bytes))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct UndoActionRow {
+    action: String,
+    payload_json: String,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
 }
 
 async fn post_undo<E>(
@@ -211,7 +494,12 @@ where
     }
 
     if let Err(err) = tx.commit().await {
-        tracing::error!(user_id = user.id, undo_id = %id, error = %err, "undo consume commit failed");
+        tracing::error!(
+            user_id = user.id,
+            undo_id = %id,
+            error = %err,
+            "undo consume commit failed"
+        );
         return internal();
     }
 
@@ -227,11 +515,23 @@ where
         )
         .await
     {
-        tracing::error!(user_id = user.id, undo_id = %id, action = %action, error = %err.0, "undo executor failed after token consume");
-        return internal();
+        tracing::error!(
+            user_id = user.id,
+            undo_id = %id,
+            action = %action,
+            error = %err.message,
+            "undo executor failed after token consume"
+        );
+        return undo_error_response(err.status);
     }
 
     Json(UndoResponse { id, action }).into_response()
+}
+
+#[derive(Debug, Serialize)]
+struct UndoResponse {
+    id: String,
+    action: String,
 }
 
 fn looks_like_undo_id(id: &str) -> bool {
@@ -254,6 +554,24 @@ fn gone(error: &'static str) -> Response {
         format!(r#"{{"error":"{error}"}}"#),
     )
         .into_response()
+}
+
+fn undo_error_response(status: UndoErrorStatus) -> Response {
+    match status {
+        UndoErrorStatus::BadRequest => (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"bad_request"}"#,
+        )
+            .into_response(),
+        UndoErrorStatus::NotImplemented => (
+            StatusCode::NOT_IMPLEMENTED,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"not_implemented"}"#,
+        )
+            .into_response(),
+        UndoErrorStatus::Internal => internal(),
+    }
 }
 
 fn internal() -> Response {

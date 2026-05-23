@@ -249,6 +249,22 @@ where
         ScreenerDecision::Deny => None,
     };
 
+    let previous_rule = match sqlx::query_as::<_, ScreenerRuleSnapshot>(
+        "SELECT decision, classify_as, decided_at, first_seen_at \
+         FROM screener_rules WHERE user_id = ?1 AND sender_address = ?2",
+    )
+    .bind(user.id)
+    .bind(&sender)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(rule) => rule,
+        Err(err) => {
+            tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener previous rule lookup failed");
+            return internal();
+        }
+    };
+
     let now = Utc::now();
     let classify_as_db = response_classify_as.map(Classification::db_value);
     if let Err(err) = sqlx::query(
@@ -303,13 +319,8 @@ where
         user.id,
         "screener.decision",
         serde_json::json!({
-            // TODO(undo executor): restore the previous screener row value
-            // instead of only exposing the generic token once action-specific
-            // compensation is implemented.
             "sender": &sender,
-            "decision": decision.response_value(),
-            "classify_as": response_classify_as,
-            "apply_to_history": body.apply_to_history,
+            "previous_rule": previous_rule,
         }),
     )
     .await
@@ -328,6 +339,14 @@ where
         undo,
     })
     .into_response()
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ScreenerRuleSnapshot {
+    decision: String,
+    classify_as: Option<String>,
+    decided_at: Option<DateTime<Utc>>,
+    first_seen_at: DateTime<Utc>,
 }
 
 fn normalize_sender(sender: &str) -> String {
