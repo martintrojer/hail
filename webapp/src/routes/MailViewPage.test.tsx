@@ -1,0 +1,334 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { RouterProvider } from '@tanstack/react-router';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it } from 'vitest';
+import type {
+  MailViewKind,
+  MailViewResponse,
+  UserEnvelope,
+} from '../api/client';
+import { HailApiClient, HailApiError } from '../api/client';
+import { queryKeys } from '../api/queryKeys';
+import { AuthProvider } from '../auth/AuthProvider';
+import { router } from '../router';
+import { MailViewPage } from './MailViewPage';
+
+const viewRoutes: Record<MailViewKind, '/imbox' | '/feed' | '/papertrail'> = {
+  imbox: '/imbox',
+  feed: '/feed',
+  papertrail: '/papertrail',
+};
+
+const viewTitles: Record<MailViewKind, string> = {
+  imbox: 'Imbox',
+  feed: 'Feed',
+  papertrail: 'Paper Trail',
+};
+
+class MailViewPageTestClient extends HailApiClient {
+  readonly calls: MailViewKind[] = [];
+
+  constructor(
+    private readonly responses: Partial<Record<MailViewKind, Promise<MailViewResponse>>>,
+  ) {
+    super({ baseUrl: 'http://localhost' });
+  }
+
+  override async me(): Promise<UserEnvelope> {
+    return {
+      user: {
+        id: 1,
+        email: 'reader@example.com',
+        display_name: 'Reader',
+        is_admin: false,
+      },
+    };
+  }
+
+  override async getImbox(): Promise<MailViewResponse> {
+    this.calls.push('imbox');
+    return this.responses.imbox ?? Promise.resolve(mailViewResponse('imbox'));
+  }
+
+  override async getFeed(): Promise<MailViewResponse> {
+    this.calls.push('feed');
+    return this.responses.feed ?? Promise.resolve(mailViewResponse('feed'));
+  }
+
+  override async getPapertrail(): Promise<MailViewResponse> {
+    this.calls.push('papertrail');
+    return this.responses.papertrail ?? Promise.resolve(mailViewResponse('papertrail'));
+  }
+}
+
+let currentTestBody: ReactNode = null;
+let restoreMailViewRoute: (() => void) | null = null;
+
+afterEach(() => {
+  currentTestBody = null;
+  restoreMailViewRoute?.();
+  restoreMailViewRoute = null;
+  window.history.pushState({}, '', '/');
+  cleanup();
+});
+
+function TestBody() {
+  return currentTestBody;
+}
+
+function installTestRouteComponent(view: MailViewKind) {
+  const matchRoute = router.routesByPath[viewRoutes[view]];
+  const previousComponent = matchRoute.options.component;
+  const previousBeforeLoad = matchRoute.options.beforeLoad;
+  matchRoute.options.component = TestBody;
+  matchRoute.options.beforeLoad = undefined;
+  restoreMailViewRoute = () => {
+    matchRoute.options.component = previousComponent;
+    matchRoute.options.beforeLoad = previousBeforeLoad;
+  };
+}
+
+function renderMailView(
+  view: MailViewKind,
+  client = new MailViewPageTestClient({ [view]: Promise.resolve(mailViewResponse(view)) }),
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  queryClient.setQueryData(queryKeys.me(), {
+    user: {
+      id: 1,
+      email: 'reader@example.com',
+      display_name: 'Reader',
+      is_admin: false,
+    },
+  } satisfies UserEnvelope);
+
+  currentTestBody = (
+    <AuthProvider>
+      <MailViewPage
+        view={view}
+        title={viewTitles[view]}
+        description={`${viewTitles[view]} description`}
+        client={client}
+      />
+    </AuthProvider>
+  );
+  installTestRouteComponent(view);
+  window.history.pushState({}, '', viewRoutes[view]);
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+
+  return client;
+}
+
+function mailItem(
+  classification: MailViewKind,
+  overrides: Partial<MailViewResponse['items'][number]> = {},
+): MailViewResponse['items'][number] {
+  return {
+    thread_id: 'thread-1',
+    email_id: 'email-1',
+    from: 'Alice Sender',
+    subject: 'Quarterly update',
+    preview: 'The latest notes from Alice.',
+    received_at: '2026-05-23T12:00:00Z',
+    unread: true,
+    classification,
+    ...overrides,
+  };
+}
+
+function mailViewResponse(
+  classification: MailViewKind,
+  items: MailViewResponse['items'] = [mailItem(classification)],
+): MailViewResponse {
+  return { items, next_cursor: null };
+}
+
+function response(status: number, body: unknown = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+describe('MailViewPage', () => {
+  it('renders Imbox loading, error, empty, and result states', async () => {
+    const pendingClient = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({ imbox: new Promise(() => undefined) }),
+    );
+
+    expect(await screen.findByLabelText('Loading Imbox mail')).toBeInTheDocument();
+    expect(pendingClient.calls).toEqual(['imbox']);
+    cleanup();
+    restoreMailViewRoute?.();
+    restoreMailViewRoute = null;
+
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.reject(new HailApiError(401, {}, response(401))),
+      }),
+    );
+    expect(await screen.findByText('Could not load mail')).toBeInTheDocument();
+    expect(
+      screen.getByText('Your session expired. Sign in again to refresh this view.'),
+    ).toBeInTheDocument();
+    cleanup();
+    restoreMailViewRoute?.();
+    restoreMailViewRoute = null;
+
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({ imbox: Promise.resolve(mailViewResponse('imbox', [])) }),
+    );
+    expect(await screen.findByText('No Imbox mail yet')).toBeInTheDocument();
+    expect(
+      screen.getByText('When the server classifies threads as Imbox, they will show up here.'),
+    ).toBeInTheDocument();
+    cleanup();
+    restoreMailViewRoute?.();
+    restoreMailViewRoute = null;
+
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread/needs encoding',
+              email_id: 'email-imbox',
+              from: 'Important Person',
+              subject: 'Read this first',
+              preview: 'A direct note for the Imbox.',
+              unread: true,
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    const link = await screen.findByRole('link', {
+      name: 'Open Read this first from Important Person',
+    });
+    expect(client.calls).toEqual(['imbox']);
+    expect(link).toHaveAttribute('href', '/thread/thread%2Fneeds%20encoding');
+    expect(within(link).getByText('Imbox')).toBeInTheDocument();
+    expect(within(link).getByText('Unread')).toBeInTheDocument();
+    expect(screen.getByLabelText('Unread thread')).toBeInTheDocument();
+    expect(within(link).getByText('A direct note for the Imbox.')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['feed', 'Feed'],
+    ['papertrail', 'Paper Trail'],
+  ] as const)('renders %s loading state with the matching API hook', async (view, title) => {
+    const client = renderMailView(
+      view,
+      new MailViewPageTestClient({ [view]: new Promise(() => undefined) }),
+    );
+
+    expect(await screen.findByLabelText(`Loading ${title} mail`)).toBeInTheDocument();
+    expect(client.calls).toEqual([view]);
+  });
+
+  it('uses the Feed hook and renders feed-specific result details', async () => {
+    const client = renderMailView(
+      'feed',
+      new MailViewPageTestClient({
+        feed: Promise.resolve(
+          mailViewResponse('feed', [
+            mailItem('feed', {
+              thread_id: 'feed-thread',
+              email_id: 'email-feed',
+              from: 'Newsletter',
+              subject: 'Weekly links',
+              preview: 'Links worth reading this weekend.',
+              unread: true,
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    const link = await screen.findByRole('link', {
+      name: 'Open Weekly links from Newsletter',
+    });
+    expect(client.calls).toEqual(['feed']);
+    expect(link).toHaveAttribute('href', '/thread/feed-thread');
+    expect(within(link).getByText('Feed')).toBeInTheDocument();
+    expect(within(link).getByText('New')).toBeInTheDocument();
+    expect(screen.getByLabelText('Unread thread')).toBeInTheDocument();
+    expect(within(link).getByText('Links worth reading this weekend.')).toBeInTheDocument();
+  });
+
+  it('uses the Paper Trail hook and renders paper trail-specific result details', async () => {
+    const client = renderMailView(
+      'papertrail',
+      new MailViewPageTestClient({
+        papertrail: Promise.resolve(
+          mailViewResponse('papertrail', [
+            mailItem('papertrail', {
+              thread_id: 'receipt id/2026',
+              email_id: 'email-papertrail',
+              from: 'Shop Example',
+              subject: 'Your receipt',
+              preview: 'Order #123 was paid.',
+              unread: false,
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    const link = await screen.findByRole('link', {
+      name: 'Open Your receipt from Shop Example',
+    });
+    expect(client.calls).toEqual(['papertrail']);
+    expect(link).toHaveAttribute('href', '/thread/receipt%20id%2F2026');
+    expect(within(link).getByText('Paper Trail')).toBeInTheDocument();
+    expect(within(link).getByLabelText('Read thread')).toBeInTheDocument();
+    expect(within(link).queryByText('Unread')).not.toBeInTheDocument();
+    expect(within(link).queryByText('New')).not.toBeInTheDocument();
+    expect(within(link).getByText('Order #123 was paid.')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['feed', 'Feed'],
+    ['papertrail', 'Paper Trail'],
+  ] as const)('renders %s error and empty states', async (view, title) => {
+    renderMailView(
+      view,
+      new MailViewPageTestClient({
+        [view]: Promise.reject(new HailApiError(503, {}, response(503))),
+      }),
+    );
+    expect(await screen.findByText('Could not load mail')).toBeInTheDocument();
+    expect(screen.getByText('Mail view failed with HTTP 503.')).toBeInTheDocument();
+    cleanup();
+    restoreMailViewRoute?.();
+    restoreMailViewRoute = null;
+
+    renderMailView(
+      view,
+      new MailViewPageTestClient({ [view]: Promise.resolve(mailViewResponse(view, [])) }),
+    );
+    expect(await screen.findByText(`No ${title} mail yet`)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `When the server classifies threads as ${title}, they will show up here.`,
+      ),
+    ).toBeInTheDocument();
+  });
+});

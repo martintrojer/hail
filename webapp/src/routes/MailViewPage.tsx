@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
-import { HailApiError, type MailViewItem, type MailViewKind } from '../api/client';
+import { HailApiError, type HailApiClient, type MailViewItem, type MailViewKind } from '../api/client';
 import { useFeedView, useImboxView, usePapertrailView } from '../api/query';
 import { AppShell } from '../layout/AppShell';
 
@@ -8,6 +8,7 @@ interface MailViewPageProps {
   view: MailViewKind;
   title: string;
   description: string;
+  client?: HailApiClient;
 }
 
 const viewLabels: Record<MailViewKind, string> = {
@@ -16,14 +17,14 @@ const viewLabels: Record<MailViewKind, string> = {
   papertrail: 'Paper Trail',
 };
 
-function useMailView(view: MailViewKind) {
+function useMailView(view: MailViewKind, client?: HailApiClient) {
   switch (view) {
     case 'imbox':
-      return useImboxView();
+      return useImboxView(client);
     case 'feed':
-      return useFeedView();
+      return useFeedView(client);
     case 'papertrail':
-      return usePapertrailView();
+      return usePapertrailView(client);
   }
 }
 
@@ -67,7 +68,10 @@ function SkeletonList({ view }: { view: MailViewKind }) {
   const rows = view === 'papertrail' ? 8 : 5;
 
   return (
-    <div className={view === 'feed' ? 'space-y-4' : 'space-y-3'}>
+    <div
+      aria-label={`Loading ${viewLabels[view]} mail`}
+      className={view === 'feed' ? 'space-y-4' : 'space-y-3'}
+    >
       {Array.from({ length: rows }, (_, index) => (
         <div
           key={index}
@@ -105,9 +109,17 @@ function ThreadCard({ item, view }: { item: MailViewItem; view: MailViewKind }) 
 
 function UnreadDot({ unread }: { unread: boolean }) {
   return unread ? (
-    <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-sky-300 shadow shadow-sky-400/50" />
+    <span
+      role="img"
+      aria-label={unread ? 'Unread thread' : 'Read thread'}
+      className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-sky-300 shadow shadow-sky-400/50"
+    />
   ) : (
-    <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border border-slate-700" />
+    <span
+      role="img"
+      aria-label="Read thread"
+      className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border border-slate-700"
+    />
   );
 }
 
@@ -239,8 +251,13 @@ function ThreadLink({
   );
 }
 
-export function MailViewPage({ view, title, description }: MailViewPageProps) {
-  const query = useMailView(view);
+export function MailViewPage({
+  view,
+  title,
+  description,
+  client,
+}: MailViewPageProps) {
+  const query = useMailView(view, client);
 
   let list;
   if (query.isPending) {
