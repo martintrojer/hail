@@ -117,6 +117,15 @@ pub trait ThreadUndoRestorer: Send + Sync + 'static {
         user: &AuthUser,
         snapshots: Vec<EmailMailboxSnapshot>,
     ) -> Result<(), UndoError>;
+
+    async fn set_keyword(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        thread_id: &str,
+        keyword: &str,
+        enabled: bool,
+    ) -> Result<(), UndoError>;
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -174,6 +183,28 @@ impl ThreadUndoRestorer for JmapThreadUndoRestorer {
         }
         Ok(())
     }
+
+    async fn set_keyword(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        thread_id: &str,
+        keyword: &str,
+        enabled: bool,
+    ) -> Result<(), UndoError> {
+        let session =
+            hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
+                .await
+                .map_err(|err| UndoError::internal(err.to_string()))?;
+        for email_id in email_ids_in_thread(&session, thread_id).await? {
+            session
+                .client()
+                .email_set_keyword(&email_id, keyword, enabled)
+                .await
+                .map_err(|err| UndoError::internal(err.to_string()))?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -212,6 +243,11 @@ where
                     .restore_mailboxes(state, user, payload.email_mailbox_ids)
                     .await
             }
+            "thread.stack" => {
+                let payload: ThreadStackUndoPayload = serde_json::from_value(undo.payload)
+                    .map_err(|_| UndoError::bad_request("invalid_undo_payload"))?;
+                restore_thread_stack(state, user, self.thread_restorer.as_ref(), payload).await
+            }
             "screener.decision" => restore_screener_decision(state, user, undo.payload).await,
             _ => Err(UndoError::not_implemented("undo_action_not_supported")),
         }
@@ -227,6 +263,20 @@ struct ThreadClassifyUndoPayload {
 #[derive(Debug, Deserialize)]
 struct ThreadMoveUndoPayload {
     email_mailbox_ids: Vec<EmailMailboxSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadStackUndoPayload {
+    thread_id: String,
+    stack: String,
+    keyword: String,
+    previous_position: Option<StackPositionSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StackPositionSnapshot {
+    position: i64,
+    added_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,6 +366,89 @@ async fn restore_screener_decision(
     }
 
     Ok(())
+}
+
+async fn restore_thread_stack<R>(
+    state: &AppState,
+    user: &AuthUser,
+    thread_restorer: &R,
+    payload: ThreadStackUndoPayload,
+) -> Result<(), UndoError>
+where
+    R: ThreadUndoRestorer,
+{
+    validate_thread_stack_payload(&payload)?;
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|err| UndoError::internal(err.to_string()))?;
+
+    match &payload.previous_position {
+        Some(snapshot) => {
+            sqlx::query(
+                "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(user_id, stack, thread_id) DO UPDATE SET \
+                   position = excluded.position, \
+                   added_at = excluded.added_at",
+            )
+            .bind(user.id)
+            .bind(&payload.stack)
+            .bind(&payload.thread_id)
+            .bind(snapshot.position)
+            .bind(snapshot.added_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| UndoError::internal(err.to_string()))?;
+        }
+        None => {
+            sqlx::query(
+                "DELETE FROM stack_positions WHERE user_id = ?1 AND stack = ?2 AND thread_id = ?3",
+            )
+            .bind(user.id)
+            .bind(&payload.stack)
+            .bind(&payload.thread_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| UndoError::internal(err.to_string()))?;
+        }
+    }
+
+    tx.commit()
+        .await
+        .map_err(|err| UndoError::internal(err.to_string()))?;
+
+    if payload.previous_position.is_none() {
+        thread_restorer
+            .set_keyword(state, user, &payload.thread_id, &payload.keyword, false)
+            .await?;
+    }
+
+    Ok(())
+}
+
+fn validate_thread_stack_payload(payload: &ThreadStackUndoPayload) -> Result<(), UndoError> {
+    if !looks_like_jmap_id(&payload.thread_id) {
+        return Err(UndoError::bad_request("invalid_thread_id"));
+    }
+    match (payload.stack.as_str(), payload.keyword.as_str()) {
+        ("set_aside", "$hail_setaside") | ("reply_later", "$hail_replylater") => {}
+        _ => return Err(UndoError::bad_request("invalid_stack_undo")),
+    }
+    if payload
+        .previous_position
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.position < 1)
+    {
+        return Err(UndoError::bad_request("invalid_stack_undo"));
+    }
+    Ok(())
+}
+
+fn looks_like_jmap_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn validate_screener_rule(rule: &ScreenerRuleSnapshot) -> Result<(), UndoError> {
