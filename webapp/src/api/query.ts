@@ -12,6 +12,7 @@ import {
   type ContactNote,
   type ContactResponse,
   type LoginRequest,
+  type MailViewResponse,
   type PutContactNoteRequest,
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
@@ -83,6 +84,39 @@ export function useScreenerView(
   return useQuery({
     queryKey: queryKeys.screener(),
     queryFn: () => client.getScreenerView(),
+    ...options,
+  });
+}
+
+export function useImboxView(
+  client = defaultApiClient,
+  options?: QueryConfig<MailViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('imbox'),
+    queryFn: () => client.getImbox(),
+    ...options,
+  });
+}
+
+export function useFeedView(
+  client = defaultApiClient,
+  options?: QueryConfig<MailViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('feed'),
+    queryFn: () => client.getFeed(),
+    ...options,
+  });
+}
+
+export function usePapertrailView(
+  client = defaultApiClient,
+  options?: QueryConfig<MailViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('papertrail'),
+    queryFn: () => client.getPapertrail(),
     ...options,
   });
 }

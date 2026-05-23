@@ -46,6 +46,25 @@ export interface SetupAdminRequest {
   domain: string;
 }
 
+export type MailClassification = 'imbox' | 'feed' | 'papertrail';
+export type MailViewKind = MailClassification;
+
+export interface MailViewItem {
+  thread_id: string;
+  email_id: string;
+  from: string;
+  subject: string;
+  preview: string;
+  received_at: string | null;
+  unread: boolean;
+  classification: MailClassification;
+}
+
+export interface MailViewResponse {
+  items: MailViewItem[];
+  next_cursor: string | null;
+}
+
 export interface ContactNote {
   markdown: string;
   updated_at: string;
@@ -207,6 +226,27 @@ export class HailApiClient {
   async getScreenerView(): Promise<ScreenerView> {
     return this.#json<ScreenerView>(
       await this.#request('/api/views/screener'),
+      200,
+    );
+  }
+
+  async getImbox(): Promise<MailViewResponse> {
+    return this.#json<MailViewResponse>(
+      await this.#request('/api/views/imbox'),
+      200,
+    );
+  }
+
+  async getFeed(): Promise<MailViewResponse> {
+    return this.#json<MailViewResponse>(
+      await this.#request('/api/views/feed'),
+      200,
+    );
+  }
+
+  async getPapertrail(): Promise<MailViewResponse> {
+    return this.#json<MailViewResponse>(
+      await this.#request('/api/views/papertrail'),
       200,
     );
   }
