@@ -7,11 +7,13 @@
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Router, routing::get};
 use chrono::Utc;
 use tokio::sync::broadcast;
 use tokio::time::{self, Duration};
+use url::Url;
 
 use crate::events::{AppEvent, AppEventEnvelope};
 use crate::middleware::auth::AuthUser;
@@ -26,10 +28,53 @@ pub fn router() -> Router<AppState> {
 async fn ws_handler(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if !origin_matches_public_url(&headers, &state.config.server.public_url) {
+        tracing::debug!("websocket rejected due to missing or foreign Origin");
+        return forbidden_origin();
+    }
+
     let events = state.events.subscribe();
     ws.on_upgrade(move |socket| serve_socket(socket, events, user.id, HEARTBEAT_INTERVAL))
+}
+
+fn forbidden_origin() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"origin_forbidden"}"#,
+    )
+        .into_response()
+}
+
+fn origin_matches_public_url(headers: &HeaderMap, public_url: &str) -> bool {
+    // `/api/ws` uses ambient session cookies, so require a browser Origin
+    // that exactly matches the configured public URL. Non-browser clients
+    // without Origin can use the REST API; the WebSocket channel is SPA-only.
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+
+    let Ok(origin) = Url::parse(origin) else {
+        return false;
+    };
+    let Ok(public_url) = Url::parse(public_url) else {
+        tracing::warn!("configured public_url is not a valid URL; rejecting websocket origin");
+        return false;
+    };
+
+    same_origin(&origin, &public_url)
+}
+
+fn same_origin(left: &Url, right: &Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
 }
 
 async fn serve_socket(

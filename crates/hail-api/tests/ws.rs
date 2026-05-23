@@ -119,10 +119,66 @@ async fn websocket_handshake_succeeds_with_valid_session() {
             .parse()
             .expect("cookie header"),
     );
+    req.headers_mut()
+        .insert("origin", "http://localhost".parse().expect("origin header"));
     let (_socket, response) = tokio_tungstenite::connect_async(req)
         .await
         .expect("authenticated websocket connects");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+}
+
+#[tokio::test]
+async fn websocket_rejects_authenticated_request_without_origin() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "missing-origin@example.org").await;
+    let url = spawn_server(state).await;
+
+    let mut req = url.into_client_request().expect("ws request");
+    req.headers_mut().insert(
+        "cookie",
+        format!("hail_session={sid}")
+            .parse()
+            .expect("cookie header"),
+    );
+
+    let err = tokio_tungstenite::connect_async(req)
+        .await
+        .expect_err("missing Origin should fail");
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        other => panic!("expected HTTP 403 handshake error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn websocket_rejects_authenticated_request_with_foreign_origin() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "foreign-origin@example.org").await;
+    let url = spawn_server(state).await;
+
+    let mut req = url.into_client_request().expect("ws request");
+    req.headers_mut().insert(
+        "cookie",
+        format!("hail_session={sid}")
+            .parse()
+            .expect("cookie header"),
+    );
+    req.headers_mut().insert(
+        "origin",
+        "https://evil.example".parse().expect("origin header"),
+    );
+
+    let err = tokio_tungstenite::connect_async(req)
+        .await
+        .expect_err("foreign Origin should fail");
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        other => panic!("expected HTTP 403 handshake error, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -139,6 +195,8 @@ async fn websocket_receives_broadcast_event() {
             .parse()
             .expect("cookie header"),
     );
+    req.headers_mut()
+        .insert("origin", "http://localhost".parse().expect("origin header"));
     let (mut socket, _response) = tokio_tungstenite::connect_async(req)
         .await
         .expect("authenticated websocket connects");
@@ -188,6 +246,9 @@ async fn websocket_receives_db_bridged_worker_event_for_same_user_only() {
             .parse()
             .expect("cookie header"),
     );
+    alice_req
+        .headers_mut()
+        .insert("origin", "http://localhost".parse().expect("origin header"));
     let (mut alice_socket, _response) = tokio_tungstenite::connect_async(alice_req)
         .await
         .expect("alice websocket connects");
@@ -199,6 +260,9 @@ async fn websocket_receives_db_bridged_worker_event_for_same_user_only() {
             .parse()
             .expect("cookie header"),
     );
+    bob_req
+        .headers_mut()
+        .insert("origin", "http://localhost".parse().expect("origin header"));
     let (mut bob_socket, _response) = tokio_tungstenite::connect_async(bob_req)
         .await
         .expect("bob websocket connects");
