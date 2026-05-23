@@ -1,10 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  BubbleUpRequest,
+  BubbleUpResponse,
   ContactResponse,
+  ThreadVerbResponse,
   ThreadViewResponse,
   UserEnvelope,
 } from '../api/client';
@@ -16,6 +19,10 @@ import { router } from '../router';
 import { ThreadPage } from './ThreadPage';
 
 class ThreadPageTestClient extends HailApiClient {
+  readonly setAsideCalls: string[] = [];
+  readonly replyLaterCalls: string[] = [];
+  readonly bubbleUpCalls: Array<{ threadId: string; request: BubbleUpRequest }> = [];
+
   constructor(private readonly thread: ThreadViewResponse) {
     super({ baseUrl: 'http://localhost' });
   }
@@ -40,6 +47,39 @@ class ThreadPageTestClient extends HailApiClient {
       address,
       note: null,
       threads: [],
+    };
+  }
+
+  override async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.setAsideCalls.push(threadId);
+    return {
+      undo: {
+        id: 'undo-set-aside',
+        action: 'thread.stack',
+        expires_at: '2026-05-23T13:00:00Z',
+      },
+    };
+  }
+
+  override async replyLaterThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.replyLaterCalls.push(threadId);
+    return {
+      undo: {
+        id: 'undo-reply-later',
+        action: 'thread.stack',
+        expires_at: '2026-05-23T13:00:00Z',
+      },
+    };
+  }
+
+  override async bubbleUpThread(
+    threadId: string,
+    request: BubbleUpRequest,
+  ): Promise<BubbleUpResponse> {
+    this.bubbleUpCalls.push({ threadId, request });
+    return {
+      bubble_id: 1,
+      surface_at: request.at,
     };
   }
 }
@@ -100,11 +140,15 @@ function renderThread(thread: ThreadViewResponse) {
   installTestRouteComponent();
   window.history.pushState({}, '', `/thread/${thread.thread_id}`);
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+    client,
+    queryClient,
+  };
 }
 
 function sampleThread(
@@ -172,5 +216,41 @@ describe('ThreadPage', () => {
 
     expect(await screen.findByText('0 messages with Unknown')).toBeInTheDocument();
     expect(screen.getByText('No messages in this thread')).toBeInTheDocument();
+  });
+
+  it('adds the thread to stack views and shows undo toasts', async () => {
+    const { client } = renderThread(sampleThread());
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Set Aside' }));
+
+    await waitFor(() => expect(client.setAsideCalls).toEqual(['thread-1']));
+    expect(await screen.findByText('Thread added to Set Aside.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply Later' }));
+
+    await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-1']));
+    expect(await screen.findByText('Thread added to Reply Later.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
+  it('schedules a bubble up time from the thread controls', async () => {
+    const { client } = renderThread(sampleThread());
+    const localValue = '2999-01-02T03:04';
+
+    fireEvent.change(await screen.findByLabelText('Bubble up at'), {
+      target: { value: localValue },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Bubble Up' }));
+
+    await waitFor(() =>
+      expect(client.bubbleUpCalls).toEqual([
+        {
+          threadId: 'thread-1',
+          request: { at: new Date(localValue).toISOString() },
+        },
+      ]),
+    );
+    expect(await screen.findByText(/Thread will bubble up/)).toBeInTheDocument();
   });
 });

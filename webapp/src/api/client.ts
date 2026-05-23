@@ -591,6 +591,26 @@ export class HailApiClient {
     );
   }
 
+  async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
+    return this.#json<ThreadVerbResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/set-aside`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async replyLaterThread(threadId: string): Promise<ThreadVerbResponse> {
+    return this.#json<ThreadVerbResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/reply-later`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
   async bubbleUpThread(
     threadId: string,
     body: BubbleUpRequest,

@@ -10,8 +10,10 @@ import {
   useLogoutMutation,
   useMe,
   usePapertrailView,
+  useReplyLaterThreadMutation,
   useScreenerDecisionMutation,
   useScreenerView,
+  useSetAsideThreadMutation,
   useSetupState,
   useTrashThreadMutation,
 } from './query';
@@ -31,6 +33,8 @@ export function ApiHookSmoke() {
   void useClassifyThreadMutation();
   void useArchiveThreadMutation();
   void useTrashThreadMutation();
+  void useSetAsideThreadMutation();
+  void useReplyLaterThreadMutation();
   void useContactNoteMutation();
   void useBubbleUpMutation();
   void queryKeys.contact('person@example.com');
