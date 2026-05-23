@@ -34,11 +34,15 @@ mod backoff;
 #[path = "../src/changes.rs"]
 mod changes;
 
+#[path = "../src/screener.rs"]
+mod screener;
+
 use backoff::Backoff;
 use changes::{
     EmailChanges, EmailEnvelope, JmapChangeFetcher, TRACKED_TYPE_STATES, handle_changes,
     load_cursor, upsert_cursor,
 };
+use screener::{JmapOps, RouteError};
 
 /// In-memory fake fetcher. Returns a scripted [`EmailChanges`] per
 /// call and counts invocations so tests can assert call shape.
@@ -56,6 +60,27 @@ impl JmapChangeFetcher for FakeFetcher {
     ) -> anyhow::Result<EmailChanges> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.response.clone())
+    }
+}
+
+struct NoopJmapOps;
+
+#[async_trait]
+impl JmapOps for NoopJmapOps {
+    async fn get_or_create_mailbox(&self, _name: &str) -> Result<String, RouteError> {
+        Ok("screener-id".to_string())
+    }
+
+    async fn get_mailbox_by_role(&self, _role: &str) -> Result<Option<String>, RouteError> {
+        Ok(Some("trash-id".to_string()))
+    }
+
+    async fn apply_keyword(&self, _email_id: &str, _keyword: &str) -> Result<(), RouteError> {
+        Ok(())
+    }
+
+    async fn move_to_mailbox(&self, _email_id: &str, _mailbox_id: &str) -> Result<(), RouteError> {
+        Ok(())
     }
 }
 
@@ -147,7 +172,7 @@ async fn handle_changes_persists_new_cursor() {
 
     let mut types = BTreeSet::new();
     types.insert("Email".to_string());
-    handle_changes(&pool, user_id, fetcher.as_ref(), &types)
+    handle_changes(&pool, user_id, fetcher.as_ref(), &NoopJmapOps, &types)
         .await
         .expect("handle_changes");
 
@@ -174,7 +199,7 @@ async fn handle_changes_is_idempotent_on_empty_round() {
     // Running twice should not panic and should leave the cursor at
     // whatever the fetcher returned.
     for _ in 0..2 {
-        handle_changes(&pool, user_id, &fetcher, &types)
+        handle_changes(&pool, user_id, &fetcher, &NoopJmapOps, &types)
             .await
             .expect("handle_changes empty");
     }
@@ -203,7 +228,7 @@ async fn handle_changes_skips_untracked_type_states() {
     types.insert("Identity".to_string());
     types.insert("Core".to_string());
 
-    handle_changes(&pool, user_id, fetcher.as_ref(), &types)
+    handle_changes(&pool, user_id, fetcher.as_ref(), &NoopJmapOps, &types)
         .await
         .expect("handle_changes");
 

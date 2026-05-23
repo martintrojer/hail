@@ -5,10 +5,6 @@
 //! `user.rs` so the change-diff -> envelope-fetch -> log -> persist
 //! pipeline is unit-testable against a fake JMAP backend without
 //! standing up a real `Client`.
-//!
-//! Screener routing logic is downstream (`screener-routing` task) and
-//! NOT done here. For this task we log each envelope structured at
-//! INFO and persist the new cursor.
 
 use std::collections::BTreeSet;
 
@@ -17,6 +13,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
+
+use crate::screener::{self, JmapOps, route_email};
 
 /// JMAP TypeStates that hail-worker tracks per user. Mirrors
 /// design.md §6.2 (`jmap_state.type_state` column) and §8.1 item 1
@@ -93,6 +91,7 @@ pub async fn handle_changes(
     db: &SqlitePool,
     user_id: i64,
     fetcher: &dyn JmapChangeFetcher,
+    jmap_ops: &dyn JmapOps,
     changed_types: &BTreeSet<String>,
 ) -> Result<()> {
     for type_state in changed_types {
@@ -118,7 +117,7 @@ pub async fn handle_changes(
             }
         };
 
-        log_envelopes(user_id, type_state, &changes);
+        route_envelopes(db, user_id, type_state, jmap_ops, &changes).await?;
 
         if changes.new_state.is_empty() {
             // Defensive: a fetcher that returns an empty new_state
@@ -177,34 +176,53 @@ pub async fn upsert_cursor(
     Ok(())
 }
 
-/// Emit one INFO line per created/updated envelope. Destroyed ids
+/// Route created/updated Email envelopes through Screener rules. Destroyed ids
 /// are logged in a single line — we don't have envelopes for them.
 ///
-/// Logging hygiene (design.md §10.1): no bodies, no decrypted tokens,
-/// preview is already a server-side excerpt and is safe to log.
-fn log_envelopes(user_id: i64, type_state: &str, changes: &EmailChanges) {
-    for env in changes.created.iter().chain(changes.updated.iter()) {
-        let from = env
-            .from
-            .iter()
-            .map(|(_, addr)| addr.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        let mailboxes = env.mailbox_ids.join(",");
-        let keywords = env.keywords.join(",");
-        info!(
-            user_id,
-            type_state = %type_state,
-            email_id = %env.id,
-            thread_id = env.thread_id.as_deref().unwrap_or(""),
-            from = %from,
-            subject = env.subject.as_deref().unwrap_or(""),
-            mailbox_ids = %mailboxes,
-            keywords = %keywords,
-            size = env.size,
-            "jmap change envelope"
-        );
+/// Logging hygiene (design.md §10.1): INFO logs include ids and route outcomes
+/// only. Subjects and full envelopes are debug-only material, not emitted here.
+async fn route_envelopes(
+    db: &SqlitePool,
+    user_id: i64,
+    type_state: &str,
+    jmap_ops: &dyn JmapOps,
+    changes: &EmailChanges,
+) -> Result<()> {
+    if type_state == "Email" {
+        let mut conn = db.acquire().await.context("acquire sqlite connection")?;
+        for env in changes.created.iter().chain(changes.updated.iter()) {
+            let route_env = match route_envelope_from_change(env) {
+                Some(route_env) => route_env,
+                None => {
+                    warn!(
+                        user_id,
+                        email_id = %env.id,
+                        "skipping route for email without sender"
+                    );
+                    continue;
+                }
+            };
+            match route_email(conn.as_mut(), jmap_ops, user_id, &route_env).await {
+                Ok(outcome) => {
+                    info!(
+                        user_id,
+                        email_id = %route_env.id,
+                        outcome = ?outcome,
+                        "routed"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        user_id,
+                        email_id = %route_env.id,
+                        error = %e,
+                        "route_email failed; will retry on next change"
+                    );
+                }
+            }
+        }
     }
+
     if !changes.destroyed.is_empty() {
         info!(
             user_id,
@@ -213,4 +231,24 @@ fn log_envelopes(user_id: i64, type_state: &str, changes: &EmailChanges) {
             "jmap destroyed ids"
         );
     }
+    Ok(())
+}
+
+fn route_envelope_from_change(env: &EmailEnvelope) -> Option<screener::EmailEnvelope> {
+    let from = env.from.first().map(|(_, addr)| screener::normalize_sender(addr))?;
+    if from.is_empty() {
+        return None;
+    }
+    Some(screener::EmailEnvelope {
+        id: env.id.clone(),
+        thread_id: env.thread_id.clone().unwrap_or_default(),
+        from,
+        subject: env.subject.clone().unwrap_or_default(),
+        mailbox_ids: env.mailbox_ids.clone(),
+        keywords: env.keywords.clone(),
+        received_at: env
+            .received_at
+            .and_then(|ts| chrono::DateTime::<Utc>::from_timestamp(ts, 0)),
+        size: u32::try_from(env.size).ok(),
+    })
 }

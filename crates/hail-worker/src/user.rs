@@ -28,6 +28,7 @@ use crate::changes::{
     EmailChanges, EmailEnvelope, JmapChangeFetcher, TRACKED_TYPE_STATES, handle_changes,
 };
 use crate::crypto::TokenDecryptor;
+use crate::screener::JmapOpsLive;
 use crate::state::AppState;
 
 /// EventSource keep-alive ping interval (seconds) — the task contract
@@ -112,6 +113,10 @@ async fn run_user_supervisor_with(
         session: session.session.clone(),
         account_id: session.account_id.clone(),
     });
+    let jmap_ops = Arc::new(JmapOpsLive {
+        session: session.session.clone(),
+        account_id: session.account_id.clone(),
+    });
 
     // Catch-up: replay every tracked TypeState from its stored cursor
     // before subscribing to live push. Item 4 of the task contract.
@@ -119,11 +124,19 @@ async fn run_user_supervisor_with(
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    if let Err(e) = handle_changes(&state.db, user_id, fetcher.as_ref(), &all_tracked).await {
+    if let Err(e) = handle_changes(
+        &state.db,
+        user_id,
+        fetcher.as_ref(),
+        jmap_ops.as_ref(),
+        &all_tracked,
+    )
+    .await
+    {
         warn!(user_id, error = %e, "catch-up handle_changes failed; continuing to live push");
     }
 
-    run_event_loop(user_id, state, session, fetcher, cancel).await
+    run_event_loop(user_id, state, session, fetcher, jmap_ops, cancel).await
 }
 
 /// EventSource consume-and-reconnect loop. Each iteration of the
@@ -135,6 +148,7 @@ async fn run_event_loop(
     state: Arc<AppState>,
     session: JmapSession,
     fetcher: Arc<dyn JmapChangeFetcher>,
+    jmap_ops: Arc<JmapOpsLive>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut backoff = Backoff::new();
@@ -208,6 +222,7 @@ async fn run_event_loop(
                                 user_id,
                                 &session.account_id,
                                 fetcher.as_ref(),
+                                jmap_ops.as_ref(),
                                 notification,
                             )
                             .await;
@@ -236,6 +251,7 @@ async fn handle_notification(
     user_id: i64,
     account_id: &str,
     fetcher: &dyn JmapChangeFetcher,
+    jmap_ops: &JmapOpsLive,
     notification: PushNotification,
 ) {
     let mut changes = match notification {
@@ -250,7 +266,7 @@ async fn handle_notification(
         .keys()
         .map(|k| k.to_string())
         .collect();
-    if let Err(e) = handle_changes(db, user_id, fetcher, &changed_types).await {
+    if let Err(e) = handle_changes(db, user_id, fetcher, jmap_ops, &changed_types).await {
         warn!(user_id, error = %e, "handle_changes failed for push event");
     }
 }
