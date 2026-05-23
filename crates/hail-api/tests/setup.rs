@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::body::Body;
@@ -48,15 +49,31 @@ async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) 
 fn uuid_like() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    format!("{}_{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn app(state: AppState) -> Router {
-    hail_api::routes::setup::router_with_provisioner(Arc::new(FakeProvisioner))
-        .with_state(state)
+    app_with_provisioner(state, Arc::new(FakeProvisioner::default()))
 }
 
-struct FakeProvisioner;
+fn app_with_provisioner(state: AppState, provisioner: Arc<FakeProvisioner>) -> Router {
+    hail_api::routes::setup::router_with_provisioner(provisioner).with_state(state)
+}
+
+#[derive(Default)]
+struct FakeProvisioner {
+    calls: AtomicUsize,
+}
+
+impl FakeProvisioner {
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
 
 impl UserProvisioner for FakeProvisioner {
     fn provision<'a>(
@@ -66,6 +83,7 @@ impl UserProvisioner for FakeProvisioner {
         _password: SecretString,
         _display_name: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
             Ok(ProvisionedUser {
                 jmap_account_id: format!("acct-{email}"),
@@ -177,22 +195,76 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
 }
 
 #[tokio::test]
-async fn post_setup_admin_twice_returns_409_second_time() {
+async fn post_setup_admin_twice_returns_409_second_time_without_reprovisioning() {
     let (state, _key) = fixture_state(None).await;
+    let provisioner = Arc::new(FakeProvisioner::default());
     let first = post_admin(
-        app(state.clone()),
+        app_with_provisioner(state.clone(), provisioner.clone()),
         r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
     )
     .await;
     assert_eq!(first.status(), StatusCode::CREATED);
+    assert_eq!(provisioner.call_count(), 1);
 
     let second = post_admin(
-        app(state),
+        app_with_provisioner(state, provisioner.clone()),
         r#"{"email":"bob@example.org","password":"correct horse battery","domain":"example.org"}"#,
     )
     .await;
     assert_eq!(second.status(), StatusCode::CONFLICT);
+    assert_eq!(provisioner.call_count(), 1);
     let bytes = second.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_disabled");
+}
+
+#[tokio::test]
+async fn post_setup_admin_returns_409_and_does_not_provision_when_config_admin_set() {
+    let (state, _key) = fixture_state(Some(AdminConfig {
+        email: "operator@example.org".to_string(),
+        password_hash: None,
+        display_name: Some("Operator".to_string()),
+    }))
+    .await;
+    let provisioner = Arc::new(FakeProvisioner::default());
+
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(provisioner.call_count(), 0);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_disabled");
+}
+
+#[tokio::test]
+async fn post_setup_admin_returns_409_and_does_not_provision_when_admin_user_exists() {
+    let (state, _key) = fixture_state(None).await;
+    sqlx::query(
+        "INSERT INTO users (email, jmap_account_id, display_name, is_admin, created_at) \
+         VALUES (?1, ?2, NULL, 1, ?3)",
+    )
+    .bind("admin@example.org")
+    .bind("acct")
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let provisioner = Arc::new(FakeProvisioner::default());
+
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(provisioner.call_count(), 0);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "setup_disabled");
 }
