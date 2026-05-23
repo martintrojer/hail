@@ -95,6 +95,7 @@ pub fn build_router(state: AppState, include_test_stubs: bool) -> Router {
         .merge(open_router) // /healthz, /readyz
         .route("/api/openapi.json", openapi_route)
         .merge(routes::auth::public_router())
+        .merge(routes::setup::router())
         // Protected routes, behind the auth middleware layer.
         .merge(protected)
         .with_state(state)

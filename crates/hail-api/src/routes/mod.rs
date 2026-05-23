@@ -7,6 +7,7 @@ pub mod auth;
 pub mod blobs;
 pub mod contacts;
 pub mod health;
+pub mod setup;
 pub mod threads;
 
 // `test_stub` is gated behind the `__test-stubs` feature so it never

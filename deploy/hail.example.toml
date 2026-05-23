@@ -39,8 +39,8 @@ bind = "0.0.0.0:8080"
 public_url = "https://hail.example.com"
 
 # --- Admin (OPTIONAL) -------------------------------------------------------
-# Set this block to pre-provision the admin user from config (DD-9 in design.md).
-# DELETE THIS BLOCK to enable the first-run wizard at /setup instead.
+# Uncomment AND set to disable the first-run wizard at /setup. Leave commented
+# to enable the wizard. Both paths create the same hail admin DB state (DD-9).
 #
 # `password_hash` is an argon2 hash — never a plaintext password. Generate with:
 #   argon2 "$(pwgen -s 32 1)" -e -id -t 3 -m 16 -p 1
