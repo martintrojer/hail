@@ -284,7 +284,7 @@ async fn select_due_bubble_ups(db: &SqlitePool, now: &str) -> Result<Vec<BubbleU
     })
 }
 
-mod live {
+pub(crate) mod live {
     use std::sync::Arc;
 
     use anyhow::{Context, Result, anyhow};
@@ -518,6 +518,10 @@ mod live {
         }
     }
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "integration tests include this module by path; binary test targets do not call the helper"
+    )]
     pub(crate) fn classify_jmap_set_error_type_for_test(error: &SetErrorType) -> SendSubmitError {
         if is_transient_set_error_type(error) {
             SendSubmitError::transient(error)
@@ -527,13 +531,11 @@ mod live {
     }
 
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "integration tests include this module by path; binary test targets do not call the helper"
+    )]
     pub(crate) fn classify_jmap_submit_error_for_test(err: JmapClientError) -> SendSubmitError {
         classify_jmap_submit_error(err)
     }
 }
-
-#[cfg(test)]
-pub(crate) use live::{classify_jmap_set_error_type_for_test, classify_jmap_submit_error_for_test};
-
-#[allow(unused_imports)]
-pub use live::{LiveBubbleJmapOps, LiveSendSubmitter};

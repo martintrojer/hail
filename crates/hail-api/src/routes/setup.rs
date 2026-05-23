@@ -272,7 +272,10 @@ where
 
     let session_id = match new_session_id() {
         Ok(id) => id,
-        Err(()) => return internal(),
+        Err(err) => {
+            tracing::error!(error = %err, "setup: failed to draw session id from OS RNG");
+            return internal();
+        }
     };
     let user_agent = headers
         .get(header::USER_AGENT)

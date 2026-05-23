@@ -332,10 +332,10 @@ async fn wait_for_health(hail_url: &str) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
     let health_url = format!("{hail_url}/api/health");
     for _ in 0..90 {
-        if let Ok(response) = client.get(&health_url).send().await {
-            if response.status().is_success() {
-                return Ok(());
-            }
+        if let Ok(response) = client.get(&health_url).send().await
+            && response.status().is_success()
+        {
+            return Ok(());
         }
         sleep(Duration::from_millis(500)).await;
     }

@@ -185,10 +185,10 @@ fn trailing_quote_element(html: &str, tag: &str, mut matches: impl FnMut(&str) -
             .and_then(|s| s.trim().strip_prefix(tag))
             .unwrap_or_default();
 
-        if matches(attrs) {
-            if let Some(end) = find_matching_close(rest, tag, open_end + 1) {
-                return visible_text(&rest[end..]).trim().is_empty();
-            }
+        if matches(attrs)
+            && let Some(end) = find_matching_close(rest, tag, open_end + 1)
+        {
+            return visible_text(&rest[end..]).trim().is_empty();
         }
     }
     false
@@ -259,13 +259,13 @@ fn strip_elements_matching(
             .and_then(|s| s.trim().strip_prefix(tag))
             .unwrap_or_default();
 
-        if matches(attrs) {
-            if let Some(end) = find_matching_close(html, tag, open_end + 1) {
-                html.replace_range(start..end, "");
-                stripped = true;
-                cursor = start;
-                continue;
-            }
+        if matches(attrs)
+            && let Some(end) = find_matching_close(html, tag, open_end + 1)
+        {
+            html.replace_range(start..end, "");
+            stripped = true;
+            cursor = start;
+            continue;
         }
         cursor = open_end + 1;
     }

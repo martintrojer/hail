@@ -15,8 +15,8 @@
 //!        * round-tripping the same credentials keeps the server side
 //!          unchanged and the failure mode obvious — if the password
 //!          changes, every old session breaks loudly at the next request.
-//!      We encrypt the bearer at rest via AES-256-GCM (`hail_core::seal`)
-//!      so the SQLite file alone does not yield usable tokens.
+//!          We encrypt the bearer at rest via AES-256-GCM (`hail_core::seal`)
+//!          so the SQLite file alone does not yield usable tokens.
 //!   4. Mint a 256-bit random session id (hex-encoded — `2 * 32 = 64`
 //!      chars — never derived from any user input).
 //!   5. INSERT the row with 30-day expiry, set the cookie, return the
@@ -43,8 +43,8 @@ use std::sync::Arc;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::session::{
-    SESSION_TTL_DAYS, basic_bearer, build_session_cookie,
-    clear_session_cookie, new_session_id, session_cookie_value,
+    SESSION_TTL_DAYS, basic_bearer, build_session_cookie, clear_session_cookie, new_session_id,
+    session_cookie_value,
 };
 use crate::state::AppState;
 
@@ -196,8 +196,8 @@ where
     // user input (design.md §10.1: "opaque id, 256-bit").
     let session_id = match new_session_id() {
         Ok(id) => id,
-        Err(()) => {
-            tracing::error!("login: failed to draw session id from OS RNG");
+        Err(err) => {
+            tracing::error!(error = %err, "login: failed to draw session id from OS RNG");
             return internal();
         }
     };

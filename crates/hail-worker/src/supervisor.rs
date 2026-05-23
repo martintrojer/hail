@@ -25,9 +25,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
-use crate::scheduler::{
-    LiveBubbleJmapOps, LiveSendSubmitter, process_due_bubble_ups, process_due_scheduled_sends,
-};
+use crate::scheduler::live::{LiveBubbleJmapOps, LiveSendSubmitter};
+use crate::scheduler::{process_due_bubble_ups, process_due_scheduled_sends};
 use crate::state::AppState;
 use crate::user::run_user_supervisor;
 
@@ -149,10 +148,10 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
         tasks.abort_all();
         // Drain JoinErrors from the abort so we don't leak handles.
         while let Some(res) = tasks.join_next().await {
-            if let Err(e) = res {
-                if !e.is_cancelled() {
-                    warn!(error = %e, "per-user task error after abort");
-                }
+            if let Err(e) = res
+                && !e.is_cancelled()
+            {
+                warn!(error = %e, "per-user task error after abort");
             }
         }
     }

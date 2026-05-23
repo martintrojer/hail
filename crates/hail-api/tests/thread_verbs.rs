@@ -268,8 +268,7 @@ impl FakeActions {
             .provider_failures
             .lock()
             .expect("provider failures mutex")
-            .iter()
-            .any(|failure| *failure == kind)
+            .contains(&kind)
         {
             Err(ThreadActionError::Provider(format!("{kind:?} failed")))
         } else {
