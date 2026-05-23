@@ -236,6 +236,12 @@ impl ThreadActions for JmapThreadActions {
 #[derive(Debug)]
 pub struct ThreadVerifyError(String);
 
+impl ThreadVerifyError {
+    pub fn provider(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
 #[derive(Debug)]
 pub enum ThreadActionError {
     NotFound,
@@ -603,7 +609,7 @@ async fn mark_thread<A>(
     Extension(user): Extension<AuthUser>,
     Extension(actions): Extension<Arc<A>>,
     Path(thread_id): Path<String>,
-    Json(body): Json<MarkRequest>,
+    body: Result<Json<MarkRequest>, JsonRejection>,
 ) -> Response
 where
     A: ThreadActions,
@@ -611,6 +617,9 @@ where
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
+    let Ok(Json(body)) = body else {
+        return bad_request("invalid_mark");
+    };
     match actions
         .mark(&state, user.jmap_token.clone(), &thread_id, body.read)
         .await
