@@ -65,6 +65,7 @@ impl FakeSendSubmitter {
 impl SendSubmitter for FakeSendSubmitter {
     async fn submit_draft(
         &self,
+        _scheduled_send_id: i64,
         user_id: i64,
         draft_email_id: &str,
     ) -> Result<Option<String>, SendSubmitError> {
@@ -105,6 +106,7 @@ impl BlockingSubmitter {
 impl SendSubmitter for BlockingSubmitter {
     async fn submit_draft(
         &self,
+        _scheduled_send_id: i64,
         user_id: i64,
         draft_email_id: &str,
     ) -> Result<Option<String>, SendSubmitError> {
@@ -239,6 +241,37 @@ async fn insert_session(
     .expect("insert session");
 }
 
+async fn attach_scheduled_send_session(
+    pool: &SqlitePool,
+    scheduled_send_id: i64,
+    session_id: &str,
+    expires_at: DateTime<Utc>,
+) {
+    sqlx::query(
+        "UPDATE scheduled_sends \
+         SET auth_session_id = ?, auth_session_expires_at = ? \
+         WHERE id = ?",
+    )
+    .bind(session_id)
+    .bind(expires_at)
+    .bind(scheduled_send_id)
+    .execute(pool)
+    .await
+    .expect("attach scheduled send session");
+}
+
+async fn insert_scheduled_send_session(
+    pool: &SqlitePool,
+    user_id: i64,
+    scheduled_send_id: i64,
+    id: &str,
+    token: &[u8],
+    expires_at: DateTime<Utc>,
+) {
+    insert_session(pool, user_id, id, token, expires_at, Utc::now()).await;
+    attach_scheduled_send_session(pool, scheduled_send_id, id, expires_at).await;
+}
+
 async fn scheduled_send_state(
     pool: &SqlitePool,
     id: i64,
@@ -354,6 +387,125 @@ async fn live_submitter_decrypt_failure_is_transient() {
         matches!(err, SendSubmitError::Transient(ref message) if message.contains("decrypt JMAP token")),
         "unexpected error: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn scheduled_send_missing_auth_session_marks_auth_required() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id =
+        insert_scheduled_send(&pool, user_id, "draft-no-auth", now - Duration::minutes(1)).await;
+    let submitter = LiveSendSubmitter::new(
+        pool.clone(),
+        "http://127.0.0.1:9/jmap".to_string(),
+        Arc::new(EchoTokenDecryptor),
+    );
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 0);
+    let state = scheduled_send_state(&pool, id).await;
+    assert_eq!(state.0, "auth_required");
+    assert!(
+        state
+            .3
+            .as_deref()
+            .is_some_and(|message| message.contains("auth_required")),
+        "unexpected state: {state:?}"
+    );
+}
+
+#[tokio::test]
+async fn scheduled_send_expired_auth_session_marks_auth_required() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send(
+        &pool,
+        user_id,
+        "draft-expired-auth",
+        now - Duration::minutes(1),
+    )
+    .await;
+    insert_scheduled_send_session(
+        &pool,
+        user_id,
+        id,
+        "expired-send-session",
+        b"expired-token",
+        now - Duration::minutes(1),
+    )
+    .await;
+    let submitter = LiveSendSubmitter::new(
+        pool.clone(),
+        "http://127.0.0.1:9/jmap".to_string(),
+        Arc::new(EchoTokenDecryptor),
+    );
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 0);
+    let state = scheduled_send_state(&pool, id).await;
+    assert_eq!(state.0, "auth_required");
+    assert!(
+        state
+            .3
+            .as_deref()
+            .is_some_and(|message| message.contains("fresh login")),
+        "unexpected state: {state:?}"
+    );
+}
+
+#[tokio::test]
+async fn scheduled_send_uses_recorded_session_not_newest_browser_session() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send(
+        &pool,
+        user_id,
+        "draft-recorded-auth",
+        now - Duration::minutes(1),
+    )
+    .await;
+    insert_scheduled_send_session(
+        &pool,
+        user_id,
+        id,
+        "recorded-send-session",
+        b"recorded-token",
+        now + Duration::hours(1),
+    )
+    .await;
+    insert_session(
+        &pool,
+        user_id,
+        "active-newer-browser-session",
+        b"newer-browser-token",
+        now + Duration::hours(1),
+        now + Duration::minutes(1),
+    )
+    .await;
+    sqlx::query("UPDATE scheduled_sends SET status = 'processing' WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("mark processing");
+    let submitter = LiveSendSubmitter::new(
+        pool.clone(),
+        "http://127.0.0.1:9/jmap".to_string(),
+        Arc::new(EchoTokenDecryptor),
+    );
+
+    let (token, email) = submitter
+        .scheduled_token_and_email(id, user_id, "draft-recorded-auth")
+        .await
+        .expect("scheduled token");
+
+    assert_eq!(token.expose_secret(), "recorded-token");
+    assert_eq!(email, "alice@example.com");
 }
 
 #[test]
