@@ -7,6 +7,7 @@
 //! `cursor` is accepted for API compatibility but intentionally ignored for v1;
 //! responses always return `next_cursor: null`.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -63,7 +64,7 @@ impl MailViewProvider for JmapMailViewProvider {
 
             let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
                 .await
-                .map_err(|err| MailViewError(err.to_string()))?;
+                .map_err(|err| MailViewError::provider(err.to_string()))?;
 
             let mut request = session.client().build();
             request
@@ -76,7 +77,7 @@ impl MailViewProvider for JmapMailViewProvider {
             let mut query = request
                 .send_query_email()
                 .await
-                .map_err(|err| MailViewError(err.to_string()))?;
+                .map_err(|err| MailViewError::provider(err.to_string()))?;
             let ids = query.take_ids();
             if ids.is_empty() {
                 return Ok(Vec::new());
@@ -96,25 +97,32 @@ impl MailViewProvider for JmapMailViewProvider {
             let mut response = request
                 .send_get_email()
                 .await
-                .map_err(|err| MailViewError(err.to_string()))?;
+                .map_err(|err| MailViewError::provider(err.to_string()))?;
 
             let classification = view.classification();
-            Ok(response
+            response
                 .take_list()
                 .into_iter()
-                .map(|email| MailViewItem {
-                    thread_id: email.thread_id().unwrap_or_default().to_string(),
-                    email_id: email.id().unwrap_or_default().to_string(),
-                    from: format_from(email.from()),
-                    subject: email.subject().unwrap_or_default().to_string(),
-                    preview: email.preview().unwrap_or_default().to_string(),
-                    received_at: email
-                        .received_at()
-                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
-                    unread: !email.keywords().into_iter().any(|kw| kw == "$seen"),
-                    classification,
+                .map(|email| {
+                    let thread_id = required_jmap_field(email.thread_id(), "threadId")
+                        .map_err(|err| MailViewError::malformed_email(err.field))?;
+                    let email_id = required_jmap_field(email.id(), "id")
+                        .map_err(|err| MailViewError::malformed_email(err.field))?;
+
+                    Ok(MailViewItem {
+                        thread_id,
+                        email_id,
+                        from: format_from(email.from()),
+                        subject: email.subject().unwrap_or_default().to_string(),
+                        preview: email.preview().unwrap_or_default().to_string(),
+                        received_at: email
+                            .received_at()
+                            .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                        unread: !email.keywords().into_iter().any(|kw| kw == "$seen"),
+                        classification,
+                    })
                 })
-                .collect())
+                .collect()
         })
     }
 }
@@ -122,8 +130,75 @@ impl MailViewProvider for JmapMailViewProvider {
 #[derive(Debug)]
 pub struct MailViewError(String);
 
+impl MailViewError {
+    pub fn provider(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+
+    fn malformed_email(field: &'static str) -> Self {
+        Self(format!("JMAP Email missing required {field}"))
+    }
+}
+
 #[derive(Debug)]
 pub struct SearchError(String);
+
+impl SearchError {
+    pub fn provider(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+
+    fn malformed_email(field: &'static str) -> Self {
+        Self(format!("JMAP Email missing required {field}"))
+    }
+}
+
+#[derive(Debug)]
+struct MissingJmapEmailField {
+    field: &'static str,
+}
+
+fn required_jmap_field<T>(
+    value: Option<T>,
+    field: &'static str,
+) -> Result<String, MissingJmapEmailField>
+where
+    T: fmt::Display,
+{
+    let Some(value) = value else {
+        return Err(MissingJmapEmailField { field });
+    };
+    let value = value.to_string();
+    if value.is_empty() {
+        return Err(MissingJmapEmailField { field });
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_jmap_field;
+
+    #[test]
+    fn required_jmap_field_rejects_missing_and_empty_values() {
+        assert_eq!(
+            required_jmap_field::<&str>(None, "id").unwrap_err().field,
+            "id"
+        );
+        assert_eq!(
+            required_jmap_field(Some(""), "threadId").unwrap_err().field,
+            "threadId"
+        );
+    }
+
+    #[test]
+    fn required_jmap_field_returns_non_empty_value() {
+        assert_eq!(
+            required_jmap_field(Some("email-1"), "id").unwrap(),
+            "email-1"
+        );
+    }
+}
 
 pub struct JmapSearchProvider;
 
@@ -142,7 +217,7 @@ impl SearchProvider for JmapSearchProvider {
 
             let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
                 .await
-                .map_err(|err| SearchError(err.to_string()))?;
+                .map_err(|err| SearchError::provider(err.to_string()))?;
 
             let mut request = session.client().build();
             request
@@ -153,7 +228,7 @@ impl SearchProvider for JmapSearchProvider {
             let mut query = request
                 .send_query_email()
                 .await
-                .map_err(|err| SearchError(err.to_string()))?;
+                .map_err(|err| SearchError::provider(err.to_string()))?;
             let ids = query.take_ids();
             if ids.is_empty() {
                 return Ok(Vec::new());
@@ -172,22 +247,29 @@ impl SearchProvider for JmapSearchProvider {
             let mut response = request
                 .send_get_email()
                 .await
-                .map_err(|err| SearchError(err.to_string()))?;
+                .map_err(|err| SearchError::provider(err.to_string()))?;
 
-            Ok(response
+            response
                 .take_list()
                 .into_iter()
-                .map(|email| MailSearchResult {
-                    thread_id: email.thread_id().unwrap_or_default().to_string(),
-                    email_id: email.id().unwrap_or_default().to_string(),
-                    from: format_from(email.from()),
-                    subject: email.subject().unwrap_or_default().to_string(),
-                    preview: email.preview().unwrap_or_default().to_string(),
-                    received_at: email
-                        .received_at()
-                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                .map(|email| {
+                    let thread_id = required_jmap_field(email.thread_id(), "threadId")
+                        .map_err(|err| SearchError::malformed_email(err.field))?;
+                    let email_id = required_jmap_field(email.id(), "id")
+                        .map_err(|err| SearchError::malformed_email(err.field))?;
+
+                    Ok(MailSearchResult {
+                        thread_id,
+                        email_id,
+                        from: format_from(email.from()),
+                        subject: email.subject().unwrap_or_default().to_string(),
+                        preview: email.preview().unwrap_or_default().to_string(),
+                        received_at: email
+                            .received_at()
+                            .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                    })
                 })
-                .collect())
+                .collect()
         })
     }
 }
