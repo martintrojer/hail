@@ -12,7 +12,9 @@ use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::changes::{JmapChangeFetcher, TRACKED_TYPE_STATES, handle_changes, upsert_cursor};
+use crate::changes::{
+    JmapChangeFetcher, TRACKED_TYPE_STATES, handle_changes_strict, upsert_cursor,
+};
 use crate::screener::JmapOps;
 
 pub async fn catchup_user(
@@ -31,7 +33,7 @@ pub async fn catchup_user(
         if cursor_exists(db, user_id, type_state).await? {
             let mut types = BTreeSet::new();
             types.insert((*type_state).to_string());
-            let changes = handle_changes(db, user_id, fetcher, jmap_ops, &types).await?;
+            let changes = handle_changes_strict(db, user_id, fetcher, jmap_ops, &types).await?;
             info!(user_id, type_state = ?type_state, changes, "catchup: applied");
         } else {
             let state = fetcher.current_state(type_state).await?;
@@ -45,13 +47,12 @@ pub async fn catchup_user(
 }
 
 async fn cursor_exists(db: &SqlitePool, user_id: i64, type_state: &str) -> Result<bool> {
-    let exists: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM jmap_state WHERE user_id = ? AND type_state = ?",
-    )
-    .bind(user_id)
-    .bind(type_state)
-    .fetch_optional(db)
-    .await
-    .context("select jmap_state existence")?;
+    let exists: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM jmap_state WHERE user_id = ? AND type_state = ?")
+            .bind(user_id)
+            .bind(type_state)
+            .fetch_optional(db)
+            .await
+            .context("select jmap_state existence")?;
     Ok(exists.is_some())
 }

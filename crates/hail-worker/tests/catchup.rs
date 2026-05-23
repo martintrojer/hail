@@ -10,15 +10,17 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
+#[path = "../src/catchup.rs"]
+mod catchup;
 #[path = "../src/changes.rs"]
 mod changes;
 #[path = "../src/screener.rs"]
 mod screener;
-#[path = "../src/catchup.rs"]
-mod catchup;
 
 use catchup::catchup_user;
-use changes::{EmailChanges, EmailEnvelope, JmapChangeFetcher, TRACKED_TYPE_STATES, load_cursor, upsert_cursor};
+use changes::{
+    EmailChanges, EmailEnvelope, JmapChangeFetcher, TRACKED_TYPE_STATES, load_cursor, upsert_cursor,
+};
 use screener::{JmapOps, RouteError};
 
 #[derive(Clone)]
@@ -83,6 +85,23 @@ impl JmapChangeFetcher for BlockingFetcher {
     }
 }
 
+/// Fetcher that fails every replay fetch. Used to ensure catch-up surfaces
+/// persisted-cursor replay errors instead of silently continuing to EventSource.
+struct FailingFetchFetcher {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl JmapChangeFetcher for FailingFetchFetcher {
+    async fn current_state(&self, _type_state: &str) -> anyhow::Result<String> {
+        Ok("unused".to_string())
+    }
+
+    async fn fetch(&self, _type_state: &str, _since_cursor: &str) -> anyhow::Result<EmailChanges> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        anyhow::bail!("scripted fetch failure")
+    }
+}
 
 struct NoopJmapOps;
 
@@ -115,7 +134,9 @@ fn fresh_db_url() -> (String, PathBuf) {
         .as_nanos();
     let pid = std::process::id();
     let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-    path.push(format!("hail-worker-catchup-test-{pid}-{nanos}-{counter}.sqlite"));
+    path.push(format!(
+        "hail-worker-catchup-test-{pid}-{nanos}-{counter}.sqlite"
+    ));
     let url = format!("sqlite://{}", path.display());
     (url, path)
 }
@@ -137,15 +158,13 @@ async fn setup_db() -> (SqlitePool, TempDb, i64) {
     let pool = hail_db::connect(&url).await.expect("connect");
     hail_db::migrate(&pool).await.expect("migrate");
 
-    sqlx::query(
-        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind("alice@example.com")
-    .bind("acct-alice")
-    .bind("2026-01-01T00:00:00Z")
-    .execute(&pool)
-    .await
-    .expect("insert user");
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("alice@example.com")
+        .bind("acct-alice")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("insert user");
     let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
         .bind("alice@example.com")
         .fetch_one(&pool)
@@ -178,14 +197,22 @@ async fn empty_cursor_fetches_current_state_and_persists_zero_changes() {
     let (pool, _guard, user_id) = setup_db().await;
     let fetcher = fake_with(EmailChanges::default());
 
-    catchup_user(&pool, user_id, &fetcher, &NoopJmapOps, CancellationToken::new())
-        .await
-        .expect("catchup");
+    catchup_user(
+        &pool,
+        user_id,
+        &fetcher,
+        &NoopJmapOps,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("catchup");
 
     assert_eq!(fetcher.current_state_calls.load(Ordering::SeqCst), 4);
     assert_eq!(fetcher.fetch_calls.load(Ordering::SeqCst), 0);
     for type_state in TRACKED_TYPE_STATES {
-        let stored = load_cursor(&pool, user_id, type_state).await.expect("cursor");
+        let stored = load_cursor(&pool, user_id, type_state)
+            .await
+            .expect("cursor");
         assert_eq!(stored, format!("{type_state}-current"));
     }
 }
@@ -203,15 +230,59 @@ async fn stored_cursor_matches_server_empty_diff_no_work() {
         ..Default::default()
     });
 
-    catchup_user(&pool, user_id, &fetcher, &NoopJmapOps, CancellationToken::new())
-        .await
-        .expect("catchup");
+    catchup_user(
+        &pool,
+        user_id,
+        &fetcher,
+        &NoopJmapOps,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("catchup");
 
     assert_eq!(fetcher.current_state_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fetcher.fetch_calls.load(Ordering::SeqCst), 4);
     for type_state in TRACKED_TYPE_STATES {
-        let stored = load_cursor(&pool, user_id, type_state).await.expect("cursor");
+        let stored = load_cursor(&pool, user_id, type_state)
+            .await
+            .expect("cursor");
         assert_eq!(stored, "state-1");
+    }
+}
+
+#[tokio::test]
+async fn stored_cursor_fetch_failure_aborts_catchup_without_advancing_cursor() {
+    let (pool, _guard, user_id) = setup_db().await;
+    for type_state in TRACKED_TYPE_STATES {
+        upsert_cursor(&pool, user_id, type_state, "state-before-error")
+            .await
+            .expect("seed");
+    }
+    let fetcher = FailingFetchFetcher {
+        calls: AtomicUsize::new(0),
+    };
+
+    let err = catchup_user(
+        &pool,
+        user_id,
+        &fetcher,
+        &NoopJmapOps,
+        CancellationToken::new(),
+    )
+    .await
+    .expect_err("catchup must surface replay fetch failures");
+
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        err.to_string()
+            .contains("fetch Email changes during catchup"),
+        "unexpected error context: {err:#}"
+    );
+    for type_state in TRACKED_TYPE_STATES {
+        let stored = load_cursor(&pool, user_id, type_state)
+            .await
+            .expect("cursor");
+        assert_eq!(stored, "state-before-error");
     }
 }
 
@@ -230,10 +301,19 @@ async fn stored_cursor_lagging_applies_n_envelopes_and_advances_cursor() {
             changes: EmailChanges {
                 new_state: "state-new".to_string(),
                 created: vec![
-                    EmailEnvelope { id: "e1".to_string(), ..Default::default() },
-                    EmailEnvelope { id: "e2".to_string(), ..Default::default() },
+                    EmailEnvelope {
+                        id: "e1".to_string(),
+                        ..Default::default()
+                    },
+                    EmailEnvelope {
+                        id: "e2".to_string(),
+                        ..Default::default()
+                    },
                 ],
-                updated: vec![EmailEnvelope { id: "e3".to_string(), ..Default::default() }],
+                updated: vec![EmailEnvelope {
+                    id: "e3".to_string(),
+                    ..Default::default()
+                }],
                 destroyed: vec![],
             },
         },
@@ -254,9 +334,15 @@ async fn stored_cursor_lagging_applies_n_envelopes_and_advances_cursor() {
         gate: None,
     };
 
-    catchup_user(&pool, user_id, &fetcher, &NoopJmapOps, CancellationToken::new())
-        .await
-        .expect("catchup");
+    catchup_user(
+        &pool,
+        user_id,
+        &fetcher,
+        &NoopJmapOps,
+        CancellationToken::new(),
+    )
+    .await
+    .expect("catchup");
 
     assert_eq!(fetcher.fetch_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fetcher.current_state_calls.load(Ordering::SeqCst), 3);

@@ -40,7 +40,7 @@ mod screener;
 use backoff::Backoff;
 use changes::{
     EmailChanges, EmailEnvelope, JmapChangeFetcher, TRACKED_TYPE_STATES, handle_changes,
-    load_cursor, upsert_cursor,
+    handle_changes_strict, load_cursor, upsert_cursor,
 };
 use screener::{JmapOps, RouteError};
 
@@ -57,11 +57,7 @@ impl JmapChangeFetcher for FakeFetcher {
         Ok(self.response.new_state.clone())
     }
 
-    async fn fetch(
-        &self,
-        _type_state: &str,
-        _since_cursor: &str,
-    ) -> anyhow::Result<EmailChanges> {
+    async fn fetch(&self, _type_state: &str, _since_cursor: &str) -> anyhow::Result<EmailChanges> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.response.clone())
     }
@@ -88,6 +84,20 @@ impl JmapOps for NoopJmapOps {
     }
 }
 
+/// Fake fetcher that returns an error for every fetch.
+struct FailingFetcher;
+
+#[async_trait]
+impl JmapChangeFetcher for FailingFetcher {
+    async fn current_state(&self, _type_state: &str) -> anyhow::Result<String> {
+        Ok("unused".to_string())
+    }
+
+    async fn fetch(&self, _type_state: &str, _since_cursor: &str) -> anyhow::Result<EmailChanges> {
+        anyhow::bail!("scripted fetch failure")
+    }
+}
+
 /// Fake fetcher that returns an empty round (no ids, blank cursor).
 struct EmptyFetcher;
 
@@ -97,11 +107,7 @@ impl JmapChangeFetcher for EmptyFetcher {
         Ok("state-after-empty".to_string())
     }
 
-    async fn fetch(
-        &self,
-        _type_state: &str,
-        _since_cursor: &str,
-    ) -> anyhow::Result<EmailChanges> {
+    async fn fetch(&self, _type_state: &str, _since_cursor: &str) -> anyhow::Result<EmailChanges> {
         Ok(EmailChanges {
             new_state: "state-after-empty".to_string(),
             created: vec![],
@@ -145,15 +151,13 @@ async fn setup_db() -> (SqlitePool, TempDb, i64) {
     let pool = hail_db::connect(&url).await.expect("connect");
     hail_db::migrate(&pool).await.expect("migrate");
 
-    sqlx::query(
-        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind("alice@example.com")
-    .bind("acct-alice")
-    .bind("2026-01-01T00:00:00Z")
-    .execute(&pool)
-    .await
-    .expect("insert user");
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("alice@example.com")
+        .bind("acct-alice")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("insert user");
     let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
         .bind("alice@example.com")
         .fetch_one(&pool)
@@ -223,6 +227,52 @@ async fn handle_changes_is_idempotent_on_empty_round() {
 }
 
 #[tokio::test]
+async fn handle_changes_logs_fetch_errors_without_advancing_cursor() {
+    let (pool, _guard, user_id) = setup_db().await;
+    upsert_cursor(&pool, user_id, "Email", "state-before-error")
+        .await
+        .expect("seed");
+
+    let mut types = BTreeSet::new();
+    types.insert("Email".to_string());
+
+    let applied = handle_changes(&pool, user_id, &FailingFetcher, &NoopJmapOps, &types)
+        .await
+        .expect("non-strict handle_changes keeps live events resilient");
+
+    assert_eq!(applied, 0);
+    let stored = load_cursor(&pool, user_id, "Email")
+        .await
+        .expect("load_cursor");
+    assert_eq!(stored, "state-before-error");
+}
+
+#[tokio::test]
+async fn handle_changes_strict_returns_fetch_errors_without_advancing_cursor() {
+    let (pool, _guard, user_id) = setup_db().await;
+    upsert_cursor(&pool, user_id, "Email", "state-before-error")
+        .await
+        .expect("seed");
+
+    let mut types = BTreeSet::new();
+    types.insert("Email".to_string());
+
+    let err = handle_changes_strict(&pool, user_id, &FailingFetcher, &NoopJmapOps, &types)
+        .await
+        .expect_err("strict catchup path must surface fetch failures");
+
+    assert!(
+        err.to_string()
+            .contains("fetch Email changes during catchup"),
+        "unexpected error context: {err:#}"
+    );
+    let stored = load_cursor(&pool, user_id, "Email")
+        .await
+        .expect("load_cursor");
+    assert_eq!(stored, "state-before-error");
+}
+
+#[tokio::test]
 async fn handle_changes_skips_untracked_type_states() {
     let (pool, _guard, user_id) = setup_db().await;
 
@@ -252,7 +302,10 @@ async fn handle_changes_skips_untracked_type_states() {
     let stored = load_cursor(&pool, user_id, "Identity")
         .await
         .expect("load_cursor");
-    assert_eq!(stored, "", "no cursor should be written for untracked types");
+    assert_eq!(
+        stored, "",
+        "no cursor should be written for untracked types"
+    );
 }
 
 #[tokio::test]
