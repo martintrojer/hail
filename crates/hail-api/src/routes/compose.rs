@@ -8,7 +8,10 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::sanitize_and_strip_trackers;
 use hail_jmap::jmap_client::core::set::SetObject;
@@ -261,6 +264,11 @@ where
     Router::new()
         .route("/api/compose", post(compose::<C>))
         .route("/api/threads/{thread_id}/reply", post(reply::<C>))
+        .route("/api/scheduled-sends", get(list_scheduled_sends))
+        .route(
+            "/api/scheduled-sends/{scheduled_send_id}",
+            get(get_scheduled_send).delete(cancel_scheduled_send),
+        )
         .layer(Extension(composer))
 }
 
@@ -295,6 +303,21 @@ enum ComposeResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         submission_id: Option<String>,
     },
+}
+
+#[derive(Debug, Serialize)]
+struct ScheduledSendResponse {
+    id: i64,
+    draft_email_id: String,
+    send_at: DateTime<Utc>,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claimed_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sent_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    created_at: DateTime<Utc>,
 }
 
 async fn compose<C>(
@@ -353,6 +376,134 @@ where
         Err(error) => return bad_request(error),
     };
     create_and_maybe_send(&state, &user, composer.as_ref(), message, send_at).await
+}
+
+async fn list_scheduled_sends(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    match sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            DateTime<Utc>,
+            String,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+            Option<String>,
+            DateTime<Utc>,
+        ),
+    >(
+        "SELECT id, draft_email_id, send_at, status, claimed_at, sent_at, error, created_at \
+         FROM scheduled_sends \
+         WHERE user_id = ? \
+         ORDER BY send_at ASC, id ASC",
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(scheduled_send_response_from_row)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(err) => {
+            tracing::warn!(user_id = user.id, error = %err, "scheduled send list failed");
+            internal()
+        }
+    }
+}
+
+async fn get_scheduled_send(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(scheduled_send_id): Path<i64>,
+) -> Response {
+    match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
+        Ok(Some(row)) => Json(row).into_response(),
+        Ok(None) => not_found(),
+        Err(err) => {
+            tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup failed");
+            internal()
+        }
+    }
+}
+
+async fn cancel_scheduled_send(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(scheduled_send_id): Path<i64>,
+) -> Response {
+    let row = match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(err) => {
+            tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup failed");
+            return internal();
+        }
+    };
+
+    match row.status.as_str() {
+        "pending" => {}
+        "cancelled" => return Json(row).into_response(),
+        _ => return conflict("scheduled_send_not_cancellable"),
+    }
+
+    let now = Utc::now();
+    let result = match sqlx::query(
+        "UPDATE scheduled_sends \
+         SET status = 'cancelled', error = NULL \
+         WHERE id = ? AND user_id = ? AND status = 'pending'",
+    )
+    .bind(scheduled_send_id)
+    .bind(user.id)
+    .execute(&state.db)
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send cancel failed");
+            return internal();
+        }
+    };
+
+    if result.rows_affected() == 0 {
+        return match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
+            Ok(Some(row)) if row.status == "cancelled" => Json(row).into_response(),
+            Ok(Some(_)) => conflict("scheduled_send_not_cancellable"),
+            Ok(None) => not_found(),
+            Err(err) => {
+                tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup after cancel race failed");
+                internal()
+            }
+        };
+    }
+
+    if let Err(err) = audit::record(
+        &state.db,
+        user.id,
+        "compose.schedule_cancel",
+        &serde_json::json!({
+            "scheduled_send_id": scheduled_send_id,
+            "cancelled_at": now,
+        }),
+    )
+    .await
+    {
+        tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "audit log write failed");
+    }
+
+    match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
+        Ok(Some(row)) => Json(row).into_response(),
+        Ok(None) => not_found(),
+        Err(err) => {
+            tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup after cancel failed");
+            internal()
+        }
+    }
 }
 
 async fn create_and_maybe_send<C>(
@@ -644,6 +795,60 @@ async fn insert_scheduled_send(
     .await
 }
 
+async fn scheduled_send_for_user(
+    state: &AppState,
+    user_id: i64,
+    scheduled_send_id: i64,
+) -> Result<Option<ScheduledSendResponse>, sqlx::Error> {
+    sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            DateTime<Utc>,
+            String,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+            Option<String>,
+            DateTime<Utc>,
+        ),
+    >(
+        "SELECT id, draft_email_id, send_at, status, claimed_at, sent_at, error, created_at \
+         FROM scheduled_sends \
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(scheduled_send_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map(|row| row.map(scheduled_send_response_from_row))
+}
+
+fn scheduled_send_response_from_row(
+    row: (
+        i64,
+        String,
+        DateTime<Utc>,
+        String,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+        Option<String>,
+        DateTime<Utc>,
+    ),
+) -> ScheduledSendResponse {
+    let (id, draft_email_id, send_at, status, claimed_at, sent_at, error, created_at) = row;
+    ScheduledSendResponse {
+        id,
+        draft_email_id,
+        send_at,
+        status,
+        claimed_at,
+        sent_at,
+        error,
+        created_at,
+    }
+}
+
 async fn login(state: &AppState, token: SecretString) -> Result<hail_jmap::Session, ComposeError> {
     hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
         .await
@@ -731,6 +936,15 @@ fn not_found() -> Response {
         StatusCode::NOT_FOUND,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"not_found"}"#,
+    )
+        .into_response()
+}
+
+fn conflict(error: &'static str) -> Response {
+    (
+        StatusCode::CONFLICT,
+        [(header::CONTENT_TYPE, "application/json")],
+        format!(r#"{{"error":"{error}"}}"#),
     )
         .into_response()
 }

@@ -334,6 +334,241 @@ async fn compose_send_later_inserts_pending_row_without_submit() {
 }
 
 #[tokio::test]
+async fn scheduled_send_list_and_get_are_scoped_to_user() {
+    let (state, key) = fixture_state().await;
+    let alice_sid = seed_session(&state, &key, "alice@example.org").await;
+    let _bob_sid = seed_session(&state, &key, "bob@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    let alice_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("alice@example.org")
+        .fetch_one(&state.db)
+        .await
+        .expect("alice id");
+    let bob_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("bob@example.org")
+        .fetch_one(&state.db)
+        .await
+        .expect("bob id");
+    let now = Utc::now();
+    let alice_later = now + Duration::hours(3);
+    let alice_soon = now + Duration::hours(1);
+    let bob_send_at = now + Duration::hours(2);
+    let alice_later_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
+         VALUES (?, 'draft-alice-later', ?, 'pending', ?) RETURNING id",
+    )
+    .bind(alice_id)
+    .bind(alice_later)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert alice later");
+    let alice_soon_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
+         VALUES (?, 'draft-alice-soon', ?, 'failed', ?) RETURNING id",
+    )
+    .bind(alice_id)
+    .bind(alice_soon)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert alice soon");
+    let bob_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
+         VALUES (?, 'draft-bob', ?, 'pending', ?) RETURNING id",
+    )
+    .bind(bob_id)
+    .bind(bob_send_at)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert bob");
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::GET,
+        "/api/scheduled-sends",
+        Some(&alice_sid),
+        false,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let rows = json.as_array().expect("array response");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["id"], alice_soon_id);
+    assert_eq!(rows[0]["draft_email_id"], "draft-alice-soon");
+    assert_eq!(rows[0]["status"], "failed");
+    assert_eq!(rows[1]["id"], alice_later_id);
+    assert_eq!(rows[1]["draft_email_id"], "draft-alice-later");
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::GET,
+        &format!("/api/scheduled-sends/{alice_later_id}"),
+        Some(&alice_sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["id"], alice_later_id);
+    assert_eq!(json["send_at"], serde_json::to_value(alice_later).unwrap());
+
+    let resp = request(
+        state,
+        composer,
+        Method::GET,
+        &format!("/api/scheduled-sends/{bob_id}"),
+        Some(&alice_sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn scheduled_send_cancel_marks_pending_row_cancelled_for_owner() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    let send_at = Utc::now() + Duration::hours(2);
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(compose_body(Some(send_at))),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let scheduled_send_id = json_body(resp).await["scheduled_send_id"]
+        .as_i64()
+        .expect("scheduled id");
+
+    let resp = request(
+        state.clone(),
+        composer,
+        Method::DELETE,
+        &format!("/api/scheduled-sends/{scheduled_send_id}"),
+        Some(&sid),
+        true,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["id"], scheduled_send_id);
+    assert_eq!(json["status"], "cancelled");
+    assert_eq!(json["draft_email_id"], "draft-1");
+
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT status, error FROM scheduled_sends WHERE id = ?")
+            .bind(scheduled_send_id)
+            .fetch_one(&state.db)
+            .await
+            .expect("scheduled row");
+    assert_eq!(row, ("cancelled".to_string(), None));
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_log WHERE action = 'compose.schedule_cancel' AND user_id = (SELECT id FROM users WHERE email = 'alice@example.org')",
+    )
+    .fetch_one(&state.db)
+    .await
+    .expect("audit count");
+    assert_eq!(audit_count, 1);
+}
+
+#[tokio::test]
+async fn scheduled_send_cancel_rejects_non_pending_and_non_owner_rows() {
+    let (state, key) = fixture_state().await;
+    let alice_sid = seed_session(&state, &key, "alice@example.org").await;
+    let bob_sid = seed_session(&state, &key, "bob@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    let alice_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("alice@example.org")
+        .fetch_one(&state.db)
+        .await
+        .expect("alice id");
+    let bob_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("bob@example.org")
+        .fetch_one(&state.db)
+        .await
+        .expect("bob id");
+    let now = Utc::now();
+    let sent_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, sent_at, created_at) \
+         VALUES (?, 'draft-sent', ?, 'sent', ?, ?) RETURNING id",
+    )
+    .bind(alice_id)
+    .bind(now - Duration::minutes(1))
+    .bind(now)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert sent");
+    let bob_pending_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
+         VALUES (?, 'draft-bob', ?, 'pending', ?) RETURNING id",
+    )
+    .bind(bob_id)
+    .bind(now + Duration::hours(2))
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert bob pending");
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::DELETE,
+        &format!("/api/scheduled-sends/{sent_id}"),
+        Some(&alice_sid),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "scheduled_send_not_cancellable");
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::DELETE,
+        &format!("/api/scheduled-sends/{bob_pending_id}"),
+        Some(&alice_sid),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = request(
+        state,
+        composer,
+        Method::DELETE,
+        &format!("/api/scheduled-sends/{bob_pending_id}"),
+        Some(&bob_sid),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "cancelled");
+}
+
+#[tokio::test]
 async fn compose_rejects_non_future_send_at_without_creating_draft() {
     let (state, key) = fixture_state().await;
     let sid = seed_session(&state, &key, "alice@example.org").await;
