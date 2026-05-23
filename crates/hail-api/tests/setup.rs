@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -95,10 +96,18 @@ fn session_cookie_value(set_cookie: &str) -> String {
     value.to_string()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProvisionCall {
+    email: String,
+    display_name: Option<String>,
+}
+
 #[derive(Default)]
 struct FakeProvisioner {
     calls: AtomicUsize,
     delay: Option<Duration>,
+    fail: bool,
+    observed: Mutex<Vec<ProvisionCall>>,
 }
 
 impl FakeProvisioner {
@@ -106,11 +115,26 @@ impl FakeProvisioner {
         Self {
             calls: AtomicUsize::new(0),
             delay: Some(delay),
+            fail: false,
+            observed: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn failing() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            delay: None,
+            fail: true,
+            observed: Mutex::new(Vec::new()),
         }
     }
 
     fn call_count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    fn observed_calls(&self) -> Vec<ProvisionCall> {
+        self.observed.lock().expect("observed calls").clone()
     }
 }
 
@@ -123,9 +147,21 @@ impl UserProvisioner for FakeProvisioner {
         _display_name: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.observed
+            .lock()
+            .expect("observed calls")
+            .push(ProvisionCall {
+                email: email.to_string(),
+                display_name: _display_name.map(str::to_string),
+            });
         Box::pin(async move {
             if let Some(delay) = self.delay {
                 tokio::time::sleep(delay).await;
+            }
+            if self.fail {
+                return Err(ProvisionError::Management(
+                    "fake provision failure".to_string(),
+                ));
             }
             Ok(ProvisionedUser {
                 jmap_account_id: format!("acct-{email}"),
@@ -464,4 +500,152 @@ async fn post_setup_admin_rejects_invalid_email_or_short_password() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "invalid_input");
     assert_eq!(json["field"], "password");
+}
+
+#[tokio::test]
+async fn post_setup_admin_rejects_invalid_domain() {
+    let invalid_domains = [
+        "",
+        "localhost",
+        ".example.org",
+        "example.org.",
+        "exa mple.org",
+    ];
+
+    for domain in invalid_domains {
+        let (state, _key) = fixture_state(None).await;
+        let provisioner = Arc::new(FakeProvisioner::default());
+        let body = serde_json::json!({
+            "email": "alice@example.org",
+            "password": "correct horse battery",
+            "domain": domain,
+        })
+        .to_string();
+
+        let resp = post_admin(app_with_provisioner(state, provisioner.clone()), &body).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "domain={domain:?}");
+        assert_eq!(provisioner.call_count(), 0, "domain={domain:?}");
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"], "invalid_input", "domain={domain:?}");
+        assert_eq!(json["field"], "domain", "domain={domain:?}");
+    }
+}
+
+#[tokio::test]
+async fn post_setup_admin_rejects_email_domain_mismatch() {
+    let (state, _key) = fixture_state(None).await;
+    let provisioner = Arc::new(FakeProvisioner::default());
+
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.net"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(provisioner.call_count(), 0);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "invalid_input");
+    assert_eq!(json["field"], "email");
+}
+
+#[tokio::test]
+async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
+    let (trim_state, _key) = fixture_state(None).await;
+    let trim_db = trim_state.db.clone();
+    let trim_provisioner = Arc::new(FakeProvisioner::default());
+    let trim_resp = post_admin(
+        app_with_provisioner(trim_state, trim_provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"  Alice Example  ","domain":"example.org"}"#,
+    )
+    .await;
+    assert_eq!(trim_resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        trim_provisioner.observed_calls(),
+        vec![ProvisionCall {
+            email: "alice@example.org".to_string(),
+            display_name: Some("Alice Example".to_string()),
+        }]
+    );
+    let stored_display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM users WHERE email = ?1")
+            .bind("alice@example.org")
+            .fetch_one(&trim_db)
+            .await
+            .unwrap();
+    assert_eq!(stored_display_name.as_deref(), Some("Alice Example"));
+
+    let (empty_state, _key) = fixture_state(None).await;
+    let empty_db = empty_state.db.clone();
+    let empty_provisioner = Arc::new(FakeProvisioner::default());
+    let empty_resp = post_admin(
+        app_with_provisioner(empty_state, empty_provisioner.clone()),
+        r#"{"email":"bob@example.org","password":"correct horse battery","display_name":"   ","domain":"example.org"}"#,
+    )
+    .await;
+    assert_eq!(empty_resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        empty_provisioner.observed_calls(),
+        vec![ProvisionCall {
+            email: "bob@example.org".to_string(),
+            display_name: None,
+        }]
+    );
+    let stored_display_name: Option<String> =
+        sqlx::query_scalar("SELECT display_name FROM users WHERE email = ?1")
+            .bind("bob@example.org")
+            .fetch_one(&empty_db)
+            .await
+            .unwrap();
+    assert_eq!(stored_display_name, None);
+}
+
+#[tokio::test]
+async fn post_setup_admin_passes_lowercased_email_to_provisioner() {
+    let (state, _key) = fixture_state(None).await;
+    let provisioner = Arc::new(FakeProvisioner::default());
+
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"  Alice@Example.ORG  ","password":"correct horse battery","domain":" EXAMPLE.org "}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        provisioner.observed_calls(),
+        vec![ProvisionCall {
+            email: "alice@example.org".to_string(),
+            display_name: None,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn post_setup_admin_failing_provisioner_leaves_no_users_or_sessions() {
+    let (state, _key) = fixture_state(None).await;
+    let db = state.db.clone();
+    let provisioner = Arc::new(FakeProvisioner::failing());
+
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(provisioner.call_count(), 1);
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(user_count, 0);
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(session_count, 0);
 }
