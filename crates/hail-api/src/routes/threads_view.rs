@@ -14,7 +14,9 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use chrono::{DateTime, Utc};
-use hail_core::mail_render::{sanitize_and_strip_trackers, strip_quoted_history};
+use hail_core::mail_render::{
+    plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history,
+};
 use secrecy::SecretString;
 use serde::Serialize;
 
@@ -108,10 +110,12 @@ impl ThreadAssembler for JmapThreadAssembler {
                 hail_jmap::jmap_client::email::Property::To,
                 hail_jmap::jmap_client::email::Property::ReceivedAt,
                 hail_jmap::jmap_client::email::Property::HtmlBody,
+                hail_jmap::jmap_client::email::Property::TextBody,
                 hail_jmap::jmap_client::email::Property::BodyValues,
                 hail_jmap::jmap_client::email::Property::Preview,
             ]);
             get_email.arguments().fetch_html_body_values(true);
+            get_email.arguments().fetch_text_body_values(true);
             let mut email_response = email_request
                 .send_get_email()
                 .await
@@ -140,6 +144,7 @@ impl ThreadAssembler for JmapThreadAssembler {
                         .and_then(|ts| DateTime::<Utc>::from_timestamp(ts, 0)),
                     subject: email.subject().unwrap_or_default().to_string(),
                     html: html_body_from_email(&email),
+                    text: text_body_from_email(&email),
                     preview: email.preview().unwrap_or_default().to_string(),
                 });
             }
@@ -175,6 +180,7 @@ pub struct AssembledMessage {
     pub received_at: Option<DateTime<Utc>>,
     pub subject: String,
     pub html: String,
+    pub text: String,
     pub preview: String,
 }
 
@@ -266,7 +272,12 @@ where
 }
 
 fn render_message(message: AssembledMessage) -> ThreadMessageResponse {
-    let stripped = strip_quoted_history(&message.html);
+    let body_html = if message.html.is_empty() {
+        plaintext_body_to_html(&message.text)
+    } else {
+        message.html
+    };
+    let stripped = strip_quoted_history(&body_html);
     let sanitized = sanitize_and_strip_trackers(&stripped.html);
     ThreadMessageResponse {
         email_id: message.email_id,
@@ -319,11 +330,22 @@ fn addresses_from_jmap(
 }
 
 fn html_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
-    let Some(parts) = email.html_body() else {
+    body_from_parts(email, email.html_body())
+}
+
+fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
+    body_from_parts(email, email.text_body())
+}
+
+fn body_from_parts(
+    email: &hail_jmap::jmap_client::email::Email,
+    parts: Option<&[hail_jmap::jmap_client::email::EmailBodyPart]>,
+) -> String {
+    let Some(parts) = parts else {
         return String::new();
     };
 
-    let mut html = String::new();
+    let mut body = String::new();
     for part in parts {
         let Some(part_id) = part.part_id() else {
             continue;
@@ -331,9 +353,9 @@ fn html_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String 
         let Some(value) = email.body_value(part_id) else {
             continue;
         };
-        html.push_str(value.value());
+        body.push_str(value.value());
     }
-    html
+    body
 }
 
 fn looks_like_jmap_id(id: &str) -> bool {

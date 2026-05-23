@@ -132,7 +132,15 @@ fn sample_message(email_id: &str, html: &str) -> AssembledMessage {
         received_at: Some(Utc.with_ymd_and_hms(2026, 5, 23, 10, 0, 0).unwrap()),
         subject: "Status".to_string(),
         html: html.to_string(),
+        text: String::new(),
         preview: "preview text".to_string(),
+    }
+}
+
+fn sample_text_message(email_id: &str, text: &str) -> AssembledMessage {
+    AssembledMessage {
+        text: text.to_string(),
+        ..sample_message(email_id, "")
     }
 }
 
@@ -236,6 +244,82 @@ async fn quoted_history_is_stripped() {
     assert!(html.contains("New reply"));
     assert!(!html.contains("Old quoted text"));
     assert!(!html.contains("gmail_quote"));
+}
+
+#[tokio::test]
+async fn plaintext_only_body_renders_full_escaped_body() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let thread = sample_thread(vec![sample_text_message(
+        "email-a",
+        "Hello <Alice> & Bob\nSecond line\n\nFinal line",
+    )]);
+
+    let (status, json) = get_json(
+        state,
+        &sid,
+        Arc::new(FakeAssembler {
+            result: Ok(Some(thread)),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let html = json["messages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Hello &lt;Alice&gt; &amp; Bob"));
+    assert!(html.contains("Second line"));
+    assert!(html.contains("Final line"));
+    assert!(html.contains("<br>"));
+    assert!(!html.contains("Hello <Alice> & Bob"));
+    assert_ne!(html, "preview text");
+}
+
+#[tokio::test]
+async fn plaintext_quote_history_is_stripped() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let thread = sample_thread(vec![sample_text_message(
+        "email-a",
+        "Fresh answer\n\n> old quoted line\n> another old line",
+    )]);
+
+    let (status, json) = get_json(
+        state,
+        &sid,
+        Arc::new(FakeAssembler {
+            result: Ok(Some(thread)),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let html = json["messages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Fresh answer"));
+    assert!(!html.contains("old quoted line"));
+    assert!(!html.contains("another old line"));
+}
+
+#[tokio::test]
+async fn html_body_wins_over_plaintext_fallback() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let mut message = sample_message("email-a", "<p>HTML body</p>");
+    message.text = "Plaintext body".to_string();
+    let thread = sample_thread(vec![message]);
+
+    let (status, json) = get_json(
+        state,
+        &sid,
+        Arc::new(FakeAssembler {
+            result: Ok(Some(thread)),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let html = json["messages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("<p>HTML body</p>"));
+    assert!(!html.contains("Plaintext body"));
 }
 
 #[tokio::test]
