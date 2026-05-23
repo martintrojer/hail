@@ -30,6 +30,8 @@ use crate::routes::health;
     ),
     tags(
         (name = health::TAG, description = "Liveness, readiness, and operational probes."),
+        (name = crate::routes::compose::TAG, description = "Compose, reply, and scheduled-send creation."),
+        (name = crate::routes::drafts::TAG, description = "Draft autosave create/update endpoints."),
     ),
 )]
 pub struct ApiDoc;

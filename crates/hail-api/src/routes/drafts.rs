@@ -14,11 +14,14 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use hail_jmap::jmap_client::core::set::SetObject;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
@@ -26,6 +29,9 @@ use crate::state::AppState;
 const MAX_SUBJECT_CHARS: usize = 998;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RECIPIENTS_PER_FIELD: usize = 200;
+
+/// OpenAPI tag for draft autosave endpoints.
+pub const TAG: &str = "drafts";
 
 pub trait DraftStore: Send + Sync + 'static {
     fn create<'a>(
@@ -152,23 +158,32 @@ pub struct DraftUpdate {
 }
 
 pub fn router() -> Router<AppState> {
-    router_with_store(Arc::new(JmapDraftStore))
+    Router::from(openapi_router_with_store(Arc::new(JmapDraftStore)))
+}
+
+/// Build the OpenAPI-tracked router for the production draft store.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_store(Arc::new(JmapDraftStore))
 }
 
 pub fn router_with_store<S>(store: Arc<S>) -> Router<AppState>
 where
     S: DraftStore,
 {
-    Router::new()
-        .route("/api/drafts", post(create_draft::<S>))
-        .route(
-            "/api/drafts/{draft_id}",
-            axum::routing::patch(update_draft::<S>),
-        )
-        .layer(Extension(store))
+    Router::from(openapi_router_with_store(store))
 }
 
-#[derive(Debug, Deserialize)]
+fn openapi_router_with_store<S>(store: Arc<S>) -> OpenApiRouter<AppState>
+where
+    S: DraftStore,
+{
+    let store: Arc<dyn DraftStore> = store;
+    OpenApiRouter::new()
+        .routes(routes!(create_draft).layer(Extension(store.clone())))
+        .routes(routes!(update_draft).layer(Extension(store)))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 struct DraftPayload {
     to: Option<Vec<String>>,
     cc: Option<Vec<String>>,
@@ -178,20 +193,31 @@ struct DraftPayload {
     attachments: Option<Vec<serde_json::Value>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct DraftResponse {
     draft_id: String,
+    #[schema(value_type = String, format = DateTime)]
     updated_at: DateTime<Utc>,
 }
 
-async fn create_draft<S>(
+#[utoipa::path(
+    post,
+    path = "/api/drafts",
+    tag = TAG,
+    request_body(content = DraftPayload, content_type = "application/json"),
+    responses(
+        (status = 201, description = "Draft created or autosaved.", body = DraftResponse),
+        (status = 400, description = "Invalid draft payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP draft store failure."),
+    ),
+)]
+async fn create_draft(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(store): Extension<Arc<S>>,
+    Extension(store): Extension<Arc<dyn DraftStore>>,
     body: Result<Json<DraftPayload>, JsonRejection>,
 ) -> Response
-where
-    S: DraftStore,
 {
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
@@ -217,15 +243,28 @@ where
     }
 }
 
-async fn update_draft<S>(
+#[utoipa::path(
+    patch,
+    path = "/api/drafts/{draft_id}",
+    tag = TAG,
+    params(
+        ("draft_id" = String, Path, description = "JMAP draft email id to update."),
+    ),
+    request_body(content = DraftPayload, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Draft updated.", body = DraftResponse),
+        (status = 400, description = "Invalid draft id or payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP draft store failure."),
+    ),
+)]
+async fn update_draft(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(store): Extension<Arc<S>>,
+    Extension(store): Extension<Arc<dyn DraftStore>>,
     Path(draft_id): Path<String>,
     body: Result<Json<DraftPayload>, JsonRejection>,
 ) -> Response
-where
-    S: DraftStore,
 {
     if !looks_like_jmap_id(&draft_id) {
         return bad_request("invalid_draft_id");

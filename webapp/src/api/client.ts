@@ -171,47 +171,11 @@ export interface UploadedBlob {
   type: string;
 }
 
-export interface ComposeRequest {
-  to: string[];
-  cc?: string[];
-  bcc?: string[];
-  subject: string;
-  body_markdown: string;
-  attachments?: unknown[];
-  send_at?: string;
-}
-
-export interface ReplyRequest {
-  body_markdown: string;
-  attachments?: unknown[];
-  send_at?: string;
-}
-
-export type ComposeResponse =
-  | {
-      status: 'sent';
-      email_id: string;
-      submission_id?: string | null;
-    }
-  | {
-      status: 'pending';
-      scheduled_send_id: number;
-      draft_email_id: string;
-    };
-
-export interface DraftRequest {
-  to?: string[];
-  cc?: string[];
-  bcc?: string[];
-  subject?: string;
-  body_markdown?: string;
-  attachments?: unknown[];
-}
-
-export interface DraftResponse {
-  draft_id: string;
-  updated_at: string;
-}
+export type ComposeRequest = components['schemas']['ComposePayload'];
+export type ReplyRequest = components['schemas']['ReplyPayload'];
+export type ComposeResponse = components['schemas']['ComposeResponse'];
+export type DraftRequest = components['schemas']['DraftPayload'];
+export type DraftResponse = components['schemas']['DraftResponse'];
 
 export interface BlobUploadResponse {
   blobs: UploadedBlob[];

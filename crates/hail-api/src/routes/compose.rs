@@ -10,13 +10,16 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{
     Json, Router,
-    routing::{get, post},
+    routing::get,
 };
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::sanitize_and_strip_trackers;
 use hail_jmap::jmap_client::core::set::SetObject;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
+use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
@@ -25,6 +28,9 @@ use crate::state::AppState;
 const MAX_SUBJECT_CHARS: usize = 998;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RECIPIENTS_PER_FIELD: usize = 200;
+
+/// OpenAPI tag for outbound compose/reply endpoints.
+pub const TAG: &str = "compose";
 
 pub trait Composer: Send + Sync + 'static {
     fn create_draft<'a>(
@@ -257,22 +263,34 @@ pub fn router() -> Router<AppState> {
     router_with_composer(Arc::new(JmapComposer))
 }
 
+/// Build the OpenAPI-tracked router for the production composer.
+pub fn openapi_router() -> OpenApiRouter<AppState> {
+    openapi_router_with_composer(Arc::new(JmapComposer))
+}
+
 pub fn router_with_composer<C>(composer: Arc<C>) -> Router<AppState>
 where
     C: Composer,
 {
-    Router::new()
-        .route("/api/compose", post(compose::<C>))
-        .route("/api/threads/{thread_id}/reply", post(reply::<C>))
+    Router::from(openapi_router_with_composer(composer))
         .route("/api/scheduled-sends", get(list_scheduled_sends))
         .route(
             "/api/scheduled-sends/{scheduled_send_id}",
             get(get_scheduled_send).delete(cancel_scheduled_send),
         )
-        .layer(Extension(composer))
 }
 
-#[derive(Debug, Deserialize)]
+fn openapi_router_with_composer<C>(composer: Arc<C>) -> OpenApiRouter<AppState>
+where
+    C: Composer,
+{
+    let composer: Arc<dyn Composer> = composer;
+    OpenApiRouter::new()
+        .routes(routes!(compose).layer(Extension(composer.clone())))
+        .routes(routes!(reply).layer(Extension(composer)))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 struct ComposePayload {
     to: Vec<String>,
     cc: Option<Vec<String>>,
@@ -280,16 +298,18 @@ struct ComposePayload {
     subject: String,
     body_markdown: String,
     attachments: Option<Vec<serde_json::Value>>,
+    #[schema(value_type = Option<String>, format = DateTime)]
     send_at: Option<DateTime<Utc>>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 struct ReplyPayload {
     body_markdown: String,
     attachments: Option<Vec<serde_json::Value>>,
+    #[schema(value_type = Option<String>, format = DateTime)]
     send_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "status")]
 enum ComposeResponse {
     #[serde(rename = "pending")]
@@ -320,14 +340,25 @@ struct ScheduledSendResponse {
     created_at: DateTime<Utc>,
 }
 
-async fn compose<C>(
+#[utoipa::path(
+    post,
+    path = "/api/compose",
+    tag = TAG,
+    request_body(content = ComposePayload, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Message sent immediately.", body = ComposeResponse),
+        (status = 201, description = "Message draft scheduled for later delivery.", body = ComposeResponse),
+        (status = 400, description = "Invalid compose payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP provider or scheduler failure."),
+    ),
+)]
+async fn compose(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(composer): Extension<Arc<C>>,
+    Extension(composer): Extension<Arc<dyn Composer>>,
     body: Result<Json<ComposePayload>, JsonRejection>,
 ) -> Response
-where
-    C: Composer,
 {
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
@@ -343,15 +374,30 @@ where
     create_and_maybe_send(&state, &user, composer.as_ref(), message, send_at).await
 }
 
-async fn reply<C>(
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/reply",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id to reply to."),
+    ),
+    request_body(content = ReplyPayload, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Reply sent immediately.", body = ComposeResponse),
+        (status = 201, description = "Reply draft scheduled for later delivery.", body = ComposeResponse),
+        (status = 400, description = "Invalid thread id or reply payload."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "JMAP provider or scheduler failure."),
+    ),
+)]
+async fn reply(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
-    Extension(composer): Extension<Arc<C>>,
+    Extension(composer): Extension<Arc<dyn Composer>>,
     Path(thread_id): Path<String>,
     body: Result<Json<ReplyPayload>, JsonRejection>,
 ) -> Response
-where
-    C: Composer,
 {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
@@ -506,15 +552,13 @@ async fn cancel_scheduled_send(
     }
 }
 
-async fn create_and_maybe_send<C>(
+async fn create_and_maybe_send(
     state: &AppState,
     user: &AuthUser,
-    composer: &C,
+    composer: &dyn Composer,
     message: OutboundMessage,
     send_at: Option<DateTime<Utc>>,
 ) -> Response
-where
-    C: Composer,
 {
     let draft_email_id = match composer
         .create_draft(state, user.jmap_token.clone(), &user.email, message)
