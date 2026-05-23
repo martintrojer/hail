@@ -1,6 +1,22 @@
 // This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
+    "/api/threads/{thread_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_thread"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -53,7 +69,32 @@ export interface paths {
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: never;
+    schemas: {
+        BlockedTrackerResponse: {
+            reason: string;
+            src: string;
+        };
+        Participant: {
+            email: string;
+            name?: string | null;
+        };
+        ThreadMessageResponse: {
+            blocked_trackers: components["schemas"]["BlockedTrackerResponse"][];
+            email_id: string;
+            from: components["schemas"]["Participant"][];
+            html: string;
+            preview: string;
+            /** Format: date-time */
+            received_at?: string | null;
+            to: components["schemas"]["Participant"][];
+        };
+        ThreadViewResponse: {
+            messages: components["schemas"]["ThreadMessageResponse"][];
+            participants: components["schemas"]["Participant"][];
+            subject: string;
+            thread_id: string;
+        };
+    };
     responses: never;
     parameters: never;
     requestBodies: never;
@@ -62,6 +103,57 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id to render as a sanitized document. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thread rendered as sanitized HTML messages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadViewResponse"];
+                };
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread assembly failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     healthz: {
         parameters: {
             query?: never;

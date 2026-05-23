@@ -61,7 +61,11 @@ fn build_api_router(
     // own `OpenApiRouter::router()` here.
     let api_router: OpenApiRouter<AppState> =
         OpenApiRouter::with_openapi(ApiDoc::openapi()).merge(routes::health::router());
-    let (open_router, api) = api_router.with_state(state.clone()).split_for_parts();
+    let (open_router, mut api) = api_router.with_state(state.clone()).split_for_parts();
+    let (_, thread_view_api) = routes::threads_view::router()
+        .with_state::<AppState>(state.clone())
+        .split_for_parts();
+    api.merge(thread_view_api);
 
     // Serialize once. The OpenAPI doc is immutable at runtime.
     let openapi_json =
@@ -95,7 +99,7 @@ fn build_api_router(
         .merge(routes::pile::router())
         .merge(routes::screener::router())
         .merge(routes::threads::router())
-        .merge(routes::threads_view::router())
+        .merge(Router::from(routes::threads_view::router()))
         .merge(routes::undo::router())
         .merge(routes::views::router())
         .merge(routes::ws::router());
