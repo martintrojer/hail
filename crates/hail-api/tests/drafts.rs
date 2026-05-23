@@ -139,6 +139,8 @@ enum Call {
     Update {
         draft_id: String,
         to: Option<Vec<String>>,
+        cc: Option<Vec<String>>,
+        bcc: Option<Vec<String>>,
         subject: Option<String>,
         body_markdown: Option<String>,
     },
@@ -205,6 +207,8 @@ impl DraftStore for FakeDraftStore {
             self.calls.lock().expect("calls mutex").push(Call::Update {
                 draft_id: draft_id.to_string(),
                 to: draft.to,
+                cc: draft.cc,
+                bcc: draft.bcc,
                 subject: draft.subject,
                 body_markdown: draft.body_markdown,
             });
@@ -220,6 +224,21 @@ fn create_body() -> &'static str {
         "subject":"Hello",
         "body_markdown":"Hi Bob"
     }"#
+}
+
+fn update_recipients_body(field: &str, recipients: Vec<String>) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        field.to_string(),
+        Value::Array(recipients.into_iter().map(Value::String).collect()),
+    );
+    Value::Object(payload).to_string()
+}
+
+fn recipient_list(count: usize) -> Vec<String> {
+    (0..count)
+        .map(|idx| format!("user{idx}@example.org"))
+        .collect()
 }
 
 #[tokio::test]
@@ -328,7 +347,7 @@ async fn update_draft_calls_store_and_returns_id() {
         "/api/drafts/draft-1",
         Some(&sid),
         true,
-        Some(r#"{"subject":"Revised","body_markdown":"new body"}"#),
+        Some(r#"{"to":["erin@example.org"],"cc":["carol@example.org"],"bcc":["blind@example.org"],"subject":"Revised","body_markdown":"new body"}"#),
     )
     .await;
 
@@ -340,7 +359,9 @@ async fn update_draft_calls_store_and_returns_id() {
         store.calls(),
         vec![Call::Update {
             draft_id: "draft-1".to_string(),
-            to: None,
+            to: Some(vec!["erin@example.org".to_string()]),
+            cc: Some(vec!["carol@example.org".to_string()]),
+            bcc: Some(vec!["blind@example.org".to_string()]),
             subject: Some("Revised".to_string()),
             body_markdown: Some("new body".to_string()),
         }]
@@ -367,6 +388,58 @@ async fn invalid_recipient_returns_400_without_store_call() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = json_body(resp).await;
     assert_eq!(body["error"], "invalid_to");
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn update_rejects_invalid_cc_bcc_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    for (field, expected_error) in [("cc", "invalid_cc"), ("bcc", "invalid_bcc")] {
+        let body = update_recipients_body(field, vec!["not-an-email".to_string()]);
+        let resp = request(
+            state.clone(),
+            store.clone(),
+            Method::PATCH,
+            "/api/drafts/draft-1",
+            Some(&sid),
+            true,
+            Some(&body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(resp).await;
+        assert_eq!(body["error"], expected_error);
+    }
+    assert!(store.calls().is_empty());
+}
+
+#[tokio::test]
+async fn update_rejects_too_many_cc_bcc_without_store_call() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    for (field, expected_error) in [("cc", "too_many_cc"), ("bcc", "too_many_bcc")] {
+        let body = update_recipients_body(field, recipient_list(201));
+        let resp = request(
+            state.clone(),
+            store.clone(),
+            Method::PATCH,
+            "/api/drafts/draft-1",
+            Some(&sid),
+            true,
+            Some(&body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(resp).await;
+        assert_eq!(body["error"], expected_error);
+    }
     assert!(store.calls().is_empty());
 }
 
