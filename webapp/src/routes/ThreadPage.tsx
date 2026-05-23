@@ -27,6 +27,7 @@ const classificationOptions: Array<{
 
 interface ThreadPageProps {
   threadId: string;
+  client?: Parameters<typeof useThread>[1];
 }
 
 function formatParticipantName(participant: { name?: string | null; email: string }) {
@@ -356,8 +357,8 @@ function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
   );
 }
 
-export function ThreadPage({ threadId }: ThreadPageProps) {
-  const query = useThread(threadId);
+export function ThreadPage({ threadId, client }: ThreadPageProps) {
+  const query = useThread(threadId, client);
 
   let reading;
   if (query.isPending) {
