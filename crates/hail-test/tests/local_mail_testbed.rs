@@ -57,7 +57,7 @@ fn local_mail_testbed_script_dry_run_prints_expected_checks() {
     assert!(stdout.contains("personal-simple.eml"));
     assert!(stdout.contains("newsletter-tracking-pixel.eml"));
     assert!(stdout.contains("receipt-papertrail.eml"));
-    assert!(stdout.contains("curl -fsS http://127.0.0.1:18081/api/health"));
+    assert!(stdout.contains("curl -fsS http://127.0.0.1:18081/readyz"));
 }
 
 #[tokio::test]
@@ -71,19 +71,15 @@ async fn local_mail_testbed_imports_fixtures_when_enabled() {
 
     let jmap_url = std::env::var("HAIL_TESTBED_JMAP_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:18080".to_owned());
-    let email = std::env::var("HAIL_TESTBED_EMAIL")
-        .unwrap_or_else(|_| "alice@hail.test".to_owned());
-    let password = std::env::var("HAIL_TESTBED_PASSWORD").expect(
-        "HAIL_TESTBED_PASSWORD is required; automatic Stalwart user provisioning is TODO",
-    );
+    let email =
+        std::env::var("HAIL_TESTBED_EMAIL").unwrap_or_else(|_| "alice@hail.test".to_owned());
+    let password = std::env::var("HAIL_TESTBED_PASSWORD")
+        .expect("HAIL_TESTBED_PASSWORD is required; automatic Stalwart user provisioning is TODO");
 
-    let imported = import_local_testbed_fixtures_via_jmap(
-        &jmap_url,
-        &email,
-        SecretString::from(password),
-    )
-    .await
-    .expect("fixtures should import through JMAP Email/import");
+    let imported =
+        import_local_testbed_fixtures_via_jmap(&jmap_url, &email, SecretString::from(password))
+            .await
+            .expect("fixtures should import through JMAP Email/import");
 
     let names = imported
         .iter()
