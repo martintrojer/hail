@@ -6,13 +6,14 @@
 //! contract).
 
 use std::collections::BTreeSet;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use hail_jmap::jmap_client;
 use hail_jmap::jmap_client::DataType;
 use hail_jmap::jmap_client::email::Property;
@@ -27,7 +28,7 @@ use crate::backoff::Backoff;
 use crate::catchup::catchup_user;
 use crate::changes::{EmailChanges, EmailEnvelope, JmapChangeFetcher, handle_changes};
 use crate::crypto::TokenDecryptor;
-use crate::screener::JmapOpsLive;
+use crate::screener::{JmapOps, JmapOpsLive};
 use crate::state::AppState;
 
 /// EventSource keep-alive ping interval (seconds) — the task contract
@@ -112,7 +113,7 @@ async fn run_user_supervisor_with(
         session: session.session.clone(),
         account_id: session.account_id.clone(),
     });
-    let jmap_ops = Arc::new(JmapOpsLive {
+    let jmap_ops: Arc<dyn JmapOps> = Arc::new(JmapOpsLive {
         session: session.session.clone(),
         account_id: session.account_id.clone(),
     });
@@ -129,10 +130,99 @@ async fn run_event_loop(
     state: Arc<AppState>,
     session: JmapSession,
     fetcher: Arc<dyn JmapChangeFetcher>,
-    jmap_ops: Arc<JmapOpsLive>,
+    jmap_ops: Arc<dyn JmapOps>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let event_source = LiveEventSource {
+        session: session.session.clone(),
+    };
     let mut backoff = Backoff::new();
+    let sleeper = TokioSleeper;
+    run_event_loop_with(
+        &state.db,
+        user_id,
+        &session.account_id,
+        fetcher.as_ref(),
+        jmap_ops.as_ref(),
+        &event_source,
+        &mut backoff,
+        &sleeper,
+        cancel,
+    )
+    .await
+}
+
+type EventStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<PushNotification, jmap_client::Error>> + Send>>;
+
+#[async_trait]
+trait EventSourceProvider: Send + Sync {
+    async fn open(
+        &self,
+        types: Vec<DataType>,
+    ) -> std::result::Result<EventStream, jmap_client::Error>;
+}
+
+struct LiveEventSource {
+    session: Arc<hail_jmap::Session>,
+}
+
+#[async_trait]
+impl EventSourceProvider for LiveEventSource {
+    async fn open(
+        &self,
+        types: Vec<DataType>,
+    ) -> std::result::Result<EventStream, jmap_client::Error> {
+        let stream = self
+            .session
+            .client()
+            .event_source(Some(types), false, Some(EVENT_SOURCE_PING_SECS), None)
+            .await?;
+        Ok(Box::pin(stream))
+    }
+}
+
+trait ReconnectBackoff: Send {
+    fn reset(&mut self);
+    fn next_delay(&mut self) -> Duration;
+}
+
+impl ReconnectBackoff for Backoff {
+    fn reset(&mut self) {
+        Backoff::reset(self);
+    }
+
+    fn next_delay(&mut self) -> Duration {
+        Backoff::next_delay(self)
+    }
+}
+
+#[async_trait]
+trait CancelSleeper: Send + Sync {
+    async fn sleep(&self, delay: Duration, cancel: &CancellationToken) -> bool;
+}
+
+struct TokioSleeper;
+
+#[async_trait]
+impl CancelSleeper for TokioSleeper {
+    async fn sleep(&self, delay: Duration, cancel: &CancellationToken) -> bool {
+        cancel_aware_sleep(delay, cancel).await
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_event_loop_with(
+    db: &SqlitePool,
+    user_id: i64,
+    account_id: &str,
+    fetcher: &dyn JmapChangeFetcher,
+    jmap_ops: &dyn JmapOps,
+    event_source: &dyn EventSourceProvider,
+    backoff: &mut dyn ReconnectBackoff,
+    sleeper: &dyn CancelSleeper,
+    cancel: CancellationToken,
+) -> Result<()> {
     let types = vec![
         DataType::Email,
         DataType::EmailDelivery,
@@ -152,7 +242,7 @@ async fn run_event_loop(
                 info!(user_id, "per-user supervisor: cancel during catchup");
                 return Ok(());
             }
-            result = catchup_user(&state.db, user_id, fetcher.as_ref(), jmap_ops.as_ref(), cancel.clone()) => result,
+            result = catchup_user(db, user_id, fetcher, jmap_ops, cancel.clone()) => result,
         };
         if let Err(e) = catchup_res {
             if is_auth_anyhow(&e) {
@@ -166,16 +256,13 @@ async fn run_event_loop(
                 error = %e,
                 "catchup: transient failure; backing off"
             );
-            if cancel_aware_sleep(delay, &cancel).await {
+            if sleeper.sleep(delay, &cancel).await {
                 return Ok(());
             }
             continue;
         }
 
-        let stream_res = session
-            .client()
-            .event_source(Some(types.clone()), false, Some(EVENT_SOURCE_PING_SECS), None)
-            .await;
+        let stream_res = event_source.open(types.clone()).await;
         let mut stream = match stream_res {
             Ok(s) => {
                 info!(user_id, "event_source: connected");
@@ -194,7 +281,7 @@ async fn run_event_loop(
                     error = %e,
                     "event_source: connect failed; backing off"
                 );
-                if cancel_aware_sleep(delay, &cancel).await {
+                if sleeper.sleep(delay, &cancel).await {
                     return Ok(());
                 }
                 continue;
@@ -225,11 +312,11 @@ async fn run_event_loop(
                         }
                         Some(Ok(notification)) => {
                             handle_notification(
-                                &state.db,
+                                db,
                                 user_id,
-                                &session.account_id,
-                                fetcher.as_ref(),
-                                jmap_ops.as_ref(),
+                                account_id,
+                                fetcher,
+                                jmap_ops,
                                 notification,
                             )
                             .await;
@@ -246,7 +333,7 @@ async fn run_event_loop(
             delay_ms = delay.as_millis() as u64,
             "event_source: scheduling reconnect"
         );
-        if cancel_aware_sleep(delay, &cancel).await {
+        if sleeper.sleep(delay, &cancel).await {
             return Ok(());
         }
     }
@@ -258,7 +345,7 @@ async fn handle_notification(
     user_id: i64,
     account_id: &str,
     fetcher: &dyn JmapChangeFetcher,
-    jmap_ops: &JmapOpsLive,
+    jmap_ops: &dyn JmapOps,
     notification: PushNotification,
 ) {
     let mut changes = match notification {
@@ -269,10 +356,7 @@ async fn handle_notification(
         Some(c) => c,
         None => return,
     };
-    let changed_types: BTreeSet<String> = account_changes
-        .keys()
-        .map(|k| k.to_string())
-        .collect();
+    let changed_types: BTreeSet<String> = account_changes.keys().map(|k| k.to_string()).collect();
     if let Err(e) = handle_changes(db, user_id, fetcher, jmap_ops, &changed_types).await {
         warn!(user_id, error = %e, "handle_changes failed for push event");
     }
@@ -300,12 +384,6 @@ struct JmapSession {
     account_id: String,
 }
 
-impl JmapSession {
-    fn client(&self) -> &jmap_client::client::Client {
-        self.session.client()
-    }
-}
-
 enum SupervisorBringupError {
     Fatal(FatalError),
     Transient(anyhow::Error),
@@ -325,7 +403,9 @@ async fn bring_up_session(
         .await
         .map_err(|e| SupervisorBringupError::Transient(anyhow!(e)))?;
     if user_exists.is_none() {
-        return Err(SupervisorBringupError::Fatal(FatalError::UserMissing(user_id)));
+        return Err(SupervisorBringupError::Fatal(FatalError::UserMissing(
+            user_id,
+        )));
     }
 
     let now = Utc::now().to_rfc3339();
@@ -343,9 +423,9 @@ async fn bring_up_session(
     let enc = match token_row {
         Some((blob,)) => blob,
         None => {
-            return Err(SupervisorBringupError::Fatal(
-                FatalError::NoActiveSession(user_id),
-            ));
+            return Err(SupervisorBringupError::Fatal(FatalError::NoActiveSession(
+                user_id,
+            )));
         }
     };
 
@@ -579,3 +659,474 @@ fn envelope_from(em: jmap_client::email::Email) -> EmailEnvelope {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
+
+    use ahash::AHashMap;
+    use futures_util::stream;
+    use hail_jmap::jmap_client::CalendarAlert;
+    use tokio::sync::oneshot;
+
+    use crate::screener::RouteError;
+
+    static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDb(std::path::PathBuf);
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            let _ = &self.0;
+        }
+    }
+
+    async fn setup_db() -> (SqlitePool, TempDb, i64) {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let pid = std::process::id();
+        let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+        path.push(format!(
+            "hail-worker-user-test-{pid}-{nanos}-{counter}.sqlite"
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let guard = TempDb(path);
+        let pool = hail_db::connect(&url).await.expect("connect");
+        hail_db::migrate(&pool).await.expect("migrate");
+
+        sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+            .bind("alice@example.com")
+            .bind("acct-alice")
+            .bind("2026-01-01T00:00:00Z")
+            .execute(&pool)
+            .await
+            .expect("insert user");
+        let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+            .bind("alice@example.com")
+            .fetch_one(&pool)
+            .await
+            .expect("fetch user id");
+        (pool, guard, user_id)
+    }
+
+    struct RecordingFetcher {
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingFetcher {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls lock").clone()
+        }
+    }
+
+    #[async_trait]
+    impl JmapChangeFetcher for RecordingFetcher {
+        async fn current_state(&self, type_state: &str) -> Result<String> {
+            Ok(format!("{type_state}-initial"))
+        }
+
+        async fn fetch(&self, type_state: &str, since_cursor: &str) -> Result<EmailChanges> {
+            self.calls
+                .lock()
+                .expect("calls lock")
+                .push(type_state.to_string());
+            Ok(EmailChanges {
+                new_state: format!("{type_state}-after-{since_cursor}"),
+                ..Default::default()
+            })
+        }
+    }
+
+    struct NoopJmapOps;
+
+    #[async_trait]
+    impl JmapOps for NoopJmapOps {
+        async fn get_or_create_mailbox(
+            &self,
+            _name: &str,
+        ) -> std::result::Result<String, RouteError> {
+            Ok("screener-id".to_string())
+        }
+
+        async fn get_mailbox_by_role(
+            &self,
+            _role: &str,
+        ) -> std::result::Result<Option<String>, RouteError> {
+            Ok(Some("trash-id".to_string()))
+        }
+
+        async fn apply_keyword(
+            &self,
+            _email_id: &str,
+            _keyword: &str,
+        ) -> std::result::Result<(), RouteError> {
+            Ok(())
+        }
+
+        async fn move_to_mailbox(
+            &self,
+            _email_id: &str,
+            _mailbox_id: &str,
+        ) -> std::result::Result<(), RouteError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBackoff {
+        next_calls: usize,
+        reset_calls: usize,
+    }
+
+    impl ReconnectBackoff for RecordingBackoff {
+        fn reset(&mut self) {
+            self.reset_calls += 1;
+        }
+
+        fn next_delay(&mut self) -> Duration {
+            self.next_calls += 1;
+            Duration::from_millis(self.next_calls as u64)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSleeper {
+        delays: std::sync::Mutex<Vec<Duration>>,
+    }
+
+    #[async_trait]
+    impl CancelSleeper for RecordingSleeper {
+        async fn sleep(&self, delay: Duration, cancel: &CancellationToken) -> bool {
+            self.delays.lock().expect("delays lock").push(delay);
+            cancel.is_cancelled()
+        }
+    }
+
+    impl RecordingSleeper {
+        fn delays(&self) -> Vec<Duration> {
+            self.delays.lock().expect("delays lock").clone()
+        }
+    }
+
+    struct ScriptedEventSource {
+        opens: std::sync::Mutex<Vec<OpenResult>>,
+        open_calls: AtomicUsize,
+    }
+
+    enum OpenResult {
+        Stream(Vec<std::result::Result<PushNotification, jmap_client::Error>>),
+        Error(jmap_client::Error),
+    }
+
+    #[async_trait]
+    impl EventSourceProvider for ScriptedEventSource {
+        async fn open(
+            &self,
+            _types: Vec<DataType>,
+        ) -> std::result::Result<EventStream, jmap_client::Error> {
+            self.open_calls.fetch_add(1, Ordering::SeqCst);
+            let next = self.opens.lock().expect("opens lock").remove(0);
+            match next {
+                OpenResult::Stream(items) => Ok(Box::pin(stream::iter(items))),
+                OpenResult::Error(error) => Err(error),
+            }
+        }
+    }
+
+    impl ScriptedEventSource {
+        fn new(opens: Vec<OpenResult>) -> Self {
+            Self {
+                opens: std::sync::Mutex::new(opens),
+                open_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn open_calls(&self) -> usize {
+            self.open_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    struct PendingStream {
+        entered: Option<oneshot::Sender<()>>,
+    }
+
+    impl Stream for PendingStream {
+        type Item = std::result::Result<PushNotification, jmap_client::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            if let Some(entered) = self.entered.take() {
+                let _ = entered.send(());
+            }
+            Poll::Pending
+        }
+    }
+
+    struct PendingEventSource {
+        entered: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    #[async_trait]
+    impl EventSourceProvider for PendingEventSource {
+        async fn open(
+            &self,
+            _types: Vec<DataType>,
+        ) -> std::result::Result<EventStream, jmap_client::Error> {
+            Ok(Box::pin(PendingStream {
+                entered: self.entered.lock().expect("entered lock").take(),
+            }))
+        }
+    }
+
+    struct BlockingSleeper {
+        entered: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    #[async_trait]
+    impl CancelSleeper for BlockingSleeper {
+        async fn sleep(&self, _delay: Duration, cancel: &CancellationToken) -> bool {
+            if let Some(entered) = self.entered.lock().expect("entered lock").take() {
+                let _ = entered.send(());
+            }
+            cancel.cancelled().await;
+            true
+        }
+    }
+
+    fn state_change(account_id: &str, types: &[DataType]) -> PushNotification {
+        let mut account_changes = AHashMap::new();
+        for data_type in types {
+            account_changes.insert(data_type.clone(), format!("{data_type}-state"));
+        }
+        let mut changes = AHashMap::new();
+        changes.insert(account_id.to_string(), account_changes);
+        PushNotification::StateChange(jmap_client::event_source::Changes::new(None, changes))
+    }
+
+    fn calendar_alert(account_id: &str) -> PushNotification {
+        PushNotification::CalendarAlert(CalendarAlert {
+            account_id: account_id.to_string(),
+            calendar_event_id: "event-1".to_string(),
+            uid: "uid-1".to_string(),
+            recurrence_id: None,
+            alert_id: "alert-1".to_string(),
+        })
+    }
+
+    async fn seed_cursors(db: &SqlitePool, user_id: i64) {
+        for type_state in crate::changes::TRACKED_TYPE_STATES {
+            crate::changes::upsert_cursor(db, user_id, type_state, &format!("{type_state}-before"))
+                .await
+                .expect("seed cursor");
+        }
+    }
+
+    #[tokio::test]
+    async fn event_loop_filters_state_changes_and_ignores_calendar_alerts() {
+        let (db, _guard, user_id) = setup_db().await;
+        seed_cursors(&db, user_id).await;
+        let fetcher = RecordingFetcher::new();
+        let jmap_ops = NoopJmapOps;
+        let events = ScriptedEventSource::new(vec![
+            OpenResult::Stream(vec![
+                Ok(calendar_alert("acct-alice")),
+                Ok(state_change("other-account", &[DataType::Email])),
+                Ok(state_change(
+                    "acct-alice",
+                    &[DataType::Identity, DataType::Email, DataType::Mailbox],
+                )),
+            ]),
+            OpenResult::Error(jmap_client::Error::Server("401 unauthorized".to_string())),
+        ]);
+        let mut backoff = RecordingBackoff::default();
+        let sleeper = RecordingSleeper::default();
+
+        run_event_loop_with(
+            &db,
+            user_id,
+            "acct-alice",
+            &fetcher,
+            &jmap_ops,
+            &events,
+            &mut backoff,
+            &sleeper,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("event loop exits cleanly on terminal auth");
+
+        assert_eq!(
+            fetcher.calls(),
+            vec![
+                "Email".to_string(),
+                "EmailDelivery".to_string(),
+                "Mailbox".to_string(),
+                "EmailSubmission".to_string(),
+                "Email".to_string(),
+                "Mailbox".to_string(),
+                "Email".to_string(),
+                "EmailDelivery".to_string(),
+                "Mailbox".to_string(),
+                "EmailSubmission".to_string(),
+            ]
+        );
+        assert_eq!(events.open_calls(), 2);
+        assert_eq!(backoff.reset_calls, 1);
+        assert_eq!(backoff.next_calls, 1);
+        assert_eq!(sleeper.delays(), vec![Duration::from_millis(1)]);
+    }
+
+    #[tokio::test]
+    async fn event_loop_resets_backoff_after_successful_reconnect() {
+        let (db, _guard, user_id) = setup_db().await;
+        seed_cursors(&db, user_id).await;
+        let fetcher = RecordingFetcher::new();
+        let jmap_ops = NoopJmapOps;
+        let events = ScriptedEventSource::new(vec![
+            OpenResult::Error(jmap_client::Error::Internal("connect failed".to_string())),
+            OpenResult::Stream(vec![]),
+            OpenResult::Error(jmap_client::Error::Server("401 unauthorized".to_string())),
+        ]);
+        let mut backoff = RecordingBackoff::default();
+        let sleeper = RecordingSleeper::default();
+
+        run_event_loop_with(
+            &db,
+            user_id,
+            "acct-alice",
+            &fetcher,
+            &jmap_ops,
+            &events,
+            &mut backoff,
+            &sleeper,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("event loop exits cleanly on terminal auth");
+
+        assert_eq!(events.open_calls(), 3);
+        assert_eq!(backoff.next_calls, 2);
+        assert_eq!(backoff.reset_calls, 1);
+        assert_eq!(
+            sleeper.delays(),
+            vec![Duration::from_millis(1), Duration::from_millis(2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_errors_mid_stream_are_terminal_without_reconnect_backoff() {
+        let (db, _guard, user_id) = setup_db().await;
+        seed_cursors(&db, user_id).await;
+        let fetcher = RecordingFetcher::new();
+        let jmap_ops = NoopJmapOps;
+        let events = ScriptedEventSource::new(vec![OpenResult::Stream(vec![Err(
+            jmap_client::Error::Server("403 forbidden".to_string()),
+        )])]);
+        let mut backoff = RecordingBackoff::default();
+        let sleeper = RecordingSleeper::default();
+
+        run_event_loop_with(
+            &db,
+            user_id,
+            "acct-alice",
+            &fetcher,
+            &jmap_ops,
+            &events,
+            &mut backoff,
+            &sleeper,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("event loop exits cleanly on terminal auth");
+
+        assert_eq!(events.open_calls(), 1);
+        assert_eq!(backoff.next_calls, 0);
+        assert_eq!(sleeper.delays(), Vec::<Duration>::new());
+    }
+
+    #[tokio::test]
+    async fn cancellation_preempts_waiting_on_stream_next() {
+        let (db, _guard, user_id) = setup_db().await;
+        seed_cursors(&db, user_id).await;
+        let fetcher = RecordingFetcher::new();
+        let jmap_ops = NoopJmapOps;
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let events = PendingEventSource {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+        };
+        let mut backoff = RecordingBackoff::default();
+        let sleeper = RecordingSleeper::default();
+        let cancel = CancellationToken::new();
+
+        let run = run_event_loop_with(
+            &db,
+            user_id,
+            "acct-alice",
+            &fetcher,
+            &jmap_ops,
+            &events,
+            &mut backoff,
+            &sleeper,
+            cancel.clone(),
+        );
+        tokio::pin!(run);
+
+        tokio::select! {
+            res = &mut run => panic!("event loop completed before stream wait: {res:?}"),
+            received = entered_rx => received.expect("stream.next polled"),
+        }
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(1), &mut run)
+            .await
+            .expect("cancel should preempt stream.next")
+            .expect("event loop result");
+    }
+
+    #[tokio::test]
+    async fn cancellation_preempts_reconnect_backoff() {
+        let (db, _guard, user_id) = setup_db().await;
+        seed_cursors(&db, user_id).await;
+        let fetcher = RecordingFetcher::new();
+        let jmap_ops = NoopJmapOps;
+        let events = ScriptedEventSource::new(vec![OpenResult::Stream(vec![])]);
+        let mut backoff = RecordingBackoff::default();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let sleeper = BlockingSleeper {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+        };
+        let cancel = CancellationToken::new();
+
+        let run = run_event_loop_with(
+            &db,
+            user_id,
+            "acct-alice",
+            &fetcher,
+            &jmap_ops,
+            &events,
+            &mut backoff,
+            &sleeper,
+            cancel.clone(),
+        );
+        tokio::pin!(run);
+
+        tokio::select! {
+            res = &mut run => panic!("event loop completed before backoff wait: {res:?}"),
+            received = entered_rx => received.expect("backoff sleep entered"),
+        }
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(1), &mut run)
+            .await
+            .expect("cancel should preempt backoff")
+            .expect("event loop result");
+    }
+}
