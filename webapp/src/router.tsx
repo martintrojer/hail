@@ -16,6 +16,7 @@ import {
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
+import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { MailViewPage } from './routes/MailViewPage';
@@ -27,6 +28,7 @@ function AppShell() {
   return (
     <AuthProvider>
       <Outlet />
+      <KeyboardShortcuts />
     </AuthProvider>
   );
 }
@@ -368,6 +370,15 @@ function PaperTrailPage() {
   );
 }
 
+function ComposePlaceholderPage() {
+  return (
+    <ProtectedPlaceholderPage
+      title="Compose"
+      description="Composer is not built yet. The c shortcut will land here once drafting ships."
+    />
+  );
+}
+
 const rootRoute = createRootRoute({
   component: AppShell,
 });
@@ -494,6 +505,13 @@ const searchRoute = createRoute({
   component: SearchPage,
 });
 
+const composeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/compose',
+  beforeLoad: requireAuth,
+  component: ComposePlaceholderPage,
+});
+
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
@@ -524,6 +542,7 @@ const routeTree = rootRoute.addChildren([
   replyLaterRoute,
   threadRoute,
   searchRoute,
+  composeRoute,
   adminRoute,
 ]);
 
