@@ -46,6 +46,39 @@ pub fn sanitize_and_strip_trackers(input_html: &str) -> SanitizedHtml {
     }
 }
 
+/// Convert a plain-text mail body into a safe HTML fragment.
+///
+/// The output escapes HTML metacharacters and preserves author line breaks with
+/// `<br>` tags. Quote/history stripping is intentionally left to callers so the
+/// same thread render pipeline can apply one policy to both native HTML and
+/// text/plain fallback bodies.
+pub fn plaintext_body_to_html(input_text: &str) -> String {
+    let mut html = String::with_capacity(input_text.len());
+    let normalized = input_text.replace("\r\n", "\n").replace('\r', "\n");
+
+    for (idx, line) in normalized.split('\n').enumerate() {
+        if idx > 0 {
+            html.push_str("<br>");
+        }
+        escape_text_into(line, &mut html);
+    }
+
+    html
+}
+
+fn escape_text_into(input: &str, output: &mut String) {
+    for ch in input.chars() {
+        match ch {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&#39;"),
+            _ => output.push(ch),
+        }
+    }
+}
+
 fn sanitizer() -> Builder<'static> {
     let mut builder = Builder::default();
     builder
@@ -201,6 +234,25 @@ fn tracking_url(src: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plaintext_body_is_escaped_and_preserves_line_breaks() {
+        let html = plaintext_body_to_html("Hello <Alice> & Bob\r\nSecond line\n\nFinal > line");
+
+        assert_eq!(
+            html,
+            "Hello &lt;Alice&gt; &amp; Bob<br>Second line<br><br>Final &gt; line"
+        );
+    }
+
+    #[test]
+    fn plaintext_body_can_feed_quote_stripper() {
+        let html = plaintext_body_to_html("Fresh reply\n\n> old quoted text");
+        let stripped = strip_quoted_history(&html);
+
+        assert_eq!(stripped.html, "Fresh reply");
+        assert!(stripped.stripped);
+    }
 
     #[test]
     fn removes_script_tags() {
