@@ -9,6 +9,7 @@ mod backoff;
 mod catchup;
 mod changes;
 mod crypto;
+mod reconcile;
 mod scheduler;
 mod screener;
 mod state;
