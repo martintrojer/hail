@@ -524,4 +524,129 @@ mod tests {
             .contains(r#"rel="noopener noreferrer nofollow""#));
         assert!(sanitized.html.contains(r#"target="_blank""#));
     }
+
+    mod fixture_corpus {
+        use hail_test::mail_fixture;
+        use mail_parser::MessageParser;
+
+        use super::{plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history};
+
+        #[derive(Debug)]
+        struct RenderedFixture {
+            html: String,
+            blocked_tracker_srcs: Vec<String>,
+        }
+
+        fn render_fixture(name: &str) -> RenderedFixture {
+            let fixture = mail_fixture(name).unwrap_or_else(|| panic!("{name} fixture exists"));
+            let message = MessageParser::default()
+                .parse(fixture.bytes())
+                .unwrap_or_else(|| panic!("{name} parses as RFC822"));
+            let body_html = if message.html_body_count() > 0 {
+                message
+                    .body_html(0)
+                    .unwrap_or_else(|| panic!("{name} has readable html body"))
+                    .into_owned()
+            } else {
+                let text = message
+                    .body_text(0)
+                    .unwrap_or_else(|| panic!("{name} has readable text body"));
+                plaintext_body_to_html(&text)
+            };
+
+            let stripped = strip_quoted_history(&body_html);
+            let sanitized = sanitize_and_strip_trackers(&stripped.html);
+
+            RenderedFixture {
+                html: sanitized.html,
+                blocked_tracker_srcs: sanitized
+                    .blocked_trackers
+                    .into_iter()
+                    .map(|tracker| tracker.src)
+                    .collect(),
+            }
+        }
+
+        #[test]
+        fn newsletter_tracking_pixel_is_blocked() {
+            let rendered = render_fixture("newsletter-tracking-pixel.eml");
+
+            assert!(rendered.html.contains("Northwind Weekly"));
+            assert!(rendered.html.contains("Read the full issue"));
+            assert!(!rendered.html.contains("track.northwind.example"));
+            assert!(!rendered.html.contains("open.gif"));
+            assert_eq!(
+                rendered.blocked_tracker_srcs,
+                ["https://track.northwind.example/open.gif?recipient=alex%40hail.test&campaign=2025-05-21"]
+            );
+        }
+
+        #[test]
+        fn malicious_html_fixture_is_sanitized() {
+            let rendered = render_fixture("malicious-html.eml");
+            let lower_html = rendered.html.to_ascii_lowercase();
+
+            assert!(rendered.html.contains("Mailbox verification required"));
+            assert!(rendered.html.contains("Verify mailbox"));
+            assert!(!lower_html.contains("<script"));
+            assert!(!lower_html.contains("__stolen"));
+            assert!(!lower_html.contains("onerror"));
+            assert!(!lower_html.contains("javascript:"));
+            assert!(!lower_html.contains("background-image"));
+            assert!(!rendered.html.contains("phish.example/pixel/open.png"));
+            assert_eq!(
+                rendered.blocked_tracker_srcs,
+                ["https://phish.example/pixel/open.png?id=alex"]
+            );
+        }
+
+        #[test]
+        fn quoted_gmail_fixture_strips_reply_history() {
+            let rendered = render_fixture("quoted-gmail.eml");
+
+            assert!(rendered.html.contains("Looks good to me"));
+            assert!(rendered.html.contains("Priya"));
+            assert!(!rendered.html.contains("gmail_quote"));
+            assert!(!rendered.html.contains("Can you sanity-check the launch checklist"));
+            assert!(!rendered.html.contains("Approve a sender"));
+        }
+
+        #[test]
+        fn quoted_outlook_fixture_strips_reply_history() {
+            let rendered = render_fixture("quoted-outlook.eml");
+
+            assert!(rendered.html.contains("Approved. Please keep the invoice"));
+            assert!(rendered.html.contains("Sam"));
+            assert!(!rendered.html.contains("Alex Rivera"));
+            assert!(!rendered.html.contains("Budget approval</p>"));
+            assert!(!rendered.html.contains("prototype documentation shelf"));
+        }
+
+        #[test]
+        fn plaintext_simple_fixture_renders_body_safely() {
+            let rendered = render_fixture("personal-simple.eml");
+
+            assert!(rendered.html.contains("Hey Alex"));
+            assert!(rendered.html.contains("Are you still free for dinner on Thursday?"));
+            assert!(rendered.html.contains("Bring the photos from the hike"));
+            assert!(rendered.html.contains("<br>"));
+            assert!(!rendered.html.contains("<script"));
+            assert!(rendered.blocked_tracker_srcs.is_empty());
+        }
+
+        #[test]
+        fn receipt_fixture_preserves_table_and_basic_formatting_safely() {
+            let rendered = render_fixture("receipt-papertrail.eml");
+
+            assert!(rendered.html.contains("Receipt PT-1042"));
+            assert!(rendered.html.contains("<table>"));
+            assert!(rendered.html.contains("<th>Item</th>"));
+            assert!(rendered.html.contains("The Rust Programming Language"));
+            assert!(rendered.html.contains("<strong>Total</strong>"));
+            assert!(rendered.html.contains("<strong>$55.08</strong>"));
+            assert!(rendered.html.contains("Paid with Visa ending in 4242"));
+            assert!(!rendered.html.contains("<script"));
+            assert!(rendered.blocked_tracker_srcs.is_empty());
+        }
+    }
 }

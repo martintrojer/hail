@@ -62,6 +62,15 @@ fn strip_cite_blockquotes(html: &mut String) -> bool {
 }
 
 fn strip_outlook_history(html: &mut String) -> bool {
+    if let Some(start) = outlook_history_start(html) {
+        html.truncate(start);
+        trim_trailing_breaks(html);
+        return true;
+    }
+    false
+}
+
+fn outlook_history_start(html: &str) -> Option<usize> {
     let mut cursor = 0;
     while let Some(rel_hr_start) = find_next_tag_start(&html[cursor..], "hr") {
         let hr_start = cursor + rel_hr_start;
@@ -71,13 +80,27 @@ fn strip_outlook_history(html: &mut String) -> bool {
         let after_hr = hr_end + 1;
         let probe_end = (after_hr + 2_000).min(html.len());
         if outlook_header_score(&html[after_hr..probe_end]) >= 3 {
-            html.truncate(hr_start);
-            trim_trailing_breaks(html);
-            return true;
+            return Some(hr_start);
         }
         cursor = after_hr;
     }
-    false
+
+    let lower = html.to_ascii_lowercase();
+    let mut search_start = 0;
+    while let Some(rel_pos) = lower[search_start..].find("from:") {
+        let pos = search_start + rel_pos;
+        let line_start = find_lineish_start(html, pos);
+        if visible_text(&html[line_start..pos]).trim().is_empty() {
+            let following = &html[line_start..];
+            let probe_end = 2_000.min(following.len());
+            if outlook_header_score(&following[..probe_end]) >= 3 {
+                return Some(line_start);
+            }
+        }
+        search_start = pos + "from:".len();
+    }
+
+    None
 }
 
 fn strip_on_wrote_trailing_history(html: &mut String) -> bool {
@@ -500,6 +523,16 @@ mod tests {
         let stripped = strip_quoted_history(input);
 
         assert_eq!(stripped.html, "<div>Done.</div>");
+        assert!(stripped.stripped);
+    }
+
+    #[test]
+    fn outlook_header_block_without_hr_removed() {
+        let input = "<p>Done.</p><div><p><b>From:</b> Alice &lt;a@example.test&gt;<br><b>Sent:</b> Monday<br><b>To:</b> Bob<br><b>Subject:</b> Re: Hi</p></div><p>old body</p>";
+
+        let stripped = strip_quoted_history(input);
+
+        assert_eq!(stripped.html, "<p>Done.</p>");
         assert!(stripped.stripped);
     }
 
