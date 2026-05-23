@@ -19,17 +19,14 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::undo::{UndoToken, create_undo_action};
+use crate::routes::undo::{NewUndoAction, ThreadStackUndoTarget, UndoToken, create_undo_action};
 use crate::state::AppState;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 struct StackPositionSnapshot {
     position: i64,
     added_at: DateTime<Utc>,
 }
-
-const STACK_SET_ASIDE: &str = "set_aside";
-const STACK_REPLY_LATER: &str = "reply_later";
 
 pub trait ThreadVerifier: Send + Sync + 'static {
     fn exists<'a>(
@@ -461,8 +458,7 @@ where
         user,
         actions,
         thread_id,
-        STACK_SET_ASIDE,
-        "$hail_setaside",
+        ThreadStackUndoTarget::SetAside,
     )
     .await
 }
@@ -481,8 +477,7 @@ where
         user,
         actions,
         thread_id,
-        STACK_REPLY_LATER,
-        "$hail_replylater",
+        ThreadStackUndoTarget::ReplyLater,
     )
     .await
 }
@@ -492,8 +487,7 @@ async fn add_to_stack<A>(
     user: AuthUser,
     actions: Arc<A>,
     thread_id: String,
-    stack: &'static str,
-    keyword: &'static str,
+    target: ThreadStackUndoTarget,
 ) -> Response
 where
     A: ThreadActions,
@@ -501,6 +495,8 @@ where
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
+    let stack = target.stack();
+    let keyword = target.keyword();
 
     match actions
         .add_keyword(&state, user.jmap_token.clone(), &thread_id, keyword)
@@ -536,15 +532,9 @@ where
 
     match result {
         Ok(_) => {
-            let undo = create_thread_stack_undo(
-                &state,
-                user.id,
-                &thread_id,
-                stack,
-                keyword,
-                previous_position,
-            )
-            .await;
+            let undo =
+                create_thread_stack_undo(&state, user.id, &thread_id, target, previous_position)
+                    .await;
             Json(ThreadVerbResponse { undo }).into_response()
         }
         Err(err) => {
@@ -640,12 +630,11 @@ async fn create_thread_classify_undo(
     create_undo_action(
         state,
         user_id,
-        "thread.classify",
-        serde_json::json!({
-            "thread_id": thread_id,
-            "previous_classification": previous_classification.db_value(),
-            "new_classification": new_classification.db_value(),
-        }),
+        NewUndoAction::thread_classify(
+            thread_id,
+            previous_classification.db_value(),
+            new_classification.db_value(),
+        ),
     )
     .await
     .map_err(|err| {
@@ -659,8 +648,7 @@ async fn create_thread_stack_undo(
     state: &AppState,
     user_id: i64,
     thread_id: &str,
-    stack: &str,
-    keyword: &str,
+    target: ThreadStackUndoTarget,
     previous_position: Option<StackPositionSnapshot>,
 ) -> Option<UndoToken> {
     let previous_position = previous_position.map(|snapshot| {
@@ -673,17 +661,11 @@ async fn create_thread_stack_undo(
     create_undo_action(
         state,
         user_id,
-        "thread.stack",
-        serde_json::json!({
-            "thread_id": thread_id,
-            "stack": stack,
-            "keyword": keyword,
-            "previous_position": previous_position,
-        }),
+        NewUndoAction::thread_stack(thread_id, target, previous_position),
     )
     .await
     .map_err(|err| {
-        tracing::warn!(user_id, thread_id = %thread_id, stack, error = %err, "undo action create failed");
+        tracing::warn!(user_id, thread_id = %thread_id, stack = target.stack(), error = %err, "undo action create failed");
         err
     })
     .ok()
