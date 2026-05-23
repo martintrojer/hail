@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod blobs;
 pub mod contacts;
+pub mod drafts;
 pub mod health;
 pub mod pile;
 pub mod screener;
