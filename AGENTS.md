@@ -169,16 +169,51 @@ How review findings become work:
 
 1. The reviewer writes findings in the task note, grouped as Critical /
    Recommended / Suggestions.
-2. The orchestrator triages every finding:
-   - **Do now:** add a concrete fix task and wire blockers.
-   - **Defer:** add a task and mark it `DEFERRED` with evidence.
-   - **Reject:** add a note explaining why, or close/reject the proposed fix task
-     with evidence.
-3. Important: findings must not live only in review prose. If a finding needs
+2. The reviewer creates mu tasks for every actionable finding before closing the
+   review. Do not leave a long review note for the orchestrator to manually
+   split later. Use concrete task names, honest impact/effort, and blocker
+   edges.
+3. The reviewer wires obvious dependencies immediately:
+   - Critical correctness/security findings should usually block
+     `mvp-security-review`, `mvp-test-review`, and often `v1-ship`.
+   - Test-confidence findings should block `mvp-test-review`.
+   - Product-smoke findings should block the relevant `human-smoke-*` task.
+4. The reviewer marks low-priority follow-ups `DEFERRED` when they should be
+   tracked but not worked for v1.
+5. The reviewer adds a final triage note summarizing:
+   - tasks created;
+   - tasks deferred;
+   - findings intentionally rejected/no-tasked and why.
+6. The orchestrator still has final authority to re-prioritize, reopen, defer,
+   reject, or unblock tasks. But the reviewer should do the first split so the
+   orchestrator is not forced to mine a giant note for TODOs.
+
+Example review finalization:
+
+```bash
+mu task add fix-thread-render-remote-image-privacy -w hail \
+  -t "Thread render: block/proxy external remote images by default" \
+  -i 95 -e 1 \
+  -b html-sanitize-trackers,thread-assembly
+mu task block v1-ship -w hail --by fix-thread-render-remote-image-privacy
+mu task block mvp-security-review -w hail --by fix-thread-render-remote-image-privacy
+
+mu task add refactor-mail-render-quote-stripping-dom -w hail \
+  -t "Mail render: replace quote-strip string parser with DOM traversal" \
+  -i 60 -e 1 \
+  -b quoted-reply-stripper
+mu task defer refactor-mail-render-quote-stripping-dom -w hail \
+  --evidence "tracked from review; not v1 blocking unless quote heuristics expand"
+
+mu task note review-code-thread-rendering -w hail \
+  "TRIAGE: created fix-thread-render-remote-image-privacy (v1 blocker); deferred refactor-mail-render-quote-stripping-dom; rejected no findings."
+mu task close review-code-thread-rendering -w hail \
+  --evidence "review complete; findings split into mu tasks"
+```
+
+Important: findings must not live only in review prose. If a finding needs
    action, it becomes a mu task. If it does not need action, the triage reason is
    recorded in the review task notes.
-4. The orchestrator, not the reviewer, decides priority and whether the finding
-   blocks v1.
 
 Human-in-the-loop smoke tests follow the same rule. When the operator is asked
 to try the app, their notes are not treated as chat-only feedback. Add a
@@ -200,18 +235,6 @@ tracking pixels, quoted replies) should be reusable across unit tests, local
 E2E, Cloudflare smoke, and human smoke. If a smoke test needs external
 credentials or DNS changes, model it as a human-in-the-loop mu task and make the
 operator steps explicit.
-
-Review tasks should be read-only unless explicitly assigned to fix issues. A
-reviewer's final action is usually:
-
-```bash
-mu task note review-code-foo -w hail "CRITICAL: ...\nRECOMMENDED: ...\nSUGGESTIONS: ...\nTRIAGE_HINTS: ..."
-mu task close review-code-foo -w hail --evidence "review complete; findings logged as task note"
-```
-
-If the reviewer discovers a security issue or test false-confidence issue that
-could invalidate a just-merged feature, they should say so loudly in the note;
-the orchestrator should immediately add a blocking fix task.
 
 ## Fedora host / toolbox tools
 
