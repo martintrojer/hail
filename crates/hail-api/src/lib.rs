@@ -109,8 +109,7 @@ fn build_api_router(
     }
 
     // Serialize once. The OpenAPI doc is immutable at runtime.
-    let openapi_json =
-        serde_json::to_string(&api).expect("OpenAPI doc must serialize to JSON");
+    let openapi_json = serde_json::to_string(&api).expect("OpenAPI doc must serialize to JSON");
 
     let openapi_route = get(move || {
         let body = openapi_json.clone();
@@ -170,7 +169,10 @@ fn build_api_router(
         .with_state(state.clone())
         .layer(TraceLayer::new_for_http());
 
-    mount_spa_fallback(router, &webapp_dir(&state))
+    mount_spa_fallback(router, &webapp_dir(&state)).layer(axum::middleware::from_fn_with_state(
+        state,
+        middleware::security_headers::add_security_headers,
+    ))
 }
 
 fn resolve_webapp_dir(state: &AppState) -> PathBuf {
@@ -189,14 +191,14 @@ fn mount_spa_fallback(router: Router, webapp_dir: &Path) -> Router {
         return router.fallback(api_only_not_found);
     }
 
-    router.fallback_service(
-        // `not_found_service` forces the fallback response status back to
-        // 404 in tower-http 0.6; history-mode SPA routes need `200 OK`, so
-        // use the same ServeFile fallback without SetStatus wrapping.
-        ServeDir::new(webapp_dir)
-            .fallback(ServeFile::new(webapp_dir.join("index.html"))),
-    )
-    .layer(axum::middleware::from_fn(normalize_javascript_content_type))
+    router
+        .fallback_service(
+            // `not_found_service` forces the fallback response status back to
+            // 404 in tower-http 0.6; history-mode SPA routes need `200 OK`, so
+            // use the same ServeFile fallback without SetStatus wrapping.
+            ServeDir::new(webapp_dir).fallback(ServeFile::new(webapp_dir.join("index.html"))),
+        )
+        .layer(axum::middleware::from_fn(normalize_javascript_content_type))
 }
 
 async fn normalize_javascript_content_type(req: Request, next: Next) -> Response {
