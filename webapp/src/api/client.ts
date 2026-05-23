@@ -49,6 +49,7 @@ export interface SetupAdminRequest {
 export type MailClassification = 'imbox' | 'feed' | 'papertrail';
 export type MailViewKind = MailClassification;
 export type PileViewKind = 'set-aside' | 'reply-later';
+export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 
 export interface MailViewItem {
   thread_id: string;
@@ -64,6 +65,34 @@ export interface MailViewItem {
 export interface MailViewResponse {
   items: MailViewItem[];
   next_cursor: string | null;
+}
+
+export interface MailSearchResult {
+  type: 'mail';
+  thread_id: string;
+  email_id: string;
+  from: string;
+  subject: string;
+  preview: string;
+  received_at: string | null;
+}
+
+export interface ContactNoteSearchResult {
+  type: 'contact_note';
+  address: string;
+  markdown: string;
+  updated_at: string;
+}
+
+export type SearchResult = MailSearchResult | ContactNoteSearchResult;
+
+export interface SearchResponse {
+  results: SearchResult[];
+}
+
+export interface SearchParams {
+  q: string;
+  scope?: SearchScope;
 }
 
 export interface BlockedTracker {
@@ -292,6 +321,18 @@ export class HailApiClient {
   async getPapertrail(): Promise<MailViewResponse> {
     return this.#json<MailViewResponse>(
       await this.#request('/api/views/papertrail'),
+      200,
+    );
+  }
+
+  async search(params: SearchParams): Promise<SearchResponse> {
+    const query = new URLSearchParams({ q: params.q });
+    if (params.scope) {
+      query.set('scope', params.scope);
+    }
+
+    return this.#json<SearchResponse>(
+      await this.#request(`/api/views/search?${query.toString()}`),
       200,
     );
   }

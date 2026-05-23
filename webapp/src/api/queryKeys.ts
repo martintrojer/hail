@@ -7,6 +7,8 @@ export const queryKeys = {
   views: () => [...queryKeys.all, 'views'] as const,
   view: (view: 'imbox' | 'feed' | 'papertrail' | 'set-aside' | 'reply-later') =>
     [...queryKeys.views(), view] as const,
+  search: (q: string, scope: 'all' | 'mail' | 'notes' | 'clips') =>
+    [...queryKeys.views(), 'search', scope, q] as const,
   screener: () => [...queryKeys.views(), 'screener'] as const,
   contacts: () => [...queryKeys.all, 'contacts'] as const,
   contact: (address: string) =>
