@@ -6,7 +6,7 @@ Compose deployment. Production deployment remains documented in
 
 ## Stalwart integration fixture
 
-`crates/hail-test` exposes a Stalwart fixture scaffold for local integration
+`crates/hail-test` exposes a Stalwart fixture for local integration and smoke
 and smoke tests:
 
 ```rust
@@ -16,23 +16,26 @@ let fixture = start_stalwart_fixture().await?;
 let jmap_url = fixture.jmap_url();
 ```
 
-The fixture currently does the parts we can automate reliably:
+The fixture automates a full disposable mailbox:
 
 - allocates free loopback host ports;
-- creates a temporary config/data directory;
-- renders a minimal Stalwart TOML matching `deploy/stalwart.example.toml`'s
-  SQLite/filesystem/internal-directory shape;
-- starts `docker.io/stalwartlabs/stalwart:latest` with Podman;
-- waits for `/.well-known/jmap` to respond;
+- creates temporary `/etc/stalwart` and `/var/lib/stalwart` bind mounts;
+- starts `docker.io/stalwartlabs/stalwart:latest` with Podman in v0.16
+  bootstrap mode using a pinned `STALWART_RECOVERY_ADMIN`;
+- completes the `x:Bootstrap` JMAP setup object with `mail.hail.test` /
+  `hail.test`, internal directory, manual DNS/TLS/DKIM, and a loopback
+  `STALWART_PUBLIC_URL`;
+- restarts Stalwart into normal mode and waits for authenticated JMAP;
+- provisions the default user `alice@hail.test` with password
+  `hail-test-password` through `x:Account/set`;
+- proves login with `hail_jmap`; and
 - removes the container on drop.
 
-The fixture intentionally does **not** pretend that mailbox provisioning works.
-`seed_user_domain()` and `login_seeded_user()` currently return
-`UserProvisioningNotImplemented`. Stalwart v0.13+ moved more state into the
-WebUI/JMAP-managed configuration surface, and hail still needs to pin the exact
-management API/auth flow before automated domain/user creation is safe. Future
-work should replace those placeholders with real calls and then obtain a
-`hail_jmap::Session` for the seeded user.
+`create_domain()`, `create_user()`, `seed_user_domain()`, and
+`seed_default_user()` are idempotent helpers over Stalwart's v0.16 JMAP
+management objects. The fixture uses Basic authentication for the seeded user's
+JMAP session because Stalwart v0.16 does not accept hail's legacy
+base64-as-bearer convention for normal password login.
 
 ## Running the gated Stalwart tests
 
@@ -55,21 +58,30 @@ RUSTFLAGS="-D warnings" cargo test -p hail-test --test stalwart_fixture -- --noc
 
 ## Equivalent manual Podman command
 
-The fixture writes a config equivalent to this run shape. For manual debugging,
-create a temporary root and copy/edit `deploy/stalwart.example.toml` into it:
+The fixture uses Stalwart v0.16's bootstrap flow rather than mounting the older
+TOML config shape. For manual debugging, start the same image with writable
+config/data mounts and pinned recovery credentials:
 
 ```bash
 root=$(mktemp -d)
 mkdir -p "$root/etc" "$root/data"
-cp deploy/stalwart.example.toml "$root/etc/config.toml"
+podman unshare chown -R 2000:2000 "$root/etc" "$root/data"
 
 podman run --rm --name hail-stalwart-manual \
+  -e STALWART_RECOVERY_ADMIN='admin:hail-bootstrap-admin-password' \
+  -e STALWART_PUBLIC_URL='http://localhost:18080' \
   --publish 127.0.0.1:18080:8080 \
   --publish 127.0.0.1:10025:25 \
-  --volume "$root/etc/config.toml:/opt/stalwart/etc/config.toml:ro" \
+  --volume "$root/etc:/etc/stalwart:Z" \
   --volume "$root/data:/var/lib/stalwart:Z" \
   docker.io/stalwartlabs/stalwart:latest
 ```
+
+The Rust fixture then performs the equivalent of:
+
+1. `x:Bootstrap/get` / `x:Bootstrap/set` against `http://localhost:18080/jmap/`;
+2. container restart;
+3. `x:Account/set` for `alice` in the bootstrapped `hail.test` domain.
 
 In another shell, readiness should be visible as a non-5xx response:
 
@@ -122,26 +134,14 @@ curl -fsS http://127.0.0.1:18081/api/health
 # Browser: http://127.0.0.1:18081
 ```
 
-### Current provisioning blocker
+### Provisioning status
 
-Automatic Stalwart domain/user provisioning is still intentionally blocked on
-pinning Stalwart's management API/auth bootstrap flow. The script starts the
-stack and then fails clearly before import if `HAIL_TESTBED_PASSWORD` is absent.
-It does **not** claim successful end-to-end mail injection until a real mailbox
-exists.
-
-Manual path for now:
-
-1. start the testbed:
-   ```bash
-   scripts/local-mail-testbed.sh
-   ```
-2. create domain `hail.test` and mailbox `alice@hail.test` in Stalwart's
-   WebUI/admin surface (or with the Stalwart CLI for the pinned image);
-3. rerun import against the existing stack:
-   ```bash
-   HAIL_TESTBED_PASSWORD='<password>' scripts/local-mail-testbed.sh --no-build
-   ```
+The Rust Stalwart fixture now automates disposable v0.16 provisioning for
+integration tests. The Compose script still targets the standalone Compose stack
+and imports into whatever mailbox is reachable at `HAIL_TESTBED_JMAP_URL`.
+Until that script is switched to reuse the Rust fixture/bootstrap helper or a
+Compose-native v0.16 apply step, set `HAIL_TESTBED_PASSWORD` when importing into
+an already-provisioned stack.
 
 Override defaults when needed:
 
@@ -163,20 +163,3 @@ HAIL_RUN_LOCAL_MAIL_TESTBED=1 \
 HAIL_TESTBED_PASSWORD='<password>' \
   cargo test -p hail-test --test local_mail_testbed -- --nocapture
 ```
-
-## Provisioning TODO
-
-The next harness step is to replace the explicit placeholder with real
-Stalwart automation:
-
-1. confirm the management endpoint and authentication mechanism for the pinned
-   Stalwart image;
-2. create the test domain (`hail.test` by default);
-3. create the test user (`alice@hail.test` by default) with a password;
-4. log in via `hail_jmap::login_bearer` using hail's base64 `email:password`
-   bearer convention;
-5. optionally create the `Screener` mailbox via JMAP so local mail-flow smokes
-   can assert receive/screener/imbox behavior.
-
-Until those steps land, tests must treat user provisioning as unsupported and
-must not report false success.

@@ -21,6 +21,7 @@ pub async fn login_basic(
 ) -> Result<Session, Error> {
     let client = jmap_client::client::Client::new()
         .credentials((email, password.expose_secret()))
+        .follow_redirects(base_url_host(base_url))
         .connect(base_url)
         .await
         .map_err(classify_connect_error)?;
@@ -33,6 +34,7 @@ pub async fn login_basic(
 pub async fn login_bearer(base_url: &str, token: SecretString) -> Result<Session, Error> {
     let client = jmap_client::client::Client::new()
         .credentials(Credentials::bearer(token.expose_secret()))
+        .follow_redirects(base_url_host(base_url))
         .connect(base_url)
         .await
         .map_err(classify_connect_error)?;
@@ -52,6 +54,16 @@ impl Session {
     pub fn client(&self) -> &jmap_client::client::Client {
         &self.client
     }
+}
+
+fn base_url_host(base_url: &str) -> Option<String> {
+    base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest)
+        .split(['/', ':'])
+        .next()
+        .filter(|host| !host.is_empty())
+        .map(str::to_owned)
 }
 
 fn session_from_client(client: jmap_client::client::Client) -> Result<Session, Error> {
@@ -77,7 +89,9 @@ fn classify_connect_error(error: jmap_client::Error) -> Error {
 fn is_auth_error(error: &jmap_client::Error) -> bool {
     match error {
         jmap_client::Error::Problem(problem) => matches!(problem.status, Some(401 | 403)),
-        jmap_client::Error::Server(status) => status.starts_with("401") || status.starts_with("403"),
+        jmap_client::Error::Server(status) => {
+            status.starts_with("401") || status.starts_with("403")
+        }
         _ => false,
     }
 }

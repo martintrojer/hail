@@ -953,6 +953,8 @@ dependencies = [
  "hail-jmap",
  "reqwest",
  "secrecy",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
