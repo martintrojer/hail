@@ -29,6 +29,32 @@ export interface UserEnvelope {
   user: UserView;
 }
 
+export interface AdminUsersResponse {
+  users: UserView[];
+}
+
+export interface CreateAdminUserRequest {
+  email: string;
+  password: string;
+  display_name?: string | null;
+}
+
+export interface ResetAdminUserPasswordRequest {
+  password: string;
+}
+
+export interface AdminDomainsResponse {
+  domains: string[];
+}
+
+export interface AdminDomainResponse {
+  domain: string;
+}
+
+export interface AddAdminDomainRequest {
+  domain: string;
+}
+
 export interface LoginRequest {
   email: string;
   password: string;
@@ -294,6 +320,81 @@ export class HailApiClient {
         mutating: true,
       }),
       201,
+    );
+  }
+
+  async listAdminUsers(): Promise<AdminUsersResponse> {
+    return this.#json<AdminUsersResponse>(
+      await this.#request('/api/admin/users'),
+      200,
+    );
+  }
+
+  async createAdminUser(body: CreateAdminUserRequest): Promise<UserEnvelope> {
+    return this.#json<UserEnvelope>(
+      await this.#request('/api/admin/users', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async deleteAdminUser(userId: number): Promise<void> {
+    await this.#empty(
+      await this.#request(`/api/admin/users/${encodeURIComponent(String(userId))}`, {
+        method: 'DELETE',
+        mutating: true,
+      }),
+      204,
+    );
+  }
+
+  async resetAdminUserPassword(
+    userId: number,
+    body: ResetAdminUserPasswordRequest,
+  ): Promise<UserEnvelope> {
+    return this.#json<UserEnvelope>(
+      await this.#request(
+        `/api/admin/users/${encodeURIComponent(String(userId))}/reset-password`,
+        {
+          method: 'POST',
+          body,
+          mutating: true,
+        },
+      ),
+      200,
+    );
+  }
+
+  async listAdminDomains(): Promise<AdminDomainsResponse> {
+    return this.#json<AdminDomainsResponse>(
+      await this.#request('/api/admin/domains'),
+      200,
+    );
+  }
+
+  async addAdminDomain(
+    body: AddAdminDomainRequest,
+  ): Promise<AdminDomainResponse> {
+    return this.#json<AdminDomainResponse>(
+      await this.#request('/api/admin/domains', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async deleteAdminDomain(domain: string): Promise<void> {
+    await this.#empty(
+      await this.#request(`/api/admin/domains/${encodeURIComponent(domain)}`, {
+        method: 'DELETE',
+        mutating: true,
+      }),
+      204,
     );
   }
 

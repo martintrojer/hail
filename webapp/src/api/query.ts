@@ -7,10 +7,15 @@ import {
 } from '@tanstack/react-query';
 import {
   HailApiClient,
+  type AddAdminDomainRequest,
+  type AdminDomainResponse,
+  type AdminDomainsResponse,
+  type AdminUsersResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
   type ContactNote,
   type ContactResponse,
+  type CreateAdminUserRequest,
   type LoginRequest,
   type MailViewResponse,
   type PileViewResponse,
@@ -76,6 +81,114 @@ export function useSetupAdminMutation(
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       queryClient.setQueryData(queryKeys.me(), data);
       void queryClient.invalidateQueries({ queryKey: queryKeys.setup() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useAdminUsers(
+  client = defaultApiClient,
+  options?: QueryConfig<AdminUsersResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.adminUsers(),
+    queryFn: () => client.listAdminUsers(),
+    ...options,
+  });
+}
+
+export function useCreateAdminUserMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<CreateAdminUserRequest, UserEnvelope>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.createAdminUser(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useDeleteAdminUserMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (userId) => client.deleteAdminUser(userId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface ResetAdminUserPasswordVariables {
+  userId: number;
+  password: string;
+}
+
+export function useResetAdminUserPasswordMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ResetAdminUserPasswordVariables, UserEnvelope>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ userId, password }) =>
+      client.resetAdminUserPassword(userId, { password }),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useAdminDomains(
+  client = defaultApiClient,
+  options?: QueryConfig<AdminDomainsResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.adminDomains(),
+    queryFn: () => client.listAdminDomains(),
+    ...options,
+  });
+}
+
+export function useAddAdminDomainMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<AddAdminDomainRequest, AdminDomainResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.addAdminDomain(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminDomains() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useDeleteAdminDomainMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<string, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (domain) => client.deleteAdminDomain(domain),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminDomains() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });

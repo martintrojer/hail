@@ -19,6 +19,7 @@ import { AuthProvider } from './auth/AuthProvider';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
+import { AdminPage } from './routes/AdminPage';
 import { MailViewPage } from './routes/MailViewPage';
 import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
@@ -515,19 +516,8 @@ const composeRoute = createRoute({
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
-  beforeLoad: async () => {
-    const me = await requireAuth();
-    if (!me.user.is_admin) {
-      throw redirect({ to: '/imbox' });
-    }
-    return me;
-  },
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Admin"
-      description="Instance users, domains, and operator settings will render here."
-    />
-  ),
+  beforeLoad: requireAuth,
+  component: AdminPage,
 });
 
 const routeTree = rootRoute.addChildren([
