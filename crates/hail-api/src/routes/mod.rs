@@ -4,6 +4,7 @@
 //! login/logout/me).
 
 pub mod auth;
+pub mod contacts;
 pub mod health;
 pub mod threads;
 
