@@ -10,6 +10,8 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
+#[path = "../src/app_events.rs"]
+mod app_events;
 #[path = "../src/catchup.rs"]
 mod catchup;
 #[path = "../src/changes.rs"]

@@ -5,6 +5,7 @@
 //! on SIGINT/SIGTERM. JMAP EventSource subscriptions and screener routing
 //! arrive in follow-up tasks (`jmap-eventsource`, `screener-routing`).
 
+mod app_events;
 mod backoff;
 mod catchup;
 mod changes;
@@ -48,10 +49,9 @@ async fn main() -> Result<()> {
         .context("running hail-db migrations")?;
     info!("db ready");
 
-    let token_decryptor: Arc<dyn crypto::TokenDecryptor> =
-        Arc::new(crypto::HailCoreOpener::new(
-            config.secrets.server_key.clone(),
-        )?);
+    let token_decryptor: Arc<dyn crypto::TokenDecryptor> = Arc::new(crypto::HailCoreOpener::new(
+        config.secrets.server_key.clone(),
+    )?);
     let state = Arc::new(AppState {
         db,
         config,

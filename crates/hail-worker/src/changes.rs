@@ -14,7 +14,8 @@ use chrono::Utc;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
-use crate::screener::{self, JmapOps, route_email};
+use crate::app_events::{WorkerAppEvent, publish_app_event};
+use crate::screener::{self, Classification, JmapOps, RouteOutcome, route_email};
 
 /// JMAP TypeStates that hail-worker tracks per user. Mirrors
 /// design.md §6.2 (`jmap_state.type_state` column) and §8.1 item 1
@@ -267,6 +268,17 @@ async fn route_envelopes(
             };
             match route_email(conn.as_mut(), jmap_ops, user_id, &route_env).await {
                 Ok(outcome) => {
+                    if let Some(event) = app_event_for_route_outcome(&outcome) {
+                        if let Err(err) = publish_app_event(db, user_id, event).await {
+                            warn!(
+                                user_id,
+                                email_id = %route_env.id,
+                                event_type = %event.event_type(),
+                                error = %err,
+                                "failed to publish routed mail app event"
+                            );
+                        }
+                    }
                     info!(
                         user_id,
                         email_id = %route_env.id,
@@ -289,6 +301,14 @@ async fn route_envelopes(
     }
 
     if !changes.destroyed.is_empty() {
+        if let Err(err) = publish_app_event(db, user_id, WorkerAppEvent::ThreadUpdated).await {
+            warn!(
+                user_id,
+                type_state = %type_state,
+                error = %err,
+                "failed to publish destroyed ids app event"
+            );
+        }
         info!(
             user_id,
             type_state = %type_state,
@@ -297,6 +317,19 @@ async fn route_envelopes(
         );
     }
     Ok(())
+}
+
+fn app_event_for_route_outcome(outcome: &RouteOutcome) -> Option<WorkerAppEvent> {
+    match outcome {
+        RouteOutcome::Classified { classification } => Some(match classification {
+            Classification::Imbox => WorkerAppEvent::ImboxNew,
+            Classification::Feed => WorkerAppEvent::FeedNew,
+            Classification::Papertrail => WorkerAppEvent::PapertrailNew,
+        }),
+        RouteOutcome::ScreenerPending { .. } => Some(WorkerAppEvent::ScreenerPending),
+        RouteOutcome::Trashed => Some(WorkerAppEvent::ThreadUpdated),
+        RouteOutcome::AlreadyScreened => Some(WorkerAppEvent::ThreadUpdated),
+    }
 }
 
 fn route_envelope_from_change(env: &EmailEnvelope) -> Option<screener::EmailEnvelope> {

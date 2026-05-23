@@ -13,6 +13,9 @@ use secrecy::{ExposeSecret, SecretString};
 use sqlx::SqlitePool;
 use tokio::sync::Barrier;
 
+#[path = "../src/app_events.rs"]
+mod app_events;
+
 #[path = "../src/crypto.rs"]
 #[allow(dead_code)]
 mod crypto;
@@ -421,6 +424,14 @@ async fn due_send_submits_and_marks_sent() {
             None
         )
     );
+    let event_type: String = sqlx::query_scalar(
+        "SELECT event_type FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("app event");
+    assert_eq!(event_type, "send.completed");
 }
 
 #[tokio::test]

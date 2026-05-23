@@ -18,6 +18,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "jmap_state",
     "audit_log",
     "undo_actions",
+    "app_events",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -27,6 +28,8 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_bubble_ups_pending",
     "idx_scheduled_sends_due",
     "idx_undo_actions_user_live",
+    "idx_app_events_id",
+    "idx_app_events_user_id",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[

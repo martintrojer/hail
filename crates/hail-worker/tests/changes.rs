@@ -31,6 +31,9 @@ use sqlx::SqlitePool;
 #[path = "../src/backoff.rs"]
 mod backoff;
 
+#[path = "../src/app_events.rs"]
+mod app_events;
+
 #[path = "../src/changes.rs"]
 mod changes;
 
@@ -221,6 +224,15 @@ async fn handle_changes_persists_new_cursor() {
         .await
         .expect("load_cursor");
     assert_eq!(stored, "state-2");
+
+    let event_type: String = sqlx::query_scalar(
+        "SELECT event_type FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("app event");
+    assert_eq!(event_type, "screener.pending");
 }
 
 #[tokio::test]

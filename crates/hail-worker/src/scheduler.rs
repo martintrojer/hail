@@ -26,6 +26,8 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
+use crate::app_events::{WorkerAppEvent, publish_app_event};
+
 const STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS: i64 = 60 * 60;
 const STALE_SCHEDULED_SEND_CLAIM_ERROR: &str = "scheduled send processing claim is stale or missing claimed_at; submission state unknown; manual review required";
 
@@ -128,6 +130,16 @@ pub async fn process_due_scheduled_sends(
                 .with_context(|| format!("mark scheduled_send {} sent", row.id))?;
                 if result.rows_affected() > 0 {
                     sent += 1;
+                    if let Err(err) =
+                        publish_app_event(db, row.user_id, WorkerAppEvent::SendCompleted).await
+                    {
+                        warn!(
+                            scheduled_send_id = row.id,
+                            user_id = row.user_id,
+                            error = %err,
+                            "failed to publish scheduled send completed app event"
+                        );
+                    }
                     info!(
                         scheduled_send_id = row.id,
                         user_id = row.user_id,
@@ -170,6 +182,16 @@ pub async fn process_due_scheduled_sends(
                 .await
                 .with_context(|| format!("mark scheduled_send {} failed", row.id))?;
                 if result.rows_affected() > 0 {
+                    if let Err(err) =
+                        publish_app_event(db, row.user_id, WorkerAppEvent::SendFailed).await
+                    {
+                        warn!(
+                            scheduled_send_id = row.id,
+                            user_id = row.user_id,
+                            error = %err,
+                            "failed to publish scheduled send failed app event"
+                        );
+                    }
                     warn!(
                         scheduled_send_id = row.id,
                         user_id = row.user_id,
@@ -276,6 +298,16 @@ pub async fn process_due_bubble_ups(
                 .with_context(|| format!("mark bubble_up {} fired", row.id))?;
                 if result.rows_affected() > 0 {
                     fired += 1;
+                    if let Err(err) =
+                        publish_app_event(db, row.user_id, WorkerAppEvent::BubbleFired).await
+                    {
+                        warn!(
+                            bubble_up_id = row.id,
+                            user_id = row.user_id,
+                            error = %err,
+                            "failed to publish bubble-up fired app event"
+                        );
+                    }
                     info!(
                         bubble_up_id = row.id,
                         user_id = row.user_id,
