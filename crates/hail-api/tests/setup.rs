@@ -131,7 +131,7 @@ async fn wizard_state_inactive_when_admin_user_exists() {
 async fn wizard_state_inactive_when_config_admin_set() {
     let (state, _key) = fixture_state(Some(AdminConfig {
         email: "operator@example.org".to_string(),
-        password_hash: Some("hash".to_string()),
+        password_hash: None,
         display_name: Some("Operator".to_string()),
     }))
     .await;
