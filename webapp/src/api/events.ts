@@ -7,8 +7,11 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 
 const eventTypes = [
   'imbox.new',
+  'feed.new',
+  'papertrail.new',
   'screener.pending',
   'thread.updated',
+  'thread.removed',
   'bubble.fired',
   'send.completed',
   'send.failed',
@@ -19,7 +22,17 @@ export type HailEventType = (typeof eventTypes)[number];
 
 export type HailEvent =
   | { type: 'heartbeat'; at?: string }
-  | { type: Exclude<HailEventType, 'heartbeat'> };
+  | {
+      type: 'imbox.new' | 'feed.new' | 'papertrail.new';
+      threadId?: string;
+    }
+  | { type: 'screener.pending' }
+  | { type: 'thread.updated' | 'thread.removed' | 'bubble.fired'; threadId?: string }
+  | {
+      type: 'send.completed' | 'send.failed';
+      scheduledSendId?: number;
+      error?: string;
+    };
 
 interface UseHailEventsOptions {
   enabled: boolean;
@@ -133,7 +146,28 @@ export function parseHailEvent(data: unknown): HailEvent | null {
       : { type: parsed.type };
   }
 
-  return { type: parsed.type };
+  if (isNewItemEventType(parsed.type)) {
+    return {
+      type: parsed.type,
+      ...threadPayload(parsed),
+    };
+  }
+
+  if (parsed.type === 'screener.pending') {
+    return { type: parsed.type };
+  }
+
+  if (isThreadEventType(parsed.type)) {
+    return {
+      type: parsed.type,
+      ...threadPayload(parsed),
+    };
+  }
+
+  return {
+    type: parsed.type,
+    ...scheduledSendPayload(parsed),
+  };
 }
 
 export function invalidateQueriesForEvent(
@@ -144,17 +178,27 @@ export function invalidateQueriesForEvent(
     case 'heartbeat':
       return;
     case 'imbox.new':
-      void queryClient.invalidateQueries({ queryKey: queryKeys.view('imbox') });
+      invalidateNewItem(queryClient, 'imbox', event.threadId);
+      return;
+    case 'feed.new':
+      invalidateNewItem(queryClient, 'feed', event.threadId);
+      return;
+    case 'papertrail.new':
+      invalidateNewItem(queryClient, 'papertrail', event.threadId);
       return;
     case 'screener.pending':
       void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
       return;
     case 'thread.updated':
-      void queryClient.invalidateQueries({ queryKey: queryKeys.threads() });
+      invalidateThreadOrAll(queryClient, event.threadId);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      return;
+    case 'thread.removed':
+      removeThreadOrInvalidateAll(queryClient, event.threadId);
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       return;
     case 'bubble.fired':
-      void queryClient.invalidateQueries({ queryKey: queryKeys.threads() });
+      invalidateThreadOrAll(queryClient, event.threadId);
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       return;
     case 'send.completed':
@@ -167,6 +211,67 @@ export function invalidateQueriesForEvent(
 
 function isHailEventType(type: string): type is HailEventType {
   return eventTypes.some((eventType) => eventType === type);
+}
+
+function isNewItemEventType(
+  type: HailEventType,
+): type is 'imbox.new' | 'feed.new' | 'papertrail.new' {
+  return type === 'imbox.new' || type === 'feed.new' || type === 'papertrail.new';
+}
+
+function isThreadEventType(
+  type: HailEventType,
+): type is 'thread.updated' | 'thread.removed' | 'bubble.fired' {
+  return (
+    type === 'thread.updated' || type === 'thread.removed' || type === 'bubble.fired'
+  );
+}
+
+function threadPayload(parsed: Record<string, unknown>) {
+  return typeof parsed.thread_id === 'string'
+    ? { threadId: parsed.thread_id }
+    : {};
+}
+
+function scheduledSendPayload(parsed: Record<string, unknown>) {
+  return {
+    ...(typeof parsed.scheduled_send_id === 'number'
+      ? { scheduledSendId: parsed.scheduled_send_id }
+      : {}),
+    ...(typeof parsed.error === 'string' ? { error: parsed.error } : {}),
+  };
+}
+
+function invalidateNewItem(
+  queryClient: QueryClient,
+  view: 'imbox' | 'feed' | 'papertrail',
+  threadId: string | undefined,
+) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.view(view) });
+  if (threadId !== undefined) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.thread(threadId) });
+  }
+}
+
+function invalidateThreadOrAll(
+  queryClient: QueryClient,
+  threadId: string | undefined,
+) {
+  void queryClient.invalidateQueries({
+    queryKey: threadId === undefined ? queryKeys.threads() : queryKeys.thread(threadId),
+  });
+}
+
+function removeThreadOrInvalidateAll(
+  queryClient: QueryClient,
+  threadId: string | undefined,
+) {
+  if (threadId === undefined) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.threads() });
+    return;
+  }
+
+  queryClient.removeQueries({ queryKey: queryKeys.thread(threadId) });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
