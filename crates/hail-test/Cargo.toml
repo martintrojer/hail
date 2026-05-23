@@ -8,4 +8,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+base64 = "0.22"
+hail-jmap = { path = "../hail-jmap" }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json"] }
+secrecy = "0.10"
+tempfile = "3"
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
