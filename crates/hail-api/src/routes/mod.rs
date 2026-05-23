@@ -7,6 +7,7 @@ pub mod auth;
 pub mod blobs;
 pub mod contacts;
 pub mod health;
+pub mod pile;
 pub mod screener;
 pub mod setup;
 pub mod threads;
