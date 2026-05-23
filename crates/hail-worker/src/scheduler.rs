@@ -12,14 +12,22 @@
 //! by the [`SendSubmitter`]: transient failures (network/server/rate/no active
 //! session) are released back to pending for a later tick; permanent failures
 //! (accepted JMAP request rejects the draft/recipients/identity) become
-//! `status='failed'` with `error` set. In both cases, later due rows continue
-//! processing.
+//! `status='failed'` with `error` set. A crashed worker can also leave a row in
+//! `processing` after taking the durable claim. Because an EmailSubmission call
+//! might already have reached JMAP, stale processing claims are not retried
+//! automatically; after the claim timeout, or when the claim timestamp is
+//! missing, the row is failed with an explicit unknown-submission-state error so
+//! an operator/user can review it without risking duplicate mail. In all failure
+//! cases, later due rows continue processing.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
+
+const STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS: i64 = 60 * 60;
+const STALE_SCHEDULED_SEND_CLAIM_ERROR: &str = "scheduled send processing claim is stale or missing claimed_at; submission state unknown; manual review required";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BubbleUpRow {
@@ -81,16 +89,20 @@ pub trait SendSubmitter: Send + Sync {
 /// Each row is first atomically claimed with a durable `processing` state before
 /// the non-idempotent JMAP submission call. Competing worker ticks/processes
 /// that race on the same due row can observe it, but only one can transition it
-/// from `pending` to `processing`; losers skip submission. Transient submit
-/// failures release the row back to `pending` for a later tick. Permanent
-/// failures mark the row `failed` and store the error string. Later due rows are
-/// always attempted.
+/// from `pending` to `processing`; losers skip submission. Processing claims
+/// older than one hour, or claims missing `claimed_at`, are recovered before due
+/// pending rows are selected by failing the row with an explicit
+/// unknown-submission-state error instead of retrying a potentially already
+/// submitted draft. Transient submit failures release the row back to `pending`
+/// for a later tick. Permanent failures mark the row `failed` and store the
+/// error string. Later due rows are always attempted.
 pub async fn process_due_scheduled_sends(
     db: &SqlitePool,
     submitter: &dyn SendSubmitter,
     now: DateTime<Utc>,
 ) -> Result<usize> {
     let now_s = now.to_rfc3339();
+    recover_stale_scheduled_send_claims(db, now).await?;
     let rows = select_due_scheduled_sends(db, &now_s).await?;
 
     let mut sent = 0;
@@ -171,6 +183,31 @@ pub async fn process_due_scheduled_sends(
     }
 
     Ok(sent)
+}
+
+async fn recover_stale_scheduled_send_claims(db: &SqlitePool, now: DateTime<Utc>) -> Result<()> {
+    let cutoff = (now - Duration::seconds(STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS)).to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE scheduled_sends \
+         SET status = 'failed', error = ? \
+         WHERE status = 'processing' AND (claimed_at IS NULL OR claimed_at <= ?)",
+    )
+    .bind(STALE_SCHEDULED_SEND_CLAIM_ERROR)
+    .bind(&cutoff)
+    .execute(db)
+    .await
+    .context("recover stale scheduled_send processing claims")?;
+
+    let recovered = result.rows_affected();
+    if recovered > 0 {
+        warn!(
+            recovered,
+            stale_after_seconds = STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS,
+            "recovered stale scheduled send processing claims as failed with unknown submission state"
+        );
+    }
+
+    Ok(())
 }
 
 async fn claim_scheduled_send(db: &SqlitePool, id: i64, now: &str) -> Result<bool> {
