@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
 use hail_core::{Config, KEY_LEN};
@@ -9,7 +9,10 @@ use hail_db::connect;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-async fn fixture_state(webapp_dir: Option<std::path::PathBuf>) -> AppState {
+async fn fixture_state_with_public_url(
+    webapp_dir: Option<std::path::PathBuf>,
+    public_url: &str,
+) -> AppState {
     let uniq = uuid_like();
     let url = format!("sqlite:file:hail_static_test_{uniq}?mode=memory&cache=shared");
     let db = connect(&url).await.expect("open sqlite");
@@ -25,6 +28,7 @@ async fn fixture_state(webapp_dir: Option<std::path::PathBuf>) -> AppState {
         std::env::remove_var("HAIL_WEBAPP_DIR");
     }
     let mut config = Config::load_from(None).expect("load config");
+    config.server.public_url = public_url.to_string();
     config.server.webapp_dir = webapp_dir;
 
     AppState {
@@ -36,10 +40,18 @@ async fn fixture_state(webapp_dir: Option<std::path::PathBuf>) -> AppState {
     }
 }
 
+async fn fixture_state(webapp_dir: Option<std::path::PathBuf>) -> AppState {
+    fixture_state_with_public_url(webapp_dir, "http://localhost").await
+}
+
 fn uuid_like() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    format!("{}_{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
@@ -49,6 +61,30 @@ async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
         .body(Body::empty())
         .unwrap();
     app.oneshot(req).await.unwrap()
+}
+
+fn assert_common_security_headers(headers: &HeaderMap) {
+    assert_eq!(
+        headers.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+        "nosniff"
+    );
+    assert_eq!(headers.get(header::REFERRER_POLICY).unwrap(), "no-referrer");
+    assert_eq!(headers.get(header::X_FRAME_OPTIONS).unwrap(), "DENY");
+
+    let csp = headers
+        .get(header::CONTENT_SECURITY_POLICY)
+        .expect("content-security-policy")
+        .to_str()
+        .unwrap();
+    assert!(csp.contains("default-src 'self'"), "csp: {csp}");
+    assert!(csp.contains("script-src 'self'"), "csp: {csp}");
+    assert!(
+        csp.contains("style-src 'self' 'unsafe-inline'"),
+        "csp: {csp}"
+    );
+    assert!(csp.contains("img-src 'self' data: blob:"), "csp: {csp}");
+    assert!(csp.contains("object-src 'none'"), "csp: {csp}");
+    assert!(csp.contains("frame-ancestors 'none'"), "csp: {csp}");
 }
 
 #[tokio::test]
@@ -63,6 +99,19 @@ async fn serves_spa_bundle_and_history_fallback_without_intercepting_api() {
 
     let root = get(app.clone(), "/").await;
     assert_eq!(root.status(), StatusCode::OK);
+    assert_common_security_headers(root.headers());
+    let root_csp = root
+        .headers()
+        .get(header::CONTENT_SECURITY_POLICY)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(root_csp.contains("connect-src 'self' ws://localhost"));
+    assert!(
+        root.headers()
+            .get(header::STRICT_TRANSPORT_SECURITY)
+            .is_none()
+    );
     let bytes = root.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(bytes.as_ref(), b"<html>hail app</html>");
 
@@ -86,6 +135,49 @@ async fn serves_spa_bundle_and_history_fallback_without_intercepting_api() {
 
     let health = get(app, "/healthz").await;
     assert_eq!(health.status(), StatusCode::NO_CONTENT);
+    assert_common_security_headers(health.headers());
+}
+
+#[tokio::test]
+async fn security_headers_include_hsts_and_wss_when_public_url_is_https() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("index.html"), "<html>hail app</html>").expect("index");
+
+    let state =
+        fixture_state_with_public_url(Some(dir.path().to_path_buf()), "https://mail.example.test")
+            .await;
+    let app = hail_api::build_router(state, false);
+
+    let spa = get(app.clone(), "/").await;
+    assert_eq!(spa.status(), StatusCode::OK);
+    assert_common_security_headers(spa.headers());
+    assert_eq!(
+        spa.headers()
+            .get(header::STRICT_TRANSPORT_SECURITY)
+            .unwrap(),
+        "max-age=31536000; includeSubDomains"
+    );
+    let csp = spa
+        .headers()
+        .get(header::CONTENT_SECURITY_POLICY)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        csp.contains("connect-src 'self' wss://mail.example.test"),
+        "csp: {csp}"
+    );
+
+    let openapi = get(app, "/api/openapi.json").await;
+    assert_eq!(openapi.status(), StatusCode::OK);
+    assert_common_security_headers(openapi.headers());
+    assert_eq!(
+        openapi
+            .headers()
+            .get(header::STRICT_TRANSPORT_SECURITY)
+            .unwrap(),
+        "max-age=31536000; includeSubDomains"
+    );
 }
 
 #[tokio::test]
@@ -100,4 +192,5 @@ async fn missing_webapp_dir_keeps_api_up_and_root_404s() {
 
     let root = get(app, "/").await;
     assert_eq!(root.status(), StatusCode::NOT_FOUND);
+    assert_common_security_headers(root.headers());
 }
