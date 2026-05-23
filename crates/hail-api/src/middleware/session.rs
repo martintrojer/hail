@@ -25,26 +25,30 @@ pub fn basic_bearer(email: &str, password: &SecretString) -> String {
     B64.encode(format!("{}:{}", email, password.expose_secret()).as_bytes())
 }
 
+/// Error returned when the OS random-number generator cannot mint a session id.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to draw session id from OS RNG")]
+pub struct SessionIdError;
+
 /// Mint a 256-bit random session id, hex-encoded as 64 lowercase chars.
-pub fn new_session_id() -> Result<String, ()> {
+pub fn new_session_id() -> Result<String, SessionIdError> {
     let mut id_bytes = [0u8; 32];
     rand::rngs::OsRng
         .try_fill_bytes(&mut id_bytes)
-        .map_err(|_| ())?;
+        .map_err(|_| SessionIdError)?;
     Ok(hex::encode(id_bytes))
 }
 
 /// Build the `Set-Cookie` value for a fresh session. We hardcode every
 /// flag in design.md §10.1 so the security posture is obvious from this
 /// single line:
-///   * `HttpOnly`           — not visible to JS in the SPA.
-///   * `Secure`             — cookie only sent over HTTPS in production.
-///   * `SameSite=Lax`       — top-level navigation only carries the
-///                            cookie cross-site; combined with the
-///                            mandatory `X-Hail-Request` header on
-///                            mutations this gives CSRF defence in depth.
-///   * `Path=/`             — visible to every hail route.
-///   * `Max-Age=2592000`    — 30 days, matching the row's expiry.
+/// - `HttpOnly` — not visible to JS in the SPA.
+/// - `Secure` — cookie only sent over HTTPS in production.
+/// - `SameSite=Lax` — top-level navigation only carries the cookie cross-site;
+///   combined with the mandatory `X-Hail-Request` header on mutations this gives
+///   CSRF defence in depth.
+/// - `Path=/` — visible to every hail route.
+/// - `Max-Age=2592000` — 30 days, matching the row's expiry.
 pub fn build_session_cookie(session_id: &str) -> String {
     format!(
         "{name}={value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={max_age}",
@@ -67,10 +71,10 @@ pub fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     for pair in raw.split(';') {
         let pair = pair.trim_start();
-        if let Some((k, v)) = pair.split_once('=') {
-            if k == name {
-                return Some(v);
-            }
+        if let Some((k, v)) = pair.split_once('=')
+            && k == name
+        {
+            return Some(v);
         }
     }
     None

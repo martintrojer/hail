@@ -123,7 +123,7 @@ pub enum ConfigError {
     /// Figment couldn't parse or merge the layers. Wraps the upstream
     /// error verbatim — it already points at file + field.
     #[error(transparent)]
-    Parse(#[from] figment::Error),
+    Parse(Box<figment::Error>),
     /// `secrets.server_key` was empty or does not provide at least
     /// `MIN_SERVER_KEY_BYTES` of usable key material.
     #[error("invalid server_key: {0}")]
@@ -153,7 +153,7 @@ impl Config {
             if path.is_none() && env_layer_empty() {
                 ConfigError::NotFound(PathBuf::from(DEFAULT_CONFIG_PATH))
             } else {
-                ConfigError::Parse(e)
+                ConfigError::Parse(Box::new(e))
             }
         })?;
 
@@ -225,7 +225,7 @@ fn validate_server_key(key: &SecretString) -> Result<(), ConfigError> {
 /// Hex-decode `s` and return its byte length. `None` if `s` isn't a pure
 /// hex string — we don't actually need the bytes, just the length.
 fn decode_hex(s: &str) -> Option<usize> {
-    if s.is_empty() || s.len() % 2 != 0 {
+    if s.is_empty() || !s.len().is_multiple_of(2) {
         return None;
     }
     if !s.bytes().all(|b| b.is_ascii_hexdigit()) {

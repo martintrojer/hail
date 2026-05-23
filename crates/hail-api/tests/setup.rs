@@ -9,8 +9,8 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration as ChronoDuration, Utc};
-use hail_api::middleware::session::SESSION_COOKIE;
 use hail_api::middleware::rate_limit::IpRateLimiter;
+use hail_api::middleware::session::SESSION_COOKIE;
 use hail_api::routes::setup::{ProvisionError, ProvisionedUser, UserProvisioner};
 use hail_api::state::AppState;
 use hail_core::{AdminConfig, Config, KEY_LEN};
@@ -292,7 +292,7 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
     assert_eq!(me_json["user"]["display_name"], "Alice");
     assert_eq!(me_json["user"]["is_admin"], true);
 
-    let (row_session_id, user_id, token_enc, user_agent, expires_at, created_at, last_used_at): (
+    type SessionRow = (
         String,
         i64,
         Vec<u8>,
@@ -300,7 +300,8 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
         chrono::DateTime<Utc>,
         chrono::DateTime<Utc>,
         chrono::DateTime<Utc>,
-    ) = sqlx::query_as(
+    );
+    let (row_session_id, user_id, token_enc, user_agent, expires_at, created_at, last_used_at): SessionRow = sqlx::query_as(
         "SELECT id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at \
          FROM sessions WHERE id = ?1",
     )

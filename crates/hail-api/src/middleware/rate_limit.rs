@@ -65,13 +65,11 @@ impl IpRateLimiter {
         // Evict oldest if cap reached and `ip` not present. Cheapest
         // strategy that bounds memory; collisions on hot IPs are still
         // counted correctly.
-        if map.len() >= MAX_TRACKED_IPS && !map.contains_key(&ip) {
-            if let Some((&oldest_ip, _)) = map
-                .iter()
-                .min_by_key(|(_, b)| b.window_start)
-            {
-                map.remove(&oldest_ip);
-            }
+        if map.len() >= MAX_TRACKED_IPS
+            && !map.contains_key(&ip)
+            && let Some((&oldest_ip, _)) = map.iter().min_by_key(|(_, b)| b.window_start)
+        {
+            map.remove(&oldest_ip);
         }
 
         let bucket = map.entry(ip).or_insert_with(|| Bucket {

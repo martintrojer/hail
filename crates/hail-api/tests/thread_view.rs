@@ -163,7 +163,7 @@ async fn get_json(
     let resp = app(state, assembler).oneshot(req).await.unwrap();
     let status = resp.status();
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let json = serde_json::from_slice(&body).unwrap_or_else(|_| serde_json::Value::Null);
+    let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
     (status, json)
 }
 

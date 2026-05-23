@@ -291,14 +291,13 @@ where
         return internal();
     }
 
-    if body.apply_to_history {
-        if let Err(err) = backfill
+    if body.apply_to_history
+        && let Err(err) = backfill
             .apply(&state, &user, &sender, decision, response_classify_as)
             .await
-        {
-            tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener history backfill failed");
-            return internal();
-        }
+    {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener history backfill failed");
+        return internal();
     }
 
     if let Err(err) = audit::record(

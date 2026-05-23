@@ -20,10 +20,10 @@ mod crypto;
 #[path = "../src/scheduler.rs"]
 mod scheduler;
 
-use scheduler::{
-    LiveSendSubmitter, SendSubmitError, SendSubmitter, classify_jmap_set_error_type_for_test,
-    classify_jmap_submit_error_for_test, process_due_scheduled_sends,
+use scheduler::live::{
+    LiveSendSubmitter, classify_jmap_set_error_type_for_test, classify_jmap_submit_error_for_test,
 };
+use scheduler::{SendSubmitError, SendSubmitter, process_due_scheduled_sends};
 
 #[derive(Debug, Default)]
 struct EchoTokenDecryptor;
