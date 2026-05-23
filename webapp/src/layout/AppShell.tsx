@@ -69,6 +69,20 @@ export function AppShell({
               </p>
             </div>
 
+            <Link
+              to="/compose"
+              activeProps={{
+                className: 'border-sky-400 bg-sky-400/10 text-sky-100',
+              }}
+              inactiveProps={{
+                className:
+                  'border-sky-400/70 bg-sky-400 text-slate-950 hover:border-sky-300 hover:bg-sky-300',
+              }}
+              className="rounded-lg border px-3 py-2 text-sm font-semibold transition"
+            >
+              Compose
+            </Link>
+
             <nav aria-label="Mailbox views" className="flex flex-wrap gap-2 lg:flex-col">
               {navItems.map((item) => (
                 <Link
