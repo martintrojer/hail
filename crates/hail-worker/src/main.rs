@@ -6,6 +6,7 @@
 //! arrive in follow-up tasks (`jmap-eventsource`, `screener-routing`).
 
 mod backoff;
+mod catchup;
 mod changes;
 mod crypto;
 mod screener;

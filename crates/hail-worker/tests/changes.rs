@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -53,6 +53,10 @@ struct FakeFetcher {
 
 #[async_trait]
 impl JmapChangeFetcher for FakeFetcher {
+    async fn current_state(&self, _type_state: &str) -> anyhow::Result<String> {
+        Ok(self.response.new_state.clone())
+    }
+
     async fn fetch(
         &self,
         _type_state: &str,
@@ -89,6 +93,10 @@ struct EmptyFetcher;
 
 #[async_trait]
 impl JmapChangeFetcher for EmptyFetcher {
+    async fn current_state(&self, _type_state: &str) -> anyhow::Result<String> {
+        Ok("state-after-empty".to_string())
+    }
+
     async fn fetch(
         &self,
         _type_state: &str,
@@ -103,6 +111,8 @@ impl JmapChangeFetcher for EmptyFetcher {
     }
 }
 
+static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// Build a fresh DB URL backed by a unique temp file. Matches the
 /// approach in `hail-db/tests/migrate.rs`.
 fn fresh_db_url() -> (String, PathBuf) {
@@ -112,7 +122,8 @@ fn fresh_db_url() -> (String, PathBuf) {
         .unwrap()
         .as_nanos();
     let pid = std::process::id();
-    path.push(format!("hail-worker-test-{pid}-{nanos}.sqlite"));
+    let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+    path.push(format!("hail-worker-test-{pid}-{nanos}-{counter}.sqlite"));
     let url = format!("sqlite://{}", path.display());
     (url, path)
 }
@@ -121,9 +132,10 @@ struct TempDb(PathBuf);
 
 impl Drop for TempDb {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(self.0.with_extension("sqlite-shm"));
+        // Intentionally leave temp DB files behind. Integration tests
+        // bind the pool before the guard, so removing the files here
+        // can race SQLite's pool close under parallel test execution.
+        let _ = &self.0;
     }
 }
 

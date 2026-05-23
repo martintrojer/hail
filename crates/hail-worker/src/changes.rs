@@ -62,6 +62,11 @@ impl EmailChanges {
     pub fn is_empty(&self) -> bool {
         self.created.is_empty() && self.updated.is_empty() && self.destroyed.is_empty()
     }
+
+    #[must_use]
+    pub fn total_changes(&self) -> usize {
+        self.created.len() + self.updated.len() + self.destroyed.len()
+    }
 }
 
 /// Backend that turns "give me changes since `cursor`" into resolved
@@ -71,6 +76,11 @@ impl EmailChanges {
 /// shaping lives in the impl.
 #[async_trait]
 pub trait JmapChangeFetcher: Send + Sync {
+    /// Fetch the current state token without replaying history. Used
+    /// only when no `jmap_state` row exists yet for a first-run user.
+    #[allow(dead_code)]
+    async fn current_state(&self, type_state: &str) -> Result<String>;
+
     /// Fetch the diff for `type_state` since `since_cursor`, then
     /// resolve created+updated ids to envelopes via `Email/get`. The
     /// `since_cursor` is the opaque state token stored in
@@ -93,7 +103,8 @@ pub async fn handle_changes(
     fetcher: &dyn JmapChangeFetcher,
     jmap_ops: &dyn JmapOps,
     changed_types: &BTreeSet<String>,
-) -> Result<()> {
+) -> Result<usize> {
+    let mut applied = 0usize;
     for type_state in changed_types {
         if !TRACKED_TYPE_STATES.contains(&type_state.as_str()) {
             // EventSource can deliver types we don't care about
@@ -118,6 +129,7 @@ pub async fn handle_changes(
         };
 
         route_envelopes(db, user_id, type_state, jmap_ops, &changes).await?;
+        applied += changes.total_changes();
 
         if changes.new_state.is_empty() {
             // Defensive: a fetcher that returns an empty new_state
@@ -133,7 +145,7 @@ pub async fn handle_changes(
 
         upsert_cursor(db, user_id, type_state, &changes.new_state).await?;
     }
-    Ok(())
+    Ok(applied)
 }
 
 /// Load the stored cursor for `(user_id, type_state)`, or empty

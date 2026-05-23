@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -24,9 +24,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
 use crate::backoff::Backoff;
-use crate::changes::{
-    EmailChanges, EmailEnvelope, JmapChangeFetcher, TRACKED_TYPE_STATES, handle_changes,
-};
+use crate::catchup::catchup_user;
+use crate::changes::{EmailChanges, EmailEnvelope, JmapChangeFetcher, handle_changes};
 use crate::crypto::TokenDecryptor;
 use crate::screener::JmapOpsLive;
 use crate::state::AppState;
@@ -118,24 +117,6 @@ async fn run_user_supervisor_with(
         account_id: session.account_id.clone(),
     });
 
-    // Catch-up: replay every tracked TypeState from its stored cursor
-    // before subscribing to live push. Item 4 of the task contract.
-    let all_tracked: BTreeSet<String> = TRACKED_TYPE_STATES
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    if let Err(e) = handle_changes(
-        &state.db,
-        user_id,
-        fetcher.as_ref(),
-        jmap_ops.as_ref(),
-        &all_tracked,
-    )
-    .await
-    {
-        warn!(user_id, error = %e, "catch-up handle_changes failed; continuing to live push");
-    }
-
     run_event_loop(user_id, state, session, fetcher, jmap_ops, cancel).await
 }
 
@@ -163,6 +144,32 @@ async fn run_event_loop(
         if cancel.is_cancelled() {
             info!(user_id, "per-user supervisor: cancelled");
             return Ok(());
+        }
+
+        let catchup_res = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                info!(user_id, "per-user supervisor: cancel during catchup");
+                return Ok(());
+            }
+            result = catchup_user(&state.db, user_id, fetcher.as_ref(), jmap_ops.as_ref(), cancel.clone()) => result,
+        };
+        if let Err(e) = catchup_res {
+            if is_auth_anyhow(&e) {
+                error!(user_id, error = %e, "catchup: auth revoked (FATAL)");
+                return Ok(());
+            }
+            let delay = backoff.next_delay();
+            info!(
+                user_id,
+                delay_ms = delay.as_millis() as u64,
+                error = %e,
+                "catchup: transient failure; backing off"
+            );
+            if cancel_aware_sleep(delay, &cancel).await {
+                return Ok(());
+            }
+            continue;
         }
 
         let stream_res = session
@@ -376,6 +383,12 @@ fn is_auth_error(e: &jmap_client::Error) -> bool {
     }
 }
 
+fn is_auth_anyhow(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|cause| cause.downcast_ref::<jmap_client::Error>())
+        .any(is_auth_error)
+}
+
 /// Production `JmapChangeFetcher`: drives `Email/changes` then
 /// resolves created+updated ids via `Email/get` with the property
 /// list named in the task contract.
@@ -386,32 +399,98 @@ struct LiveJmapFetcher {
 
 #[async_trait]
 impl JmapChangeFetcher for LiveJmapFetcher {
+    async fn current_state(&self, type_state: &str) -> Result<String> {
+        let client = self.session.client();
+        let state = match type_state {
+            "Email" => {
+                let mut request = client.build();
+                request.get_email().ids(std::iter::empty::<String>());
+                request
+                    .send_get_email()
+                    .await
+                    .context("initial Email/get failed")?
+                    .take_state()
+            }
+            "Mailbox" => {
+                let mut request = client.build();
+                request.get_mailbox().ids(std::iter::empty::<String>());
+                request
+                    .send_get_mailbox()
+                    .await
+                    .context("initial Mailbox/get failed")?
+                    .take_state()
+            }
+            "EmailSubmission" => {
+                let mut request = client.build();
+                request
+                    .get_email_submission()
+                    .ids(std::iter::empty::<String>());
+                request
+                    .send_get_email_submission()
+                    .await
+                    .context("initial EmailSubmission/get failed")?
+                    .take_state()
+            }
+            "EmailDelivery" => {
+                // jmap-client 0.3 exposes EmailDelivery as an EventSource
+                // TypeState but not as a first-class */get or */changes
+                // helper. Use a cheap Email/get state token to seed the row
+                // so first-run users do not replay history; future crate
+                // support can replace this with EmailDelivery/get.
+                let mut request = client.build();
+                request.get_email().ids(std::iter::empty::<String>());
+                request
+                    .send_get_email()
+                    .await
+                    .context("initial EmailDelivery state fallback failed")?
+                    .take_state()
+            }
+            other => anyhow::bail!("unsupported TypeState {other}"),
+        };
+        Ok(state)
+    }
+
     async fn fetch(&self, type_state: &str, since_cursor: &str) -> Result<EmailChanges> {
-        // For v1 we only resolve envelopes for the Email TypeState.
-        // Other type states (Mailbox, EmailSubmission, EmailDelivery)
-        // still advance their cursors but don't fan out envelopes —
-        // those land downstream in screener-routing and the scheduler.
-        if type_state != "Email" {
+        if type_state == "Mailbox" {
+            let mut resp = self
+                .session
+                .client()
+                .mailbox_changes(since_cursor.to_string(), 512)
+                .await
+                .context("Mailbox/changes failed")?;
+            return Ok(EmailChanges {
+                new_state: resp.take_new_state(),
+                destroyed: resp.take_destroyed(),
+                ..Default::default()
+            });
+        }
+        if type_state == "EmailSubmission" {
+            let mut resp = self
+                .session
+                .client()
+                .email_submission_changes(since_cursor.to_string(), 512)
+                .await
+                .context("EmailSubmission/changes failed")?;
+            return Ok(EmailChanges {
+                new_state: resp.take_new_state(),
+                destroyed: resp.take_destroyed(),
+                ..Default::default()
+            });
+        }
+        if type_state == "EmailDelivery" {
+            // See `current_state`: jmap-client currently has no
+            // EmailDelivery helpers, so there is no object diff to fetch.
             return Ok(EmailChanges {
                 new_state: since_cursor.to_string(),
                 ..Default::default()
             });
         }
 
-        // First run: no cursor yet. We pass an empty since_state and
-        // let Stalwart hand back the current state token. The
-        // `catchup-on-restart` task handles full historical replay;
-        // here we just want a cursor we can resume from on the next
-        // push event.
+        // First run: catchup_user seeds the cursor with */get state.
+        // If a legacy empty cursor is encountered, seed it the same way.
         if since_cursor.is_empty() {
-            let mut resp = self
-                .session
-                .client()
-                .email_changes(String::new(), None)
-                .await
-                .map_err(|e| anyhow!("initial Email/changes failed: {e}"))?;
             return Ok(EmailChanges {
-                new_state: resp.take_new_state(),
+                new_state: self.current_state(type_state).await?,
                 ..Default::default()
             });
         }
@@ -421,7 +500,7 @@ impl JmapChangeFetcher for LiveJmapFetcher {
             .client()
             .email_changes(since_cursor.to_string(), None)
             .await
-            .map_err(|e| anyhow!("Email/changes failed: {e}"))?;
+            .context("Email/changes failed")?;
         let new_state = resp.take_new_state();
         let created_ids = resp.take_created();
         let updated_ids = resp.take_updated();
@@ -446,7 +525,7 @@ impl JmapChangeFetcher for LiveJmapFetcher {
                 .client()
                 .email_get(&id, Some(props.iter().cloned()))
                 .await
-                .map_err(|e| anyhow!("Email/get failed for {id}: {e}"))?
+                .with_context(|| format!("Email/get failed for {id}"))?
             {
                 created.push(envelope_from(em));
             }
@@ -458,7 +537,7 @@ impl JmapChangeFetcher for LiveJmapFetcher {
                 .client()
                 .email_get(&id, Some(props.iter().cloned()))
                 .await
-                .map_err(|e| anyhow!("Email/get failed for {id}: {e}"))?
+                .with_context(|| format!("Email/get failed for {id}"))?
             {
                 updated.push(envelope_from(em));
             }
