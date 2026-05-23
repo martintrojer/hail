@@ -144,24 +144,35 @@ async fn setup_db() -> (SqlitePool, TempDb, i64) {
     (pool, guard, user_id)
 }
 
+async fn insert_scheduled_send_with_status(
+    pool: &SqlitePool,
+    user_id: i64,
+    draft_email_id: &str,
+    send_at: DateTime<Utc>,
+    status: &str,
+) -> i64 {
+    sqlx::query(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(draft_email_id)
+    .bind(send_at)
+    .bind(status)
+    .bind("2026-01-01T00:00:00Z")
+    .execute(pool)
+    .await
+    .expect("insert scheduled_send")
+    .last_insert_rowid()
+}
+
 async fn insert_scheduled_send(
     pool: &SqlitePool,
     user_id: i64,
     draft_email_id: &str,
     send_at: DateTime<Utc>,
 ) -> i64 {
-    sqlx::query(
-        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
-         VALUES (?, ?, ?, 'pending', ?)",
-    )
-    .bind(user_id)
-    .bind(draft_email_id)
-    .bind(send_at)
-    .bind("2026-01-01T00:00:00Z")
-    .execute(pool)
-    .await
-    .expect("insert scheduled_send")
-    .last_insert_rowid()
+    insert_scheduled_send_with_status(pool, user_id, draft_email_id, send_at, "pending").await
 }
 
 async fn scheduled_send_state(
@@ -197,6 +208,22 @@ async fn due_send_submits_and_marks_sent() {
             None
         )
     );
+}
+
+#[tokio::test]
+async fn due_at_exactly_now_submits() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let id = insert_scheduled_send(&pool, user_id, "draft-now", now).await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 1);
+    assert_eq!(submitter.calls(), vec![(user_id, "draft-now".to_string())]);
+    assert_eq!(scheduled_send_state(&pool, id).await.0, "sent");
 }
 
 #[tokio::test]
@@ -349,6 +376,77 @@ async fn multiple_due_rows_continue_after_failures() {
         )
     );
     assert_eq!(scheduled_send_state(&pool, last).await.0, "sent");
+}
+
+#[tokio::test]
+async fn non_pending_due_rows_are_ignored() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let due = now - Duration::minutes(1);
+    let sent_id =
+        insert_scheduled_send_with_status(&pool, user_id, "draft-sent", due, "sent").await;
+    let failed_id =
+        insert_scheduled_send_with_status(&pool, user_id, "draft-failed", due, "failed").await;
+    let cancelled_id =
+        insert_scheduled_send_with_status(&pool, user_id, "draft-cancelled", due, "cancelled")
+            .await;
+    let processing_id =
+        insert_scheduled_send_with_status(&pool, user_id, "draft-processing", due, "processing")
+            .await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 0);
+    assert!(submitter.calls().is_empty());
+    assert_eq!(scheduled_send_state(&pool, sent_id).await.0, "sent");
+    assert_eq!(scheduled_send_state(&pool, failed_id).await.0, "failed");
+    assert_eq!(
+        scheduled_send_state(&pool, cancelled_id).await.0,
+        "cancelled"
+    );
+    assert_eq!(
+        scheduled_send_state(&pool, processing_id).await.0,
+        "processing"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_pending_rows_for_same_draft_are_claimed_independently() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    let first = insert_scheduled_send(
+        &pool,
+        user_id,
+        "draft-duplicate",
+        now - Duration::minutes(2),
+    )
+    .await;
+    let second = insert_scheduled_send(
+        &pool,
+        user_id,
+        "draft-duplicate",
+        now - Duration::minutes(1),
+    )
+    .await;
+    let submitter = FakeSendSubmitter::default();
+
+    let sent = process_due_scheduled_sends(&pool, &submitter, now)
+        .await
+        .expect("process due");
+
+    assert_eq!(sent, 2);
+    assert_eq!(
+        submitter.calls(),
+        vec![
+            (user_id, "draft-duplicate".to_string()),
+            (user_id, "draft-duplicate".to_string()),
+        ]
+    );
+    assert_eq!(scheduled_send_state(&pool, first).await.0, "sent");
+    assert_eq!(scheduled_send_state(&pool, second).await.0, "sent");
 }
 
 #[tokio::test]
