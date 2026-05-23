@@ -5,7 +5,7 @@ export const queryKeys = {
   setup: () => [...queryKeys.all, 'setup'] as const,
   setupState: () => [...queryKeys.setup(), 'state'] as const,
   views: () => [...queryKeys.all, 'views'] as const,
-  view: (view: 'imbox' | 'feed' | 'papertrail') =>
+  view: (view: 'imbox' | 'feed' | 'papertrail' | 'set-aside' | 'reply-later') =>
     [...queryKeys.views(), view] as const,
   screener: () => [...queryKeys.views(), 'screener'] as const,
   contacts: () => [...queryKeys.all, 'contacts'] as const,
