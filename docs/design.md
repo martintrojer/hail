@@ -632,6 +632,10 @@ Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Fil
 
 Per-identity delivery windows, user-defined auto-classification rules, merge contacts, first-reply auto-promote Feed→Imbox, drag-to-classify in Screener, daily Feed digest, Sieve rules editor, vacation responder UI, multiple identities UI, backup/restore + data export.
 
+### v2.1 / later — Alternate clients
+
+- **Node/Ink terminal UI.** A first-class TUI client that talks only to `hail-api` (never directly to Stalwart/JMAP), proving the "fat Rust API, slim clients" architecture. Roadmap tasks in mu: `tui-architecture-spike`, `tui-node-ink-scaffold`, `tui-thread-reader`, `tui-screener`, `tui-offline-cache-spike`. These are tracked but deferred until the web MVP lands.
+
 ### Out of scope (Tier 4)
 
 Shared mailboxes, calendar UI, full CRM, Imbox sub-labels, E2E encryption.

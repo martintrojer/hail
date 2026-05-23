@@ -142,6 +142,10 @@ the rationale is in `docs/design.md` §6.
   generates Sieve scripts to embed routing into Stalwart. All product
   logic (Screener decisions, classification, the Pile, bubble-up) is
   hail-side. Operators can upgrade Stalwart independently.
+- **Alternate clients are expected later.** The planned Node/Ink TUI is
+  deliberately a client of `hail-api`, not a parallel mail client that talks to
+  Stalwart. That keeps one source of truth for Screener, Pile, search, and
+  rendering semantics.
 
 ## 6. Hard decisions and rejected alternatives
 
