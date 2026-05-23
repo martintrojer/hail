@@ -20,18 +20,15 @@
 
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use secrecy::SecretString;
 use subtle::ConstantTimeEq;
 
+use crate::middleware::session::{SESSION_COOKIE, cookie_value};
 use crate::state::AppState;
-
-/// Cookie name. Single source of truth — both the login handler and the
-/// middleware reference this so renaming is a one-touch operation.
-pub const SESSION_COOKIE: &str = "hail_session";
 /// CSRF header demanded on mutating methods. Same value the SPA sends.
 pub const CSRF_HEADER: &str = "X-Hail-Request";
 
@@ -75,24 +72,6 @@ fn forbidden_csrf() -> Response {
         .into_response()
 }
 
-/// Extract a named cookie value from the request headers. We parse the
-/// `Cookie` header by hand rather than pulling in `axum-extra` — keeps
-/// the dependency surface tighter and the parsing logic auditable in one
-/// place. Returns the first match (browsers send at most one value per
-/// name per host).
-fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    for pair in raw.split(';') {
-        let pair = pair.trim_start();
-        if let Some((k, v)) = pair.split_once('=') {
-            if k == name {
-                return Some(v);
-            }
-        }
-    }
-    None
-}
-
 /// Constant-time string compare. Returns true iff the strings are equal
 /// in length and content. Used when the value is attacker-controlled
 /// (here, the cookie before lookup).
@@ -118,11 +97,7 @@ pub async fn require_auth(
 ) -> Response {
     // CSRF check first: if it fails we don't even need to touch the DB.
     if is_mutating(req.method())
-        && req
-            .headers()
-            .get(CSRF_HEADER)
-            .map(|v| v.as_bytes())
-            != Some(b"1")
+        && req.headers().get(CSRF_HEADER).map(|v| v.as_bytes()) != Some(b"1")
     {
         tracing::debug!(
             method = %req.method(),

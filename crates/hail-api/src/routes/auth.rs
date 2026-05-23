@@ -33,20 +33,16 @@ use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::post};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
 use chrono::{Duration, Utc};
-use rand::TryRngCore;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
-use crate::middleware::auth::{AuthUser, SESSION_COOKIE};
+use crate::middleware::auth::AuthUser;
+use crate::middleware::session::{
+    SESSION_TTL_DAYS, basic_bearer, build_session_cookie, clear_session_cookie, new_session_id,
+    session_cookie_value,
+};
 use crate::state::AppState;
-
-/// Session lifetime — 30 days, per design.md §10.1 ("30-day sliding TTL").
-const SESSION_TTL_DAYS: i64 = 30;
-/// `Max-Age` value matching `SESSION_TTL_DAYS` in seconds.
-const SESSION_MAX_AGE_SECS: i64 = SESSION_TTL_DAYS * 24 * 60 * 60;
 
 /// Public JSON representation of a user. Mirrors the v1 schema in
 /// design.md §6.2. `jmap_account_id` and `created_at` are intentionally
@@ -161,8 +157,7 @@ async fn login(
     // so storing it lets us reuse the same value for future requests
     // without re-prompting for a password. The plaintext is held only
     // long enough to encrypt-and-forget; we never log it.
-    let basic_plain = format!("{}:{}", email, password.expose_secret());
-    let bearer = B64.encode(basic_plain.as_bytes());
+    let bearer = basic_bearer(&email, &password);
     let token_enc = match hail_core::seal(bearer.as_bytes(), &state.server_key) {
         Ok(b) => b,
         Err(err) => {
@@ -173,12 +168,13 @@ async fn login(
 
     // 4. 256-bit random session id, hex encoded. Never derived from any
     // user input (design.md §10.1: "opaque id, 256-bit").
-    let mut id_bytes = [0u8; 32];
-    if rand::rngs::OsRng.try_fill_bytes(&mut id_bytes).is_err() {
-        tracing::error!("login: failed to draw session id from OS RNG");
-        return internal();
-    }
-    let session_id = hex::encode(id_bytes);
+    let session_id = match new_session_id() {
+        Ok(id) => id,
+        Err(()) => {
+            tracing::error!("login: failed to draw session id from OS RNG");
+            return internal();
+        }
+    };
 
     let user_agent = headers
         .get(header::USER_AGENT)
@@ -223,7 +219,7 @@ async fn login(
         }
     };
 
-    let cookie = build_session_cookie(&session_id, SESSION_MAX_AGE_SECS);
+    let cookie = build_session_cookie(&session_id);
     tracing::info!(user_id, "login: success");
     (
         StatusCode::OK,
@@ -240,11 +236,11 @@ async fn login(
 /// matches one we know; we always clear the cookie client-side so a stale
 /// or attacker-supplied cookie can't keep coming back.
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(value) = read_session_cookie(&headers) {
+    if let Some(value) = session_cookie_value(&headers) {
         // Best-effort delete. We deliberately don't expose whether the
         // session existed.
         if let Err(err) = sqlx::query("DELETE FROM sessions WHERE id = ?1")
-            .bind(&value)
+            .bind(value)
             .execute(&state.db)
             .await
         {
@@ -336,50 +332,6 @@ fn should_promote_to_admin(
     }
 
     !any_admin_exists
-}
-
-/// Build the `Set-Cookie` value for a fresh session. We hardcode every
-/// flag in design.md §10.1 so the security posture is obvious from this
-/// single line:
-///   * `HttpOnly`           — not visible to JS in the SPA.
-///   * `Secure`             — cookie only sent over HTTPS in production.
-///   * `SameSite=Lax`       — top-level navigation only carries the
-///                            cookie cross-site; combined with the
-///                            mandatory `X-Hail-Request` header on
-///                            mutations this gives CSRF defence in depth.
-///   * `Path=/`             — visible to every hail route.
-///   * `Max-Age=2592000`    — 30 days, matching the row's expiry.
-fn build_session_cookie(session_id: &str, max_age_secs: i64) -> String {
-    format!(
-        "{name}={value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={max_age}",
-        name = SESSION_COOKIE,
-        value = session_id,
-        max_age = max_age_secs,
-    )
-}
-
-/// `Set-Cookie` value used by logout to invalidate the cookie client-side.
-fn clear_session_cookie() -> String {
-    format!(
-        "{name}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
-        name = SESSION_COOKIE
-    )
-}
-
-/// Find the `hail_session` cookie value, if any. Walks the `Cookie`
-/// header manually to avoid pulling in `axum-extra::cookie` for this one
-/// call — see the middleware module for the same parser.
-fn read_session_cookie(headers: &HeaderMap) -> Option<String> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    for pair in raw.split(';') {
-        let pair = pair.trim_start();
-        if let Some((k, v)) = pair.split_once('=') {
-            if k == SESSION_COOKIE {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn invalid_credentials() -> Response {
@@ -501,27 +453,5 @@ mod tests {
     fn first_login_promotes_only_without_configured_admin_and_existing_admin() {
         assert!(should_promote_to_admin(None, "alice@example.org", false));
         assert!(!should_promote_to_admin(None, "bob@example.org", true));
-    }
-
-    #[test]
-    fn cookie_carries_all_security_flags() {
-        let c = build_session_cookie("deadbeef", 2_592_000);
-        // Each flag from design.md §10.1 must be present verbatim.
-        assert!(c.contains("HttpOnly"), "HttpOnly missing: {c}");
-        assert!(c.contains("Secure"), "Secure missing: {c}");
-        assert!(c.contains("SameSite=Lax"), "SameSite=Lax missing: {c}");
-        assert!(c.contains("Path=/"), "Path=/ missing: {c}");
-        assert!(c.contains("Max-Age=2592000"), "Max-Age missing: {c}");
-        assert!(
-            c.starts_with("hail_session=deadbeef"),
-            "name/value missing: {c}"
-        );
-    }
-
-    #[test]
-    fn cleared_cookie_has_max_age_zero() {
-        let c = clear_session_cookie();
-        assert!(c.contains("Max-Age=0"));
-        assert!(c.contains("HttpOnly"));
     }
 }
