@@ -74,7 +74,9 @@ pub struct ProvisionedUser {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProvisionError {
-    #[error("stalwart management API returned 404 for {path}; Stalwart versions differ here, check management_url/path")]
+    #[error(
+        "stalwart management API returned 404 for {path}; Stalwart versions differ here, check management_url/path"
+    )]
     ManagementPathNotFound { path: String },
     #[error("stalwart management request failed: {0}")]
     Management(String),
@@ -110,13 +112,10 @@ impl UserProvisioner for StalwartProvisioner {
                 );
             }
 
-            let session = hail_jmap::login_basic(
-                &state.config.stalwart.jmap_url,
-                email,
-                password.clone(),
-            )
-            .await
-            .map_err(|err| ProvisionError::Jmap(err.to_string()))?;
+            let session =
+                hail_jmap::login_basic(&state.config.stalwart.jmap_url, email, password.clone())
+                    .await
+                    .map_err(|err| ProvisionError::Jmap(err.to_string()))?;
             let bearer = basic_bearer(email, &password);
             Ok(ProvisionedUser {
                 jmap_account_id: session.account_id().to_string(),
@@ -181,6 +180,29 @@ where
         return invalid_input("email");
     }
 
+    let now = Utc::now();
+    let mut gate_tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, "setup: gate tx begin failed");
+            return internal();
+        }
+    };
+    let status = match setup_status_in_tx(&state, &mut gate_tx).await {
+        Ok(status) => status,
+        Err(err) => {
+            tracing::error!(error = %err, "setup: active precheck failed");
+            return internal();
+        }
+    };
+    if !status.wizard_active {
+        return conflict_setup_disabled();
+    }
+    if let Err(err) = gate_tx.commit().await {
+        tracing::error!(error = %err, "setup: gate tx commit failed");
+        return internal();
+    }
+
     let provisioned = match provisioner
         .provision(&state, &email, body.password, display_name.as_deref())
         .await
@@ -192,7 +214,6 @@ where
         }
     };
 
-    let now = Utc::now();
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
         Err(err) => {
@@ -425,7 +446,9 @@ fn valid_domain(domain: &str) -> bool {
 
 fn new_session_id() -> Result<String, ()> {
     let mut id_bytes = [0u8; 32];
-    rand::rngs::OsRng.try_fill_bytes(&mut id_bytes).map_err(|_| ())?;
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut id_bytes)
+        .map_err(|_| ())?;
     Ok(hex::encode(id_bytes))
 }
 
