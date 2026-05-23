@@ -96,6 +96,7 @@ fn app(state: AppState, provider: Arc<FakeProvider>) -> Router {
 #[derive(Default)]
 struct FakeProvider {
     items: Vec<MailViewItem>,
+    error: Option<String>,
     calls: Mutex<Vec<(MailView, usize)>>,
 }
 
@@ -103,6 +104,15 @@ impl FakeProvider {
     fn new(items: Vec<MailViewItem>) -> Self {
         Self {
             items,
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn failing(message: impl Into<String>) -> Self {
+        Self {
+            items: Vec::new(),
+            error: Some(message.into()),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -122,6 +132,9 @@ impl MailViewProvider for FakeProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.lock().expect("calls lock").push((view, limit));
+            if let Some(message) = &self.error {
+                return Err(MailViewError::provider(message.clone()));
+            }
             Ok(self.items.iter().take(limit).cloned().collect())
         })
     }
@@ -264,6 +277,44 @@ async fn response_preserves_provider_order() {
         .map(|value| value["email_id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec!["email-30", "email-10", "email-20"]);
+}
+
+#[tokio::test]
+async fn provider_error_returns_stable_internal_json() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "erin@example.org").await;
+    let provider = Arc::new(FakeProvider::failing("upstream query failed"));
+
+    let resp = get_view(state, provider.clone(), Some(&sid), "/api/views/imbox").await;
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(provider.calls(), vec![(MailView::Imbox, 50)]);
+    assert_eq!(
+        response_json(resp).await,
+        serde_json::json!({"error": "internal"})
+    );
+}
+
+#[tokio::test]
+async fn required_identifier_provider_error_returns_stable_internal_json() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "frank@example.org").await;
+    let provider = Arc::new(FakeProvider::failing("JMAP Email missing required id"));
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&sid),
+        "/api/views/feed?limit=2",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(provider.calls(), vec![(MailView::Feed, 2)]);
+    assert_eq!(
+        response_json(resp).await,
+        serde_json::json!({"error": "internal"})
+    );
 }
 
 #[tokio::test]
