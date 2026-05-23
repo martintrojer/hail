@@ -220,15 +220,22 @@ fn is_hidden_style(style: &str) -> bool {
 }
 
 fn is_remote_http_image(src: &str) -> bool {
-    let src = src.trim_start().to_ascii_lowercase();
+    let src = normalize_url_for_scheme_detection(src);
     src.starts_with("http://") || src.starts_with("https://")
 }
 
 fn tracking_url(src: &str) -> bool {
-    let src = src.to_ascii_lowercase();
+    let src = normalize_url_for_scheme_detection(src);
     ["open", "pixel", "track", "beacon"]
         .iter()
         .any(|needle| src.contains(needle))
+}
+
+fn normalize_url_for_scheme_detection(src: &str) -> String {
+    src.chars()
+        .filter(|ch| !ch.is_ascii_control() && !ch.is_ascii_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -279,6 +286,50 @@ mod tests {
         assert!(sanitized.html.contains(">click</a>"));
         assert!(!sanitized.html.contains("href"));
         assert!(!sanitized.html.contains("javascript"));
+    }
+
+    #[test]
+    fn strips_mixed_case_javascript_and_data_links() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<a href="JaVaScRiPt:alert(1)">script</a><a href="DaTa:text/html,hello">data</a>"#,
+        );
+
+        assert!(sanitized.html.contains(">script</a>"));
+        assert!(sanitized.html.contains(">data</a>"));
+        assert!(!sanitized.html.contains("href"));
+        assert!(!sanitized.html.to_ascii_lowercase().contains("javascript"));
+        assert!(!sanitized
+            .html
+            .to_ascii_lowercase()
+            .contains("data:text/html"));
+    }
+
+    #[test]
+    fn strips_control_character_javascript_links() {
+        let sanitized = sanitize_and_strip_trackers(
+            "<a href=\"java\nscript:alert(1)\">newline</a><a href=\"jav&#x09;ascript:alert(1)\">tab</a>",
+        );
+
+        assert!(sanitized.html.contains(">newline</a>"));
+        assert!(sanitized.html.contains(">tab</a>"));
+        assert!(!sanitized.html.contains("href"));
+        assert!(!sanitized.html.to_ascii_lowercase().contains("script:alert"));
+    }
+
+    #[test]
+    fn strips_data_svg_with_control_character_scheme() {
+        let sanitized = sanitize_and_strip_trackers(
+            "<img src=\"da\nta:image/svg+xml,<svg onload=alert(1)>\" alt=\"svg\">",
+        );
+
+        assert!(sanitized.html.contains("<img"));
+        assert!(sanitized.html.contains(r#"alt="svg""#));
+        assert!(!sanitized.html.contains("src"));
+        assert!(!sanitized
+            .html
+            .to_ascii_lowercase()
+            .contains("data:image/svg"));
+        assert!(!sanitized.html.to_ascii_lowercase().contains("onload"));
     }
 
     #[test]
@@ -357,7 +408,43 @@ mod tests {
             sanitized.blocked_trackers[0].src,
             "https://example.com/logo.png"
         );
-        assert!(sanitized.blocked_trackers[0].reason.contains("remote image"));
+        assert!(sanitized.blocked_trackers[0]
+            .reason
+            .contains("remote image"));
+    }
+
+    #[test]
+    fn strips_remote_http_images_with_mixed_case_and_control_chars() {
+        let sanitized = sanitize_and_strip_trackers(
+            "<img src=\" HtTpS://cdn.example/logo.png?utm=1&open=abc\" alt=\"logo\"><img src=\"h\nttps://cdn.example/banner.jpg?x=1\" alt=\"banner\">",
+        );
+
+        assert!(!sanitized.html.contains("<img"));
+        assert!(!sanitized.html.contains("cdn.example"));
+        assert_eq!(sanitized.blocked_trackers.len(), 2);
+        assert!(sanitized.blocked_trackers[0]
+            .reason
+            .contains("tracking beacon"));
+        assert!(sanitized.blocked_trackers[1]
+            .reason
+            .contains("remote image"));
+    }
+
+    #[test]
+    fn strips_remote_http_image_query_tracking_variants() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<img src="https://images.example/newsletter.png?utm_source=list&OpenId=abc" width="640" height="320" alt="newsletter">"#,
+        );
+
+        assert!(!sanitized.html.contains("<img"));
+        assert_eq!(sanitized.blocked_trackers.len(), 1);
+        assert_eq!(
+            sanitized.blocked_trackers[0].src,
+            "https://images.example/newsletter.png?utm_source=list&OpenId=abc"
+        );
+        assert!(sanitized.blocked_trackers[0]
+            .reason
+            .contains("tracking beacon"));
     }
 
     #[test]
@@ -370,6 +457,50 @@ mod tests {
         assert!(sanitized.html.contains(r#"src="cid:logo""#));
         assert!(sanitized.html.contains(r#"alt="Logo""#));
         assert!(sanitized.blocked_trackers.is_empty());
+    }
+
+    #[test]
+    fn cid_image_with_query_is_preserved() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<img src="CID:logo.123@example?part=1&name=logo.png" width="640" height="320" alt="Logo">"#,
+        );
+
+        assert!(sanitized.html.contains("<img"));
+        assert!(sanitized
+            .html
+            .contains(r#"src="CID:logo.123@example?part=1&amp;name=logo.png""#));
+        assert!(sanitized.blocked_trackers.is_empty());
+    }
+
+    #[test]
+    fn strips_picture_source_and_srcset_rather_than_keep_remote_candidates() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<picture><source srcset="https://cdn.example/hero.webp 1x, cid:hero 2x"><img src="cid:fallback" srcset="https://cdn.example/fallback.png 1x" alt="Hero"></picture>"#,
+        );
+
+        assert!(!sanitized.html.contains("<picture"));
+        assert!(!sanitized.html.contains("<source"));
+        assert!(sanitized.html.contains("<img"));
+        assert!(sanitized.html.contains(r#"src="cid:fallback""#));
+        assert!(!sanitized.html.contains("srcset"));
+        assert!(!sanitized.html.contains("cdn.example"));
+    }
+
+    #[test]
+    fn strips_svg_tags_and_data_svg_references() {
+        let sanitized = sanitize_and_strip_trackers(
+            r#"<svg><a href="javascript:alert(1)"><circle onload="alert(2)"></circle></a></svg><img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" alt="svg">"#,
+        );
+
+        assert!(sanitized.html.contains(r#"alt="svg""#));
+        assert!(!sanitized.html.contains("<svg"));
+        assert!(!sanitized.html.contains("<circle"));
+        assert!(!sanitized.html.contains("src="));
+        assert!(!sanitized.html.to_ascii_lowercase().contains("javascript"));
+        assert!(!sanitized
+            .html
+            .to_ascii_lowercase()
+            .contains("data:image/svg"));
     }
 
     #[test]
