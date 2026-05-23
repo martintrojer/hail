@@ -48,7 +48,12 @@ class ScreenerPageTestClient extends HailApiClient {
         Promise.resolve({
           sender: body.sender,
           decision: body.decision,
-          classify_as: body.classify_as ?? null,
+          classify_as:
+            body.classify_as === 'imbox' ||
+            body.classify_as === 'feed' ||
+            body.classify_as === 'papertrail'
+              ? body.classify_as
+              : null,
         }));
   }
 
@@ -78,10 +83,14 @@ class ScreenerPageTestClient extends HailApiClient {
 let currentTestBody: ReactNode = null;
 let restoreScreenerRoute: (() => void) | null = null;
 
-afterEach(() => {
-  currentTestBody = null;
+function restoreRoute() {
   restoreScreenerRoute?.();
   restoreScreenerRoute = null;
+}
+
+afterEach(() => {
+  currentTestBody = null;
+  restoreRoute();
   window.history.pushState({}, '', '/');
   cleanup();
 });
@@ -199,8 +208,7 @@ describe('ScreenerPage', () => {
     expect(screen.getByLabelText('Loading pending senders')).toBeInTheDocument();
     expect(pendingClient.decideScreenerCalls).toEqual([]);
     cleanup();
-    restoreScreenerRoute?.();
-    restoreScreenerRoute = null;
+    restoreRoute();
 
     renderScreener(
       new ScreenerPageTestClient({
@@ -214,8 +222,7 @@ describe('ScreenerPage', () => {
       screen.getByText('Your session expired. Sign in again to refresh the Screener.'),
     ).toBeInTheDocument();
     cleanup();
-    restoreScreenerRoute?.();
-    restoreScreenerRoute = null;
+    restoreRoute();
 
     renderScreener(new ScreenerPageTestClient({ view: sampleScreenerView({ senders: [] }) }));
     expect(await screen.findByText('No unknown senders')).toBeInTheDocument();
