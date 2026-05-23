@@ -949,7 +949,13 @@ dependencies = [
 name = "hail-test"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "hail-jmap",
+ "reqwest",
+ "secrecy",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

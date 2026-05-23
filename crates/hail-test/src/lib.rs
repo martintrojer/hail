@@ -4,6 +4,8 @@
 //! corpus and a minimal header parser that is sufficient for fixture smoke
 //! tests and for future local/E2E testbeds to inject raw messages.
 
+pub mod stalwart;
+
 use std::collections::BTreeMap;
 
 /// Relative path to the synthetic RFC822 corpus from the workspace root.
