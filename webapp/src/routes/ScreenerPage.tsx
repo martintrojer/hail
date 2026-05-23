@@ -1,4 +1,5 @@
 import { useId, useState, type FormEvent } from 'react';
+import type { HailApiClient } from '../api/client';
 import {
   HailApiError,
   type ScreenerClassification,
@@ -105,12 +106,18 @@ function StateCard({ title, body }: { title: string; body: string }) {
   );
 }
 
-function PendingSenderCard({ sender }: { sender: ScreenerPendingSender }) {
+function PendingSenderCard({
+  sender,
+  client,
+}: {
+  sender: ScreenerPendingSender;
+  client?: HailApiClient;
+}) {
   const selectId = useId();
   const [classifyAs, setClassifyAs] =
     useState<ScreenerClassification>('imbox');
   const { showToast } = useUndoToast();
-  const decision = useScreenerDecisionMutation(undefined, {
+  const decision = useScreenerDecisionMutation(client, {
     onSuccess: (data, variables) => {
       if (variables.decision !== 'deny') {
         return;
@@ -217,8 +224,8 @@ function PendingSenderCard({ sender }: { sender: ScreenerPendingSender }) {
   );
 }
 
-export function ScreenerPage() {
-  const query = useScreenerView();
+export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
+  const query = useScreenerView(client);
 
   let list;
   if (query.isPending) {
@@ -241,7 +248,7 @@ export function ScreenerPage() {
     list = (
       <div className="space-y-3">
         {query.data.senders.map((sender) => (
-          <PendingSenderCard key={sender.sender} sender={sender} />
+          <PendingSenderCard key={sender.sender} sender={sender} client={client} />
         ))}
       </div>
     );
