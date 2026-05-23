@@ -4,6 +4,7 @@
 //! login/logout/me).
 
 pub mod admin_domains;
+pub mod admin_users;
 pub mod auth;
 pub mod blobs;
 pub mod contacts;

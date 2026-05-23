@@ -85,6 +85,7 @@ fn build_api_router(
     #[cfg_attr(not(feature = "__test-stubs"), allow(unused_mut))]
     let mut protected: Router<AppState> = routes::auth::protected_router()
         .merge(routes::admin_domains::router())
+        .merge(routes::admin_users::router())
         .merge(routes::blobs::router())
         .merge(routes::contacts::router())
         .merge(routes::drafts::router())
