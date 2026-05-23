@@ -127,6 +127,7 @@ impl MailViewProvider for EmptyMailViewProvider {
 #[derive(Default)]
 struct FakeSearchProvider {
     items: Vec<MailSearchResult>,
+    error: Option<String>,
     calls: Mutex<Vec<(String, usize)>>,
 }
 
@@ -134,6 +135,15 @@ impl FakeSearchProvider {
     fn new(items: Vec<MailSearchResult>) -> Self {
         Self {
             items,
+            error: None,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn failing(message: impl Into<String>) -> Self {
+        Self {
+            items: Vec::new(),
+            error: Some(message.into()),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -156,6 +166,9 @@ impl SearchProvider for FakeSearchProvider {
                 .lock()
                 .expect("calls lock")
                 .push((q.to_string(), limit));
+            if let Some(message) = &self.error {
+                return Err(SearchError::provider(message.clone()));
+            }
             Ok(self.items.iter().take(limit).cloned().collect())
         })
     }
@@ -212,6 +225,52 @@ async fn short_q_returns_400() {
     let resp = request_search(state, search, Some(&sid), "/api/views/search?q=x").await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn mail_provider_error_returns_stable_internal_json() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "bob@example.org").await;
+    let search = Arc::new(FakeSearchProvider::failing("upstream search failed"));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=mail",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(
+        json_body(resp).await,
+        serde_json::json!({"error": "internal"})
+    );
+}
+
+#[tokio::test]
+async fn required_identifier_provider_error_returns_stable_internal_json() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "carol@example.org").await;
+    let search = Arc::new(FakeSearchProvider::failing(
+        "JMAP Email missing required threadId",
+    ));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=all",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(
+        json_body(resp).await,
+        serde_json::json!({"error": "internal"})
+    );
 }
 
 #[tokio::test]
