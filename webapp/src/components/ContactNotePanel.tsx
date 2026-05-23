@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { HailApiError } from '../api/client';
 import { useContact, useContactNoteMutation } from '../api/query';
+import { useUndoToast } from './UndoToastProvider';
 
 interface ContactNotePanelProps {
   address: string;
@@ -59,11 +60,16 @@ export function ContactNotePanel({
   const [isOpen, setIsOpen] = useState(false);
   const [markdown, setMarkdown] = useState('');
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const { showToast } = useUndoToast();
   const contact = useContact(address);
   const noteMutation = useContactNoteMutation(undefined, {
     onSuccess: (_data, variables) => {
-      setSavedMessage(variables.note === null ? 'Note deleted.' : 'Note saved.');
+      const deleted = variables.note === null;
+      setSavedMessage(deleted ? null : 'Note saved.');
       setMarkdown(variables.note?.markdown ?? '');
+      if (deleted) {
+        showToast({ message: 'Note deleted.' });
+      }
     },
   });
 

@@ -273,11 +273,28 @@ export interface ScreenerDecisionRequest {
   apply_to_history: boolean;
 }
 
-export type ScreenerDecisionResponse = {
+export interface UndoToken {
+  id: string;
+  action: string;
+  expires_at: string;
+}
+
+export interface UndoResponse {
+  id: string;
+  action: string;
+}
+
+export type UndoableResponse = {
+  undo?: UndoToken | null;
+};
+
+export type ScreenerDecisionResponse = UndoableResponse & {
   sender: string;
   decision: ScreenerDecision;
   classify_as?: ScreenerClassification | null;
 };
+
+export type ThreadVerbResponse = UndoableResponse;
 
 export class HailApiError<Status extends number = number> extends Error {
   readonly name = 'HailApiError';
@@ -508,6 +525,50 @@ export class HailApiClient {
       await this.#request('/api/screener/decisions', {
         method: 'POST',
         body,
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async classifyThread(
+    threadId: string,
+    to: MailClassification,
+  ): Promise<ThreadVerbResponse> {
+    return this.#json<ThreadVerbResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/classify`, {
+        method: 'POST',
+        body: { to },
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async archiveThread(threadId: string): Promise<ThreadVerbResponse> {
+    return this.#json<ThreadVerbResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/archive`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async trashThread(threadId: string): Promise<ThreadVerbResponse> {
+    return this.#json<ThreadVerbResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/trash`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async undo(id: string): Promise<UndoResponse> {
+    return this.#json<UndoResponse>(
+      await this.#request(`/api/undo/${encodeURIComponent(id)}`, {
+        method: 'POST',
         mutating: true,
       }),
       200,

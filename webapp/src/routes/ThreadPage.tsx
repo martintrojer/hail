@@ -1,8 +1,29 @@
 import { useNavigate } from '@tanstack/react-router';
-import { HailApiError, type ThreadMessage, type ThreadViewResponse } from '../api/client';
-import { useThread } from '../api/query';
+import { useState } from 'react';
+import {
+  HailApiError,
+  type MailClassification,
+  type ThreadMessage,
+  type ThreadViewResponse,
+} from '../api/client';
+import {
+  useArchiveThreadMutation,
+  useClassifyThreadMutation,
+  useThread,
+  useTrashThreadMutation,
+} from '../api/query';
 import { ContactNotePanel } from '../components/ContactNotePanel';
+import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
+
+const classificationOptions: Array<{
+  value: MailClassification;
+  label: string;
+}> = [
+  { value: 'imbox', label: 'Imbox' },
+  { value: 'feed', label: 'Feed' },
+  { value: 'papertrail', label: 'Paper Trail' },
+];
 
 interface ThreadPageProps {
   threadId: string;
@@ -53,6 +74,20 @@ function errorCopy(error: Error) {
   }
 
   return 'Thread failed to load. Refresh and try again.';
+}
+
+function threadActionErrorMessage(error: Error) {
+  if (error instanceof HailApiError) {
+    if (error.status === 401) {
+      return 'Your session expired. Sign in again before changing this thread.';
+    }
+    if (error.status === 404) {
+      return 'This thread was not found. Refresh and try again.';
+    }
+    return `Thread action failed with HTTP ${error.status}.`;
+  }
+
+  return 'Thread action failed. Try again.';
 }
 
 function StateCard({ title, body }: { title: string; body: string }) {
@@ -172,6 +207,103 @@ function primarySender(thread: ThreadViewResponse) {
   );
 }
 
+function ThreadActions({ thread }: { thread: ThreadViewResponse }) {
+  const { showToast } = useUndoToast();
+  const [classification, setClassification] =
+    useState<MailClassification>('imbox');
+  const classify = useClassifyThreadMutation(undefined, {
+    onSuccess: (data, variables) => {
+      const label =
+        classificationOptions.find((option) => option.value === variables.to)
+          ?.label ?? variables.to;
+      showToast({
+        message: `Moved thread to ${label}.`,
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Thread classification undone.',
+      });
+    },
+  });
+  const archive = useArchiveThreadMutation(undefined, {
+    onSuccess: (data) => {
+      showToast({
+        message: 'Thread archived.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Archive undone.',
+      });
+    },
+  });
+  const trash = useTrashThreadMutation(undefined, {
+    onSuccess: (data) => {
+      showToast({
+        message: 'Thread moved to trash.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Trash undone.',
+      });
+    },
+  });
+  const busy = classify.isPending || archive.isPending || trash.isPending;
+  const error = classify.error ?? archive.error ?? trash.error;
+
+  return (
+    <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/20">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <label className="min-w-0 flex-1 text-sm font-medium text-slate-200">
+          Classify as
+          <select
+            value={classification}
+            onChange={(event) =>
+              setClassification(event.target.value as MailClassification)
+            }
+            disabled={busy}
+            className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none ring-sky-400 transition focus:border-sky-400 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {classificationOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex flex-wrap gap-2 sm:self-end">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              classify.mutate({ threadId: thread.thread_id, to: classification })
+            }
+            className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {classify.isPending ? 'Moving…' : 'Move'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => archive.mutate({ threadId: thread.thread_id })}
+            className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-emerald-400 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {archive.isPending ? 'Archiving…' : 'Archive'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => trash.mutate({ threadId: thread.thread_id })}
+            className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-red-400 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {trash.isPending ? 'Trashing…' : 'Trash'}
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <p role="alert" className="mt-3 text-sm text-red-200">
+          {threadActionErrorMessage(error)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
   const navigate = useNavigate();
   const sender = primarySender(thread);
@@ -194,6 +326,7 @@ function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
     return (
       <div className="space-y-4">
         <ThreadSummary thread={thread} />
+        <ThreadActions thread={thread} />
         {replyButton}
         {sender ? (
           <ContactNotePanel address={sender.email} displayName={sender.name} />
@@ -209,6 +342,7 @@ function ThreadDocument({ thread }: { thread: ThreadViewResponse }) {
   return (
     <div className="space-y-4">
       <ThreadSummary thread={thread} />
+      <ThreadActions thread={thread} />
       {replyButton}
       {sender ? (
         <ContactNotePanel address={sender.email} displayName={sender.name} />

@@ -1,5 +1,7 @@
 import {
+  useArchiveThreadMutation,
   useBubbleUpMutation,
+  useClassifyThreadMutation,
   useContact,
   useContactNoteMutation,
   useFeedView,
@@ -11,6 +13,7 @@ import {
   useScreenerDecisionMutation,
   useScreenerView,
   useSetupState,
+  useTrashThreadMutation,
 } from './query';
 import { queryKeys } from './queryKeys';
 
@@ -25,6 +28,9 @@ export function ApiHookSmoke() {
   void useLoginMutation();
   void useLogoutMutation();
   void useScreenerDecisionMutation();
+  void useClassifyThreadMutation();
+  void useArchiveThreadMutation();
+  void useTrashThreadMutation();
   void useContactNoteMutation();
   void useBubbleUpMutation();
   void queryKeys.contact('person@example.com');
