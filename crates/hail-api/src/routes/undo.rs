@@ -222,6 +222,7 @@ where
             "thread.classify" => {
                 let payload: ThreadClassifyUndoPayload = serde_json::from_value(undo.payload)
                     .map_err(|_| UndoError::bad_request("invalid_undo_payload"))?;
+                validate_thread_classify_payload(&payload)?;
                 self.thread_restorer
                     .restore_classification(
                         state,
@@ -258,6 +259,7 @@ where
 struct ThreadClassifyUndoPayload {
     thread_id: String,
     previous_classification: String,
+    new_classification: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,6 +428,20 @@ where
             .await?;
     }
 
+    Ok(())
+}
+
+fn validate_thread_classify_payload(payload: &ThreadClassifyUndoPayload) -> Result<(), UndoError> {
+    if !looks_like_jmap_id(&payload.thread_id) {
+        return Err(UndoError::bad_request("invalid_thread_id"));
+    }
+    let previous = ClassificationKeyword::parse(&payload.previous_classification)
+        .ok_or_else(|| UndoError::bad_request("invalid_previous_classification"))?;
+    let new = ClassificationKeyword::parse(&payload.new_classification)
+        .ok_or_else(|| UndoError::bad_request("invalid_new_classification"))?;
+    if previous == new {
+        return Err(UndoError::bad_request("noop_classify_undo"));
+    }
     Ok(())
 }
 

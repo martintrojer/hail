@@ -366,6 +366,8 @@ async fn classify_calls_action_and_rejects_invalid_classification() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert!(json["undo"].is_null());
     assert_eq!(
         actions.calls(),
         vec![Call::Classify {
@@ -384,6 +386,129 @@ async fn classify_calls_action_and_rejects_invalid_classification() {
     )
     .await;
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn classify_creates_undo_with_previous_and_new_classification() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-undo-payload@example.org").await;
+    let actions = Arc::new(FakeActions::default());
+    *actions
+        .current_classification
+        .lock()
+        .expect("current classification mutex") = Some(Classification::Imbox);
+
+    let resp = post(
+        state.clone(),
+        actions.clone(),
+        Some(&sid),
+        true,
+        "/api/threads/thread-1/classify",
+        Some(r#"{"to":"feed"}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["undo"]["action"], "thread.classify");
+    let undo_id = json["undo"]["id"].as_str().expect("undo id");
+    assert_eq!(undo_id.len(), 64);
+
+    let (action, payload_json): (String, String) = sqlx::query_as(
+        "SELECT action, payload_json FROM undo_actions WHERE id = ?1 AND user_id = ?2",
+    )
+    .bind(undo_id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(action, "thread.classify");
+    let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+    assert_eq!(payload["thread_id"], "thread-1");
+    assert_eq!(payload["previous_classification"], "imbox");
+    assert_eq!(payload["new_classification"], "feed");
+    assert_eq!(
+        actions.calls(),
+        vec![Call::Classify {
+            thread_id: "thread-1".to_string(),
+            classification: Classification::Feed,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn classify_without_previous_classification_has_no_undo() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-no-previous@example.org").await;
+    let actions = Arc::new(FakeActions::default());
+
+    let resp = post(
+        state.clone(),
+        actions.clone(),
+        Some(&sid),
+        true,
+        "/api/threads/thread-1/classify",
+        Some(r#"{"to":"papertrail"}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert!(json["undo"].is_null());
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM undo_actions WHERE user_id = ?1 AND action = 'thread.classify'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        actions.calls(),
+        vec![Call::Classify {
+            thread_id: "thread-1".to_string(),
+            classification: Classification::Papertrail,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn classify_same_classification_is_noop_for_undo() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-idempotent@example.org").await;
+    let actions = Arc::new(FakeActions::default());
+    *actions
+        .current_classification
+        .lock()
+        .expect("current classification mutex") = Some(Classification::Feed);
+
+    let resp = post(
+        state.clone(),
+        actions.clone(),
+        Some(&sid),
+        true,
+        "/api/threads/thread-1/classify",
+        Some(r#"{"to":"feed"}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert!(json["undo"].is_null());
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM undo_actions WHERE user_id = ?1 AND action = 'thread.classify'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        actions.calls(),
+        vec![Call::Classify {
+            thread_id: "thread-1".to_string(),
+            classification: Classification::Feed,
+        }]
+    );
 }
 
 #[tokio::test]

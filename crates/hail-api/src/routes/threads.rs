@@ -429,7 +429,8 @@ where
         Ok(()) => {
             let undo = match previous_classification {
                 Some(previous) if previous != body.to => {
-                    create_thread_classify_undo(&state, user.id, &thread_id, previous).await
+                    create_thread_classify_undo(&state, user.id, &thread_id, previous, body.to)
+                        .await
                 }
                 _ => None,
             };
@@ -625,6 +626,7 @@ async fn create_thread_classify_undo(
     user_id: i64,
     thread_id: &str,
     previous_classification: Classification,
+    new_classification: Classification,
 ) -> Option<UndoToken> {
     create_undo_action(
         state,
@@ -633,6 +635,7 @@ async fn create_thread_classify_undo(
         serde_json::json!({
             "thread_id": thread_id,
             "previous_classification": previous_classification.db_value(),
+            "new_classification": new_classification.db_value(),
         }),
     )
     .await

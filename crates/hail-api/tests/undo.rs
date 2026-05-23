@@ -409,7 +409,8 @@ async fn classify_undo_restores_previous_classification() {
         "thread.classify",
         serde_json::json!({
             "thread_id": "thread-1",
-            "previous_classification": "feed"
+            "previous_classification": "feed",
+            "new_classification": "papertrail"
         }),
     )
     .await
@@ -431,6 +432,112 @@ async fn classify_undo_restores_previous_classification() {
             .expect("classify calls mutex")
             .clone(),
         vec![("thread-1".to_string(), "feed".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn classify_undo_rejects_missing_new_classification_payload() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-missing-new@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.classify",
+        serde_json::json!({
+            "thread_id": "thread-1",
+            "previous_classification": "feed"
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        restorer
+            .classify_calls
+            .lock()
+            .expect("classify calls mutex")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn classify_undo_rejects_missing_previous_classification_payload() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-missing-previous@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.classify",
+        serde_json::json!({
+            "thread_id": "thread-1",
+            "new_classification": "feed"
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        restorer
+            .classify_calls
+            .lock()
+            .expect("classify calls mutex")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn classify_undo_rejects_noop_classification_payload() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-noop-undo@example.org").await;
+    let restorer = Arc::new(FakeThreadRestorer::default());
+    let undo = create_undo_action(
+        &state,
+        user_id,
+        "thread.classify",
+        serde_json::json!({
+            "thread_id": "thread-1",
+            "previous_classification": "feed",
+            "new_classification": "feed"
+        }),
+    )
+    .await
+    .unwrap();
+
+    let resp = post_undo(
+        state,
+        Arc::new(ActionUndoExecutor::new(restorer.clone())),
+        Some(&sid),
+        true,
+        &undo.id,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        restorer
+            .classify_calls
+            .lock()
+            .expect("classify calls mutex")
+            .is_empty()
     );
 }
 
