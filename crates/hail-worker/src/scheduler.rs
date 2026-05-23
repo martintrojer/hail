@@ -403,7 +403,7 @@ mod live {
             }
         }
 
-        async fn latest_active_token_and_email(
+        pub(crate) async fn latest_active_token_and_email(
             &self,
             user_id: i64,
         ) -> std::result::Result<(SecretString, String), SendSubmitError> {
@@ -494,24 +494,19 @@ mod live {
             .ok_or_else(|| JmapClientError::Internal("identity not found".to_string()))
     }
 
+    fn is_transient_set_error_type(error: &SetErrorType) -> bool {
+        matches!(error, SetErrorType::RateLimit | SetErrorType::OverQuota)
+    }
+
     fn classify_jmap_submit_error(err: JmapClientError) -> SendSubmitError {
         match &err {
-            JmapClientError::Set(set_err) => match set_err.error() {
-                SetErrorType::RateLimit | SetErrorType::OverQuota => {
+            JmapClientError::Set(set_err) => {
+                if is_transient_set_error_type(set_err.error()) {
                     SendSubmitError::transient(err)
+                } else {
+                    SendSubmitError::permanent(err)
                 }
-                SetErrorType::Forbidden
-                | SetErrorType::NotFound
-                | SetErrorType::InvalidProperties
-                | SetErrorType::ForbiddenFrom
-                | SetErrorType::InvalidEmail
-                | SetErrorType::TooManyRecipients
-                | SetErrorType::NoRecipients
-                | SetErrorType::InvalidRecipients
-                | SetErrorType::ForbiddenMailFrom
-                | SetErrorType::ForbiddenToSend => SendSubmitError::permanent(err),
-                _ => SendSubmitError::permanent(err),
-            },
+            }
             JmapClientError::Transport(_)
             | JmapClientError::Server(_)
             | JmapClientError::Problem(_)
@@ -522,7 +517,23 @@ mod live {
             JmapClientError::WebSocket(_) => SendSubmitError::transient(err),
         }
     }
+    #[cfg(test)]
+    pub(crate) fn classify_jmap_set_error_type_for_test(error: &SetErrorType) -> SendSubmitError {
+        if is_transient_set_error_type(error) {
+            SendSubmitError::transient(error)
+        } else {
+            SendSubmitError::permanent(error)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn classify_jmap_submit_error_for_test(err: JmapClientError) -> SendSubmitError {
+        classify_jmap_submit_error(err)
+    }
 }
+
+#[cfg(test)]
+pub(crate) use live::{classify_jmap_set_error_type_for_test, classify_jmap_submit_error_for_test};
 
 #[allow(unused_imports)]
 pub use live::{LiveBubbleJmapOps, LiveSendSubmitter};

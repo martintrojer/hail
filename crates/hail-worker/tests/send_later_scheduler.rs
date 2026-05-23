@@ -7,6 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use hail_jmap::jmap_client::Error as JmapClientError;
+use hail_jmap::jmap_client::core::set::SetErrorType;
+use secrecy::{ExposeSecret, SecretString};
 use sqlx::SqlitePool;
 use tokio::sync::Barrier;
 
@@ -17,7 +20,24 @@ mod crypto;
 #[path = "../src/scheduler.rs"]
 mod scheduler;
 
-use scheduler::{SendSubmitError, SendSubmitter, process_due_scheduled_sends};
+use scheduler::{
+    LiveSendSubmitter, SendSubmitError, SendSubmitter, classify_jmap_set_error_type_for_test,
+    classify_jmap_submit_error_for_test, process_due_scheduled_sends,
+};
+
+#[derive(Debug, Default)]
+struct EchoTokenDecryptor;
+
+impl crypto::TokenDecryptor for EchoTokenDecryptor {
+    fn decrypt(&self, enc: &[u8]) -> Result<SecretString, crypto::DecryptError> {
+        if enc == b"decrypt-fail" {
+            return Err(crypto::DecryptError::AuthFailed);
+        }
+        String::from_utf8(enc.to_vec())
+            .map(SecretString::from)
+            .map_err(|_| crypto::DecryptError::Malformed("plaintext is not valid utf-8"))
+    }
+}
 
 #[derive(Debug, Default)]
 struct FakeSendSubmitter {
@@ -175,6 +195,30 @@ async fn insert_scheduled_send(
     insert_scheduled_send_with_status(pool, user_id, draft_email_id, send_at, "pending").await
 }
 
+async fn insert_session(
+    pool: &SqlitePool,
+    user_id: i64,
+    id: &str,
+    token: &[u8],
+    expires_at: DateTime<Utc>,
+    last_used_at: DateTime<Utc>,
+) {
+    sqlx::query(
+        "INSERT INTO sessions \
+         (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
+         VALUES (?, ?, ?, 'test', ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(token)
+    .bind(expires_at)
+    .bind("2026-01-01T00:00:00Z")
+    .bind(last_used_at)
+    .execute(pool)
+    .await
+    .expect("insert session");
+}
+
 async fn scheduled_send_state(
     pool: &SqlitePool,
     id: i64,
@@ -184,6 +228,158 @@ async fn scheduled_send_state(
         .fetch_one(pool)
         .await
         .expect("select scheduled_send state")
+}
+
+#[tokio::test]
+async fn live_submitter_uses_newest_non_expired_session() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    insert_session(
+        &pool,
+        user_id,
+        "expired-newest",
+        b"expired-token",
+        now - Duration::minutes(1),
+        now + Duration::hours(1),
+    )
+    .await;
+    insert_session(
+        &pool,
+        user_id,
+        "active-older",
+        b"older-token",
+        now + Duration::hours(1),
+        now - Duration::minutes(10),
+    )
+    .await;
+    insert_session(
+        &pool,
+        user_id,
+        "active-newest",
+        b"newest-token",
+        now + Duration::hours(1),
+        now - Duration::minutes(1),
+    )
+    .await;
+    let submitter = LiveSendSubmitter::new(
+        pool,
+        "http://127.0.0.1:9/jmap".to_string(),
+        Arc::new(EchoTokenDecryptor),
+    );
+
+    let (token, email) = submitter
+        .latest_active_token_and_email(user_id)
+        .await
+        .expect("active token");
+
+    assert_eq!(token.expose_secret(), "newest-token");
+    assert_eq!(email, "alice@example.com");
+}
+
+#[tokio::test]
+async fn live_submitter_missing_active_session_is_transient() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    insert_session(
+        &pool,
+        user_id,
+        "expired-only",
+        b"expired-token",
+        now - Duration::minutes(1),
+        now,
+    )
+    .await;
+    let submitter = LiveSendSubmitter::new(
+        pool,
+        "http://127.0.0.1:9/jmap".to_string(),
+        Arc::new(EchoTokenDecryptor),
+    );
+
+    let err = submitter
+        .latest_active_token_and_email(user_id)
+        .await
+        .expect_err("no active session");
+
+    assert!(
+        matches!(err, SendSubmitError::Transient(ref message) if message.contains("no active JMAP session")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn live_submitter_decrypt_failure_is_transient() {
+    let (pool, _guard, user_id) = setup_db().await;
+    let now = Utc::now();
+    insert_session(
+        &pool,
+        user_id,
+        "bad-token",
+        b"decrypt-fail",
+        now + Duration::hours(1),
+        now,
+    )
+    .await;
+    let submitter = LiveSendSubmitter::new(
+        pool,
+        "http://127.0.0.1:9/jmap".to_string(),
+        Arc::new(EchoTokenDecryptor),
+    );
+
+    let err = submitter
+        .latest_active_token_and_email(user_id)
+        .await
+        .expect_err("decrypt failure");
+
+    assert!(
+        matches!(err, SendSubmitError::Transient(ref message) if message.contains("decrypt JMAP token")),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn live_submitter_classifies_jmap_submit_errors() {
+    for error_type in [SetErrorType::RateLimit, SetErrorType::OverQuota] {
+        let err = classify_jmap_set_error_type_for_test(&error_type);
+        assert!(
+            matches!(err, SendSubmitError::Transient(ref message) if message.contains(&error_type.to_string())),
+            "{error_type:?} should be transient, got {err:?}"
+        );
+    }
+
+    for error_type in [
+        SetErrorType::Forbidden,
+        SetErrorType::NotFound,
+        SetErrorType::InvalidProperties,
+        SetErrorType::ForbiddenFrom,
+        SetErrorType::InvalidEmail,
+        SetErrorType::TooManyRecipients,
+        SetErrorType::NoRecipients,
+        SetErrorType::InvalidRecipients,
+        SetErrorType::ForbiddenMailFrom,
+        SetErrorType::ForbiddenToSend,
+    ] {
+        let err = classify_jmap_set_error_type_for_test(&error_type);
+        assert!(
+            matches!(err, SendSubmitError::Permanent(ref message) if message.contains(&error_type.to_string())),
+            "{error_type:?} should be permanent, got {err:?}"
+        );
+    }
+
+    let server_err = classify_jmap_submit_error_for_test(JmapClientError::Server(
+        "temporarily unavailable".to_string(),
+    ));
+    assert!(
+        matches!(server_err, SendSubmitError::Transient(ref message) if message.contains("temporarily unavailable")),
+        "server errors should be transient, got {server_err:?}"
+    );
+
+    let internal_err = classify_jmap_submit_error_for_test(JmapClientError::Internal(
+        "malformed response".to_string(),
+    ));
+    assert!(
+        matches!(internal_err, SendSubmitError::Permanent(ref message) if message.contains("malformed response")),
+        "internal errors should be permanent, got {internal_err:?}"
+    );
 }
 
 #[tokio::test]
