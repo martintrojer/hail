@@ -25,7 +25,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
-use crate::scheduler::{LiveBubbleJmapOps, process_due_bubble_ups};
+use crate::scheduler::{
+    LiveBubbleJmapOps, LiveSendSubmitter, process_due_bubble_ups, process_due_scheduled_sends,
+};
 use crate::state::AppState;
 use crate::user::run_user_supervisor;
 
@@ -70,6 +72,11 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
         state.config.stalwart.jmap_url.clone(),
         state.token_decryptor.clone(),
     );
+    let send_submitter = LiveSendSubmitter::new(
+        state.db.clone(),
+        state.config.stalwart.jmap_url.clone(),
+        state.token_decryptor.clone(),
+    );
     let thread_verifier = LiveThreadVerifier::new(
         state.db.clone(),
         state.config.stalwart.jmap_url.clone(),
@@ -79,11 +86,16 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
 
     // Reconcile immediately so the first tick doesn't burn a full
     // cadence before users come online. Also run scheduled jobs once
-    // so overdue bubble-ups fire promptly after worker restart.
+    // so overdue bubble-ups and scheduled sends fire promptly after worker restart.
     reconcile(&state, &cancel, &mut running, &mut tasks).await;
-    run_scheduler_tick(&state, &bubble_jmap).await;
-    run_reconciliation_if_due(&state, &thread_verifier, &mut next_reconcile_at, reconcile_secs)
-        .await;
+    run_scheduler_tick(&state, &bubble_jmap, &send_submitter).await;
+    run_reconciliation_if_due(
+        &state,
+        &thread_verifier,
+        &mut next_reconcile_at,
+        reconcile_secs,
+    )
+    .await;
 
     loop {
         tokio::select! {
@@ -94,7 +106,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             }
             _ = sleep(tick) => {
                 reconcile(&state, &cancel, &mut running, &mut tasks).await;
-                run_scheduler_tick(&state, &bubble_jmap).await;
+                run_scheduler_tick(&state, &bubble_jmap, &send_submitter).await;
                 run_reconciliation_if_due(&state, &thread_verifier, &mut next_reconcile_at, reconcile_secs)
                     .await;
             }
@@ -129,7 +141,10 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             }
         }
     };
-    if tokio::time::timeout(Duration::from_secs(5), drain).await.is_err() {
+    if tokio::time::timeout(Duration::from_secs(5), drain)
+        .await
+        .is_err()
+    {
         warn!("supervisor: per-user tasks did not finish within 5s, aborting");
         tasks.abort_all();
         // Drain JoinErrors from the abort so we don't leak handles.
@@ -146,11 +161,22 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     Ok(())
 }
 
-async fn run_scheduler_tick(state: &AppState, bubble_jmap: &LiveBubbleJmapOps) {
-    match process_due_bubble_ups(&state.db, bubble_jmap, chrono::Utc::now()).await {
+async fn run_scheduler_tick(
+    state: &AppState,
+    bubble_jmap: &LiveBubbleJmapOps,
+    send_submitter: &LiveSendSubmitter,
+) {
+    let now = chrono::Utc::now();
+    match process_due_bubble_ups(&state.db, bubble_jmap, now).await {
         Ok(fired) if fired > 0 => info!(fired, "scheduler: bubble-ups processed"),
         Ok(_) => {}
         Err(e) => warn!(error = %e, "scheduler: bubble-up tick failed"),
+    }
+
+    match process_due_scheduled_sends(&state.db, send_submitter, now).await {
+        Ok(sent) if sent > 0 => info!(sent, "scheduler: scheduled sends processed"),
+        Ok(_) => {}
+        Err(e) => warn!(error = %e, "scheduler: scheduled-send tick failed"),
     }
 }
 
@@ -228,7 +254,10 @@ async fn reconcile(
         .collect();
     for uid in removed {
         if let Some(token) = running.remove(&uid) {
-            info!(user_id = uid, "supervisor: cancelling per-user task (user no longer active)");
+            info!(
+                user_id = uid,
+                "supervisor: cancelling per-user task (user no longer active)"
+            );
             token.cancel();
         }
     }
@@ -238,12 +267,11 @@ async fn reconcile(
 /// Matches §6.2's `sessions.expires_at`.
 async fn active_user_ids(db: &SqlitePool) -> Result<Vec<i64>> {
     let now = chrono::Utc::now().to_rfc3339();
-    let rows: Vec<(i64,)> = sqlx::query_as(
-        "SELECT DISTINCT user_id FROM sessions WHERE expires_at > ?",
-    )
-    .bind(now)
-    .fetch_all(db)
-    .await
-    .context("select active users")?;
+    let rows: Vec<(i64,)> =
+        sqlx::query_as("SELECT DISTINCT user_id FROM sessions WHERE expires_at > ?")
+            .bind(now)
+            .fetch_all(db)
+            .await
+            .context("select active users")?;
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }

@@ -1,9 +1,18 @@
-//! Scheduled worker jobs for bubble-up reminders.
+//! Scheduled worker jobs for bubble-up reminders and scheduled sends.
 //!
-//! The scheduler owns the hail-side state transition for due `bubble_ups` rows:
-//! query due pending rows, ask JMAP to make the corresponding thread unread, then
-//! stamp `fired_at`. JMAP failures are treated as transient per design.md §8.3:
-//! the row remains pending and the rest of the batch continues.
+//! The scheduler owns hail-side state transitions for due rows:
+//! - `bubble_ups`: query due pending rows, ask JMAP to make the corresponding
+//!   thread unread, then stamp `fired_at`.
+//! - `scheduled_sends`: query due `status='pending'` rows, ask JMAP to submit
+//!   the saved draft, then mark sent or failed.
+//!
+//! Failure policy is intentionally split by operation. Bubble-up JMAP failures
+//! are treated as transient per design.md §8.3: the row remains pending and the
+//! rest of the batch continues. Scheduled-send submission failures are classified
+//! by the [`SendSubmitter`]: transient failures (network/server/rate/no active
+//! session) remain pending for a later tick; permanent failures (accepted JMAP
+//! request rejects the draft/recipients/identity) become `status='failed'` with
+//! `error` set. In both cases, later due rows continue processing.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -18,9 +27,151 @@ struct BubbleUpRow {
     thread_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScheduledSendRow {
+    id: i64,
+    user_id: i64,
+    draft_email_id: String,
+}
+
 #[async_trait]
 pub trait BubbleJmapOps: Send + Sync {
     async fn mark_thread_unread(&self, user_id: i64, thread_id: &str) -> Result<()>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SendSubmitError {
+    #[error("transient submit failure: {0}")]
+    Transient(String),
+    #[error("permanent submit failure: {0}")]
+    Permanent(String),
+}
+
+impl SendSubmitError {
+    #[must_use]
+    pub fn transient(error: impl std::fmt::Display) -> Self {
+        Self::Transient(error.to_string())
+    }
+
+    #[must_use]
+    pub fn permanent(error: impl std::fmt::Display) -> Self {
+        Self::Permanent(error.to_string())
+    }
+
+    #[must_use]
+    fn message(&self) -> &str {
+        match self {
+            Self::Transient(message) | Self::Permanent(message) => message,
+        }
+    }
+}
+
+#[async_trait]
+pub trait SendSubmitter: Send + Sync {
+    async fn submit_draft(
+        &self,
+        user_id: i64,
+        draft_email_id: &str,
+    ) -> std::result::Result<Option<String>, SendSubmitError>;
+}
+
+/// Process all pending scheduled sends whose `send_at` is due at or before `now`.
+///
+/// Returns the number of rows successfully submitted. Transient submit failures
+/// leave the row pending for a later tick. Permanent failures mark the row
+/// `failed` and store the error string. Later due rows are always attempted.
+pub async fn process_due_scheduled_sends(
+    db: &SqlitePool,
+    submitter: &dyn SendSubmitter,
+    now: DateTime<Utc>,
+) -> Result<usize> {
+    let now_s = now.to_rfc3339();
+    let rows = select_due_scheduled_sends(db, &now_s).await?;
+
+    let mut sent = 0;
+    for row in rows {
+        match submitter
+            .submit_draft(row.user_id, &row.draft_email_id)
+            .await
+        {
+            Ok(submission_id) => {
+                let result = sqlx::query(
+                    "UPDATE scheduled_sends \
+                     SET status = 'sent', sent_at = ?, error = NULL \
+                     WHERE id = ? AND status = 'pending'",
+                )
+                .bind(&now_s)
+                .bind(row.id)
+                .execute(db)
+                .await
+                .with_context(|| format!("mark scheduled_send {} sent", row.id))?;
+                if result.rows_affected() > 0 {
+                    sent += 1;
+                    info!(
+                        scheduled_send_id = row.id,
+                        user_id = row.user_id,
+                        draft_email_id = %row.draft_email_id,
+                        submission_id = ?submission_id,
+                        "scheduled send submitted"
+                    );
+                }
+            }
+            Err(SendSubmitError::Transient(message)) => {
+                warn!(
+                    scheduled_send_id = row.id,
+                    user_id = row.user_id,
+                    draft_email_id = %row.draft_email_id,
+                    error = %message,
+                    "scheduled send submit failed transiently; leaving pending"
+                );
+            }
+            Err(err @ SendSubmitError::Permanent(_)) => {
+                let message = err.message().to_string();
+                let result = sqlx::query(
+                    "UPDATE scheduled_sends SET status = 'failed', error = ? \
+                     WHERE id = ? AND status = 'pending'",
+                )
+                .bind(&message)
+                .bind(row.id)
+                .execute(db)
+                .await
+                .with_context(|| format!("mark scheduled_send {} failed", row.id))?;
+                if result.rows_affected() > 0 {
+                    warn!(
+                        scheduled_send_id = row.id,
+                        user_id = row.user_id,
+                        draft_email_id = %row.draft_email_id,
+                        error = %message,
+                        "scheduled send submit failed permanently"
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(sent)
+}
+
+async fn select_due_scheduled_sends(db: &SqlitePool, now: &str) -> Result<Vec<ScheduledSendRow>> {
+    sqlx::query_as::<_, (i64, i64, String)>(
+        "SELECT id, user_id, draft_email_id \
+         FROM scheduled_sends \
+         WHERE status = 'pending' AND send_at <= ? \
+         ORDER BY send_at ASC, id ASC",
+    )
+    .bind(now)
+    .fetch_all(db)
+    .await
+    .context("select due scheduled_sends")
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(id, user_id, draft_email_id)| ScheduledSendRow {
+                id,
+                user_id,
+                draft_email_id,
+            })
+            .collect()
+    })
 }
 
 /// Process all pending bubble-ups whose `surface_at` is due at or before `now`.
@@ -38,7 +189,10 @@ pub async fn process_due_bubble_ups(
 
     let mut fired = 0;
     for row in rows {
-        match jmap_ops.mark_thread_unread(row.user_id, &row.thread_id).await {
+        match jmap_ops
+            .mark_thread_unread(row.user_id, &row.thread_id)
+            .await
+        {
             Ok(()) => {
                 let result = sqlx::query(
                     "UPDATE bubble_ups SET fired_at = ? WHERE id = ? AND fired_at IS NULL",
@@ -100,12 +254,14 @@ mod live {
 
     use anyhow::{Context, Result, anyhow};
     use async_trait::async_trait;
+    use hail_jmap::jmap_client::Error as JmapClientError;
     use hail_jmap::jmap_client::core::query::Filter;
+    use hail_jmap::jmap_client::core::set::{SetErrorType, SetObject};
     use hail_jmap::jmap_client::email::query as email_query;
     use secrecy::SecretString;
     use sqlx::SqlitePool;
 
-    use super::BubbleJmapOps;
+    use super::{BubbleJmapOps, SendSubmitError, SendSubmitter};
     use crate::crypto::TokenDecryptor;
 
     /// Live JMAP adapter for bubble-ups.
@@ -168,9 +324,13 @@ mod live {
                 .client()
                 .email_query(
                     Some(Filter::from(email_query::Filter::in_thread(thread_id))),
-                    None::<Vec<hail_jmap::jmap_client::core::query::Comparator<
-                        email_query::Comparator,
-                    >>>,
+                    None::<
+                        Vec<
+                            hail_jmap::jmap_client::core::query::Comparator<
+                                email_query::Comparator,
+                            >,
+                        >,
+                    >,
                 )
                 .await
                 .with_context(|| format!("Email/query inThread={thread_id}"))?;
@@ -187,7 +347,147 @@ mod live {
             Ok(())
         }
     }
+
+    pub struct LiveSendSubmitter {
+        db: SqlitePool,
+        jmap_url: String,
+        token_decryptor: Arc<dyn TokenDecryptor>,
+    }
+
+    impl LiveSendSubmitter {
+        #[must_use]
+        pub fn new(
+            db: SqlitePool,
+            jmap_url: String,
+            token_decryptor: Arc<dyn TokenDecryptor>,
+        ) -> Self {
+            Self {
+                db,
+                jmap_url,
+                token_decryptor,
+            }
+        }
+
+        async fn latest_active_token_and_email(
+            &self,
+            user_id: i64,
+        ) -> std::result::Result<(SecretString, String), SendSubmitError> {
+            let now = chrono::Utc::now().to_rfc3339();
+            let row: (Vec<u8>, String) = sqlx::query_as(
+                "SELECT s.jmap_token_enc, u.email FROM sessions s \
+                 JOIN users u ON u.id = s.user_id \
+                 WHERE s.user_id = ? AND s.expires_at > ? \
+                 ORDER BY s.last_used_at DESC LIMIT 1",
+            )
+            .bind(user_id)
+            .bind(now)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|err| SendSubmitError::transient(format!("select active JMAP token: {err}")))?
+            .ok_or_else(|| {
+                SendSubmitError::transient(format!("no active JMAP session for user {user_id}"))
+            })?;
+
+            let (enc, email) = row;
+            let token = self
+                .token_decryptor
+                .decrypt(&enc)
+                .map_err(|err| SendSubmitError::transient(format!("decrypt JMAP token: {err}")))?;
+            Ok((token, email))
+        }
+    }
+
+    #[async_trait]
+    impl SendSubmitter for LiveSendSubmitter {
+        async fn submit_draft(
+            &self,
+            user_id: i64,
+            draft_email_id: &str,
+        ) -> std::result::Result<Option<String>, SendSubmitError> {
+            let (token, email) = self.latest_active_token_and_email(user_id).await?;
+            let session = hail_jmap::login_bearer(&self.jmap_url, token)
+                .await
+                .map_err(|err| SendSubmitError::transient(format!("JMAP login: {err}")))?;
+            let identity_id = identity_id_for(&session, &email)
+                .await
+                .map_err(classify_jmap_submit_error)?;
+
+            let mut request = session.client().build();
+            let create_id = request
+                .set_email_submission()
+                .create()
+                .email_id(draft_email_id)
+                .identity_id(identity_id)
+                .create_id()
+                .ok_or_else(|| {
+                    SendSubmitError::permanent("EmailSubmission/set create id missing")
+                })?;
+            let mut response = request
+                .send_set_email_submission()
+                .await
+                .map_err(classify_jmap_submit_error)?;
+            let mut created = response
+                .created(&create_id)
+                .map_err(classify_jmap_submit_error)?;
+            let submission_id = created.take_id();
+            Ok((!submission_id.is_empty()).then_some(submission_id))
+        }
+    }
+
+    async fn identity_id_for(
+        session: &hail_jmap::Session,
+        from: &str,
+    ) -> std::result::Result<String, JmapClientError> {
+        let mut request = session.client().build();
+        request.get_identity().properties([
+            hail_jmap::jmap_client::identity::Property::Id,
+            hail_jmap::jmap_client::identity::Property::Email,
+        ]);
+        let mut response = request.send_get_identity().await?;
+        let mut identities = response.take_list();
+        if let Some(index) = identities.iter().position(|identity| {
+            identity
+                .email()
+                .is_some_and(|email| email.eq_ignore_ascii_case(from))
+        }) {
+            return Ok(identities[index].take_id());
+        }
+        identities
+            .first_mut()
+            .map(|identity| identity.take_id())
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| JmapClientError::Internal("identity not found".to_string()))
+    }
+
+    fn classify_jmap_submit_error(err: JmapClientError) -> SendSubmitError {
+        match &err {
+            JmapClientError::Set(set_err) => match set_err.error() {
+                SetErrorType::RateLimit | SetErrorType::OverQuota => {
+                    SendSubmitError::transient(err)
+                }
+                SetErrorType::Forbidden
+                | SetErrorType::NotFound
+                | SetErrorType::InvalidProperties
+                | SetErrorType::ForbiddenFrom
+                | SetErrorType::InvalidEmail
+                | SetErrorType::TooManyRecipients
+                | SetErrorType::NoRecipients
+                | SetErrorType::InvalidRecipients
+                | SetErrorType::ForbiddenMailFrom
+                | SetErrorType::ForbiddenToSend => SendSubmitError::permanent(err),
+                _ => SendSubmitError::permanent(err),
+            },
+            JmapClientError::Transport(_)
+            | JmapClientError::Server(_)
+            | JmapClientError::Problem(_)
+            | JmapClientError::Method(_) => SendSubmitError::transient(err),
+            JmapClientError::Parse(_) | JmapClientError::Internal(_) => {
+                SendSubmitError::permanent(err)
+            }
+            JmapClientError::WebSocket(_) => SendSubmitError::transient(err),
+        }
+    }
 }
 
-    #[allow(unused_imports)]
-    pub use live::LiveBubbleJmapOps;
+#[allow(unused_imports)]
+pub use live::{LiveBubbleJmapOps, LiveSendSubmitter};
