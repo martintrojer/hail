@@ -1,9 +1,9 @@
 //! WebSocket event channel (`GET /api/ws`).
 //!
 //! Auth middleware runs before the upgrade, then this handler multiplexes
-//! process-local app events from [`crate::events::AppEventBus`] plus a
-//! per-connection heartbeat. The worker-to-api cross-process event bridge
-//! is intentionally not implemented yet; see the TODO in `events.rs`.
+//! app events from [`crate::events::AppEventBus`] plus a per-connection
+//! heartbeat. Worker-originated events reach that bus through the SQLite
+//! bridge in `events.rs`.
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -13,7 +13,7 @@ use chrono::Utc;
 use tokio::sync::broadcast;
 use tokio::time::{self, Duration};
 
-use crate::events::AppEvent;
+use crate::events::{AppEvent, AppEventEnvelope};
 use crate::middleware::auth::AuthUser;
 use crate::state::AppState;
 
@@ -25,16 +25,17 @@ pub fn router() -> Router<AppState> {
 
 async fn ws_handler(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthUser>,
+    Extension(user): Extension<AuthUser>,
     ws: WebSocketUpgrade,
 ) -> Response {
     let events = state.events.subscribe();
-    ws.on_upgrade(move |socket| serve_socket(socket, events, HEARTBEAT_INTERVAL))
+    ws.on_upgrade(move |socket| serve_socket(socket, events, user.id, HEARTBEAT_INTERVAL))
 }
 
 async fn serve_socket(
     mut socket: WebSocket,
-    mut events: broadcast::Receiver<AppEvent>,
+    mut events: broadcast::Receiver<AppEventEnvelope>,
+    user_id: i64,
     heartbeat_interval: Duration,
 ) {
     let mut heartbeat = time::interval(heartbeat_interval);
@@ -54,8 +55,11 @@ async fn serve_socket(
             }
             result = events.recv() => {
                 match result {
-                    Ok(event) => {
-                        if !send_json(&mut socket, event).await {
+                    Ok(envelope) => {
+                        if envelope.user_id.is_some_and(|scope| scope != user_id) {
+                            continue;
+                        }
+                        if !send_json(&mut socket, envelope.event).await {
                             break;
                         }
                     }
@@ -106,12 +110,24 @@ mod tests {
             serde_json::json!({ "type": "imbox.new" })
         );
         assert_eq!(
+            serde_json::to_value(AppEvent::FeedNew).unwrap(),
+            serde_json::json!({ "type": "feed.new" })
+        );
+        assert_eq!(
+            serde_json::to_value(AppEvent::PapertrailNew).unwrap(),
+            serde_json::json!({ "type": "papertrail.new" })
+        );
+        assert_eq!(
             serde_json::to_value(AppEvent::ScreenerPending).unwrap(),
             serde_json::json!({ "type": "screener.pending" })
         );
         assert_eq!(
             serde_json::to_value(AppEvent::ThreadUpdated).unwrap(),
             serde_json::json!({ "type": "thread.updated" })
+        );
+        assert_eq!(
+            serde_json::to_value(AppEvent::ThreadRemoved).unwrap(),
+            serde_json::json!({ "type": "thread.removed" })
         );
         assert_eq!(
             serde_json::to_value(AppEvent::BubbleFired).unwrap(),

@@ -10,6 +10,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
 
+#[path = "../src/app_events.rs"]
+mod app_events;
+
 #[path = "../src/crypto.rs"]
 #[allow(dead_code)]
 mod crypto;
@@ -144,7 +147,18 @@ async fn due_row_fires_and_sets_fired_at() {
 
     assert_eq!(fired, 1);
     assert_eq!(jmap.calls(), vec![(user_id, "thread-due".to_string())]);
-    assert_eq!(fired_at(&pool, id).await.as_deref(), Some(now.to_rfc3339().as_str()));
+    assert_eq!(
+        fired_at(&pool, id).await.as_deref(),
+        Some(now.to_rfc3339().as_str())
+    );
+    let event_type: String = sqlx::query_scalar(
+        "SELECT event_type FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("app event");
+    assert_eq!(event_type, "bubble.fired");
 }
 
 #[tokio::test]

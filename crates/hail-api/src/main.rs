@@ -20,6 +20,7 @@ use hail_api::state::AppState;
 use hail_core::Config;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{Signal, SignalKind, signal as unix_signal};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -58,6 +59,13 @@ async fn main() -> Result<()> {
         events: hail_api::events::AppEventBus::default(),
     };
 
+    let bridge_cancel = CancellationToken::new();
+    let bridge_handle = hail_api::events::spawn_db_event_bridge(
+        state.db.clone(),
+        state.events.clone(),
+        bridge_cancel.clone(),
+    );
+
     let router = hail_api::build_router(state.clone(), false);
 
     // Install signal handlers EAGERLY — before we bind the listener or
@@ -94,6 +102,8 @@ async fn main() -> Result<()> {
         }
     }
 
+    bridge_cancel.cancel();
+    let _ = bridge_handle.await;
     state.db.close().await;
     info!("hail-api stopped");
     Ok(())

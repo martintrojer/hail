@@ -33,7 +33,7 @@
    │  Responsibilities:                                           │
    │    • Serve the SPA bundle    (tower-http::ServeDir)          │
    │    • Task-oriented REST API  (see docs/design.md §7)         │
-   │    • WebSocket multiplexer   (translates JMAP→app events)    │
+   │    • WebSocket multiplexer   (broadcasts API + worker events)│
    │    • Auth: cookie session, AES-GCM-encrypted JMAP token      │
    │    • Sanitise inbound HTML, strip tracking pixels            │
    │    • Build outbound MIME from structured client input        │
@@ -117,7 +117,7 @@ user) and to the SQLite file on local disk.
 | Messages, threads, mailboxes, drafts, blobs    | Stalwart             | Accessed via JMAP only.                              |
 | Standard JMAP keywords (`$seen`, `$flagged`, …) | Stalwart             | hail just reads/writes them like any JMAP client.    |
 | `$hail_imbox`, `$hail_feed`, `$hail_papertrail`, `$hail_setaside`, `$hail_replylater`, `$hail_screened`, `$hail_seen_together` | Stalwart (as keywords on messages/threads) | Survives client switches; portable.                  |
-| Screener rules, contact notes, clips, stack ordering, bubble-up schedule, scheduled sends, user prefs, sessions, audit log | `hail.db` (SQLite) | Hail's sidecar. Reconciled against Stalwart on a schedule. |
+| Screener rules, contact notes, clips, stack ordering, bubble-up schedule, scheduled sends, user prefs, sessions, audit log, app event outbox | `hail.db` (SQLite) | Hail's sidecar. Reconciled against Stalwart on a schedule. App events are durable invalidation hints from worker to API WebSocket clients. |
 | User credentials (passwords)                   | Stalwart             | hail never stores passwords. Only encrypted bearer tokens. |
 | JMAP bearer tokens                             | `hail.db` (AES-GCM encrypted, key from `[secrets].server_key`) | Plain text only ever in memory.        |
 
@@ -351,7 +351,30 @@ quickly on SIGINT/SIGTERM.
 hold WebSockets. Clean restarts during upgrades are mandatory. We test shutdown
 with real processes and fail if SIGINT/SIGTERM does not complete quickly.
 
-### 6.12 Model/work orchestration choice (project process)
+### 6.12 Worker-to-API product events use a SQLite outbox
+
+**Decision:** worker-originated UI events are appended to `hail.db.app_events`.
+`hail-api` starts a cancellation-aware polling bridge, advances to the current
+max row id, then polls for newer rows and rebroadcasts them through its
+process-local WebSocket bus. Events are coarse invalidation hints; v1 clients
+refetch current views/threads and tolerate duplicate delivery.
+
+**Rejected:**
+
+- **Redis/Postgres/NATS/pub-sub.** Reliable, but adds another service to operate
+  and conflicts with the single-file self-hosting target.
+- **An inbound HTTP callback on `hail-api` from the worker.** Simple locally, but
+  creates service-discovery/authentication questions and gives the worker an
+  API dependency during state transitions.
+- **SQLite triggers or file notifications.** Less portable and harder to reason
+  about under container bind mounts than bounded polling.
+
+**Why:** SQLite is already shared durable state. A small polling outbox is enough
+for v1 realtime invalidation without making WebSocket correctness depend on
+process co-location. The bridge intentionally does not replay historical rows on
+API startup; offline tabs catch up by normal REST refetch after reconnect.
+
+### 6.13 Model/work orchestration choice (project process)
 
 **Decision:** implementation tasks live in `mu`, not in markdown checklists.
 Agents work in isolated git workspaces, produce one commit per task, and the

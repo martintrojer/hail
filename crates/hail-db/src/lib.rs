@@ -3,13 +3,13 @@
 //! See `design.md` §5 DD-7 and §6.2 for context on why SQLite (WAL + Litestream)
 //! is the sidecar store and what schema the baseline migration establishes.
 
+pub mod app_events;
+
 use std::str::FromStr;
 use std::time::Duration;
 
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 /// Errors surfaced by the hail-db crate.
 #[derive(Debug, thiserror::Error)]

@@ -129,7 +129,7 @@ async fn websocket_handshake_succeeds_with_valid_session() {
 async fn websocket_receives_broadcast_event() {
     let (state, key) = fixture_state().await;
     let sid = seed_session(&state, &key, "bob@example.org").await;
-    let sender = state.events.sender();
+    let sender = state.events.clone();
     let url = spawn_server(state).await;
 
     let mut req = url.into_client_request().expect("ws request");
@@ -143,7 +143,7 @@ async fn websocket_receives_broadcast_event() {
         .await
         .expect("authenticated websocket connects");
 
-    sender.send(AppEvent::ImboxNew).expect("publish event");
+    sender.publish(AppEvent::ImboxNew).expect("publish event");
 
     let json: serde_json::Value = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -163,10 +163,89 @@ async fn websocket_receives_broadcast_event() {
 }
 
 #[tokio::test]
+async fn websocket_receives_db_bridged_worker_event_for_same_user_only() {
+    let (state, key) = fixture_state().await;
+    let alice_sid = seed_session(&state, &key, "alice-bridge@example.org").await;
+    let bob_sid = seed_session(&state, &key, "bob-bridge@example.org").await;
+    let alice_user_id: i64 = sqlx::query_scalar("SELECT user_id FROM sessions WHERE id = ?")
+        .bind(&alice_sid)
+        .fetch_one(&state.db)
+        .await
+        .expect("alice user id");
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let bridge = hail_api::events::spawn_db_event_bridge(
+        state.db.clone(),
+        state.events.clone(),
+        cancel.clone(),
+    );
+    let url = spawn_server(state.clone()).await;
+
+    let mut alice_req = url.clone().into_client_request().expect("alice ws request");
+    alice_req.headers_mut().insert(
+        "cookie",
+        format!("hail_session={alice_sid}")
+            .parse()
+            .expect("cookie header"),
+    );
+    let (mut alice_socket, _response) = tokio_tungstenite::connect_async(alice_req)
+        .await
+        .expect("alice websocket connects");
+
+    let mut bob_req = url.into_client_request().expect("bob ws request");
+    bob_req.headers_mut().insert(
+        "cookie",
+        format!("hail_session={bob_sid}")
+            .parse()
+            .expect("cookie header"),
+    );
+    let (mut bob_socket, _response) = tokio_tungstenite::connect_async(bob_req)
+        .await
+        .expect("bob websocket connects");
+
+    hail_db::app_events::insert_app_event(&state.db, Some(alice_user_id), "screener.pending", "{}")
+        .await
+        .expect("insert app event");
+
+    let json: serde_json::Value = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let message = alice_socket.try_next().await.expect("websocket read");
+            if let Some(tokio_tungstenite::tungstenite::Message::Text(text)) = message {
+                let json: serde_json::Value = serde_json::from_str(&text).expect("event JSON");
+                if json["type"] == "screener.pending" {
+                    break json;
+                }
+            }
+        }
+    })
+    .await
+    .expect("db event within timeout");
+    assert_eq!(json, serde_json::json!({ "type": "screener.pending" }));
+
+    let bob_message =
+        tokio::time::timeout(std::time::Duration::from_millis(250), bob_socket.try_next()).await;
+    assert!(
+        bob_message.is_err(),
+        "bob must not receive alice-scoped app event"
+    );
+
+    cancel.cancel();
+    bridge.await.expect("bridge task joins");
+}
+
+#[tokio::test]
 async fn app_event_json_shape_is_stable() {
     assert_eq!(
         serde_json::to_value(AppEvent::ImboxNew).unwrap(),
         serde_json::json!({ "type": "imbox.new" })
+    );
+    assert_eq!(
+        serde_json::to_value(AppEvent::FeedNew).unwrap(),
+        serde_json::json!({ "type": "feed.new" })
+    );
+    assert_eq!(
+        serde_json::to_value(AppEvent::PapertrailNew).unwrap(),
+        serde_json::json!({ "type": "papertrail.new" })
     );
     assert_eq!(
         serde_json::to_value(AppEvent::ScreenerPending).unwrap(),
@@ -175,6 +254,10 @@ async fn app_event_json_shape_is_stable() {
     assert_eq!(
         serde_json::to_value(AppEvent::ThreadUpdated).unwrap(),
         serde_json::json!({ "type": "thread.updated" })
+    );
+    assert_eq!(
+        serde_json::to_value(AppEvent::ThreadRemoved).unwrap(),
+        serde_json::json!({ "type": "thread.removed" })
     );
     assert_eq!(
         serde_json::to_value(AppEvent::BubbleFired).unwrap(),
