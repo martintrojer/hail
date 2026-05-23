@@ -98,6 +98,16 @@ async fn seed_session(
     email: &str,
     expires_in: Duration,
 ) -> String {
+    seed_session_with_token(state, key, email, expires_in, b"dummy-bearer-token").await
+}
+
+async fn seed_session_with_token(
+    state: &AppState,
+    key: &[u8; KEY_LEN],
+    email: &str,
+    expires_in: Duration,
+    token: &[u8],
+) -> String {
     let now = Utc::now();
     let user_id: i64 = sqlx::query_scalar(
         "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
@@ -110,7 +120,7 @@ async fn seed_session(
     .await
     .expect("insert user");
 
-    let token_enc = hail_core::seal(b"dummy-bearer-token", key).expect("seal");
+    let token_enc = hail_core::seal(token, key).expect("seal");
     let session_id = "a".repeat(64);
     sqlx::query(
         "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
@@ -417,6 +427,23 @@ async fn auth_failure_returns_401_and_does_not_create_user_or_session() {
     assert_eq!(session_count, 0);
 }
 
+async fn session_last_used_at(state: &AppState, sid: &str) -> chrono::DateTime<Utc> {
+    sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE id = ?1")
+        .bind(sid)
+        .fetch_one(&state.db)
+        .await
+        .expect("select last_used_at")
+}
+
+fn fnv1a64_hex(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
 #[tokio::test]
 async fn me_returns_user_with_valid_session() {
     let (state, key) = fixture_state().await;
@@ -436,6 +463,68 @@ async fn me_returns_user_with_valid_session() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["user"]["email"], "alice@example.org");
     assert_eq!(json["user"]["is_admin"], false);
+}
+
+#[tokio::test]
+async fn auth_middleware_propagates_decrypted_token_to_downstream_extension() {
+    let (state, key) = fixture_state().await;
+    let token = b"token-visible-only-through-safe-probe";
+    let sid = seed_session_with_token(
+        &state,
+        &key,
+        "token-probe@example.org",
+        Duration::days(30),
+        token,
+    )
+    .await;
+
+    let app = hail_api::build_router(state, true);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/test-token")
+        .header(header::COOKIE, format!("hail_session={sid}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["email"], "token-probe@example.org");
+    assert_eq!(json["is_admin"], false);
+    assert_eq!(json["token_len"].as_u64(), Some(token.len() as u64));
+    assert_eq!(json["token_hash"], fnv1a64_hex(token));
+    assert_ne!(
+        json["token_hash"], "token-visible-only-through-safe-probe",
+        "probe must not echo the plaintext token"
+    );
+    assert!(
+        json.get("token").is_none(),
+        "probe should expose only safe token metadata"
+    );
+}
+
+#[tokio::test]
+async fn authenticated_request_advances_session_last_used_at() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "last-used@example.org", Duration::days(30)).await;
+    let before = session_last_used_at(&state, &sid).await;
+
+    let app = hail_api::build_router(state.clone(), true);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/me")
+        .header(header::COOKIE, format!("hail_session={sid}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let after = session_last_used_at(&state, &sid).await;
+    assert!(
+        after > before,
+        "auth middleware should advance last_used_at after successful auth: before={before:?} after={after:?}"
+    );
 }
 
 #[tokio::test]
