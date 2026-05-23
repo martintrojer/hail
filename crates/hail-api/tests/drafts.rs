@@ -335,6 +335,71 @@ async fn create_draft_calls_store_and_returns_id() {
 }
 
 #[tokio::test]
+async fn create_draft_accepts_missing_send_fields() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(r#"{}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = json_body(resp).await;
+    assert_eq!(body["draft_id"], "draft-1");
+    assert_eq!(
+        store.calls(),
+        vec![Call::Create {
+            from: "alice@example.org".to_string(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: String::new(),
+            body_markdown: String::new(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn create_draft_accepts_empty_send_fields() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(r#"{"to":[],"cc":[],"bcc":[],"subject":"","body_markdown":"","attachments":[]}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Create {
+            from: "alice@example.org".to_string(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: String::new(),
+            body_markdown: String::new(),
+        }]
+    );
+}
+
+
+#[tokio::test]
 async fn update_draft_calls_store_and_returns_id() {
     let (state, key) = fixture_state().await;
     let sid = seed_session(&state, &key, "alice@example.org").await;

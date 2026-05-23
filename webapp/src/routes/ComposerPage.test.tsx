@@ -303,6 +303,48 @@ describe('ComposerPage', () => {
     expect(await screen.findByText('Scheduled for later. Draft draft-1 is queued.')).toBeInTheDocument();
   });
 
+  it('creates a partial draft without send-required fields', async () => {
+    const client = renderComposer();
+    fireEvent.change(await screen.findByLabelText('Subject'), {
+      target: { value: 'Unfinished thought' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(client.createDraftCalls).toHaveLength(1));
+    expect(client.sendComposeCalls).toEqual([]);
+    expect(client.createDraftCalls[0]).toEqual({
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: 'Unfinished thought',
+      body_markdown: '',
+      attachments: [],
+    });
+  });
+
+  it('keeps send validation strict when a partial draft is saveable', async () => {
+    const client = renderComposer();
+    fireEvent.change(await screen.findByLabelText('Body'), {
+      target: { value: 'Needs a recipient and subject first.' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send later' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(client.createDraftCalls).toHaveLength(1));
+    expect(client.sendComposeCalls).toEqual([]);
+    expect(client.createDraftCalls[0]).toMatchObject({
+      to: [],
+      subject: '',
+      body_markdown: 'Needs a recipient and subject first.',
+    });
+  });
+
   it('creates a draft, then updates the same draft after more edits', async () => {
     const client = renderComposer();
     await fillSendableFields();
