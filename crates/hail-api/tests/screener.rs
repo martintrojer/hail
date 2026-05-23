@@ -394,6 +394,44 @@ async fn deny_creates_or_updates_row() {
 }
 
 #[tokio::test]
+async fn deny_rejects_classify_as() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    seed_rule(
+        &state,
+        user_id,
+        "spam@example.org",
+        "allow",
+        Some("feed"),
+        Utc::now(),
+    )
+    .await;
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"spam@example.org","decision":"deny","classify_as":"imbox","apply_to_history":false}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_classify_as");
+
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "allow");
+    assert_eq!(row.1.as_deref(), Some("feed"));
+}
+
+#[tokio::test]
 async fn decision_missing_csrf_returns_403() {
     let (state, key) = fixture_state().await;
     let (_, sid) = seed_session(&state, &key, "alice@example.org").await;
