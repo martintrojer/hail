@@ -896,6 +896,7 @@ dependencies = [
  "hail-core",
  "hail-db",
  "hail-jmap",
+ "hail-test",
  "hex",
  "http-body-util",
  "pulldown-cmark",
