@@ -6,7 +6,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -25,6 +25,7 @@ use crate::state::AppState;
 const SESSION_TTL_DAYS: i64 = 30;
 const SESSION_MAX_AGE_SECS: i64 = SESSION_TTL_DAYS * 24 * 60 * 60;
 const SESSION_COOKIE: &str = "hail_session";
+static SETUP_PROVISION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 struct SetupStateResponse {
@@ -181,6 +182,14 @@ where
     }
 
     let now = Utc::now();
+    // External setup provisioning is not transactional with the hail sidecar DB.
+    // Serialize the first-run gate through provisioning so a stale/concurrent
+    // second POST waits, observes the newly-created admin, and returns 409
+    // before touching Stalwart.
+    let _provision_guard = SETUP_PROVISION_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     let mut gate_tx = match state.db.begin().await {
         Ok(tx) => tx,
         Err(err) => {
