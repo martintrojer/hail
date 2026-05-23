@@ -8,8 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 use hail_api::middleware::auth::{AuthUser, CSRF_HEADER, require_auth};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::undo::{
-    ActionUndoExecutor, EmailMailboxSnapshot, ThreadUndoRestorer, UndoActionPayload, UndoError,
-    UndoExecutor, create_undo_action,
+    ActionUndoExecutor, EmailMailboxSnapshot, NewUndoAction, ThreadStackUndoTarget,
+    ThreadUndoRestorer, UndoActionPayload, UndoError, UndoExecutor, UndoToken, create_undo_action,
 };
 use hail_api::state::AppState;
 use hail_core::{Config, KEY_LEN};
@@ -82,6 +82,38 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i6
     .await
     .expect("insert session");
     (user_id, session_id)
+}
+
+async fn insert_raw_undo_action(
+    state: &AppState,
+    user_id: i64,
+    action: &str,
+    payload: serde_json::Value,
+) -> UndoToken {
+    let now = Utc::now();
+    let expires_at = now + Duration::seconds(10);
+    let id = format!(
+        "{:064x}",
+        uuid_like().replace('_', "").parse::<u128>().unwrap_or(0)
+    );
+    sqlx::query(
+        "INSERT INTO undo_actions (id, user_id, action, payload_json, expires_at, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(action)
+    .bind(serde_json::to_string(&payload).expect("serialize raw undo payload"))
+    .bind(expires_at)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .expect("insert raw undo action");
+    UndoToken {
+        id,
+        action: action.to_string(),
+        expires_at,
+    }
 }
 
 fn app<E>(state: AppState, executor: Arc<E>) -> Router
@@ -190,14 +222,9 @@ impl UndoExecutor for FailingExecutor {
 async fn create_and_execute_undo_action() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "undo@example.org").await;
-    let undo = create_undo_action(
-        &state,
-        user_id,
-        "thread.trash",
-        serde_json::json!({ "thread_id": "thread-1" }),
-    )
-    .await
-    .unwrap();
+    let undo = create_undo_action(&state, user_id, NewUndoAction::thread_trash(Vec::new()))
+        .await
+        .unwrap();
     let executor = Arc::new(FakeExecutor::default());
 
     let resp = post_undo(state.clone(), executor.clone(), Some(&sid), true, &undo.id).await;
@@ -210,7 +237,7 @@ async fn create_and_execute_undo_action() {
         executor.calls(),
         vec![UndoActionPayload {
             action: "thread.trash".to_string(),
-            payload: serde_json::json!({ "thread_id": "thread-1" }),
+            payload: serde_json::json!({ "email_mailbox_ids": [] }),
         }]
     );
 }
@@ -219,14 +246,9 @@ async fn create_and_execute_undo_action() {
 async fn expired_undo_returns_410_and_does_not_execute() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "expired@example.org").await;
-    let undo = create_undo_action(
-        &state,
-        user_id,
-        "thread.trash",
-        serde_json::json!({ "thread_id": "thread-1" }),
-    )
-    .await
-    .unwrap();
+    let undo = create_undo_action(&state, user_id, NewUndoAction::thread_trash(Vec::new()))
+        .await
+        .unwrap();
     sqlx::query("UPDATE undo_actions SET expires_at = ?1 WHERE id = ?2")
         .bind(Utc::now() - Duration::seconds(1))
         .bind(&undo.id)
@@ -245,14 +267,9 @@ async fn wrong_user_cannot_execute_undo_action() {
     let (state, key) = fixture_state().await;
     let (alice_id, _alice_sid) = seed_session(&state, &key, "alice@example.org").await;
     let (_bob_id, bob_sid) = seed_session(&state, &key, "bob@example.org").await;
-    let undo = create_undo_action(
-        &state,
-        alice_id,
-        "thread.trash",
-        serde_json::json!({ "thread_id": "thread-1" }),
-    )
-    .await
-    .unwrap();
+    let undo = create_undo_action(&state, alice_id, NewUndoAction::thread_trash(Vec::new()))
+        .await
+        .unwrap();
     let executor = Arc::new(FakeExecutor::default());
 
     let resp = post_undo(state, executor.clone(), Some(&bob_sid), true, &undo.id).await;
@@ -264,14 +281,9 @@ async fn wrong_user_cannot_execute_undo_action() {
 async fn undo_action_can_only_be_used_once() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "once@example.org").await;
-    let undo = create_undo_action(
-        &state,
-        user_id,
-        "thread.trash",
-        serde_json::json!({ "thread_id": "thread-1" }),
-    )
-    .await
-    .unwrap();
+    let undo = create_undo_action(&state, user_id, NewUndoAction::thread_trash(Vec::new()))
+        .await
+        .unwrap();
     let executor = Arc::new(FakeExecutor::default());
 
     let first = post_undo(state.clone(), executor.clone(), Some(&sid), true, &undo.id).await;
@@ -298,13 +310,11 @@ async fn thread_stack_undo_removes_new_stack_row_and_keyword() {
     let undo = create_undo_action(
         &state,
         user_id,
-        "thread.stack",
-        serde_json::json!({
-            "thread_id": "thread-1",
-            "stack": "set_aside",
-            "keyword": "$hail_setaside",
-            "previous_position": null,
-        }),
+        NewUndoAction::thread_stack(
+            "thread-1",
+            ThreadStackUndoTarget::SetAside,
+            None::<serde_json::Value>,
+        ),
     )
     .await
     .unwrap();
@@ -350,16 +360,14 @@ async fn thread_stack_undo_restores_existing_stack_position_without_clearing_key
     let undo = create_undo_action(
         &state,
         user_id,
-        "thread.stack",
-        serde_json::json!({
-            "thread_id": "thread-2",
-            "stack": "reply_later",
-            "keyword": "$hail_replylater",
-            "previous_position": {
+        NewUndoAction::thread_stack(
+            "thread-2",
+            ThreadStackUndoTarget::ReplyLater,
+            Some(serde_json::json!({
                 "position": 4,
                 "added_at": original_added_at,
-            },
-        }),
+            })),
+        ),
     )
     .await
     .unwrap();
@@ -388,7 +396,7 @@ async fn thread_stack_undo_restores_existing_stack_position_without_clearing_key
 async fn malformed_thread_stack_undo_returns_400() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "bad-stack-undo@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "thread.stack",
@@ -399,8 +407,7 @@ async fn malformed_thread_stack_undo_returns_400() {
             "previous_position": null,
         }),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resp = post_undo(
         state,
@@ -419,14 +426,13 @@ async fn malformed_thread_stack_undo_returns_400() {
 async fn malformed_classify_undo_returns_400() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "badpayload@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "thread.classify",
         serde_json::json!({ "thread_id": "thread-1" }),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resp = post_undo(
         state,
@@ -449,12 +455,7 @@ async fn classify_undo_restores_previous_classification() {
     let undo = create_undo_action(
         &state,
         user_id,
-        "thread.classify",
-        serde_json::json!({
-            "thread_id": "thread-1",
-            "previous_classification": "feed",
-            "new_classification": "papertrail"
-        }),
+        NewUndoAction::thread_classify("thread-1", "feed", "papertrail"),
     )
     .await
     .unwrap();
@@ -483,7 +484,7 @@ async fn classify_undo_rejects_missing_new_classification_payload() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "classify-missing-new@example.org").await;
     let restorer = Arc::new(FakeThreadRestorer::default());
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "thread.classify",
@@ -492,8 +493,7 @@ async fn classify_undo_rejects_missing_new_classification_payload() {
             "previous_classification": "feed"
         }),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resp = post_undo(
         state,
@@ -518,7 +518,7 @@ async fn classify_undo_rejects_missing_previous_classification_payload() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "classify-missing-previous@example.org").await;
     let restorer = Arc::new(FakeThreadRestorer::default());
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "thread.classify",
@@ -527,8 +527,7 @@ async fn classify_undo_rejects_missing_previous_classification_payload() {
             "new_classification": "feed"
         }),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resp = post_undo(
         state,
@@ -556,12 +555,7 @@ async fn classify_undo_rejects_noop_classification_payload() {
     let undo = create_undo_action(
         &state,
         user_id,
-        "thread.classify",
-        serde_json::json!({
-            "thread_id": "thread-1",
-            "previous_classification": "feed",
-            "new_classification": "feed"
-        }),
+        NewUndoAction::thread_classify("thread-1", "feed", "feed"),
     )
     .await
     .unwrap();
@@ -602,13 +596,7 @@ async fn thread_archive_undo_restores_mailbox_snapshots() {
     let undo = create_undo_action(
         &state,
         user_id,
-        "thread.archive",
-        serde_json::json!({
-            "email_mailbox_ids": [
-                { "email_id": "email-1", "mailbox_ids": ["inbox"] },
-                { "email_id": "email-2", "mailbox_ids": ["inbox", "custom"] }
-            ]
-        }),
+        NewUndoAction::thread_archive(expected_snapshots.clone()),
     )
     .await
     .unwrap();
@@ -637,12 +625,7 @@ async fn thread_trash_undo_restores_mailbox_snapshots() {
     let undo = create_undo_action(
         &state,
         user_id,
-        "thread.trash",
-        serde_json::json!({
-            "email_mailbox_ids": [
-                { "email_id": "email-1", "mailbox_ids": ["inbox", "custom"] }
-            ]
-        }),
+        NewUndoAction::thread_trash(expected_snapshots.clone()),
     )
     .await
     .unwrap();
@@ -664,14 +647,13 @@ async fn thread_move_undo_without_snapshots_returns_501() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "missing-snapshot-undo@example.org").await;
     let restorer = Arc::new(FakeThreadRestorer::default());
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "thread.archive",
         serde_json::json!({ "thread_id": "thread-1" }),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resp = post_undo(
         state,
@@ -689,14 +671,13 @@ async fn thread_move_undo_without_snapshots_returns_501() {
 async fn unsupported_action_returns_501() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "unsupported-undo@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "thread.snooze",
         serde_json::json!({ "thread_id": "thread-1" }),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resp = post_undo(
         state,
@@ -715,14 +696,13 @@ async fn unsupported_action_returns_501() {
 async fn executor_bad_request_failure_returns_400() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "executor-bad-request@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "test.action",
         serde_json::json!({ "ok": true }),
     )
-    .await
-    .unwrap();
+    .await;
     let executor = Arc::new(FailingExecutor::new(ExecutorFailure::BadRequest));
 
     let resp = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
@@ -734,14 +714,13 @@ async fn executor_bad_request_failure_returns_400() {
 async fn executor_not_implemented_failure_returns_501() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "executor-not-implemented@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "test.action",
         serde_json::json!({ "ok": true }),
     )
-    .await
-    .unwrap();
+    .await;
     let executor = Arc::new(FailingExecutor::new(ExecutorFailure::NotImplemented));
 
     let resp = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
@@ -753,14 +732,13 @@ async fn executor_not_implemented_failure_returns_501() {
 async fn executor_internal_failure_returns_500() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "executor-internal@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "test.action",
         serde_json::json!({ "ok": true }),
     )
-    .await
-    .unwrap();
+    .await;
     let executor = Arc::new(FailingExecutor::new(ExecutorFailure::Internal));
 
     let resp = post_undo(state, executor.clone(), Some(&sid), true, &undo.id).await;
@@ -772,14 +750,13 @@ async fn executor_internal_failure_returns_500() {
 async fn executor_failure_consumes_undo_token() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "executor-consume@example.org").await;
-    let undo = create_undo_action(
+    let undo = insert_raw_undo_action(
         &state,
         user_id,
         "test.action",
         serde_json::json!({ "ok": true }),
     )
-    .await
-    .unwrap();
+    .await;
     let executor = Arc::new(FailingExecutor::new(ExecutorFailure::Internal));
 
     let first = post_undo(state.clone(), executor.clone(), Some(&sid), true, &undo.id).await;
@@ -804,14 +781,9 @@ async fn invalid_undo_id_returns_404_without_executing() {
 async fn no_auth_returns_401_for_well_formed_undo_id() {
     let (state, key) = fixture_state().await;
     let (user_id, _sid) = seed_session(&state, &key, "no-auth-undo@example.org").await;
-    let undo = create_undo_action(
-        &state,
-        user_id,
-        "thread.trash",
-        serde_json::json!({ "thread_id": "thread-1" }),
-    )
-    .await
-    .unwrap();
+    let undo = create_undo_action(&state, user_id, NewUndoAction::thread_trash(Vec::new()))
+        .await
+        .unwrap();
     let executor = Arc::new(FakeExecutor::default());
 
     let resp = post_undo(state, executor.clone(), None, true, &undo.id).await;
@@ -838,16 +810,15 @@ async fn screener_decision_undo_restores_previous_row() {
     let undo = create_undo_action(
         &state,
         user_id,
-        "screener.decision",
-        serde_json::json!({
-            "sender": "sender@example.org",
-            "previous_rule": {
+        NewUndoAction::screener_decision(
+            "sender@example.org",
+            Some(&serde_json::json!({
                 "decision": "allow",
                 "classify_as": "papertrail",
                 "decided_at": decided,
                 "first_seen_at": first_seen,
-            }
-        }),
+            })),
+        ),
     )
     .await
     .unwrap();
@@ -948,14 +919,9 @@ impl ThreadUndoRestorer for FakeThreadRestorer {
 async fn missing_csrf_returns_403() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "csrf@example.org").await;
-    let undo = create_undo_action(
-        &state,
-        user_id,
-        "thread.trash",
-        serde_json::json!({ "thread_id": "thread-1" }),
-    )
-    .await
-    .unwrap();
+    let undo = create_undo_action(&state, user_id, NewUndoAction::thread_trash(Vec::new()))
+        .await
+        .unwrap();
 
     let resp = post_undo(
         state,

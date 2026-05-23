@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::undo::{UndoToken, create_undo_action};
+use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
 
 const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
@@ -319,11 +319,7 @@ where
     let undo = match create_undo_action(
         &state,
         user.id,
-        "screener.decision",
-        serde_json::json!({
-            "sender": &sender,
-            "previous_rule": previous_rule,
-        }),
+        NewUndoAction::screener_decision(&sender, previous_rule.as_ref()),
     )
     .await
     {

@@ -23,6 +23,137 @@ use crate::state::AppState;
 
 const UNDO_TTL_SECONDS: i64 = 10;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoActionKind {
+    ThreadClassify,
+    ThreadArchive,
+    ThreadTrash,
+    ThreadStack,
+    ScreenerDecision,
+}
+
+impl UndoActionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ThreadClassify => "thread.classify",
+            Self::ThreadArchive => "thread.archive",
+            Self::ThreadTrash => "thread.trash",
+            Self::ThreadStack => "thread.stack",
+            Self::ScreenerDecision => "screener.decision",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "thread.classify" => Some(Self::ThreadClassify),
+            "thread.archive" => Some(Self::ThreadArchive),
+            "thread.trash" => Some(Self::ThreadTrash),
+            "thread.stack" => Some(Self::ThreadStack),
+            "screener.decision" => Some(Self::ScreenerDecision),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadStackUndoTarget {
+    SetAside,
+    ReplyLater,
+}
+
+impl ThreadStackUndoTarget {
+    pub const fn stack(self) -> &'static str {
+        match self {
+            Self::SetAside => "set_aside",
+            Self::ReplyLater => "reply_later",
+        }
+    }
+
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::SetAside => "$hail_setaside",
+            Self::ReplyLater => "$hail_replylater",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewUndoAction {
+    kind: UndoActionKind,
+    payload: Value,
+}
+
+impl NewUndoAction {
+    pub fn thread_classify(
+        thread_id: &str,
+        previous_classification: &str,
+        new_classification: &str,
+    ) -> Self {
+        Self {
+            kind: UndoActionKind::ThreadClassify,
+            payload: serde_json::json!({
+                "thread_id": thread_id,
+                "previous_classification": previous_classification,
+                "new_classification": new_classification,
+            }),
+        }
+    }
+
+    pub fn thread_archive(email_mailbox_ids: Vec<EmailMailboxSnapshot>) -> Self {
+        Self {
+            kind: UndoActionKind::ThreadArchive,
+            payload: serde_json::json!({ "email_mailbox_ids": email_mailbox_ids }),
+        }
+    }
+
+    pub fn thread_trash(email_mailbox_ids: Vec<EmailMailboxSnapshot>) -> Self {
+        Self {
+            kind: UndoActionKind::ThreadTrash,
+            payload: serde_json::json!({ "email_mailbox_ids": email_mailbox_ids }),
+        }
+    }
+
+    pub fn thread_stack<P>(
+        thread_id: &str,
+        target: ThreadStackUndoTarget,
+        previous_position: Option<P>,
+    ) -> Self
+    where
+        P: Serialize,
+    {
+        Self {
+            kind: UndoActionKind::ThreadStack,
+            payload: serde_json::json!({
+                "thread_id": thread_id,
+                "stack": target.stack(),
+                "keyword": target.keyword(),
+                "previous_position": previous_position,
+            }),
+        }
+    }
+
+    pub fn screener_decision<P>(sender: &str, previous_rule: Option<&P>) -> Self
+    where
+        P: Serialize,
+    {
+        Self {
+            kind: UndoActionKind::ScreenerDecision,
+            payload: serde_json::json!({
+                "sender": sender,
+                "previous_rule": previous_rule,
+            }),
+        }
+    }
+
+    fn kind(&self) -> UndoActionKind {
+        self.kind
+    }
+
+    fn payload(&self) -> &Value {
+        &self.payload
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UndoActionPayload {
     pub action: String,
@@ -128,7 +259,7 @@ pub trait ThreadUndoRestorer: Send + Sync + 'static {
     ) -> Result<(), UndoError>;
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmailMailboxSnapshot {
     pub email_id: String,
     pub mailbox_ids: Vec<String>,
@@ -218,8 +349,8 @@ where
         user: &AuthUser,
         undo: UndoActionPayload,
     ) -> Result<(), UndoError> {
-        match undo.action.as_str() {
-            "thread.classify" => {
+        match UndoActionKind::parse(&undo.action) {
+            Some(UndoActionKind::ThreadClassify) => {
                 let payload: ThreadClassifyUndoPayload = serde_json::from_value(undo.payload)
                     .map_err(|_| UndoError::bad_request("invalid_undo_payload"))?;
                 validate_thread_classify_payload(&payload)?;
@@ -232,7 +363,7 @@ where
                     )
                     .await
             }
-            "thread.trash" | "thread.archive" => {
+            Some(UndoActionKind::ThreadArchive | UndoActionKind::ThreadTrash) => {
                 let payload: ThreadMoveUndoPayload = serde_json::from_value(undo.payload)
                     .map_err(|_| UndoError::not_implemented("thread_move_undo_missing_snapshot"))?;
                 if payload.email_mailbox_ids.is_empty() {
@@ -244,13 +375,15 @@ where
                     .restore_mailboxes(state, user, payload.email_mailbox_ids)
                     .await
             }
-            "thread.stack" => {
+            Some(UndoActionKind::ThreadStack) => {
                 let payload: ThreadStackUndoPayload = serde_json::from_value(undo.payload)
                     .map_err(|_| UndoError::bad_request("invalid_undo_payload"))?;
                 restore_thread_stack(state, user, self.thread_restorer.as_ref(), payload).await
             }
-            "screener.decision" => restore_screener_decision(state, user, undo.payload).await,
-            _ => Err(UndoError::not_implemented("undo_action_not_supported")),
+            Some(UndoActionKind::ScreenerDecision) => {
+                restore_screener_decision(state, user, undo.payload).await
+            }
+            None => Err(UndoError::not_implemented("undo_action_not_supported")),
         }
     }
 }
@@ -521,14 +654,22 @@ where
 pub async fn create_undo_action(
     state: &AppState,
     user_id: i64,
+    action: NewUndoAction,
+) -> Result<UndoToken, sqlx::Error> {
+    insert_undo_action(state, user_id, action.kind().as_str(), action.payload()).await
+}
+
+async fn insert_undo_action(
+    state: &AppState,
+    user_id: i64,
     action: &str,
-    payload: Value,
+    payload: &Value,
 ) -> Result<UndoToken, sqlx::Error> {
     let now = Utc::now();
     let expires_at = now + Duration::seconds(UNDO_TTL_SECONDS);
     let id = new_undo_id().map_err(sqlx::Error::Protocol)?;
     let payload_json =
-        serde_json::to_string(&payload).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
+        serde_json::to_string(payload).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
 
     sqlx::query(
         "INSERT INTO undo_actions (id, user_id, action, payload_json, expires_at, created_at) \
