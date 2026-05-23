@@ -86,14 +86,17 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i6
 }
 
 fn app(state: AppState, actions: Arc<FakeActions>) -> Router {
-    let protected = hail_api::routes::threads::router_with_deps(
-        Arc::new(FakeVerifier { exists: true }),
-        actions,
-    )
-    .layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        require_auth,
-    ));
+    app_with_verifier(state, Arc::new(FakeVerifier::visible()), actions)
+}
+
+fn app_with_verifier(
+    state: AppState,
+    verifier: Arc<FakeVerifier>,
+    actions: Arc<FakeActions>,
+) -> Router {
+    let protected = hail_api::routes::threads::router_with_deps(verifier, actions).layer(
+        axum::middleware::from_fn_with_state(state.clone(), require_auth),
+    );
     Router::new().merge(protected).with_state(state)
 }
 
@@ -121,13 +124,67 @@ async fn post(
     app(state, actions).oneshot(req).await.unwrap()
 }
 
+async fn post_with_verifier(
+    state: AppState,
+    verifier: Arc<FakeVerifier>,
+    actions: Arc<FakeActions>,
+    sid: Option<&str>,
+    csrf: bool,
+    path: &str,
+    body: Option<&str>,
+) -> axum::response::Response {
+    let mut builder = Request::builder().method(Method::POST).uri(path);
+    if let Some(sid) = sid {
+        builder = builder.header(header::COOKIE, format!("hail_session={sid}"));
+    }
+    if csrf {
+        builder = builder.header(CSRF_HEADER, "1");
+    }
+    if body.is_some() {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+    }
+    let req = builder
+        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+        .unwrap();
+    app_with_verifier(state, verifier, actions)
+        .oneshot(req)
+        .await
+        .unwrap()
+}
+
 async fn json_body(resp: axum::response::Response) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
 }
 
+enum VerifyMode {
+    Visible,
+    Hidden,
+    Error,
+}
+
 struct FakeVerifier {
-    exists: bool,
+    mode: VerifyMode,
+}
+
+impl FakeVerifier {
+    fn visible() -> Self {
+        Self {
+            mode: VerifyMode::Visible,
+        }
+    }
+
+    fn hidden() -> Self {
+        Self {
+            mode: VerifyMode::Hidden,
+        }
+    }
+
+    fn failing() -> Self {
+        Self {
+            mode: VerifyMode::Error,
+        }
+    }
 }
 
 impl ThreadVerifier for FakeVerifier {
@@ -137,7 +194,13 @@ impl ThreadVerifier for FakeVerifier {
         _token: SecretString,
         _thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, ThreadVerifyError>> + Send + 'a>> {
-        Box::pin(async move { Ok(self.exists) })
+        Box::pin(async move {
+            match self.mode {
+                VerifyMode::Visible => Ok(true),
+                VerifyMode::Hidden => Ok(false),
+                VerifyMode::Error => Err(ThreadVerifyError::provider("visibility failed")),
+            }
+        })
     }
 }
 
@@ -163,10 +226,21 @@ enum Call {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActionKind {
+    CurrentClassification,
+    Classify,
+    AddKeyword,
+    Archive,
+    Trash,
+    Mark,
+}
+
 #[derive(Default)]
 struct FakeActions {
     calls: Mutex<Vec<Call>>,
     missing: Mutex<Vec<String>>,
+    provider_failures: Mutex<Vec<ActionKind>>,
     current_classification: Mutex<Option<Classification>>,
 }
 
@@ -180,6 +254,27 @@ impl FakeActions {
             .lock()
             .expect("missing mutex")
             .push(thread_id.to_string());
+    }
+
+    fn fail_provider(&self, kind: ActionKind) {
+        self.provider_failures
+            .lock()
+            .expect("provider failures mutex")
+            .push(kind);
+    }
+
+    fn maybe_fail(&self, kind: ActionKind) -> Result<(), ThreadActionError> {
+        if self
+            .provider_failures
+            .lock()
+            .expect("provider failures mutex")
+            .iter()
+            .any(|failure| *failure == kind)
+        {
+            Err(ThreadActionError::Provider(format!("{kind:?} failed")))
+        } else {
+            Ok(())
+        }
     }
 
     fn maybe_missing(&self, thread_id: &str) -> Result<(), ThreadActionError> {
@@ -206,6 +301,7 @@ impl ThreadActions for FakeActions {
     ) -> Pin<Box<dyn Future<Output = Result<Option<Classification>, ThreadActionError>> + Send + 'a>>
     {
         Box::pin(async move {
+            self.maybe_fail(ActionKind::CurrentClassification)?;
             self.maybe_missing(thread_id)?;
             Ok(*self
                 .current_classification
@@ -222,6 +318,7 @@ impl ThreadActions for FakeActions {
         classification: Classification,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
+            self.maybe_fail(ActionKind::Classify)?;
             self.maybe_missing(thread_id)?;
             self.calls
                 .lock()
@@ -242,6 +339,7 @@ impl ThreadActions for FakeActions {
         keyword: &'static str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
+            self.maybe_fail(ActionKind::AddKeyword)?;
             self.maybe_missing(thread_id)?;
             self.calls
                 .lock()
@@ -261,6 +359,7 @@ impl ThreadActions for FakeActions {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
+            self.maybe_fail(ActionKind::Archive)?;
             self.maybe_missing(thread_id)?;
             self.calls.lock().expect("calls mutex").push(Call::Archive {
                 thread_id: thread_id.to_string(),
@@ -276,6 +375,7 @@ impl ThreadActions for FakeActions {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
+            self.maybe_fail(ActionKind::Trash)?;
             self.maybe_missing(thread_id)?;
             self.calls.lock().expect("calls mutex").push(Call::Trash {
                 thread_id: thread_id.to_string(),
@@ -292,6 +392,7 @@ impl ThreadActions for FakeActions {
         read: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
+            self.maybe_fail(ActionKind::Mark)?;
             self.maybe_missing(thread_id)?;
             self.calls.lock().expect("calls mutex").push(Call::Mark {
                 thread_id: thread_id.to_string(),
@@ -300,6 +401,191 @@ impl ThreadActions for FakeActions {
             Ok(())
         })
     }
+}
+
+async fn count_bubble_rows(state: &AppState, user_id: i64, thread_id: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2",
+    )
+    .bind(user_id)
+    .bind(thread_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn bubble_up_hidden_or_provider_error_does_not_insert_row() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "bubble-errors@example.org").await;
+    let hidden_at = Utc::now() + Duration::minutes(10);
+    let provider_at = Utc::now() + Duration::minutes(11);
+
+    let hidden = post_with_verifier(
+        state.clone(),
+        Arc::new(FakeVerifier::hidden()),
+        Arc::new(FakeActions::default()),
+        Some(&sid),
+        true,
+        "/api/threads/thread-hidden/bubble-up",
+        Some(&format!(r#"{{"at":"{}"}}"#, hidden_at.to_rfc3339())),
+    )
+    .await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+
+    let provider_error = post_with_verifier(
+        state.clone(),
+        Arc::new(FakeVerifier::failing()),
+        Arc::new(FakeActions::default()),
+        Some(&sid),
+        true,
+        "/api/threads/thread-provider/bubble-up",
+        Some(&format!(r#"{{"at":"{}"}}"#, provider_at.to_rfc3339())),
+    )
+    .await;
+    assert_eq!(provider_error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = json_body(provider_error).await;
+    assert_eq!(json["error"], "internal");
+
+    assert_eq!(count_bubble_rows(&state, user_id, "thread-hidden").await, 0);
+    assert_eq!(
+        count_bubble_rows(&state, user_id, "thread-provider").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "action-errors@example.org").await;
+
+    for (kind, path, body, stack) in [
+        (
+            ActionKind::AddKeyword,
+            "/api/threads/thread-set-aside/set-aside",
+            None,
+            Some("set_aside"),
+        ),
+        (
+            ActionKind::AddKeyword,
+            "/api/threads/thread-reply-later/reply-later",
+            None,
+            Some("reply_later"),
+        ),
+        (
+            ActionKind::Archive,
+            "/api/threads/thread-archive/archive",
+            None,
+            None,
+        ),
+        (
+            ActionKind::Trash,
+            "/api/threads/thread-trash/trash",
+            None,
+            None,
+        ),
+        (
+            ActionKind::Mark,
+            "/api/threads/thread-mark/mark",
+            Some(r#"{"read":true}"#),
+            None,
+        ),
+        (
+            ActionKind::Classify,
+            "/api/threads/thread-classify/classify",
+            Some(r#"{"to":"feed"}"#),
+            None,
+        ),
+    ] {
+        let actions = Arc::new(FakeActions::default());
+        actions.fail_provider(kind);
+        *actions
+            .current_classification
+            .lock()
+            .expect("current classification mutex") = Some(Classification::Imbox);
+
+        let resp = post(state.clone(), actions.clone(), Some(&sid), true, path, body).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{path}");
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], "internal", "{path}");
+        assert_eq!(actions.calls(), Vec::<Call>::new(), "{path}");
+
+        if let Some(stack) = stack {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM stack_positions WHERE user_id = ?1 AND stack = ?2",
+            )
+            .bind(user_id)
+            .bind(stack)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+            assert_eq!(count, 0, "{path}");
+        }
+    }
+
+    let undo_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM undo_actions WHERE user_id = ?1 AND action = 'thread.classify'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(undo_count, 0);
+}
+
+#[tokio::test]
+async fn current_classification_provider_failure_stops_classify_before_action_or_undo() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "classify-current-error@example.org").await;
+    let actions = Arc::new(FakeActions::default());
+    actions.fail_provider(ActionKind::CurrentClassification);
+
+    let resp = post(
+        state.clone(),
+        actions.clone(),
+        Some(&sid),
+        true,
+        "/api/threads/thread-classify-current/classify",
+        Some(r#"{"to":"feed"}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "internal");
+    assert_eq!(actions.calls(), Vec::<Call>::new());
+
+    let undo_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM undo_actions WHERE user_id = ?1 AND action = 'thread.classify'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(undo_count, 0);
+}
+
+#[tokio::test]
+async fn malformed_mark_json_returns_400_without_calling_provider() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "bad-mark@example.org").await;
+    let actions = Arc::new(FakeActions::default());
+
+    for body in [r#"{"read":"yes"}"#, r#"{"seen":true}"#, "not-json"] {
+        let resp = post(
+            state.clone(),
+            actions.clone(),
+            Some(&sid),
+            true,
+            "/api/threads/thread-mark/mark",
+            Some(body),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{body}");
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], "invalid_mark", "{body}");
+    }
+
+    assert_eq!(actions.calls(), Vec::<Call>::new());
 }
 
 #[tokio::test]
