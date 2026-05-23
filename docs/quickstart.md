@@ -62,7 +62,8 @@ bind = "0.0.0.0:8080"
 public_url = "https://mail.example.com"
 ```
 
-Leave `[admin]` commented out to use the first-run wizard at `/setup`.
+Leave `[admin]` commented out to use the first-run wizard at `/setup`. The
+wizard POST is still protected by an operator bootstrap token, configured below.
 
 Edit Stalwart config:
 
@@ -90,27 +91,37 @@ cat > .env <<'EOF'
 HAIL_DOMAIN=example.com
 HAIL_HOSTNAME=mail.example.com
 HAIL_SERVER_KEY=
+HAIL_SETUP_BOOTSTRAP_TOKEN=
 EOF
 ```
 
 Keep any extra variables required by your `deploy/docker-compose.yml`. Do not
 commit `.env`.
 
-## 4. Generate the server key
+## 4. Generate secrets
 
-hail encrypts JMAP tokens in `hail.db`. Generate a stable 32-byte key:
+hail encrypts JMAP tokens in `hail.db`. Generate a stable 32-byte server key:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Paste it into `.env`:
+Generate a separate temporary setup bootstrap token:
+
+```bash
+openssl rand -hex 32
+```
+
+Paste both values into `.env`:
 
 ```dotenv
 HAIL_SERVER_KEY=REPLACE_WITH_THE_64_HEX_CHARS_FROM_OPENSSL
+HAIL_SETUP_BOOTSTRAP_TOKEN=REPLACE_WITH_A_DIFFERENT_64_HEX_TOKEN
 ```
 
-Back this value up. Restored sessions cannot be decrypted without it.
+Back up `HAIL_SERVER_KEY`; restored sessions cannot be decrypted without it.
+Keep `HAIL_SETUP_BOOTSTRAP_TOKEN` private until setup is complete. It is only
+needed to authorize the first admin creation form.
 
 ## 5. Start the stack
 
@@ -155,10 +166,11 @@ Then open `http://127.0.0.1:8080/setup`.
 
 In the wizard:
 
-1. Create the admin user, for example `you@example.com`.
-2. Enter a strong password and display name.
-3. Add your mail domain, for example `example.com`.
-4. Submit, then sign in with that admin account.
+1. Paste the setup bootstrap token from `HAIL_SETUP_BOOTSTRAP_TOKEN`.
+2. Create the admin user, for example `you@example.com`.
+3. Enter a strong password and display name.
+4. Add your mail domain, for example `example.com`.
+5. Submit, then sign in with that admin account.
 
 For production, put real TLS in front of hail with Caddy, Traefik, or
 Cloudflare Tunnel before inviting other users.

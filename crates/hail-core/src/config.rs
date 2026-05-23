@@ -50,9 +50,14 @@ pub struct Config {
     /// HTTP server bind + public URL (for cookie scope / CORS).
     pub server: ServerConfig,
     /// Optional admin block. When `None`, the first-run wizard at `/setup`
-    /// is active (DD-9).
+    /// can be used only if explicit setup bootstrap config is also present.
     #[serde(default)]
     pub admin: Option<AdminConfig>,
+    /// First-run setup bootstrap guard. Operators must explicitly enable the
+    /// wizard POST and provide a one-time bootstrap token out-of-band so a
+    /// public empty deployment cannot be claimed by whoever reaches it first.
+    #[serde(default)]
+    pub setup: SetupConfig,
     /// Encryption secrets. The server key is required.
     pub secrets: SecretsConfig,
 }
@@ -99,6 +104,23 @@ pub struct AdminConfig {
     /// Display name shown in the UI.
     #[serde(default)]
     pub display_name: Option<String>,
+}
+
+/// First-run setup bootstrap settings. These do not affect the generic
+/// `/api/setup/state` response: the UI may show the wizard for an empty
+/// deployment, but `/api/setup/admin` still requires this explicit operator
+/// enablement plus the matching token.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SetupConfig {
+    /// Enables POST /api/setup/admin when no admin exists and `[admin]` is not
+    /// configured. Defaults to false so an accidentally public empty instance
+    /// cannot be claimed.
+    #[serde(default)]
+    pub bootstrap_enabled: bool,
+    /// Operator-provided shared secret required in the setup form. Prefer an
+    /// env var (`HAIL_SETUP__BOOTSTRAP_TOKEN`) over TOML for deployments.
+    #[serde(default)]
+    pub bootstrap_token: Option<SecretString>,
 }
 
 /// Encryption / signing secrets. Currently just the AES-GCM key used to

@@ -56,6 +56,21 @@ public_url = "https://hail.example.com"
 # email = "you@example.com"
 # display_name = "Operator"
 
+# --- Setup bootstrap (REQUIRED FOR FIRST-RUN WIZARD) ------------------------
+# The setup state endpoint intentionally stays generic for empty deployments,
+# but POST /api/setup/admin is disabled unless this section/env is set. Generate
+# a temporary operator-only token and paste it into the /setup form:
+#
+#   export HAIL_SETUP__BOOTSTRAP_ENABLED=true
+#   export HAIL_SETUP__BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+#
+# Leave disabled if you use the [admin] config-file path instead of the wizard.
+# Prefer env vars over TOML for the token in production.
+#
+# [setup]
+# bootstrap_enabled = true
+# bootstrap_token = "REPLACE_ME_WITH_OPERATOR_BOOTSTRAP_TOKEN"
+
 # --- Secrets ----------------------------------------------------------------
 # AES-GCM key used to wrap JMAP tokens at rest (DD-8). Prefer 64 hex
 # characters from `openssl rand -hex 32`; non-hex raw strings of at least
