@@ -88,7 +88,8 @@ fn build_api_router(
         .merge(routes::contacts::router())
         .merge(routes::pile::router())
         .merge(routes::screener::router())
-        .merge(routes::threads::router());
+        .merge(routes::threads::router())
+        .merge(routes::views::router());
 
     #[cfg(feature = "__test-stubs")]
     if include_test_stubs {

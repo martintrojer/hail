@@ -1,0 +1,282 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+
+use axum::Router;
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use chrono::{Duration, TimeZone, Utc};
+use hail_api::middleware::auth::require_auth;
+use hail_api::middleware::rate_limit::IpRateLimiter;
+use hail_api::routes::views::{
+    MailClassification, MailView, MailViewError, MailViewItem, MailViewProvider,
+};
+use hail_api::state::AppState;
+use hail_core::{Config, KEY_LEN};
+use hail_db::connect;
+use http_body_util::BodyExt;
+use secrecy::SecretString;
+use serde_json::Value;
+use tower::ServiceExt;
+
+async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
+    let uniq = uuid_like();
+    let url = format!("sqlite:file:hail_mail_views_test_{uniq}?mode=memory&cache=shared");
+    let db = connect(&url).await.expect("open sqlite");
+    hail_db::migrate(&db).await.expect("migrate");
+
+    let key = [0x5Au8; KEY_LEN];
+    unsafe {
+        std::env::set_var("HAIL_DATABASE_URL", &url);
+        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
+        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
+        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
+        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
+    }
+    let config = Config::load_from(None).expect("load config");
+
+    let state = AppState {
+        db,
+        config,
+        server_key: Arc::new(key),
+        login_limiter: Arc::new(IpRateLimiter::default()),
+    };
+    (state, key)
+}
+
+fn uuid_like() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> String {
+    let now = Utc::now();
+    let user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
+         VALUES (?1, ?2, 0, ?3) RETURNING id",
+    )
+    .bind(email)
+    .bind(format!("account-{email}"))
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert user");
+
+    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
+    let session_id = format!("{:064x}", user_id);
+    sqlx::query(
+        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+    )
+    .bind(&session_id)
+    .bind(user_id)
+    .bind(&token_enc)
+    .bind(Some("test-ua"))
+    .bind(now + Duration::days(30))
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .expect("insert session");
+    session_id
+}
+
+fn app(state: AppState, provider: Arc<FakeProvider>) -> Router {
+    let protected = hail_api::routes::views::router_with_provider(provider).layer(
+        axum::middleware::from_fn_with_state(state.clone(), require_auth),
+    );
+    Router::new().merge(protected).with_state(state)
+}
+
+#[derive(Default)]
+struct FakeProvider {
+    items: Vec<MailViewItem>,
+    calls: Mutex<Vec<(MailView, usize)>>,
+}
+
+impl FakeProvider {
+    fn new(items: Vec<MailViewItem>) -> Self {
+        Self {
+            items,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<(MailView, usize)> {
+        self.calls.lock().expect("calls lock").clone()
+    }
+}
+
+impl MailViewProvider for FakeProvider {
+    fn list<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        view: MailView,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls lock").push((view, limit));
+            Ok(self.items.iter().take(limit).cloned().collect())
+        })
+    }
+}
+
+async fn get_view(
+    state: AppState,
+    provider: Arc<FakeProvider>,
+    sid: Option<&str>,
+    path: &str,
+) -> axum::response::Response {
+    let mut builder = Request::builder().method(Method::GET).uri(path);
+    if let Some(sid) = sid {
+        builder = builder.header(header::COOKIE, format!("hail_session={sid}"));
+    }
+    let req = builder.body(Body::empty()).unwrap();
+    app(state, provider).oneshot(req).await.unwrap()
+}
+
+async fn response_json(resp: axum::response::Response) -> Value {
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&body).unwrap()
+}
+
+fn item(n: i64, classification: MailClassification) -> MailViewItem {
+    MailViewItem {
+        thread_id: format!("thread-{n}"),
+        email_id: format!("email-{n}"),
+        from: format!("Sender {n} <sender{n}@example.org>"),
+        subject: format!("Subject {n}"),
+        preview: format!("Preview {n}"),
+        received_at: Some(
+            Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap() - Duration::minutes(n),
+        ),
+        unread: n % 2 == 0,
+        classification,
+    }
+}
+
+#[tokio::test]
+async fn auth_required_returns_401() {
+    let (state, _key) = fixture_state().await;
+    let provider = Arc::new(FakeProvider::default());
+
+    let resp = get_view(state, provider, None, "/api/views/imbox").await;
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+
+    let cases = [
+        (
+            "/api/views/imbox",
+            MailView::Imbox,
+            MailClassification::Imbox,
+            "imbox",
+        ),
+        (
+            "/api/views/feed",
+            MailView::Feed,
+            MailClassification::Feed,
+            "feed",
+        ),
+        (
+            "/api/views/papertrail",
+            MailView::Papertrail,
+            MailClassification::Papertrail,
+            "papertrail",
+        ),
+    ];
+
+    for (path, expected_view, classification, expected_json) in cases {
+        let provider = Arc::new(FakeProvider::new(vec![item(1, classification)]));
+        let resp = get_view(state.clone(), provider.clone(), Some(&sid), path).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(provider.calls(), vec![(expected_view, 50)]);
+        let json = response_json(resp).await;
+        assert_eq!(json["items"][0]["classification"], expected_json);
+        assert_eq!(json["next_cursor"], Value::Null);
+    }
+
+    assert_eq!(MailView::Imbox.keyword(), "$hail_imbox");
+    assert_eq!(MailView::Feed.keyword(), "$hail_feed");
+    assert_eq!(MailView::Papertrail.keyword(), "$hail_papertrail");
+}
+
+#[tokio::test]
+async fn limit_defaults_to_50_and_caps_at_100() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "bob@example.org").await;
+    let provider = Arc::new(FakeProvider::default());
+
+    let resp = get_view(
+        state.clone(),
+        provider.clone(),
+        Some(&sid),
+        "/api/views/feed?cursor=ignored",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&sid),
+        "/api/views/feed?limit=999",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    assert_eq!(
+        provider.calls(),
+        vec![(MailView::Feed, 50), (MailView::Feed, 100)]
+    );
+}
+
+#[tokio::test]
+async fn response_preserves_provider_order() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "carol@example.org").await;
+    let provider = Arc::new(FakeProvider::new(vec![
+        item(30, MailClassification::Imbox),
+        item(10, MailClassification::Imbox),
+        item(20, MailClassification::Imbox),
+    ]));
+
+    let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let ids: Vec<&str> = json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["email_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["email-30", "email-10", "email-20"]);
+}
+
+#[tokio::test]
+async fn empty_list_returns_empty_items_and_null_cursor() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "dana@example.org").await;
+    let provider = Arc::new(FakeProvider::default());
+
+    let resp = get_view(state, provider, Some(&sid), "/api/views/papertrail").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    assert_eq!(
+        json,
+        serde_json::json!({ "items": [], "next_cursor": null })
+    );
+}
