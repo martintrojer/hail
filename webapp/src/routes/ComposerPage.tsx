@@ -5,7 +5,6 @@ import {
   useState,
   type ChangeEvent,
   type FormEvent,
-  type ReactNode,
 } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { HailApiError, type HailApiClient, type ComposeRequest, type ComposeResponse } from '../api/client';
@@ -15,6 +14,7 @@ import {
   useSendComposeMutation,
   useUpdateDraftMutation,
 } from '../api/query';
+import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { AppShell } from '../layout/AppShell';
 
 interface ComposerPageProps {
@@ -42,7 +42,7 @@ interface AttachmentDraft {
 
 const autosaveIntervalMs = 5000;
 const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
-const inputClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-50 outline-none ring-sky-400 transition placeholder:text-slate-600 focus:border-sky-400 focus:ring-2';
+const lineInputClass = 'min-w-0 flex-1 border-0 bg-transparent py-3 text-base text-ink-primary outline-none placeholder:text-ink-tertiary focus:ring-0';
 
 function splitAddresses(value: string) {
   return value.split(/[;,]/).map((address) => address.trim()).filter(Boolean);
@@ -109,6 +109,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [showCarbonCopyFields, setShowCarbonCopyFields] = useState(false);
   const snapshotRef = useRef('');
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
@@ -233,67 +234,149 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   const autosaveError = createDraft.error ?? updateDraft.error;
   const savingDraft = createDraft.isPending || updateDraft.isPending;
 
+  const autosaveText = replyToThreadId
+    ? 'Replies send through the thread reply API.'
+    : savingDraft
+      ? 'Saving draft…'
+      : lastSavedAt
+        ? 'Draft saved'
+        : dirty
+          ? 'Draft not saved yet'
+          : 'Draft saved';
+
   return (
     <AppShell
       title={replyToThreadId ? 'Reply' : 'Compose'}
-      description="Drafts auto-save every five seconds while you write."
       reading={
-        <section className="mx-auto max-w-3xl rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40" aria-labelledby="composer-title">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-300">{replyToThreadId ? 'Reply composer' : 'New message'}</p>
-              <h2 id="composer-title" className="mt-2 text-2xl font-semibold text-slate-50">{replyToThreadId ? 'Reply to thread' : 'Compose message'}</h2>
-            </div>
-            <button type="button" onClick={closeComposer} className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-100">Close</button>
+        <section className="mx-auto flex min-h-[calc(100vh-11rem)] w-full max-w-center-column flex-col" aria-labelledby="composer-title">
+          <button
+            type="button"
+            onClick={closeComposer}
+            className="mb-8 inline-flex w-fit items-center gap-2 hail-chrome text-ink-secondary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          >
+            <ArrowLeft {...iconSizeProps.sm} />
+            <span>Cancel</span>
+          </button>
+
+          <div className="sr-only">
+            <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : 'Compose message'}</h2>
           </div>
 
-          <form onSubmit={onSubmit} className="mt-6 space-y-4">
-            {!replyToThreadId ? (
-              <Field id="compose-to" label="To">
-                <input id="compose-to" type="text" value={form.to} onChange={(event) => updateField('to', event.target.value)} placeholder="alice@example.com, bob@example.com" className={`mt-2 w-full ${inputClass}`} autoComplete="email" autoFocus />
-              </Field>
-            ) : null}
+          <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
+            <div className="space-y-1">
+              {!replyToThreadId ? (
+                <div className="flex items-center gap-3 border-b border-border-hairline">
+                  <label htmlFor="compose-to" className="w-16 shrink-0 hail-chrome text-ink-tertiary">To</label>
+                  <input
+                    id="compose-to"
+                    type="text"
+                    value={form.to}
+                    onChange={(event) => updateField('to', event.target.value)}
+                    placeholder="alice@example.com, bob@example.com"
+                    className={lineInputClass}
+                    autoComplete="email"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCarbonCopyFields((shown) => !shown)}
+                    className="shrink-0 hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                    aria-expanded={showCarbonCopyFields}
+                    aria-controls="compose-carbon-copy-fields"
+                  >
+                    Cc / Bcc
+                  </button>
+                </div>
+              ) : null}
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field id="compose-cc" label="Cc">
-                <input id="compose-cc" type="text" value={form.cc} onChange={(event) => updateField('cc', event.target.value)} className={`mt-2 w-full ${inputClass}`} autoComplete="email" />
-              </Field>
-              <Field id="compose-bcc" label="Bcc">
-                <input id="compose-bcc" type="text" value={form.bcc} onChange={(event) => updateField('bcc', event.target.value)} className={`mt-2 w-full ${inputClass}`} autoComplete="email" />
-              </Field>
+              <div id="compose-carbon-copy-fields" className={showCarbonCopyFields ? 'grid gap-1' : 'hidden'}>
+                <div className="flex items-center gap-3 border-b border-border-hairline">
+                  <label htmlFor="compose-cc" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Cc</label>
+                  <input
+                    id="compose-cc"
+                    type="text"
+                    value={form.cc}
+                    onChange={(event) => updateField('cc', event.target.value)}
+                    className={lineInputClass}
+                    autoComplete="email"
+                  />
+                </div>
+                <div className="flex items-center gap-3 border-b border-border-hairline">
+                  <label htmlFor="compose-bcc" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Bcc</label>
+                  <input
+                    id="compose-bcc"
+                    type="text"
+                    value={form.bcc}
+                    onChange={(event) => updateField('bcc', event.target.value)}
+                    className={lineInputClass}
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+
+              {!replyToThreadId ? (
+                <div className="flex items-center gap-3 border-b border-border-hairline">
+                  <label htmlFor="compose-subject" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Subject</label>
+                  <input
+                    id="compose-subject"
+                    type="text"
+                    value={form.subject}
+                    onChange={(event) => updateField('subject', event.target.value)}
+                    className={lineInputClass}
+                    placeholder="Subject"
+                  />
+                </div>
+              ) : null}
             </div>
 
-            {!replyToThreadId ? (
-              <Field id="compose-subject" label="Subject">
-                <input id="compose-subject" type="text" value={form.subject} onChange={(event) => updateField('subject', event.target.value)} className={`mt-2 w-full ${inputClass}`} placeholder="Subject" />
-              </Field>
-            ) : null}
+            <div className="mt-8 flex min-h-[22rem] flex-1 flex-col">
+              <label htmlFor="compose-body" className="sr-only">Body</label>
+              <textarea
+                id="compose-body"
+                value={form.body}
+                onChange={(event) => updateField('body', event.target.value)}
+                className="min-h-[22rem] flex-1 resize-none border-0 bg-transparent text-base leading-relaxed text-ink-primary outline-none placeholder:text-ink-tertiary focus:ring-0"
+                placeholder="Write your email…"
+                autoFocus={Boolean(replyToThreadId)}
+              />
+            </div>
 
-            <Field id="compose-body" label="Body">
-              <textarea id="compose-body" value={form.body} onChange={(event) => updateField('body', event.target.value)} className={`mt-2 min-h-72 w-full resize-y leading-6 ${inputClass}`} placeholder="Write your message…" autoFocus={Boolean(replyToThreadId)} />
-            </Field>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field id="compose-attachments" label="Attachments">
-                <input id="compose-attachments" type="file" multiple onChange={onAttachmentsChange} className="mt-2 w-full rounded-lg border border-dashed border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-100 hover:border-slate-600" />
-              </Field>
-              <Field id="compose-send-at" label="Send later">
-                <input id="compose-send-at" type="datetime-local" value={form.sendAt} min={minSendAt} onChange={(event) => updateField('sendAt', event.target.value)} className={`mt-2 w-full ${inputClass}`} />
-              </Field>
+            <div className="mt-3 flex min-h-6 items-center justify-between gap-4">
+              <div className="flex items-center gap-3 text-ink-tertiary">
+                <label htmlFor="compose-attachments" className="inline-flex cursor-pointer items-center gap-2 hail-chrome outline-none hover:text-accent-blue">
+                  <Paperclip {...iconSizeProps.sm} />
+                  <span>Attachments</span>
+                </label>
+                <input id="compose-attachments" type="file" multiple onChange={onAttachmentsChange} className="sr-only" />
+                <label htmlFor="compose-send-at" className="sr-only">Send later</label>
+                <input
+                  id="compose-send-at"
+                  type="datetime-local"
+                  value={form.sendAt}
+                  min={minSendAt}
+                  onChange={(event) => updateField('sendAt', event.target.value)}
+                  className="w-40 border-0 bg-transparent hail-chrome text-ink-tertiary outline-none focus:ring-0"
+                />
+              </div>
+              <p className={`hail-badge text-ink-tertiary transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId ? 'opacity-100' : 'opacity-0'}`}>
+                {autosaveText}
+              </p>
             </div>
 
             {attachments.length > 0 ? <AttachmentNotice attachments={attachments} /> : null}
 
-            <div className="flex flex-wrap items-center gap-3 border-t border-slate-800 pt-4">
-              <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
-              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
-              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
-              <p className="text-xs text-slate-500">{replyToThreadId ? 'Replies send through the thread reply API.' : savingDraft ? 'Autosaving…' : lastSavedAt ? `Saved ${lastSavedAt.toLocaleTimeString()}` : dirty ? 'Unsaved changes' : 'No draft saved yet'}</p>
+            <div className="mt-8 flex items-center gap-4 border-t border-border-hairline pt-5">
+              <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-lg bg-accent-blue px-4 py-2 hail-chrome font-semibold text-white outline-none transition hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
+              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="hail-chrome text-ink-secondary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-50">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
+              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-50">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
+              <button type="button" onClick={closeComposer} className="ml-auto hail-chrome text-ink-tertiary outline-none hover:text-accent-red focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue">Discard</button>
             </div>
 
-            {autosaveError ? <Status kind="warn" message={apiErrorMessage(autosaveError, 'Draft autosave failed.')} /> : null}
-            {sendError ? <Status kind="error" message={sendError} /> : null}
-            {successMessage ? <Status kind="success" message={successMessage} /> : null}
+            <div className="mt-4 space-y-2">
+              {autosaveError ? <Status kind="warn" message={apiErrorMessage(autosaveError, 'Draft autosave failed.')} /> : null}
+              {sendError ? <Status kind="error" message={sendError} /> : null}
+              {successMessage ? <Status kind="success" message={successMessage} /> : null}
+            </div>
           </form>
         </section>
       }
@@ -301,15 +384,11 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   );
 }
 
-function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
-  return <label className="block text-sm font-medium text-slate-200" htmlFor={id}>{label}{children}</label>;
-}
-
 function AttachmentNotice({ attachments }: { attachments: AttachmentDraft[] }) {
   return (
-    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
-      <p className="font-semibold">Attachments are not supported for sending or saving yet.</p>
-      <ul className="mt-2 space-y-1 text-amber-50/90">
+    <div className="mt-4 rounded-lg border border-border-menu bg-bg-banner p-3 hail-chrome text-ink-secondary">
+      <p className="font-semibold text-ink-primary">Attachments are not supported for sending or saving yet.</p>
+      <ul className="mt-2 space-y-1 text-ink-secondary">
         {attachments.map((attachment) => <li key={attachment.id}>{attachment.name} · {fileSizeLabel(attachment.size)} · {attachment.type}</li>)}
       </ul>
     </div>
@@ -318,9 +397,9 @@ function AttachmentNotice({ attachments }: { attachments: AttachmentDraft[] }) {
 
 function Status({ kind, message }: { kind: 'error' | 'success' | 'warn'; message: string }) {
   const className = kind === 'success'
-    ? 'border-emerald-800 bg-emerald-950/70 text-emerald-100'
+    ? 'border-border-menu bg-bg-surface text-ink-primary'
     : kind === 'warn'
-      ? 'border-amber-800 bg-amber-950/70 text-amber-100'
-      : 'border-red-800 bg-red-950/70 text-red-100';
-  return <p className={`rounded-lg border px-3 py-2 text-sm ${className}`}>{message}</p>;
+      ? 'border-border-menu bg-bg-banner text-ink-primary'
+      : 'border-accent-red/40 bg-bg-surface text-accent-red';
+  return <p className={`rounded-lg border px-3 py-2 hail-chrome ${className}`}>{message}</p>;
 }
