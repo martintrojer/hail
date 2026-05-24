@@ -1,6 +1,9 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+
   --color-bg-page: #faf8f5;
   --color-bg-surface: #ffffff;
   --color-bg-banner: #fef9ee;
@@ -18,4 +21,63 @@
 
   --hail-center-column: 720px;
   --container-center-column: var(--hail-center-column);
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-bg-page);
+    color: var(--color-ink-primary);
+  }
+}
+
+@layer components {
+  .hail-page-title {
+    font-size: clamp(2rem, 8vw, 2.5rem);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  .hail-sender {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--color-ink-primary);
+  }
+
+  .hail-subject {
+    font-size: 0.95rem;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--color-ink-secondary);
+  }
+
+  .hail-preview {
+    font-size: 0.875rem;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--color-ink-tertiary);
+  }
+
+  .hail-body {
+    font-size: 1.05rem;
+    font-weight: 400;
+    line-height: 1.6;
+    color: var(--color-ink-primary);
+  }
+
+  .hail-chrome {
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .hail-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
 }
