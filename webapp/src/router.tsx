@@ -21,6 +21,7 @@ import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
 import { ComposerPage } from './routes/ComposerPage';
 import { MailViewPage } from './routes/MailViewPage';
+import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
 import { ThreadPage } from './routes/ThreadPage';
@@ -342,16 +343,6 @@ function SetupPage() {
   );
 }
 
-function ProtectedPlaceholderPage({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return <MailAppShell title={title} description={description} />;
-}
-
 function ImboxPage() {
   return (
     <MailViewPage
@@ -384,6 +375,23 @@ function PaperTrailPage() {
 
 function ComposePage() {
   return <ComposerPage />;
+}
+
+function BubbleUpPage() {
+  return (
+    <MailAppShell
+      title="Bubble Up"
+      description="Threads scheduled to return to your attention."
+      list={(
+        <div className="flex min-h-64 flex-col items-center justify-center border-y border-border-hairline p-8 text-center">
+          <p className="text-base font-semibold text-ink-primary">No bubble-ups scheduled.</p>
+          <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">
+            Bubble up a thread and its return time will show here.
+          </p>
+        </div>
+      )}
+    />
+  );
 }
 
 function ThreadReplyPage({ threadId }: { threadId: string }) {
@@ -479,24 +487,21 @@ const setAsideRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/set-aside',
   beforeLoad: requireAuth,
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Set Aside"
-      description="Threads you want nearby but not in the Imbox will stack here."
-    />
-  ),
+  component: () => <PileSectionPage kind="set-aside" />,
 });
 
 const replyLaterRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reply-later',
   beforeLoad: requireAuth,
-  component: () => (
-    <ProtectedPlaceholderPage
-      title="Reply Later"
-      description="Mail that needs a response can wait in this pile."
-    />
-  ),
+  component: () => <PileSectionPage kind="reply-later" />,
+});
+
+const bubbleUpRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/bubble-up',
+  beforeLoad: requireAuth,
+  component: BubbleUpPage,
 });
 
 const threadRoute = createRoute({
@@ -550,6 +555,7 @@ const routeTree = rootRoute.addChildren([
   screenerRoute,
   setAsideRoute,
   replyLaterRoute,
+  bubbleUpRoute,
   threadRoute,
   threadReplyRoute,
   searchRoute,
