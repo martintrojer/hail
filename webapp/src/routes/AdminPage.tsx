@@ -40,9 +40,9 @@ function adminErrorMessage(error: Error, action: string) {
 
 function StateCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 text-center">
-      <p className="text-base font-semibold text-slate-200">{title}</p>
-      <p className="mt-2 text-sm text-slate-400">{body}</p>
+    <div className="rounded-lg border border-dashed border-hairline bg-surface p-8 text-center">
+      <p className="text-base font-semibold text-ink-primary">{title}</p>
+      <p className="mt-2 text-sm text-ink-secondary">{body}</p>
     </div>
   );
 }
@@ -69,7 +69,7 @@ function Field({
   minLength?: number;
 }) {
   return (
-    <label htmlFor={id} className="block text-sm font-medium text-slate-200">
+    <label htmlFor={id} className="block text-sm font-medium text-ink-primary">
       {label}
       <input
         id={id}
@@ -80,7 +80,7 @@ function Field({
         placeholder={placeholder}
         required={required}
         minLength={minLength}
-        className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none ring-sky-400 transition placeholder:text-slate-600 focus:border-sky-400 focus:ring-2"
+        className="mt-2 w-full rounded-lg border border-hairline bg-page px-3 py-2 text-ink-primary outline-none ring-accent-blue transition placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2"
       />
     </label>
   );
@@ -92,7 +92,7 @@ function FormError({ error, action }: { error: Error | null; action: string }) {
   }
 
   return (
-    <p role="alert" className="rounded-lg border border-red-800 bg-red-950/70 px-3 py-2 text-sm text-red-100">
+    <p role="alert" className="rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">
       {adminErrorMessage(error, action)}
     </p>
   );
@@ -123,8 +123,8 @@ function CreateUserForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-      <h2 className="text-lg font-semibold text-slate-100">Create user</h2>
+    <form onSubmit={onSubmit} className="rounded-lg border border-hairline bg-surface p-4">
+      <h2 className="text-lg font-semibold text-ink-primary">Create user</h2>
       <div className="mt-4 space-y-3">
         <Field
           id={emailId}
@@ -153,12 +153,12 @@ function CreateUserForm() {
           autoComplete="new-password"
           minLength={12}
         />
-        <p className="text-xs text-slate-500">Passwords must be at least 12 characters.</p>
+        <p className="text-xs text-ink-primary0">Passwords must be at least 12 characters.</p>
         <FormError error={createUser.error} action="Create user" />
         <button
           type="submit"
           disabled={createUser.isPending}
-          className="w-full rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {createUser.isPending ? 'Creating…' : 'Create user'}
         </button>
@@ -181,7 +181,7 @@ function ResetPasswordForm({ user }: { user: UserView }) {
 
   return (
     <form onSubmit={onSubmit} className="mt-3 space-y-2">
-      <label htmlFor={inputId} className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+      <label htmlFor={inputId} className="block text-xs font-semibold uppercase tracking-wide text-ink-secondary">
         Reset password
       </label>
       <div className="flex gap-2">
@@ -194,12 +194,12 @@ function ResetPasswordForm({ user }: { user: UserView }) {
           required
           minLength={12}
           placeholder="New password"
-          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none ring-sky-400 transition placeholder:text-slate-600 focus:border-sky-400 focus:ring-2"
+          className="min-w-0 flex-1 rounded-lg border border-hairline bg-page px-3 py-2 text-sm text-ink-primary outline-none ring-accent-blue transition placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2"
         />
         <button
           type="submit"
           disabled={resetPassword.isPending}
-          className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-lg border border-hairline px-3 py-2 text-sm font-semibold text-ink-primary transition hover:border-accent-blue hover:text-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
         >
           {resetPassword.isPending ? 'Saving…' : 'Reset'}
         </button>
@@ -214,15 +214,15 @@ function UserCard({ user, currentUserId }: { user: UserView; currentUserId: numb
   const isSelf = currentUserId === user.id;
 
   return (
-    <article className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+    <article className="rounded-lg border border-hairline bg-surface p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold text-slate-100">{user.email}</h2>
-          <p className="mt-1 text-sm text-slate-400">{user.display_name || 'No display name'}</p>
+          <h2 className="truncate text-base font-semibold text-ink-primary">{user.email}</h2>
+          <p className="mt-1 text-sm text-ink-secondary">{user.display_name || 'No display name'}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {user.is_admin ? (
-            <span className="rounded-full border border-sky-500/40 bg-sky-400/10 px-2 py-1 text-xs font-semibold text-sky-100">
+            <span className="rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2 py-1 text-xs font-semibold text-accent-blue">
               Admin
             </span>
           ) : null}
@@ -231,13 +231,13 @@ function UserCard({ user, currentUserId }: { user: UserView; currentUserId: numb
             onClick={() => deleteUser.mutate(user.id)}
             disabled={deleteUser.isPending || isSelf}
             title={isSelf ? 'You cannot delete your own admin account.' : undefined}
-            className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-red-400 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-red hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-50"
           >
             {deleteUser.isPending ? 'Deleting…' : 'Delete'}
           </button>
         </div>
       </div>
-      {isSelf ? <p className="mt-3 text-xs text-slate-500">Signed-in account cannot delete itself.</p> : null}
+      {isSelf ? <p className="mt-3 text-xs text-ink-primary0">Signed-in account cannot delete itself.</p> : null}
       <ResetPasswordForm user={user} />
       <FormError error={deleteUser.error} action="Delete user" />
     </article>
@@ -283,8 +283,8 @@ function AddDomainForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-      <h2 className="text-lg font-semibold text-slate-100">Add domain</h2>
+    <form onSubmit={onSubmit} className="rounded-lg border border-hairline bg-surface p-4">
+      <h2 className="text-lg font-semibold text-ink-primary">Add domain</h2>
       <div className="mt-4 space-y-3">
         <Field
           id={domainId}
@@ -298,7 +298,7 @@ function AddDomainForm() {
         <button
           type="submit"
           disabled={addDomain.isPending}
-          className="w-full rounded-lg bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {addDomain.isPending ? 'Adding…' : 'Add domain'}
         </button>
@@ -313,26 +313,26 @@ function DomainsSection() {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-        <h2 className="text-lg font-semibold text-slate-100">Domains</h2>
+      <section className="rounded-lg border border-hairline bg-surface p-5">
+        <h2 className="text-lg font-semibold text-ink-primary">Domains</h2>
         {domains.isPending ? (
-          <p className="mt-4 text-sm text-slate-400">Loading domains…</p>
+          <p className="mt-4 text-sm text-ink-secondary">Loading domains…</p>
         ) : domains.isError ? (
-          <p role="alert" className="mt-4 text-sm text-red-200">
+          <p role="alert" className="mt-4 text-sm text-accent-red">
             {adminErrorMessage(domains.error, 'Load domains')}
           </p>
         ) : domains.data.domains.length === 0 ? (
-          <p className="mt-4 text-sm text-slate-400">No domains configured yet.</p>
+          <p className="mt-4 text-sm text-ink-secondary">No domains configured yet.</p>
         ) : (
           <ul className="mt-4 space-y-2">
             {domains.data.domains.map((domain) => (
-              <li key={domain} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2">
-                <span className="min-w-0 truncate font-medium text-slate-100">{domain}</span>
+              <li key={domain} className="flex items-center justify-between gap-3 rounded-lg border border-hairline bg-page px-3 py-2">
+                <span className="min-w-0 truncate font-medium text-ink-primary">{domain}</span>
                 <button
                   type="button"
                   onClick={() => deleteDomain.mutate(domain)}
                   disabled={deleteDomain.isPending}
-                  className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-red-400 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-red hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Delete
                 </button>
@@ -359,9 +359,9 @@ function ForbiddenAdmin() {
         />
       }
       reading={
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
-          <h2 className="text-lg font-semibold text-slate-100">403 Forbidden</h2>
-          <p className="mt-3 text-sm leading-6 text-slate-400">
+        <div className="rounded-lg border border-hairline bg-surface p-6">
+          <h2 className="text-lg font-semibold text-ink-primary">403 Forbidden</h2>
+          <p className="mt-3 text-sm leading-6 text-ink-secondary">
             Your account is signed in, but it is not marked as an administrator.
           </p>
         </div>
@@ -388,9 +388,9 @@ export function AdminPage() {
       list={<UsersSection />}
       reading={
         <div className="space-y-4">
-          <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="text-lg font-semibold text-slate-100">Operator settings</h2>
-            <p className="mt-3 text-sm leading-6 text-slate-400">
+          <section className="rounded-lg border border-hairline bg-surface p-5">
+            <h2 className="text-lg font-semibold text-ink-primary">Operator settings</h2>
+            <p className="mt-3 text-sm leading-6 text-ink-secondary">
               User and domain operations call the hail API, which forwards changes to Stalwart management and refreshes these lists after each mutation.
             </p>
           </section>
