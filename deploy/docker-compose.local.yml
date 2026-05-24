@@ -13,6 +13,7 @@
 
 services:
   stalwart:
+    image: docker.io/stalwartlabs/stalwart:latest
     environment:
       - STALWART_PUBLIC_URL=http://stalwart:8080
     ports:
