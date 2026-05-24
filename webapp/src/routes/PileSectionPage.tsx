@@ -4,7 +4,9 @@ import type { ComponentType, ReactNode } from 'react';
 import type { PileItem, PileViewResponse } from '../api/client';
 import { useClassifyThreadMutation, useReplyLaterView, useSetAsideView } from '../api/query';
 import { queryKeys } from '../api/queryKeys';
+import { ErrorState } from '../components/ErrorState';
 import { Bookmark, Clock, iconSizeProps } from '../components/icons';
+import { LoadingState } from '../components/LoadingState';
 import { AppShell } from '../layout/AppShell';
 import { formatPileDate, pilePreview } from '../lib/pilePreview';
 
@@ -28,7 +30,7 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     title: 'Set Aside',
     description: 'Threads you want nearby but not in the Imbox wait here.',
     emptyTitle: 'Nothing set aside.',
-    emptyBody: 'When you set a thread aside, it’ll wait here.',
+    emptyBody: 'Set threads aside when you want to come back to them.',
     actionLabel: 'Move back to Imbox',
     Icon: Bookmark,
     useView: useSetAsideView,
@@ -38,7 +40,7 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     title: 'Reply Later',
     description: 'Mail that needs a response can wait in this pile.',
     emptyTitle: 'Nothing to reply to later.',
-    emptyBody: 'Threads you mark for a later reply will appear here.',
+    emptyBody: 'Mark threads for reply when you are ready.',
     actionLabel: 'Move back to Imbox',
     Icon: Clock,
     useView: useReplyLaterView,
@@ -48,26 +50,9 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
 
 function StateCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center border-y border-border-hairline p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">{title}</p>
+    <div className="flex min-h-[300px] flex-col items-center justify-center p-8 text-center">
+      <p className="text-lg font-semibold text-ink-primary">{title}</p>
       <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
-    </div>
-  );
-}
-
-function SkeletonRows({ title }: { title: string }) {
-  return (
-    <div aria-label={`Loading ${title} mail`}>
-      {Array.from({ length: 5 }, (_, index) => (
-        <div key={index} className="animate-pulse border-b border-border-hairline py-4 pl-3 sm:py-5">
-          <div className="flex items-center justify-between gap-4">
-            <div className="h-4 w-40 rounded bg-border-hairline" />
-            <div className="h-3 w-24 rounded bg-border-hairline" />
-          </div>
-          <div className="mt-2 h-4 w-2/3 rounded bg-border-hairline" />
-          <div className="mt-2 h-3 w-full rounded bg-border-hairline" />
-        </div>
-      ))}
     </div>
   );
 }
@@ -130,11 +115,16 @@ function PileRow({
 
 function PileList({ query, config }: { query: ReturnType<SectionConfig['useView']>; config: SectionConfig }) {
   if (query.isPending) {
-    return <SkeletonRows title={config.title} />;
+    return <LoadingState />;
   }
 
   if (query.isError) {
-    return <StateCard title="Could not load mail" body="This pile failed to load. Refresh and try again." />;
+    return (
+      <ErrorState
+        message="This pile failed to load. Refresh and try again."
+        onRetry={() => void query.refetch()}
+      />
+    );
   }
 
   const data = query.data as PileViewResponse;

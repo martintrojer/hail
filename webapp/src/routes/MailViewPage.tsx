@@ -17,7 +17,9 @@ import {
   useSetAsideThreadMutation,
   useTrashThreadMutation,
 } from '../api/query';
+import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle, X, iconSizeProps } from '../components/icons';
+import { LoadingState } from '../components/LoadingState';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useOptionalUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
@@ -33,6 +35,21 @@ const viewLabels: Record<MailViewKind, string> = {
   imbox: 'Imbox',
   feed: 'Feed',
   papertrail: 'Paper Trail',
+};
+
+const emptyStates: Record<MailViewKind, { title: string; body: string }> = {
+  imbox: {
+    title: "You're all caught up.",
+    body: 'New mail will appear here.',
+  },
+  feed: {
+    title: 'Nothing in The Feed yet.',
+    body: 'Newsletters and notifications will show up here.',
+  },
+  papertrail: {
+    title: 'No receipts yet.',
+    body: 'Transactional mail will land here.',
+  },
 };
 
 function useMailView(view: MailViewKind, client?: HailApiClient) {
@@ -82,40 +99,10 @@ function classificationLabel(classification: MailViewItem['classification']) {
   return viewLabels[classification];
 }
 
-function SkeletonList({ view }: { view: MailViewKind }) {
-  const rows = view === 'papertrail' ? 8 : 5;
-  const rowClassName =
-    view === 'feed'
-      ? 'animate-pulse border-b border-border-hairline py-6 sm:py-7'
-      : view === 'papertrail'
-        ? 'animate-pulse border-b border-border-hairline py-2.5 sm:py-3'
-        : 'animate-pulse border-b border-border-hairline py-4 sm:py-5';
-
-  return (
-    <div aria-label={`Loading ${viewLabels[view]} mail`}>
-      {Array.from({ length: rows }, (_, index) => (
-        <div
-          key={index}
-          className={rowClassName}
-        >
-          <div className="flex items-center justify-between gap-4">
-            <div className="h-4 w-40 rounded bg-border-hairline" />
-            <div className="h-3 w-16 rounded bg-border-hairline" />
-          </div>
-          <div className="mt-2 h-4 w-2/3 rounded bg-border-hairline" />
-          {view === 'papertrail' ? null : (
-            <div className="mt-2 h-3 w-full rounded bg-border-hairline" />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function StateCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center border-y border-border-hairline p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">{title}</p>
+    <div className="flex min-h-[300px] flex-col items-center justify-center p-8 text-center">
+      <p className="text-lg font-semibold text-ink-primary">{title}</p>
       <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
     </div>
   );
@@ -633,21 +620,17 @@ export function MailViewPage({
 
   let list;
   if (query.isPending) {
-    list = <SkeletonList view={view} />;
+    list = <LoadingState label={`Loading ${viewLabels[view]} mail`} />;
   } else if (query.isError) {
     list = (
-      <StateCard
-        title="Could not load mail"
-        body={errorMessage(query.error)}
+      <ErrorState
+        message={errorMessage(query.error)}
+        onRetry={() => void query.refetch()}
       />
     );
   } else if (query.data.items.length === 0) {
-    list = (
-      <StateCard
-        title={`No ${title} mail yet`}
-        body={`When the server classifies threads as ${title}, they will show up here.`}
-      />
-    );
+    const emptyState = emptyStates[view];
+    list = <StateCard title={emptyState.title} body={emptyState.body} />;
   } else if (view === 'imbox' && powerThroughOpen) {
     list = (
       <PowerThroughMode

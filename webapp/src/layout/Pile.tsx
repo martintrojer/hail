@@ -100,9 +100,7 @@ function ExpandedStack({ stack }: { stack: StackConfig }) {
         <CountBadge count={stack.items.length} />
       </div>
 
-      {stack.items.length === 0 ? (
-        <p className="px-2 py-3 text-sm text-ink-tertiary">Nothing here.</p>
-      ) : (
+      {stack.items.length === 0 ? null : (
         <div className="space-y-0.5">
           {stack.items.map((item) => (
             <PileItemRow key={`${stack.kind}:${item.thread_id}`} item={item} stack={stack} />

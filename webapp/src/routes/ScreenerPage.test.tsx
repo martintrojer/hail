@@ -221,7 +221,7 @@ describe('ScreenerPage', () => {
       }),
     );
     expect(
-      await screen.findByText('Could not load the Screener'),
+      await screen.findByText('Something went wrong.'),
     ).toBeInTheDocument();
     expect(
       screen.getByText('Your session expired. Sign in again to refresh the Screener.'),

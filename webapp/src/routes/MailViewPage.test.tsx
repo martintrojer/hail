@@ -184,7 +184,7 @@ describe('MailViewPage', () => {
         imbox: Promise.reject(new HailApiError(401, {}, response(401))),
       }),
     );
-    expect(await screen.findByText('Could not load mail')).toBeInTheDocument();
+    expect(await screen.findByText('Something went wrong.')).toBeInTheDocument();
     expect(
       screen.getByText('Your session expired. Sign in again to refresh this view.'),
     ).toBeInTheDocument();
@@ -195,10 +195,8 @@ describe('MailViewPage', () => {
       'imbox',
       new MailViewPageTestClient({ imbox: Promise.resolve(mailViewResponse('imbox', [])) }),
     );
-    expect(await screen.findByText('No Imbox mail yet')).toBeInTheDocument();
-    expect(
-      screen.getByText('When the server classifies threads as Imbox, they will show up here.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("You're all caught up.")).toBeInTheDocument();
+    expect(screen.getByText('New mail will appear here.')).toBeInTheDocument();
     cleanup();
     restoreRoute();
 
@@ -306,16 +304,16 @@ describe('MailViewPage', () => {
   });
 
   it.each([
-    ['feed', 'Feed'],
-    ['papertrail', 'Paper Trail'],
-  ] as const)('renders %s error and empty states', async (view, title) => {
+    ['feed', 'Nothing in The Feed yet.', 'Newsletters and notifications will show up here.'],
+    ['papertrail', 'No receipts yet.', 'Transactional mail will land here.'],
+  ] as const)('renders %s error and empty states', async (view, emptyTitle, emptyBody) => {
     renderMailView(
       view,
       new MailViewPageTestClient({
         [view]: Promise.reject(new HailApiError(503, undefined, response(503))),
       } as Partial<Record<MailViewKind, Promise<MailViewResponse>>>),
     );
-    expect(await screen.findByText('Could not load mail')).toBeInTheDocument();
+    expect(await screen.findByText('Something went wrong.')).toBeInTheDocument();
     expect(screen.getByText('Mail view failed with HTTP 503.')).toBeInTheDocument();
     cleanup();
     restoreRoute();
@@ -326,11 +324,7 @@ describe('MailViewPage', () => {
         [view]: Promise.resolve(mailViewResponse(view, [])),
       } as Partial<Record<MailViewKind, Promise<MailViewResponse>>>),
     );
-    expect(await screen.findByText(`No ${title} mail yet`)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        `When the server classifies threads as ${title}, they will show up here.`,
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(emptyTitle)).toBeInTheDocument();
+    expect(screen.getByText(emptyBody)).toBeInTheDocument();
   });
 });
