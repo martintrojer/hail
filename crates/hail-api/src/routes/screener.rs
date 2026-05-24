@@ -1,10 +1,10 @@
 //! Screener view + decision endpoints.
 //!
-//! `GET /api/views/screener` is backed by the sidecar `screener_rules`
-//! table. It deliberately returns `latest_preview: null` for now: once the
-//! API has a live JMAP integration test harness, enrich each pending sender
-//! via JMAP `Email/query` + `Email/get` against the hail-owned Screener
-//! mailbox so `message_count` and previews reflect actual pending messages.
+//! `GET /api/views/screener` starts from the sidecar `screener_rules`
+//! table, then best-effort enriches each pending sender from JMAP messages
+//! currently in the hail-owned `Screener` mailbox. If JMAP is unavailable
+//! (expired token, Stalwart down, missing mailbox), the endpoint keeps the
+//! sidecar-only fallback shape so the Screener UI remains usable.
 //!
 //! `POST /api/screener/decisions` writes the user's sender decision to the
 //! same table. Applying that decision to historical messages is injected via
@@ -18,9 +18,11 @@ use axum::extract::{Extension, State, rejection::JsonRejection};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+const SCREENER_MAILBOX_NAME: &str = "Screener";
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
@@ -108,13 +110,22 @@ struct ScreenerViewResponse {
     senders: Vec<ScreenerSender>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 struct ScreenerSender {
     sender: String,
     #[schema(value_type = String, format = DateTime)]
     first_seen_at: DateTime<Utc>,
     message_count: i64,
-    latest_preview: Option<serde_json::Value>,
+    latest_preview: Option<ScreenerLatestPreview>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ScreenerLatestPreview {
+    subject: String,
+    preview: String,
+    from: String,
+    #[schema(value_type = Option<String>, format = DateTime)]
+    received_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -221,20 +232,132 @@ async fn get_screener(
         }
     };
 
-    let senders = rows
+    let mut senders: Vec<ScreenerSender> = rows
         .into_iter()
-        .map(|(sender, first_seen_at)| ScreenerSender {
-            sender,
-            first_seen_at,
-            // TODO(JMAP Email/query): count actual pending messages per sender in
-            // the Screener mailbox. The sidecar rule table has one row per sender,
-            // so `1` is the safest non-zero placeholder for a pending sender.
-            message_count: 1,
-            latest_preview: None,
-        })
+        .map(|(sender, first_seen_at)| ScreenerSender::fallback(sender, first_seen_at))
         .collect();
 
+    if let Err(err) = enrich_screener_senders(&state, &user, &mut senders).await {
+        tracing::warn!(
+            user_id = user.id,
+            error = %err,
+            "screener JMAP preview enrichment failed; using sidecar fallback"
+        );
+    }
+
     Json(ScreenerViewResponse { senders }).into_response()
+}
+
+impl ScreenerSender {
+    fn fallback(sender: String, first_seen_at: DateTime<Utc>) -> Self {
+        Self {
+            sender,
+            first_seen_at,
+            message_count: 1,
+            latest_preview: None,
+        }
+    }
+}
+
+async fn enrich_screener_senders(
+    state: &AppState,
+    user: &AuthUser,
+    senders: &mut [ScreenerSender],
+) -> Result<(), String> {
+    if senders.is_empty() {
+        return Ok(());
+    }
+
+    use hail_jmap::jmap_client::core::query::Filter;
+    use hail_jmap::jmap_client::email::Property;
+    use hail_jmap::jmap_client::email::query as email_query;
+    use hail_jmap::jmap_client::mailbox::query as mailbox_query;
+
+    let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let mut mailbox_query = session
+        .client()
+        .mailbox_query(
+            Some(mailbox_query::Filter::name(SCREENER_MAILBOX_NAME)),
+            None::<Vec<_>>,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    let screener_mailbox_id = mailbox_query
+        .take_ids()
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("{SCREENER_MAILBOX_NAME} mailbox not found"))?;
+
+    for sender in senders {
+        let filter = Filter::and([
+            email_query::Filter::in_mailbox(screener_mailbox_id.clone()),
+            email_query::Filter::from(sender.sender.clone()),
+        ]);
+
+        let mut request = session.client().build();
+        request
+            .query_email()
+            .filter(filter)
+            .sort([email_query::Comparator::received_at().descending()])
+            .limit(1)
+            .calculate_total(true);
+        let mut query = request
+            .send_query_email()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        sender.message_count = query
+            .total()
+            .and_then(|total| i64::try_from(total).ok())
+            .unwrap_or(sender.message_count);
+
+        let ids = query.take_ids();
+        if ids.is_empty() {
+            sender.latest_preview = None;
+            continue;
+        }
+
+        let props = [
+            Property::Subject,
+            Property::Preview,
+            Property::From,
+            Property::ReceivedAt,
+        ];
+        let mut request = session.client().build();
+        request.get_email().ids(ids).properties(props);
+        let mut response = request
+            .send_get_email()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        sender.latest_preview =
+            response
+                .take_list()
+                .into_iter()
+                .next()
+                .map(|email| ScreenerLatestPreview {
+                    subject: email.subject().unwrap_or_default().to_string(),
+                    preview: email.preview().unwrap_or_default().to_string(),
+                    from: format_from(email.from()),
+                    received_at: email
+                        .received_at()
+                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                });
+    }
+
+    Ok(())
+}
+
+fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {
+    from.and_then(|addresses| addresses.first())
+        .map(|address| match address.name() {
+            Some(name) if !name.is_empty() => format!("{} <{}>", name, address.email()),
+            _ => address.email().to_string(),
+        })
+        .unwrap_or_default()
 }
 
 #[utoipa::path(
@@ -254,8 +377,7 @@ async fn post_decision(
     Extension(user): Extension<AuthUser>,
     Extension(backfill): Extension<Arc<dyn ScreenerBackfill>>,
     body: Result<Json<DecisionRequest>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     let Ok(Json(body)) = body else {
         return bad_request("invalid_decision_body");
     };
