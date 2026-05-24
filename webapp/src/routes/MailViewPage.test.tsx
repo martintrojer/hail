@@ -302,7 +302,7 @@ describe('MailViewPage', () => {
     expect(within(link).getByLabelText('Read thread')).toBeInTheDocument();
     expect(within(link).queryByText('Unread')).not.toBeInTheDocument();
     expect(within(link).queryByText('New')).not.toBeInTheDocument();
-    expect(within(link).getByText('Order #123 was paid.')).toBeInTheDocument();
+    expect(within(link).queryByText('Order #123 was paid.')).not.toBeInTheDocument();
   });
 
   it.each([

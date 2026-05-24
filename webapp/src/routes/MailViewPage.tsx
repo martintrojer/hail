@@ -67,20 +67,28 @@ function classificationLabel(classification: MailViewItem['classification']) {
 
 function SkeletonList({ view }: { view: MailViewKind }) {
   const rows = view === 'papertrail' ? 8 : 5;
+  const rowClassName =
+    view === 'feed'
+      ? 'animate-pulse border-b border-border-hairline py-6 sm:py-7'
+      : view === 'papertrail'
+        ? 'animate-pulse border-b border-border-hairline py-2.5 sm:py-3'
+        : 'animate-pulse border-b border-border-hairline py-4 sm:py-5';
 
   return (
     <div aria-label={`Loading ${viewLabels[view]} mail`}>
       {Array.from({ length: rows }, (_, index) => (
         <div
           key={index}
-          className="animate-pulse border-b border-border-hairline py-4 sm:py-5"
+          className={rowClassName}
         >
           <div className="flex items-center justify-between gap-4">
             <div className="h-4 w-40 rounded bg-border-hairline" />
             <div className="h-3 w-16 rounded bg-border-hairline" />
           </div>
           <div className="mt-2 h-4 w-2/3 rounded bg-border-hairline" />
-          <div className="mt-2 h-3 w-full rounded bg-border-hairline" />
+          {view === 'papertrail' ? null : (
+            <div className="mt-2 h-3 w-full rounded bg-border-hairline" />
+          )}
         </div>
       ))}
     </div>
@@ -96,8 +104,8 @@ function StateCard({ title, body }: { title: string; body: string }) {
   );
 }
 
-function ThreadCard({ item }: { item: MailViewItem; view: MailViewKind }) {
-  return <MailThreadRow item={item} />;
+function ThreadCard({ item, view }: { item: MailViewItem; view: MailViewKind }) {
+  return <MailThreadRow item={item} view={view} />;
 }
 
 function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
@@ -118,7 +126,19 @@ function NewPill() {
   );
 }
 
-function MailThreadRow({ item }: { item: MailViewItem }) {
+function MailThreadRow({ item, view }: { item: MailViewItem; view: MailViewKind }) {
+  if (view === 'feed') {
+    return <FeedThreadRow item={item} />;
+  }
+
+  if (view === 'papertrail') {
+    return <PaperTrailThreadRow item={item} />;
+  }
+
+  return <ImboxThreadRow item={item} />;
+}
+
+function ImboxThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
       item={item}
@@ -146,6 +166,62 @@ function MailThreadRow({ item }: { item: MailViewItem }) {
       <p className="mt-1 truncate text-sm font-normal leading-snug text-ink-tertiary">
         {item.preview || 'No preview available.'}
       </p>
+    </ThreadLink>
+  );
+}
+
+function FeedThreadRow({ item }: { item: MailViewItem }) {
+  return (
+    <ThreadLink
+      item={item}
+      className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-6 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-7"
+    >
+      <ScreenReaderThreadMetadata item={item} />
+      <div className="flex items-baseline justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <p
+            className={`truncate text-[1.05rem] leading-snug text-ink-primary ${
+              item.unread ? 'font-bold' : 'font-semibold'
+            }`}
+          >
+            {item.from || 'Unknown sender'}
+          </p>
+          {item.unread ? <NewPill /> : null}
+        </div>
+        <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
+          {formatDate(item.received_at)}
+        </time>
+      </div>
+      <p className="mt-1 text-base font-normal leading-snug text-ink-primary">
+        {item.subject || '(no subject)'}
+      </p>
+      <p className="mt-2 line-clamp-3 text-sm font-normal leading-6 text-ink-secondary">
+        {item.preview || 'No preview available.'}
+      </p>
+    </ThreadLink>
+  );
+}
+
+function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
+  return (
+    <ThreadLink
+      item={item}
+      className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-2.5 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-3"
+    >
+      <ScreenReaderThreadMetadata item={item} />
+      <div className="flex items-baseline justify-between gap-4">
+        <div className="min-w-0 sm:flex sm:items-baseline sm:gap-2">
+          <p className="truncate text-[0.95rem] font-semibold leading-snug text-ink-primary">
+            {item.from || 'Unknown sender'}
+          </p>
+          <p className="mt-0.5 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary sm:mt-0">
+            {item.subject || '(no subject)'}
+          </p>
+        </div>
+        <time className="shrink-0 text-[0.8rem] leading-snug text-ink-tertiary">
+          {formatDate(item.received_at)}
+        </time>
+      </div>
     </ThreadLink>
   );
 }
