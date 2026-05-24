@@ -15,7 +15,8 @@
    ╔══════════════════════════════════════════════════════════════╗
    ║  Browser                                                     ║
    ║  ┌────────────────────────────────────────────────────────┐  ║
-   ║  │  hail SPA  (React + Vite, static bundle)               │  ║
+   ║  hail SPA  (React + Vite, static bundle)               │  ║
+   ║  │  - single-column layout, no sidebar, dropdown nav     │  ║
    ║  │  - renders pre-shaped JSON                             │  ║
    ║  │  - never speaks JMAP, never knows $hail_* keywords     │  ║
    ║  └────────────────────────────────────────────────────────┘  ║

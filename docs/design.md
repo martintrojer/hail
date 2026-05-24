@@ -2,7 +2,7 @@
 
 > Status: **Design phase complete.** Source of truth for v1 implementation planning.
 > Audience: contributors and self-hosters.
-> Last updated: 2026-05-22.
+> Last updated: 2026-05-24.
 
 ## 1. Problem Statement
 
@@ -351,11 +351,14 @@ GET  /api/views/papertrail?cursor=<opaque>&limit=50
 GET  /api/views/screener
 GET  /api/views/set-aside
 GET  /api/views/reply-later
+GET  /api/views/bubble-up              # scheduled bubble-up threads
 GET  /api/views/search?q=<text>&scope=mail|clips|notes|all
 GET  /api/threads/:thread_id              # assembled thread-as-document
 GET  /api/contacts/:address               # contact + notes + thread history
 GET  /api/contacts/:address/files         # attachments for a contact (v1.1)
 GET  /api/files                           # global files view (v1.1)
+GET  /api/workflows                       # mail rules list (v2)
+GET  /api/workflows/:id                   # single workflow detail (v2)
 ```
 
 Each view returns **pre-shaped JSON tailored to its UI** — the Feed endpoint returns inline-rendered HTML excerpts; the Paper Trail endpoint returns merchant-grouped compact rows; the Imbox endpoint returns thread cards with sender avatars and unread badges. The SPA renders, doesn't compute.
@@ -373,6 +376,7 @@ POST /api/threads/:id/set-aside
 POST /api/threads/:id/reply-later
 POST /api/threads/:id/bubble-up    { at: ISO8601 }
 POST /api/threads/:id/clip         { text, context_before?, context_after?, source_email_id }   # v1.1
+POST /api/threads/:id/note         { markdown, email_id? }     # inline thread notes
 POST /api/threads/:id/archive
 POST /api/threads/:id/trash
 POST /api/threads/:id/mark         { read: bool }
@@ -510,21 +514,29 @@ GET /metrics                       # Prometheus (opt-in via env)
 /screener
 /set-aside
 /reply-later
+/bubble-up              # scheduled bubble-up threads list
 /thread/:id
 /contacts/:address
 /search?q=...
-/files                  # v1.1
+/compose
+/compose/reply/:thread_id
+/files                  # v1.1 — all attachments browser
 /clips                  # v1.1
+/workflows              # v2 — mail rules / automated routing
+/workflows/:id          # v2
 /settings
 /admin                  # is_admin only
 ```
 
 ### 9.3 Layout primitives
 
-- **Three-column shell:** left nav (Imbox/Feed/Paper Trail/Screener/Set Aside/Reply Later + search), middle list, right reading pane. Collapsible to two- or one-column on narrow viewports.
-- **The Pile:** floating bottom-right component layered over any view. Cards for Set Aside + Reply Later items, overlapping. Click a card → expanded thread modal.
-- **Composer:** modal that grows; Tiptap editor; "send", "send later", "save draft" actions. Auto-saves to `/api/drafts` every 5s of inactivity.
-- **Undo toast:** every destructive mutation (trash, decline sender, classify) shows a 6s undo toast. Implemented via optimistic mutation + server-side soft delete window.
+- **Single-column shell:** top strip (logo/wordmark, section title, icon cluster + avatar) + center column (720px max-width, `margin: 0 auto`). No persistent sidebar. Navigation lives in a dropdown menu anchored on the logo. See `docs/ui-direction.md` §2.
+- **The Pile:** persistent floating bottom-right widget visible from Imbox and other list views. Shows counts for Set Aside + Reply Later items. Clicking expands to show thread previews with quick-remove actions. See `docs/ui-direction.md` §11.
+- **Composer:** full-page in-canvas writing surface (same center column). Minimal field styling, quiet Send Later secondary action. Auto-saves to `/api/drafts` every 5s of inactivity. See `docs/ui-direction.md` §7.
+- **Undo toast:** dark bottom-center viewport-anchored bar for destructive mutation undo. Auto-dismisses after ~5s. At most one at a time. See `docs/ui-direction.md` §11b.
+- **Screener notification banner:** warm in-column banner at the top of Imbox when senders are pending. See `docs/ui-direction.md` §8b.
+- **Per-message action popup:** floating card triggered from each message in thread view. Offers Reply, Forward, Set Aside, Reply Later, Bubble Up, Move To, Add Note, Spam, Trash. See `docs/ui-direction.md` §6.
+- **Screener routing dropdown:** after approving a sender, a popup lets the user choose Imbox/Feed/Paper Trail destination. See `docs/ui-direction.md` §8b.
 
 ### 9.4 Keyboard shortcuts (Tier 1 minimum)
 
@@ -612,7 +624,10 @@ Decisions deferred to implementation or post-v1:
 - **Push notifications to mobile.** Out of scope until a mobile app exists.
 - **Attachment storage limits.** Stalwart's quotas handle it; hail does not impose a separate limit. Operator decides.
 - **i18n.** English only in v1. The SPA is structured for it (no hard-coded strings in components), but no translations shipped.
-- **Theming.** Dark mode in v1. Custom theming v2.
+- **Theming.** Dark mode in v1.1. Custom theming v2.
+- **Workflows / Mail Rules.** Automated routing rules with conditions and actions (HEY calls these "Workflows"). UI for list, detail, and create/edit. Tracked as `ui-workflows-rules` (DEFERRED). See `docs/ui-direction.md` §17b.
+- **All Files view.** Cross-mail attachments browser. Tracked as `ui-all-files-view` (DEFERRED). See `docs/ui-direction.md` §17c.
+- **Screener Speakeasy.** Private bypass email address. Tracked as `ui-screener-speakeasy` (DEFERRED). See `docs/ui-direction.md` §8b.
 - **Migrating from existing IMAP servers.** Stalwart has an IMAP import tool; we document it but don't wrap it. Open whether to surface in admin UI in v2.
 - **Federation / multi-host scaling.** Not a goal. If anyone wants this, fork.
 
@@ -620,17 +635,18 @@ Decisions deferred to implementation or post-v1:
 
 ### v1 — "Yes, this is hey" (MVP)
 
-Tier 1 (all): Screener, Imbox/Feed/Paper Trail, the Pile (Reply Later + Set Aside), thread-as-document, spy pixel blocking, strict JMAP threading.
-Tier 2 sticky four: contact notes, bubble-up, send-later, unified search.
+Tier 1 (all): Screener (with routing dropdown for Imbox/Feed/Paper Trail destination), Imbox/Feed/Paper Trail, the Pile (Reply Later + Set Aside as floating bottom-right widget), thread-as-document, spy pixel blocking, strict JMAP threading, per-message action popup, inline notes.
+Tier 2 sticky four: contact notes, bubble-up (with time picker submenu), send-later, unified search.
 Plumbing: multi-user auth via Stalwart, minimal admin UI, both Cloudflare Tunnel recipes, first-run wizard + config-file admin path, Litestream backup option.
+UI: HEY-inspired warm paper aesthetic (single-column, no sidebar, dropdown menu navigation). See `docs/ui-direction.md`.
 
 ### v1.1 — "Power user complete"
 
-Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Files view (per-contact, per-thread, global), aliases / send-as identities.
+Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Files view (per-contact, per-thread, global attachments browser), aliases / send-as identities, Screener Speakeasy (private bypass address), keyboard power-through-Imbox triage mode.
 
 ### v2 — Polish + self-host bonus
 
-Per-identity delivery windows, user-defined auto-classification rules, merge contacts, first-reply auto-promote Feed→Imbox, drag-to-classify in Screener, daily Feed digest, Sieve rules editor, vacation responder UI, multiple identities UI, backup/restore + data export.
+Per-identity delivery windows, user-defined auto-classification rules (Workflows — mail rules with conditions/actions, list/detail/edit UI), merge contacts, first-reply auto-promote Feed→Imbox, drag-to-classify in Screener, daily Feed digest, Sieve rules editor, vacation responder UI, multiple identities UI, backup/restore + data export, dark mode.
 
 ### v2.1 / later — Alternate clients
 
