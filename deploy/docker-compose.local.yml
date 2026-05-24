@@ -14,10 +14,12 @@
 services:
   stalwart:
     image: docker.io/stalwartlabs/stalwart:latest
+    command: ["--config", "/opt/stalwart/etc/config.json"]
     environment:
       - STALWART_PUBLIC_URL=http://stalwart:8080/
+      - STALWART_RECOVERY_ADMIN=admin:admin1234
     ports:
-      - "127.0.0.1:18080:8080" # Stalwart bootstrap WebUI/JMAP
+      - "127.0.0.1:18080:8080" # Stalwart WebUI/JMAP
       - "2525:25"              # SMTP (local high port)
       - "2465:465"             # submission SSL
       - "2587:587"             # submission STARTTLS
@@ -25,6 +27,7 @@ services:
       - "2993:993"             # IMAP SSL
     volumes:
       - stalwart-data:/opt/stalwart
+      - ./stalwart-local.json:/opt/stalwart/etc/config.json:ro,Z
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz/live >/dev/null"]
