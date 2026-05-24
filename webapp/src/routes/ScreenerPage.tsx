@@ -6,6 +6,7 @@ import {
   type ScreenerPendingSender,
 } from '../api/client';
 import { useScreenerDecisionMutation, useScreenerView } from '../api/query';
+import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 
@@ -14,7 +15,7 @@ const classificationOptions: Array<{
   label: string;
 }> = [
   { value: 'imbox', label: 'Imbox' },
-  { value: 'feed', label: 'Feed' },
+  { value: 'feed', label: 'The Feed' },
   { value: 'papertrail', label: 'Paper Trail' },
 ];
 
@@ -43,65 +44,118 @@ function decisionErrorMessage(error: Error) {
   return 'Decision failed. Try again.';
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) {
-    return 'Unknown';
+function previewRecord(preview: unknown) {
+  if (!preview || typeof preview !== 'object') {
+    return null;
   }
 
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+  return preview as Record<string, unknown>;
 }
 
-function previewText(preview: unknown) {
-  if (typeof preview === 'string') {
-    return preview;
+function textFromKeys(record: Record<string, unknown> | null, keys: string[]) {
+  if (!record) {
+    return null;
   }
 
-  if (preview && typeof preview === 'object') {
-    const record = preview as Record<string, unknown>;
-    for (const key of ['text', 'body', 'preview', 'snippet', 'subject']) {
-      const value = record[key];
-      if (typeof value === 'string' && value.trim().length > 0) {
-        return value;
-      }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
     }
   }
 
   return null;
 }
 
+function subjectText(preview: unknown) {
+  return textFromKeys(previewRecord(preview), ['subject', 'title']);
+}
+
+function previewText(preview: unknown) {
+  if (typeof preview === 'string' && preview.trim().length > 0) {
+    return preview.trim();
+  }
+
+  return textFromKeys(previewRecord(preview), [
+    'text',
+    'body',
+    'preview',
+    'snippet',
+    'summary',
+  ]);
+}
+
+function parseSender(sender: string) {
+  const trimmed = sender.trim();
+  const mailbox = trimmed.match(/^(.*?)\s*<([^>]+)>$/);
+  if (mailbox) {
+    const [, rawName, rawEmail] = mailbox;
+    const name = rawName.replace(/^['"]|['"]$/g, '').trim();
+    const email = rawEmail.trim();
+
+    return {
+      name: name || email,
+      email,
+    };
+  }
+
+  if (trimmed.includes('@')) {
+    const localPart = trimmed.split('@')[0] ?? trimmed;
+    const name = localPart
+      .split(/[._+-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+
+    return {
+      name: name || trimmed,
+      email: trimmed,
+    };
+  }
+
+  return {
+    name: trimmed || 'Unknown sender',
+    email: trimmed || 'unknown address',
+  };
+}
+
 function SkeletonList() {
   return (
-    <div className="space-y-3" aria-label="Loading pending senders">
-      {Array.from({ length: 4 }, (_, index) => (
-        <div
-          key={index}
-          className="animate-pulse rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
-        >
-          <div className="h-4 w-2/3 rounded bg-slate-800" />
-          <div className="mt-3 h-3 w-1/2 rounded bg-slate-800" />
-          <div className="mt-4 h-9 w-full rounded bg-slate-800" />
+    <div className="space-y-5" aria-label="Loading pending senders">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div key={index} className="animate-pulse rounded-lg bg-bg-surface p-5">
+          <div className="h-5 w-2/5 rounded bg-bg-selected" />
+          <div className="mt-2 h-4 w-1/2 rounded bg-bg-selected" />
+          <div className="mt-5 h-4 w-3/4 rounded bg-bg-hover" />
+          <div className="mt-3 h-4 w-full rounded bg-bg-hover" />
+          <div className="mt-5 flex gap-3">
+            <div className="h-10 w-28 rounded-lg bg-bg-selected" />
+            <div className="h-10 w-24 rounded-lg bg-bg-hover" />
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function StateCard({ title, body }: { title: string; body: string }) {
+function ErrorState({ body }: { body: string }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 text-center">
-      <p className="text-base font-semibold text-slate-200">{title}</p>
-      <p className="mt-2 max-w-sm text-sm text-slate-400">{body}</p>
+    <div className="flex min-h-64 flex-col items-center justify-center rounded-lg bg-bg-surface p-8 text-center">
+      <p className="text-base font-semibold text-ink-primary">
+        Could not load the Screener
+      </p>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="flex min-h-64 items-center justify-center text-center">
+      <p className="hail-body text-ink-secondary">
+        All clear. No one new is waiting.
+      </p>
+      <span className="sr-only">No unknown senders</span>
     </div>
   );
 }
@@ -131,7 +185,11 @@ function PendingSenderCard({
     },
   });
   const isPending = decision.isPending;
-  const preview = previewText(sender.latest_preview);
+  const senderIdentity = parseSender(sender.sender);
+  const subject = subjectText(sender.latest_preview) ?? 'First message from this sender';
+  const preview =
+    previewText(sender.latest_preview) ??
+    'Preview unavailable until this message is indexed.';
 
   function approve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -152,31 +210,27 @@ function PendingSenderCard({
   }
 
   return (
-    <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-sm shadow-slate-950/40">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold text-slate-100">
-            {sender.sender || 'Unknown sender'}
-          </h2>
-          <p className="mt-1 text-sm text-slate-400">
-            First seen <time>{formatDate(sender.first_seen_at)}</time>
-          </p>
-        </div>
-        <span className="shrink-0 rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-xs font-semibold text-slate-300">
-          {sender.message_count} {sender.message_count === 1 ? 'message' : 'messages'}
-        </span>
+    <article className="rounded-lg bg-bg-surface p-5">
+      <div>
+        <h2 className="hail-sender truncate text-ink-primary">
+          {senderIdentity.name}
+        </h2>
+        <p className="mt-1 truncate text-sm text-ink-secondary">
+          {senderIdentity.email}
+        </p>
       </div>
 
-      {preview ? (
-        <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-300">
+      <div className="mt-5 space-y-2">
+        <p className="text-[0.95rem] leading-6 text-ink-secondary">{subject}</p>
+        <p className="line-clamp-2 text-sm leading-6 text-ink-tertiary">
           {preview}
         </p>
-      ) : null}
+      </div>
 
-      <form onSubmit={approve} className="mt-4 space-y-3">
+      <form onSubmit={approve} className="mt-5 space-y-4">
         <label
           htmlFor={selectId}
-          className="block text-sm font-medium text-slate-200"
+          className="block text-sm font-medium text-ink-secondary"
         >
           Approve into
           <select
@@ -186,7 +240,7 @@ function PendingSenderCard({
               setClassifyAs(event.target.value as ScreenerClassification)
             }
             disabled={isPending}
-            className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none ring-sky-400 transition focus:border-sky-400 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-2 w-full rounded-lg border border-border-menu bg-bg-page px-3 py-2 text-sm text-ink-primary outline-none focus:border-accent-blue focus:ring-2 focus:ring-accent-blue/25 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {classificationOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -196,27 +250,29 @@ function PendingSenderCard({
           </select>
         </label>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-wrap gap-3">
           <button
             type="submit"
+            aria-label={isPending ? 'Saving…' : 'Approve'}
             disabled={isPending}
-            className="rounded-lg bg-sky-400 px-3 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isPending ? 'Saving…' : 'Approve'}
+            {isPending ? 'Saving…' : 'Yes'}
           </button>
           <button
             type="button"
+            aria-label="Deny"
             onClick={deny}
             disabled={isPending}
-            className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-red-400 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-lg border border-border-menu px-4 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Deny
+            No
           </button>
         </div>
       </form>
 
       {decision.isError ? (
-        <p role="alert" className="mt-3 text-sm text-red-200">
+        <p role="alert" className="mt-4 text-sm text-accent-red">
           {decisionErrorMessage(decision.error)}
         </p>
       ) : null}
@@ -226,27 +282,18 @@ function PendingSenderCard({
 
 export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
   const query = useScreenerView(client);
+  const pendingCount = query.data?.senders.length ?? 0;
 
   let list;
   if (query.isPending) {
     list = <SkeletonList />;
   } else if (query.isError) {
-    list = (
-      <StateCard
-        title="Could not load the Screener"
-        body={errorMessage(query.error)}
-      />
-    );
+    list = <ErrorState body={errorMessage(query.error)} />;
   } else if (query.data.senders.length === 0) {
-    list = (
-      <StateCard
-        title="No unknown senders"
-        body="When mail arrives from a new sender, approve or deny it here before it reaches your regular views."
-      />
-    );
+    list = <EmptyState />;
   } else {
     list = (
-      <div className="space-y-3">
+      <div className="space-y-5">
         {query.data.senders.map((sender) => (
           <PendingSenderCard key={sender.sender} sender={sender} client={client} />
         ))}
@@ -256,20 +303,10 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
 
   return (
     <AppShell
-      title="Screener"
-      description="Unknown senders wait here for approve or deny decisions."
+      title="The Screener"
+      description="New senders end up here. Decide if they get in."
+      actions={<ScreenerBanner pendingCount={pendingCount} />}
       list={list}
-      reading={
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6">
-          <h2 className="text-lg font-semibold text-slate-100">
-            Screen once, route future mail
-          </h2>
-          <p className="mt-3 text-sm leading-6 text-slate-400">
-            Approving a sender lets future messages land in Imbox, Feed, or
-            Paper Trail. Denying keeps the sender out of your mail flow.
-          </p>
-        </div>
-      }
     />
   );
 }
