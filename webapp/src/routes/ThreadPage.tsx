@@ -16,6 +16,7 @@ import {
   useTrashThreadMutation,
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
+import { ErrorState } from '../components/ErrorState';
 import { InlineNote, type InlineNoteProps } from '../components/InlineNote';
 import {
   ArrowLeft,
@@ -24,6 +25,7 @@ import {
   Paperclip,
   iconSizeProps,
 } from '../components/icons';
+import { LoadingState } from '../components/LoadingState';
 import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
@@ -117,32 +119,9 @@ function threadActionErrorMessage(error: Error) {
 
 function StateCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex min-h-80 flex-col items-center justify-center rounded-lg border border-dashed border-border-hairline bg-bg-banner p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">{title}</p>
-      <p className="mt-2 max-w-md hail-preview text-ink-secondary">{body}</p>
-    </div>
-  );
-}
-
-function ThreadSkeleton() {
-  return (
-    <div className="space-y-8" aria-label="Loading thread">
-      <div className="space-y-3">
-        <div className="h-5 w-20 animate-pulse rounded bg-bg-hover" />
-        <div className="h-8 w-2/3 animate-pulse rounded bg-bg-hover" />
-        <div className="h-4 w-1/2 animate-pulse rounded bg-bg-hover" />
-      </div>
-      {Array.from({ length: 2 }, (_, index) => (
-        <div key={index} className="border-b border-border-hairline pb-8">
-          <div className="flex items-start gap-3">
-            <div className="h-8 w-8 animate-pulse rounded-full bg-bg-hover" />
-            <div className="min-w-0 flex-1 space-y-3">
-              <div className="h-4 w-1/3 animate-pulse rounded bg-bg-hover" />
-              <div className="h-28 animate-pulse rounded bg-bg-hover" />
-            </div>
-          </div>
-        </div>
-      ))}
+    <div className="flex min-h-[300px] flex-col items-center justify-center p-8 text-center">
+      <p className="text-lg font-semibold text-ink-primary">{title}</p>
+      <p className="mt-2 max-w-md text-sm leading-6 text-ink-secondary">{body}</p>
     </div>
   );
 }
@@ -719,16 +698,12 @@ export function ThreadPage({ threadId, client }: ThreadPageProps) {
 
   let reading;
   if (query.isPending) {
-    reading = <ThreadSkeleton />;
+    reading = <LoadingState />;
   } else if (query.isError) {
     reading = (
-      <StateCard
-        title={
-          query.error instanceof HailApiError && query.error.status === 404
-            ? 'Thread not found'
-            : 'Could not load thread'
-        }
-        body={errorCopy(query.error)}
+      <ErrorState
+        message={errorCopy(query.error)}
+        onRetry={() => void query.refetch()}
       />
     );
   } else {

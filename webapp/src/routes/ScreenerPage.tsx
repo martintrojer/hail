@@ -6,6 +6,8 @@ import {
   type ScreenerPendingSender,
 } from '../api/client';
 import { useScreenerDecisionMutation, useScreenerView } from '../api/query';
+import { ErrorState } from '../components/ErrorState';
+import { LoadingState } from '../components/LoadingState';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import {
   ScreenerRoutingDropdown,
@@ -114,40 +116,10 @@ function parseSender(sender: string) {
   };
 }
 
-function SkeletonList() {
-  return (
-    <div className="space-y-5" aria-label="Loading pending senders">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="animate-pulse rounded-lg bg-bg-surface p-5">
-          <div className="h-5 w-2/5 rounded bg-bg-selected" />
-          <div className="mt-2 h-4 w-1/2 rounded bg-bg-selected" />
-          <div className="mt-5 h-4 w-3/4 rounded bg-bg-hover" />
-          <div className="mt-3 h-4 w-full rounded bg-bg-hover" />
-          <div className="mt-5 flex gap-3">
-            <div className="h-10 w-28 rounded-lg bg-bg-selected" />
-            <div className="h-10 w-24 rounded-lg bg-bg-hover" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ErrorState({ body }: { body: string }) {
-  return (
-    <div className="flex min-h-64 flex-col items-center justify-center rounded-lg bg-bg-surface p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">
-        Could not load the Screener
-      </p>
-      <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
-    </div>
-  );
-}
-
 function EmptyState() {
   return (
-    <div className="flex min-h-64 items-center justify-center text-center">
-      <p className="hail-body text-ink-secondary">
+    <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
+      <p className="text-lg font-semibold text-ink-primary">
         All clear. No one new is waiting.
       </p>
       <span className="sr-only">No unknown senders</span>
@@ -274,9 +246,14 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
 
   let list;
   if (query.isPending) {
-    list = <SkeletonList />;
+    list = <LoadingState label="Loading pending senders" />;
   } else if (query.isError) {
-    list = <ErrorState body={errorMessage(query.error)} />;
+    list = (
+      <ErrorState
+        message={errorMessage(query.error)}
+        onRetry={() => void query.refetch()}
+      />
+    );
   } else if (query.data.senders.length === 0) {
     list = <EmptyState />;
   } else {
