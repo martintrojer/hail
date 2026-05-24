@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { HailApiError, type HailApiClient, type MailViewItem, type MailViewKind } from '../api/client';
 import { useFeedView, useImboxView, usePapertrailView } from '../api/query';
+import { ScreenerBanner } from '../components/ScreenerBanner';
 import { AppShell } from '../layout/AppShell';
 
 interface MailViewPageProps {
@@ -68,18 +69,18 @@ function SkeletonList({ view }: { view: MailViewKind }) {
   const rows = view === 'papertrail' ? 8 : 5;
 
   return (
-    <div
-      aria-label={`Loading ${viewLabels[view]} mail`}
-      className={view === 'feed' ? 'space-y-4' : 'space-y-3'}
-    >
+    <div aria-label={`Loading ${viewLabels[view]} mail`}>
       {Array.from({ length: rows }, (_, index) => (
         <div
           key={index}
-          className="animate-pulse rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
+          className="animate-pulse border-b border-border-hairline py-4 sm:py-5"
         >
-          <div className="h-4 w-2/3 rounded bg-slate-800" />
-          <div className="mt-3 h-3 w-full rounded bg-slate-800" />
-          <div className="mt-2 h-3 w-1/2 rounded bg-slate-800" />
+          <div className="flex items-center justify-between gap-4">
+            <div className="h-4 w-40 rounded bg-border-hairline" />
+            <div className="h-3 w-16 rounded bg-border-hairline" />
+          </div>
+          <div className="mt-2 h-4 w-2/3 rounded bg-border-hairline" />
+          <div className="mt-2 h-3 w-full rounded bg-border-hairline" />
         </div>
       ))}
     </div>
@@ -88,143 +89,63 @@ function SkeletonList({ view }: { view: MailViewKind }) {
 
 function StateCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex min-h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 text-center">
-      <p className="text-base font-semibold text-slate-200">{title}</p>
-      <p className="mt-2 max-w-sm text-sm text-slate-400">{body}</p>
+    <div className="flex min-h-64 flex-col items-center justify-center border-y border-border-hairline p-8 text-center">
+      <p className="text-base font-semibold text-ink-primary">{title}</p>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
     </div>
   );
 }
 
-function ThreadCard({ item, view }: { item: MailViewItem; view: MailViewKind }) {
-  if (view === 'feed') {
-    return <FeedThreadCard item={item} />;
-  }
-
-  if (view === 'papertrail') {
-    return <PaperTrailThreadCard item={item} />;
-  }
-
-  return <ImboxThreadCard item={item} />;
+function ThreadCard({ item }: { item: MailViewItem; view: MailViewKind }) {
+  return <MailThreadRow item={item} />;
 }
 
-function UnreadDot({ unread }: { unread: boolean }) {
-  return unread ? (
-    <span
-      role="img"
-      aria-label={unread ? 'Unread thread' : 'Read thread'}
-      className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-sky-300 shadow shadow-sky-400/50"
-    />
-  ) : (
-    <span
-      role="img"
-      aria-label="Read thread"
-      className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full border border-slate-700"
-    />
-  );
-}
-
-function ClassificationPill({ item }: { item: MailViewItem }) {
+function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
   return (
-    <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2 py-0.5 text-[0.7rem] font-semibold uppercase tracking-wide text-slate-300">
-      {classificationLabel(item.classification)}
+    <span className="sr-only">
+      <span>{classificationLabel(item.classification)}</span>
+      <span role="img" aria-label={item.unread ? 'Unread thread' : 'Read thread'} />
+      {item.unread ? <span>Unread</span> : null}
     </span>
   );
 }
 
-function ImboxThreadCard({ item }: { item: MailViewItem }) {
+function NewPill() {
   return (
-    <ThreadLink
-      item={item}
-      className="group flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 transition hover:border-sky-500/60 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-400"
-    >
-      <UnreadDot unread={item.unread} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="truncate text-sm font-semibold text-slate-100">
-            {item.from || 'Unknown sender'}
-          </p>
-          <time className="shrink-0 text-xs text-slate-500">
-            {formatDate(item.received_at)}
-          </time>
-        </div>
-        <p className="mt-1 truncate text-base font-semibold text-slate-200">
-          {item.subject || '(no subject)'}
-        </p>
-        <p className="mt-1 line-clamp-2 text-sm text-slate-400">
-          {item.preview || 'No preview available.'}
-        </p>
-        <div className="mt-3 flex items-center justify-between gap-2">
-          <ClassificationPill item={item} />
-          {item.unread ? (
-            <span className="text-xs font-semibold text-sky-200">Unread</span>
-          ) : null}
-        </div>
-      </div>
-    </ThreadLink>
+    <span className="shrink-0 rounded-full bg-accent-yellow px-2 py-0.5 text-[0.7rem] font-semibold uppercase leading-tight tracking-wider text-ink-primary">
+      New
+    </span>
   );
 }
 
-function FeedThreadCard({ item }: { item: MailViewItem }) {
-  return (
-    <div className="relative pl-6 before:absolute before:left-2 before:top-0 before:h-full before:w-px before:bg-slate-800">
-      <UnreadDot unread={item.unread} />
-      <ThreadLink
-        item={item}
-        className="group -mt-4 block rounded-3xl border border-slate-800 bg-slate-900/60 p-5 transition hover:border-emerald-400/60 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-400"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-emerald-100">
-              {item.from || 'Unknown sender'}
-            </p>
-            <p className="mt-2 text-lg font-semibold leading-snug text-slate-100">
-              {item.subject || '(no subject)'}
-            </p>
-          </div>
-          <time className="shrink-0 rounded-full bg-slate-950 px-2 py-1 text-xs text-slate-400">
-            {formatDate(item.received_at)}
-          </time>
-        </div>
-        <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-300">
-          {item.preview || 'No preview available.'}
-        </p>
-        <div className="mt-4 flex items-center gap-2">
-          <ClassificationPill item={item} />
-          {item.unread ? (
-            <span className="rounded-full bg-emerald-400/10 px-2 py-0.5 text-xs font-semibold text-emerald-200">
-              New
-            </span>
-          ) : null}
-        </div>
-      </ThreadLink>
-    </div>
-  );
-}
-
-function PaperTrailThreadCard({ item }: { item: MailViewItem }) {
+function MailThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
       item={item}
-      className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2.5 transition hover:border-amber-400/60 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+      className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-4 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-5"
     >
-      <UnreadDot unread={item.unread} />
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-semibold text-slate-100">
+      <ScreenReaderThreadMetadata item={item} />
+      <div className="flex items-baseline justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <p
+            className={`truncate text-base leading-snug text-ink-primary ${
+              item.unread ? 'font-bold' : 'font-semibold'
+            }`}
+          >
             {item.from || 'Unknown sender'}
           </p>
-          <ClassificationPill item={item} />
+          {item.unread ? <NewPill /> : null}
         </div>
-        <p className="mt-0.5 truncate text-sm text-slate-300">
-          {item.subject || '(no subject)'}
-        </p>
-        <p className="mt-0.5 truncate text-xs text-slate-500">
-          {item.preview || 'No preview available.'}
-        </p>
+        <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
+          {formatDate(item.received_at)}
+        </time>
       </div>
-      <time className="text-right text-xs text-slate-500">
-        {formatDate(item.received_at)}
-      </time>
+      <p className="mt-1 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary">
+        {item.subject || '(no subject)'}
+      </p>
+      <p className="mt-1 truncate text-sm font-normal leading-snug text-ink-tertiary">
+        {item.preview || 'No preview available.'}
+      </p>
     </ThreadLink>
   );
 }
@@ -258,6 +179,7 @@ export function MailViewPage({
   client,
 }: MailViewPageProps) {
   const query = useMailView(view, client);
+  const pendingCount = 0;
 
   let list;
   if (query.isPending) {
@@ -278,10 +200,13 @@ export function MailViewPage({
     );
   } else {
     list = (
-      <div className={view === 'feed' ? 'space-y-5' : view === 'papertrail' ? 'space-y-2' : 'space-y-3'}>
-        {query.data.items.map((item) => (
-          <ThreadCard key={`${item.thread_id}:${item.email_id}`} item={item} view={view} />
-        ))}
+      <div>
+        {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
+        <div>
+          {query.data.items.map((item) => (
+            <ThreadCard key={`${item.thread_id}:${item.email_id}`} item={item} view={view} />
+          ))}
+        </div>
       </div>
     );
   }
