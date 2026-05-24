@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import {
   HailApiError,
   type MailClassification,
@@ -16,6 +16,8 @@ import {
   useTrashThreadMutation,
 } from '../api/query';
 import { ContactNotePanel } from '../components/ContactNotePanel';
+import { icons, iconSizeProps } from '../components/icons';
+import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 
@@ -158,6 +160,14 @@ function TrackerBadge({ message }: { message: ThreadMessage }) {
 }
 
 function MessageCard({ message }: { message: ThreadMessage }) {
+  const [popupAnchor, setPopupAnchor] = useState<DOMRect | null>(null);
+  const popupOpen = popupAnchor !== null;
+  const MoreIcon = icons.more;
+
+  function openPopup(event: MouseEvent<HTMLButtonElement>) {
+    setPopupAnchor(event.currentTarget.getBoundingClientRect());
+  }
+
   return (
     <article className="rounded-3xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg shadow-slate-950/20">
       <header className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
@@ -174,6 +184,22 @@ function MessageCard({ message }: { message: ThreadMessage }) {
           <time className="rounded-full bg-slate-950 px-2.5 py-1 text-xs text-slate-400">
             {formatDate(message.received_at)}
           </time>
+          <button
+            type="button"
+            aria-label="Message actions"
+            aria-haspopup="menu"
+            aria-expanded={popupOpen}
+            onClick={openPopup}
+            className="rounded-full p-1.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100 focus:bg-slate-800 focus:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-400"
+          >
+            <MoreIcon {...iconSizeProps.sm} aria-hidden="true" />
+          </button>
+          <MessageActionPopup
+            open={popupOpen}
+            anchorRect={popupAnchor}
+            onClose={() => setPopupAnchor(null)}
+            onAction={() => setPopupAnchor(null)}
+          />
         </div>
       </header>
 
