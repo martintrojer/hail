@@ -632,7 +632,12 @@ export function MailViewPage({
     );
   } else if (query.data.items.length === 0) {
     const emptyState = emptyStates[view];
-    list = <StateCard title={emptyState.title} body={emptyState.body} />;
+    list = (
+      <div>
+        {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
+        <StateCard title={emptyState.title} body={emptyState.body} />
+      </div>
+    );
   } else if (view === 'imbox' && powerThroughOpen) {
     list = (
       <PowerThroughMode
