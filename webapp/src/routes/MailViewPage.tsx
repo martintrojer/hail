@@ -1,8 +1,25 @@
 import { Link } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
-import { HailApiError, type HailApiClient, type MailViewItem, type MailViewKind } from '../api/client';
-import { useFeedView, useImboxView, usePapertrailView } from '../api/query';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  HailApiError,
+  type HailApiClient,
+  type MailClassification,
+  type MailViewItem,
+  type MailViewKind,
+} from '../api/client';
+import {
+  useArchiveThreadMutation,
+  useClassifyThreadMutation,
+  useFeedView,
+  useImboxView,
+  usePapertrailView,
+  useReplyLaterThreadMutation,
+  useSetAsideThreadMutation,
+  useTrashThreadMutation,
+} from '../api/query';
+import { ArrowUpCircle, X, iconSizeProps } from '../components/icons';
 import { ScreenerBanner } from '../components/ScreenerBanner';
+import { useOptionalUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 
 interface MailViewPageProps {
@@ -104,8 +121,147 @@ function StateCard({ title, body }: { title: string; body: string }) {
   );
 }
 
-function ThreadCard({ item, view }: { item: MailViewItem; view: MailViewKind }) {
-  return <MailThreadRow item={item} view={view} />;
+function threadActionErrorMessage(error: Error) {
+  if (error instanceof HailApiError) {
+    return `Thread action failed with HTTP ${error.status}.`;
+  }
+
+  return 'Thread action failed. Try again.';
+}
+
+function ShortcutActionButton({
+  action,
+  label,
+  busy,
+  onClick,
+}: {
+  action: string;
+  label: string;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-hail-shortcut-action={action}
+      disabled={busy}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      }}
+      className="sr-only"
+      tabIndex={-1}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ThreadShortcutActions({
+  item,
+  client,
+  onHandled,
+}: {
+  item: MailViewItem;
+  client?: HailApiClient;
+  onHandled?: () => void;
+}) {
+  const undoToast = useOptionalUndoToast();
+  const archive = useArchiveThreadMutation(client, {
+    onSuccess: (data) => {
+      undoToast?.showToast({
+        message: 'Thread archived.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Archive undone.',
+      });
+      onHandled?.();
+    },
+  });
+  const trash = useTrashThreadMutation(client, {
+    onSuccess: (data) => {
+      undoToast?.showToast({
+        message: 'Thread moved to trash.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Trash undone.',
+      });
+      onHandled?.();
+    },
+  });
+  const setAside = useSetAsideThreadMutation(client, {
+    onSuccess: (data) => {
+      undoToast?.showToast({
+        message: 'Thread added to Set Aside.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Set Aside undone.',
+      });
+      onHandled?.();
+    },
+  });
+  const replyLater = useReplyLaterThreadMutation(client, {
+    onSuccess: (data) => {
+      undoToast?.showToast({
+        message: 'Thread added to Reply Later.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Reply Later undone.',
+      });
+      onHandled?.();
+    },
+  });
+  const busy =
+    archive.isPending || trash.isPending || setAside.isPending || replyLater.isPending;
+  const error = archive.error ?? trash.error ?? setAside.error ?? replyLater.error;
+
+  return (
+    <>
+      <ShortcutActionButton
+        action="archive"
+        label="Archive"
+        busy={busy}
+        onClick={() => archive.mutate({ threadId: item.thread_id })}
+      />
+      <ShortcutActionButton
+        action="trash"
+        label="Trash"
+        busy={busy}
+        onClick={() => trash.mutate({ threadId: item.thread_id })}
+      />
+      <ShortcutActionButton
+        action="set-aside"
+        label="Set Aside"
+        busy={busy}
+        onClick={() => setAside.mutate({ threadId: item.thread_id })}
+      />
+      <ShortcutActionButton
+        action="reply-later"
+        label="Reply Later"
+        busy={busy}
+        onClick={() => replyLater.mutate({ threadId: item.thread_id })}
+      />
+      {error ? (
+        <span role="alert" className="sr-only">
+          {threadActionErrorMessage(error)}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function ThreadCard({
+  item,
+  view,
+  client,
+}: {
+  item: MailViewItem;
+  view: MailViewKind;
+  client?: HailApiClient;
+}) {
+  return (
+    <div className="relative">
+      <MailThreadRow item={item} view={view} />
+      <ThreadShortcutActions item={item} client={client} />
+    </div>
+  );
 }
 
 function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
@@ -241,11 +397,192 @@ function ThreadLink({
       params={{ threadId: item.thread_id }}
       className={className}
       data-hail-mail-list-item="true"
+      data-hail-thread-id={item.thread_id}
       aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       {children}
     </Link>
   );
+}
+
+function outlinePowerButtonClassName() {
+  return 'rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
+}
+
+function primaryPowerButtonClassName() {
+  return 'rounded-lg bg-accent-blue px-3 py-2 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
+}
+
+function PowerThroughMode({
+  items,
+  client,
+  onDone,
+}: {
+  items: MailViewItem[];
+  client?: HailApiClient;
+  onDone: () => void;
+}) {
+  const undoToast = useOptionalUndoToast();
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const currentItem = items[currentIndex];
+  const remainingCount = Math.max(items.length - currentIndex - 1, 0);
+
+  function advance() {
+    setCurrentIndex((index) => Math.min(index + 1, items.length));
+  }
+
+  const classify = useClassifyThreadMutation(client, {
+    onSuccess: (data, variables) => {
+      const label = viewLabels[variables.to];
+      undoToast?.showToast({
+        message: `Moved thread to ${label}.`,
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Thread classification undone.',
+      });
+      advance();
+    },
+  });
+  const setAside = useSetAsideThreadMutation(client, {
+    onSuccess: (data) => {
+      undoToast?.showToast({
+        message: 'Thread added to Set Aside.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Set Aside undone.',
+      });
+      advance();
+    },
+  });
+
+  const busy = classify.isPending || setAside.isPending;
+  const error = classify.error ?? setAside.error;
+
+  function classifyCurrent(to: MailClassification) {
+    if (!currentItem) {
+      return;
+    }
+    classify.mutate({ threadId: currentItem.thread_id, to });
+  }
+
+  function setCurrentAside() {
+    if (!currentItem) {
+      return;
+    }
+    setAside.mutate({ threadId: currentItem.thread_id });
+  }
+
+  if (!currentItem) {
+    return (
+      <StateCard
+        title="Power through complete"
+        body="You made it through every Imbox thread in this batch."
+      />
+    );
+  }
+
+  return (
+    <section
+      className="border-y border-border-hairline py-6"
+      aria-label="Power through Imbox"
+    >
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-ink-secondary">Power through</p>
+          <p className="mt-1 text-sm text-ink-tertiary">
+            {remainingCount} thread{remainingCount === 1 ? '' : 's'} after this one
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDone}
+          className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+        >
+          <X {...iconSizeProps.sm} aria-hidden="true" />
+          Done
+        </button>
+      </div>
+
+      <article className="rounded-lg bg-bg-surface p-6 shadow-lg shadow-ink-primary/10">
+        <div className="flex items-baseline justify-between gap-4">
+          <div className="min-w-0">
+            <p className="truncate text-lg font-bold text-ink-primary">
+              {currentItem.from || 'Unknown sender'}
+            </p>
+            <h2 className="mt-2 text-2xl font-bold leading-tight text-ink-primary">
+              {currentItem.subject || '(no subject)'}
+            </h2>
+          </div>
+          <time className="shrink-0 text-sm text-ink-tertiary">
+            {formatDate(currentItem.received_at)}
+          </time>
+        </div>
+        <p className="mt-4 text-base leading-7 text-ink-secondary">
+          {currentItem.preview || 'No preview available.'}
+        </p>
+
+        <div className="mt-6 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => classifyCurrent('imbox')}
+            className={primaryPowerButtonClassName()}
+          >
+            Keep in Imbox
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => classifyCurrent('feed')}
+            className={outlinePowerButtonClassName()}
+          >
+            Move to Feed
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => classifyCurrent('papertrail')}
+            className={outlinePowerButtonClassName()}
+          >
+            Move to Paper Trail
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={setCurrentAside}
+            className={outlinePowerButtonClassName()}
+          >
+            Set Aside
+          </button>
+        </div>
+
+        {error ? (
+          <p role="alert" className="mt-4 text-sm text-accent-red">
+            {threadActionErrorMessage(error)}
+          </p>
+        ) : null}
+      </article>
+    </section>
+  );
+}
+
+function PowerThroughButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+    >
+      <ArrowUpCircle {...iconSizeProps.sm} aria-hidden="true" />
+      Power through
+    </button>
+  );
+}
+
+function findFocusedThreadId() {
+  if (!(document.activeElement instanceof HTMLElement)) {
+    return null;
+  }
+
+  return document.activeElement.dataset.hailThreadId ?? null;
 }
 
 export function MailViewPage({
@@ -256,6 +593,43 @@ export function MailViewPage({
 }: MailViewPageProps) {
   const query = useMailView(view, client);
   const pendingCount = 0;
+  const [powerThroughOpen, setPowerThroughOpen] = useState(false);
+
+  const items = useMemo(
+    () => (query.isSuccess ? query.data.items : []),
+    [query.data?.items, query.isSuccess],
+  );
+
+  useEffect(() => {
+    if (view !== 'imbox') {
+      setPowerThroughOpen(false);
+    }
+  }, [view]);
+
+  useEffect(() => {
+    function handleMailShortcut(event: Event) {
+      const customEvent = event as CustomEvent<{ action?: string }>;
+      const action = customEvent.detail?.action;
+      if (!action) {
+        return;
+      }
+
+      const focusedThreadId = findFocusedThreadId();
+      const selectedItem =
+        items.find((item) => item.thread_id === focusedThreadId) ?? items[0];
+      if (!selectedItem) {
+        return;
+      }
+
+      const actionButton = document.querySelector<HTMLButtonElement>(
+        `[data-hail-thread-id="${CSS.escape(selectedItem.thread_id)}"] [data-hail-shortcut-action="${action}"]`,
+      );
+      actionButton?.click();
+    }
+
+    window.addEventListener('hail:mail-shortcut', handleMailShortcut);
+    return () => window.removeEventListener('hail:mail-shortcut', handleMailShortcut);
+  }, [items]);
 
   let list;
   if (query.isPending) {
@@ -274,18 +648,42 @@ export function MailViewPage({
         body={`When the server classifies threads as ${title}, they will show up here.`}
       />
     );
+  } else if (view === 'imbox' && powerThroughOpen) {
+    list = (
+      <PowerThroughMode
+        items={query.data.items}
+        client={client}
+        onDone={() => setPowerThroughOpen(false)}
+      />
+    );
   } else {
     list = (
       <div>
         {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
         <div>
           {query.data.items.map((item) => (
-            <ThreadCard key={`${item.thread_id}:${item.email_id}`} item={item} view={view} />
+            <ThreadCard
+              key={`${item.thread_id}:${item.email_id}`}
+              item={item}
+              view={view}
+              client={client}
+            />
           ))}
         </div>
       </div>
     );
   }
 
-  return <AppShell title={title} description={description} list={list} />;
+  return (
+    <AppShell
+      title={title}
+      description={description}
+      actions={
+        view === 'imbox' && !query.isPending && !query.isError && query.data.items.length > 0 ? (
+          <PowerThroughButton onClick={() => setPowerThroughOpen(true)} />
+        ) : undefined
+      }
+      list={list}
+    />
+  );
 }

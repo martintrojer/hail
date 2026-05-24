@@ -16,7 +16,6 @@ import {
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
-import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
@@ -30,7 +29,6 @@ function AppShell() {
   return (
     <AuthProvider>
       <Outlet />
-      <KeyboardShortcuts />
     </AuthProvider>
   );
 }

@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import {
   useEffect,
   useRef,
@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useAuth } from '../auth/AuthProvider';
+import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
   Bookmark,
   Clock,
@@ -18,6 +19,7 @@ import {
   UserPlus,
   iconSizeProps,
 } from '../components/icons';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 interface AppShellProps {
   title: string;
@@ -63,6 +65,52 @@ function userInitial(email: string | undefined) {
   return trimmed.charAt(0).toUpperCase();
 }
 
+function focusSearchInput(attempt = 0) {
+  window.setTimeout(() => {
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-hail-search-input="true"]',
+    );
+    if (!input && attempt < 10) {
+      focusSearchInput(attempt + 1);
+      return;
+    }
+
+    input?.focus();
+    input?.select();
+  }, 25);
+}
+
+function focusMailListItem(direction: 1 | -1) {
+  const items = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>('[data-hail-mail-list-item="true"]'),
+  ).filter((item) => item.offsetParent !== null);
+
+  if (items.length === 0) {
+    return;
+  }
+
+  const activeIndex = items.findIndex((item) => item === document.activeElement);
+  let nextIndex: number;
+  if (activeIndex === -1) {
+    nextIndex = direction === 1 ? 0 : items.length - 1;
+  } else {
+    nextIndex = Math.min(Math.max(activeIndex + direction, 0), items.length - 1);
+  }
+
+  items[nextIndex]?.focus();
+}
+
+function dispatchMailShortcut(action: string) {
+  window.dispatchEvent(new CustomEvent('hail:mail-shortcut', { detail: { action } }));
+}
+
+function focusReplyBox() {
+  const replyBox = document.querySelector<HTMLTextAreaElement>(
+    '[data-hail-reply-box="true"]',
+  );
+  replyBox?.focus();
+}
+
 export function AppShell({
   title,
   description,
@@ -71,10 +119,32 @@ export function AppShell({
   actions,
 }: AppShellProps) {
   const { user, logout, logoutLoading } = useAuth();
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const logoButtonRef = useRef<HTMLButtonElement | null>(null);
   const hasContent = Boolean(list || reading);
+
+  useKeyboardShortcuts({
+    onNextThread: () => focusMailListItem(1),
+    onPreviousThread: () => focusMailListItem(-1),
+    onArchive: () => dispatchMailShortcut('archive'),
+    onTrash: () => dispatchMailShortcut('trash'),
+    onSetAside: () => dispatchMailShortcut('set-aside'),
+    onReplyLater: () => dispatchMailShortcut('reply-later'),
+    onReply: focusReplyBox,
+    onCompose: () => void navigate({ to: '/compose' }),
+    onFocusSearch: () => {
+      void navigate({ to: '/search' });
+      focusSearchInput();
+    },
+    onGoImbox: () => void navigate({ to: '/imbox' }),
+    onGoFeed: () => void navigate({ to: '/feed' }),
+    onGoPaperTrail: () => void navigate({ to: '/papertrail' }),
+    onGoScreener: () => void navigate({ to: '/screener' }),
+    onShowHelp: () => setShortcutHelpOpen(true),
+  });
 
   useEffect(() => {
     if (!menuOpen) {
@@ -114,6 +184,10 @@ export function AppShell({
 
   return (
     <div className="min-h-screen bg-bg-page text-ink-primary">
+      <KeyboardShortcutHelp
+        open={shortcutHelpOpen}
+        onClose={() => setShortcutHelpOpen(false)}
+      />
       {menuOpen ? (
         <button
           type="button"
