@@ -1,0 +1,48 @@
+[server]
+hostname = "mail.localhost"
+
+[server.listener."http"]
+bind = ["0.0.0.0:8080"]
+protocol = "http"
+
+[server.listener."smtp"]
+bind = ["0.0.0.0:25"]
+protocol = "smtp"
+
+[server.listener."submission"]
+bind = ["0.0.0.0:587"]
+protocol = "smtp"
+
+[server.listener."imap"]
+bind = ["0.0.0.0:143"]
+protocol = "imap"
+
+[storage]
+data = "sqlite"
+fts = "sqlite"
+lookup = "sqlite"
+blob = "filesystem"
+directory = "internal"
+
+[store."sqlite"]
+type = "sqlite"
+path = "/opt/stalwart/data/index.sqlite3"
+
+[store."filesystem"]
+type = "fs"
+path = "/opt/stalwart/data/blobs"
+depth = 2
+
+[directory."internal"]
+type = "internal"
+store = "sqlite"
+
+[authentication.fallback-admin]
+user = "admin"
+secret = "changeme123"
+
+[tracer."stdout"]
+type = "stdout"
+level = "info"
+ansi = false
+enable = true

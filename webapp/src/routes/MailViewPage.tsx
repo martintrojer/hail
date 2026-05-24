@@ -14,6 +14,7 @@ import {
   useImboxView,
   usePapertrailView,
   useReplyLaterThreadMutation,
+  useScreenerView,
   useSetAsideThreadMutation,
   useTrashThreadMutation,
 } from '../api/query';
@@ -579,7 +580,8 @@ export function MailViewPage({
   client,
 }: MailViewPageProps) {
   const query = useMailView(view, client);
-  const pendingCount = 0;
+  const screenerQuery = useScreenerView(client);
+  const pendingCount = screenerQuery.data?.senders?.length ?? 0;
   const [powerThroughOpen, setPowerThroughOpen] = useState(false);
 
   const items = useMemo(

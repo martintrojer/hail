@@ -41,6 +41,7 @@ const navItems: MenuItem[] = [
   { to: '/imbox', label: 'Imbox', Icon: Mail },
   { to: '/feed', label: 'The Feed', Icon: Mail },
   { to: '/papertrail', label: 'Paper Trail', Icon: Mail },
+  { to: '/screener', label: 'The Screener', Icon: UserPlus },
   { to: '/set-aside', label: 'Set Aside', Icon: Bookmark },
   { to: '/reply-later', label: 'Reply Later', Icon: Clock },
   { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
