@@ -1,0 +1,78 @@
+# Local rootless Podman compose stack for development smoke tests.
+#
+# This uses Stalwart's bootstrap WebUI mode intentionally and maps Stalwart mail
+# ports to high host ports so rootless Podman can start without lowering
+# net.ipv4.ip_unprivileged_port_start.
+#
+# Use for local stack/setup smoke:
+#
+#   podman compose -f deploy/docker-compose.local.yml up -d --build
+#
+# Production/direct SMTP still needs the canonical low-port mapping in
+# deploy/docker-compose.yml or a reverse/proxy/mail-routing setup.
+
+services:
+  stalwart:
+    image: docker.io/stalwartlabs/stalwart:latest
+    ports:
+      - "127.0.0.1:18080:8080" # Stalwart bootstrap WebUI/JMAP
+      - "2525:25"              # SMTP (local high port)
+      - "2465:465"             # submission SSL
+      - "2587:587"             # submission STARTTLS
+      - "2143:143"             # IMAP STARTTLS
+      - "2993:993"             # IMAP SSL
+    volumes:
+      - stalwart-data:/opt/stalwart
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/jmap/.well-known/jmap >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  hail-api:
+    build:
+      context: ..
+      dockerfile: Containerfile
+    image: hail:local
+    depends_on:
+      stalwart:
+        condition: service_started
+    command: ["/usr/local/bin/hail-api"]
+    environment:
+      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
+      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_SERVER__BIND=0.0.0.0:8080
+      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-http://127.0.0.1:8080}
+      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
+      - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
+      - HAIL_SETUP__BOOTSTRAP_TOKEN=${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}
+    ports:
+      - "8080:8080"
+    volumes:
+      - hail-data:/var/lib/hail
+      - ./hail.example.toml:/etc/hail/hail.toml:ro
+    restart: unless-stopped
+
+  hail-worker:
+    image: hail:local
+    depends_on:
+      - stalwart
+      - hail-api
+    command: ["/usr/local/bin/hail-worker"]
+    environment:
+      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
+      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_SERVER__BIND=0.0.0.0:8080
+      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-http://127.0.0.1:8080}
+      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
+      - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
+      - HAIL_SETUP__BOOTSTRAP_TOKEN=${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}
+    volumes:
+      - hail-data:/var/lib/hail
+    restart: unless-stopped
+
+volumes:
+  stalwart-data: {}
+  hail-data: {}
