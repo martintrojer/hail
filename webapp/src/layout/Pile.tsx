@@ -75,25 +75,25 @@ function PileCard({ item, stack }: { item: PileItem; stack: StackConfig }) {
     <Link
       to="/thread/$threadId"
       params={{ threadId: item.thread_id }}
-      className={`group block rounded-2xl border border-slate-700/80 bg-slate-950/95 p-3 shadow-lg shadow-slate-950/40 backdrop-blur transition focus:outline-none focus:ring-2 focus:ring-sky-300 ${stack.hoverClassName}`}
+      className={`group block rounded-2xl border border-border-menu bg-bg-surface p-3 shadow-lg shadow-ink-primary/10 focus:outline-none focus:ring-2 focus:ring-accent-blue ${stack.hoverClassName}`}
       aria-label={`Open thread ${item.thread_id} from ${stack.title}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 truncate font-mono text-[0.72rem] font-semibold text-slate-100">
+        <p className="min-w-0 truncate font-mono text-[0.72rem] font-semibold text-ink-primary">
           {item.thread_id}
         </p>
-        <span className="shrink-0 rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[0.65rem] font-semibold text-slate-400">
+        <span className="shrink-0 rounded-full border border-border-hairline bg-bg-banner px-2 py-0.5 text-[0.65rem] font-semibold text-ink-secondary">
           #{item.position}
         </span>
       </div>
 
       {preview ? (
-        <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-300">
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-ink-secondary">
           {preview}
         </p>
       ) : null}
 
-      <time className="mt-2 block text-[0.68rem] text-slate-500">
+      <time className="mt-2 block text-[0.68rem] text-ink-tertiary">
         Added {formatPileDate(item.added_at)}
       </time>
     </Link>
@@ -111,11 +111,11 @@ function PileStack({ stack }: { stack: StackConfig }) {
   return (
     <section aria-label={stack.title}>
       <div className="mb-2 flex items-center justify-between gap-3 px-1">
-        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
+        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-ink-secondary">
           <span className={`h-2 w-2 rounded-full ${stack.accentClassName}`} />
           {stack.title}
         </h2>
-        <span className="text-xs font-medium text-slate-500">
+        <span className="text-xs font-medium text-ink-tertiary">
           {stack.items.length}
         </span>
       </div>
@@ -133,7 +133,7 @@ function PileStack({ stack }: { stack: StackConfig }) {
       </div>
 
       {hiddenCount > 0 ? (
-        <p className="mt-2 px-1 text-[0.68rem] text-slate-500">
+        <p className="mt-2 px-1 text-[0.68rem] text-ink-tertiary">
           +{hiddenCount} more in {stack.title}
         </p>
       ) : null}
@@ -149,15 +149,15 @@ export function Pile() {
     {
       kind: 'set-aside',
       title: 'Set Aside',
-      accentClassName: 'bg-violet-300 shadow shadow-violet-300/50',
-      hoverClassName: 'hover:border-violet-300/70 hover:bg-violet-950/40',
+      accentClassName: 'bg-accent-blue shadow shadow-accent-blue/30',
+      hoverClassName: 'hover:border-accent-blue hover:bg-bg-hover',
       items: setAside.data?.items ?? [],
     },
     {
       kind: 'reply-later',
       title: 'Reply Later',
-      accentClassName: 'bg-amber-300 shadow shadow-amber-300/50',
-      hoverClassName: 'hover:border-amber-300/70 hover:bg-amber-950/40',
+      accentClassName: 'bg-accent-yellow shadow shadow-accent-yellow/30',
+      hoverClassName: 'hover:border-accent-yellow hover:bg-bg-hover',
       items: replyLater.data?.items ?? [],
     },
   ];
@@ -170,11 +170,11 @@ export function Pile() {
   return (
     <aside
       aria-label="Pile"
-      className="fixed bottom-4 right-4 z-30 hidden w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-slate-700/80 bg-slate-900/85 p-3 text-slate-50 shadow-2xl shadow-slate-950/70 backdrop-blur md:block"
+      className="fixed bottom-4 right-4 z-30 hidden w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-border-menu bg-bg-surface p-3 text-ink-primary shadow-2xl shadow-ink-primary/15 md:block"
     >
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
-        <p className="text-sm font-semibold text-slate-100">The Pile</p>
-        <p className="text-xs text-slate-500">{totalItems} stacked</p>
+        <p className="text-sm font-semibold text-ink-primary">The Pile</p>
+        <p className="text-xs text-ink-tertiary">{totalItems} stacked</p>
       </div>
 
       <div className="space-y-5">
