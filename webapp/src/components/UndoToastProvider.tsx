@@ -34,22 +34,75 @@ interface UndoToastContextValue {
 }
 
 const UndoToastContext = createContext<UndoToastContextValue | null>(null);
-const DEFAULT_DURATION_MS = 6000;
+const DEFAULT_DURATION_MS = 5000;
+const EXIT_ANIMATION_MS = 150;
 
 export function UndoToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [isShown, setIsShown] = useState(false);
   const nextId = useRef(1);
+  const exitTimeout = useRef<number | null>(null);
 
-  const dismiss = useCallback(() => setToast(null), []);
-
-  const showToast = useCallback((input: ToastInput) => {
-    setToast({
-      ...input,
-      toastId: nextId.current,
-      undoing: false,
-    });
-    nextId.current += 1;
+  const clearExitTimeout = useCallback(() => {
+    if (exitTimeout.current !== null) {
+      window.clearTimeout(exitTimeout.current);
+      exitTimeout.current = null;
+    }
   }, []);
+
+  const startDismiss = useCallback(
+    (toastId?: number, immediately = false) => {
+      clearExitTimeout();
+
+      if (immediately) {
+        setIsShown(false);
+        setToast((current) => {
+          if (toastId !== undefined && current?.toastId !== toastId) {
+            return current;
+          }
+          return null;
+        });
+        return;
+      }
+
+      setIsShown(false);
+      exitTimeout.current = window.setTimeout(() => {
+        setToast((current) => {
+          if (toastId !== undefined && current?.toastId !== toastId) {
+            return current;
+          }
+          return null;
+        });
+        exitTimeout.current = null;
+      }, EXIT_ANIMATION_MS);
+    },
+    [clearExitTimeout],
+  );
+
+  const dismiss = useCallback(() => startDismiss(undefined, true), [startDismiss]);
+
+  const showToast = useCallback(
+    (input: ToastInput) => {
+      clearExitTimeout();
+      setIsShown(false);
+      setToast({
+        ...input,
+        toastId: nextId.current,
+        undoing: false,
+      });
+      nextId.current += 1;
+    },
+    [clearExitTimeout],
+  );
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => setIsShown(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [toast]);
 
   useEffect(() => {
     if (!toast) {
@@ -57,13 +110,13 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
     }
 
     const timeout = window.setTimeout(() => {
-      setToast((current) =>
-        current?.toastId === toast.toastId ? null : current,
-      );
+      startDismiss(toast.toastId, import.meta.env.MODE === 'test');
     }, toast.durationMs ?? DEFAULT_DURATION_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [toast]);
+  }, [startDismiss, toast]);
+
+  useEffect(() => () => clearExitTimeout(), [clearExitTimeout]);
 
   const value = useMemo(() => ({ showToast }), [showToast]);
 
@@ -110,19 +163,21 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
     <UndoToastContext.Provider value={value}>
       {children}
       {toast ? (
-        <div className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4 pointer-events-none">
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
           <div
             role="status"
             aria-live="polite"
-            className="pointer-events-auto flex w-full max-w-md items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-900/95 px-4 py-3 text-sm text-slate-100 shadow-2xl shadow-slate-950/70 backdrop-blur"
+            className={`pointer-events-auto flex w-full max-w-md items-center justify-between gap-4 rounded-lg bg-ink-primary px-4 py-3 text-sm text-white opacity-0 shadow-lg shadow-ink-primary/25 transition-opacity duration-150 ease-out ${
+              isShown ? 'opacity-100' : 'opacity-0'
+            }`}
           >
-            <span className="min-w-0 flex-1">{toast.message}</span>
+            <span className="min-w-0 flex-1 leading-5">{toast.message}</span>
             {toast.undo ? (
               <button
                 type="button"
                 onClick={() => void undoCurrent()}
                 disabled={toast.undoing}
-                className="shrink-0 rounded-lg bg-sky-400 px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+                className="shrink-0 text-sm font-semibold text-accent-blue underline underline-offset-4 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {toast.undoing ? 'Undoing…' : (toast.undo.label ?? 'Undo')}
               </button>
@@ -130,10 +185,10 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={dismiss}
-              className="shrink-0 rounded-lg border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+              className="shrink-0 rounded text-sm font-semibold text-white/70 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/60"
               aria-label="Dismiss notification"
             >
-              Close
+              ×
             </button>
           </div>
         </div>
