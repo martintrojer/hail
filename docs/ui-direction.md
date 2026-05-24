@@ -373,6 +373,22 @@ Imbox. It's a gatekeeper, not a spam filter.
   right away with a brief undo toast. No multi-step confirmation modal.
   Future mail from that sender is routed automatically.
 
+- **Screener routing dropdown** (from `20-screen-drop-down.png`):
+  - After clicking "Yes" / "Let them in", a small dropdown card appears
+    offering where to route this sender's mail:
+    - "The Imbox" (default, highlighted)
+    - "The Feed"
+    - "Paper Trail"
+  - The dropdown is a small floating card (bg-surface, border-menu,
+    rounded-lg, shadow-md), same style as other popup menus.
+  - Each option is a text row (~0.875rem, font-medium) with py-2 px-3.
+  - Clicking an option immediately routes and moves to the next sender.
+
+- **Screener Speakeasy** (from `21-screener-speakeasy.png`):
+  - A special private email address that bypasses the Screener entirely.
+  - Shown in the Screener settings or as a discoverable feature.
+  - For hail v1: deferred. Track as a future feature, not v1-blocking.
+
 ## 9. Paper Trail
 
 From `09-paper-trail.png`:
@@ -435,11 +451,19 @@ From `11-bubble-up-submenu.png` and `12-bubble-up-page.png`:
     received timestamp.
   - Each row has a "cancel bubble" action on hover or in the popup.
 
-- **The Pile** (optional future feature):
-  - In HEY, the Pile is a small persistent panel anchored bottom-right.
-  - For hail v1, implement piles as regular section pages (Set Aside,
-    Reply Later) rather than a floating panel. The panel treatment
-    can be a follow-up.
+- **The Pile** (from `19-imbox-with-reply-later-and-set-aside.png`):
+  - The Pile IS a persistent floating widget, visible from the Imbox
+    and other list views. It is anchored to the bottom-right corner.
+  - It shows two sections: "Reply Later" and "Set Aside", each with
+    a count of items.
+  - Clicking the Pile expands it to show the items in each section
+    (sender/subject for each thread).
+  - Each item has a quick-action to remove from the pile.
+  - The Pile widget uses bg-surface, rounded-lg, shadow-lg, and is
+    compact (~200-250px wide when collapsed to just counts).
+  - For hail v1, implement the Pile as this floating bottom-right
+    widget (not just section pages). The expanded view can be a
+    small card listing items, not a full page.
 
 ## 11b. Notification banners and toasts
 
@@ -549,6 +573,45 @@ viewport with 16px horizontal padding.
 - The dropdown menu becomes full-width on mobile (<640px).
 - Thread reading and compose use the same single column.
 - No breakpoint where a sidebar appears. The layout is always sidebar-free.
+
+## 17b. Workflows / Mail Rules (from 18-all-workflows, 22-single-workflow, 23-single-workflow-popup)
+
+HEY has a "Workflows" feature — automated mail rules presented as a
+manageable list. For hail v1 this maps to our screener_rules and
+potential future mail rules.
+
+- **Workflows list** (`18-all-workflows.png`):
+  - A section page ("Workflows") listing all rules.
+  - Each rule is a row with: name (semibold), description of what it
+    does (ink-secondary), and an on/off toggle on the right.
+  - Same center column, same row styling as other lists.
+  - An "Add workflow" button at the top.
+
+- **Single workflow detail** (`22-single-workflow.png`):
+  - Shows the rule name as a title, then the conditions and actions
+    in a readable, sentence-like format.
+  - Edit/delete actions available.
+
+- **Workflow edit popup** (`23-single-workflow-popup.png`):
+  - A floating card or in-page form for configuring a rule.
+  - Fields for conditions (sender, subject, etc.) and actions
+    (move to, label, etc.).
+
+- **For hail v1**: workflows/rules are deferred. Track as a future
+  feature. The UI direction is documented here for when we build it.
+
+## 17c. All Files / Attachments (from 17-all-files)
+
+HEY shows an "All files" view that lists all attachments received
+across all emails.
+
+- Grid or list of files with: file type icon, filename, sender who
+  sent it, and date received.
+- Clicking a file opens/downloads it.
+- Useful for finding attachments without remembering which email
+  they came from.
+
+- **For hail v1**: deferred. Track as a future feature.
 
 ## 18. Non-goals
 
