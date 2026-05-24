@@ -169,13 +169,18 @@ function response(status: number, body: unknown = {}) {
 }
 
 describe('ScreenerPage', () => {
-  it('approves a sender with selected classification and history backfill', async () => {
+  it('opens routing choices before approving a sender with history backfill', async () => {
     const client = renderScreener();
 
-    fireEvent.change(await screen.findByLabelText('Approve into'), {
-      target: { value: 'feed' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    expect(
+      screen.getByRole('menu', { name: 'Screener routing destinations' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'The Imbox' })).toHaveClass(
+      'bg-bg-selected',
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
 
     await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
     expect(client.decideScreenerCalls[0]).toEqual({
@@ -236,16 +241,14 @@ describe('ScreenerPage', () => {
       }),
     );
 
-    const picker = await screen.findByLabelText('Approve into');
-    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
 
     await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
     expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
-    expect(picker).toBeDisabled();
   });
 
-  it('shows a decision error without clearing the selected classification', async () => {
+  it('shows a decision error after choosing a routing destination', async () => {
     const client = renderScreener(
       new ScreenerPageTestClient({
         decisionHandler: () =>
@@ -253,16 +256,14 @@ describe('ScreenerPage', () => {
       }),
     );
 
-    const picker = await screen.findByLabelText('Approve into');
-    fireEvent.change(picker, { target: { value: 'papertrail' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
 
     expect(
       await screen.findByRole('alert', {
         name: '',
       }),
     ).toHaveTextContent('The server rejected this decision. Refresh and try again.');
-    expect(picker).toHaveValue('papertrail');
     expect(client.decideScreenerCalls[0]).toMatchObject({
       classify_as: 'papertrail',
       apply_to_history: true,

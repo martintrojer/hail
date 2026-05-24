@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useRef, useState } from 'react';
 import type { HailApiClient } from '../api/client';
 import {
   HailApiError,
@@ -7,17 +7,12 @@ import {
 } from '../api/client';
 import { useScreenerDecisionMutation, useScreenerView } from '../api/query';
 import { ScreenerBanner } from '../components/ScreenerBanner';
+import {
+  ScreenerRoutingDropdown,
+  type ScreenerRoutingDestination,
+} from '../components/ScreenerRoutingDropdown';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
-
-const classificationOptions: Array<{
-  value: ScreenerClassification;
-  label: string;
-}> = [
-  { value: 'imbox', label: 'Imbox' },
-  { value: 'feed', label: 'The Feed' },
-  { value: 'papertrail', label: 'Paper Trail' },
-];
 
 function errorMessage(error: Error) {
   if (error instanceof HailApiError) {
@@ -167,9 +162,9 @@ function PendingSenderCard({
   sender: ScreenerPendingSender;
   client?: HailApiClient;
 }) {
-  const selectId = useId();
-  const [classifyAs, setClassifyAs] =
-    useState<ScreenerClassification>('imbox');
+  const [routingOpen, setRoutingOpen] = useState(false);
+  const [routingAnchor, setRoutingAnchor] = useState<DOMRect | null>(null);
+  const approveButtonRef = useRef<HTMLButtonElement | null>(null);
   const { showToast } = useUndoToast();
   const decision = useScreenerDecisionMutation(client, {
     onSuccess: (data, variables) => {
@@ -191,12 +186,18 @@ function PendingSenderCard({
     previewText(sender.latest_preview) ??
     'Preview unavailable until this message is indexed.';
 
-  function approve(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function showRoutingDropdown() {
+    if (approveButtonRef.current) {
+      setRoutingAnchor(approveButtonRef.current.getBoundingClientRect());
+    }
+    setRoutingOpen(true);
+  }
+
+  function approve(destination: ScreenerRoutingDestination) {
     decision.mutate({
       sender: sender.sender,
       decision: 'approve',
-      classify_as: classifyAs,
+      classify_as: destination as ScreenerClassification,
       apply_to_history: true,
     });
   }
@@ -227,49 +228,36 @@ function PendingSenderCard({
         </p>
       </div>
 
-      <form onSubmit={approve} className="mt-5 space-y-4">
-        <label
-          htmlFor={selectId}
-          className="block text-sm font-medium text-ink-secondary"
+      <div className="mt-5 flex flex-wrap gap-3">
+        <button
+          ref={approveButtonRef}
+          type="button"
+          aria-label={isPending ? 'Saving…' : 'Approve'}
+          aria-haspopup="menu"
+          aria-expanded={routingOpen}
+          onClick={showRoutingDropdown}
+          disabled={isPending}
+          className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Approve into
-          <select
-            id={selectId}
-            value={classifyAs}
-            onChange={(event) =>
-              setClassifyAs(event.target.value as ScreenerClassification)
-            }
-            disabled={isPending}
-            className="mt-2 w-full rounded-lg border border-border-menu bg-bg-page px-3 py-2 text-sm text-ink-primary outline-none focus:border-accent-blue focus:ring-2 focus:ring-accent-blue/25 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {classificationOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+          {isPending ? 'Saving…' : 'Yes'}
+        </button>
+        <button
+          type="button"
+          aria-label="Deny"
+          onClick={deny}
+          disabled={isPending}
+          className="rounded-lg border border-border-menu px-4 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          No
+        </button>
+      </div>
 
-        <div className="flex flex-wrap gap-3">
-          <button
-            type="submit"
-            aria-label={isPending ? 'Saving…' : 'Approve'}
-            disabled={isPending}
-            className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isPending ? 'Saving…' : 'Yes'}
-          </button>
-          <button
-            type="button"
-            aria-label="Deny"
-            onClick={deny}
-            disabled={isPending}
-            className="rounded-lg border border-border-menu px-4 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            No
-          </button>
-        </div>
-      </form>
+      <ScreenerRoutingDropdown
+        open={routingOpen}
+        anchorRect={routingAnchor}
+        onClose={() => setRoutingOpen(false)}
+        onSelect={approve}
+      />
 
       {decision.isError ? (
         <p role="alert" className="mt-4 text-sm text-accent-red">
