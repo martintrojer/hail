@@ -9,6 +9,7 @@ import {
 import { useAuth } from '../auth/AuthProvider';
 import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
+  ArrowUpCircle,
   Bookmark,
   Clock,
   LogOut,
@@ -20,6 +21,7 @@ import {
   iconSizeProps,
 } from '../components/icons';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { Pile } from './Pile';
 
 interface AppShellProps {
   title: string;
@@ -41,6 +43,7 @@ const navItems: MenuItem[] = [
   { to: '/papertrail', label: 'Paper Trail', Icon: Mail },
   { to: '/set-aside', label: 'Set Aside', Icon: Bookmark },
   { to: '/reply-later', label: 'Reply Later', Icon: Clock },
+  { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
   { to: '/search', label: 'Search', Icon: Search },
 ];
 
@@ -331,6 +334,7 @@ export function AppShell({
           {!hasContent ? <EmptyList title={title} /> : null}
         </div>
       </main>
+      <Pile />
     </div>
   );
 }
