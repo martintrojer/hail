@@ -160,7 +160,8 @@ describe('SPA auth/router flows', () => {
 
     await expectLocation('/imbox');
     expect(await screen.findByRole('heading', { name: 'Imbox' })).toBeInTheDocument();
-    expect(screen.getAllByText('admin@example.com').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'hail' }));
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
   });
 
   it('updates the auth cache and navigates to imbox after login', async () => {
