@@ -79,21 +79,21 @@ function PileCard({ item, stack }: { item: PileItem; stack: StackConfig }) {
       aria-label={`Open thread ${item.thread_id} from ${stack.title}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 truncate font-mono text-[0.72rem] font-semibold text-ink-primary">
+        <p className="min-w-0 truncate hail-badge text-ink-primary">
           {item.thread_id}
         </p>
-        <span className="shrink-0 rounded-full border border-border-hairline bg-bg-banner px-2 py-0.5 text-[0.65rem] font-semibold text-ink-secondary">
+        <span className="hail-badge shrink-0 rounded-full border border-border-hairline bg-bg-banner px-2 py-0.5 text-ink-secondary">
           #{item.position}
         </span>
       </div>
 
       {preview ? (
-        <p className="mt-2 line-clamp-2 text-xs leading-5 text-ink-secondary">
+        <p className="mt-2 line-clamp-2 hail-preview">
           {preview}
         </p>
       ) : null}
 
-      <time className="mt-2 block text-[0.68rem] text-ink-tertiary">
+      <time className="mt-2 block hail-badge text-ink-tertiary">
         Added {formatPileDate(item.added_at)}
       </time>
     </Link>
@@ -111,11 +111,11 @@ function PileStack({ stack }: { stack: StackConfig }) {
   return (
     <section aria-label={stack.title}>
       <div className="mb-2 flex items-center justify-between gap-3 px-1">
-        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-ink-secondary">
+        <h2 className="flex items-center gap-2 hail-badge text-ink-secondary">
           <span className={`h-2 w-2 rounded-full ${stack.accentClassName}`} />
           {stack.title}
         </h2>
-        <span className="text-xs font-medium text-ink-tertiary">
+        <span className="hail-chrome text-ink-tertiary">
           {stack.items.length}
         </span>
       </div>
@@ -133,7 +133,7 @@ function PileStack({ stack }: { stack: StackConfig }) {
       </div>
 
       {hiddenCount > 0 ? (
-        <p className="mt-2 px-1 text-[0.68rem] text-ink-tertiary">
+        <p className="mt-2 px-1 hail-badge text-ink-tertiary">
           +{hiddenCount} more in {stack.title}
         </p>
       ) : null}
@@ -173,8 +173,8 @@ export function Pile() {
       className="fixed bottom-4 right-4 z-30 hidden w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-border-menu bg-bg-surface p-3 text-ink-primary shadow-2xl shadow-ink-primary/15 md:block"
     >
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
-        <p className="text-sm font-semibold text-ink-primary">The Pile</p>
-        <p className="text-xs text-ink-tertiary">{totalItems} stacked</p>
+        <p className="hail-chrome font-semibold text-ink-primary">The Pile</p>
+        <p className="hail-badge text-ink-tertiary">{totalItems} stacked</p>
       </div>
 
       <div className="space-y-5">
