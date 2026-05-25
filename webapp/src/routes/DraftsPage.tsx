@@ -9,6 +9,7 @@ import { defaultApiClient, useDeleteDraftMutation, useDraftsView } from '../api/
 import { ErrorState } from '../components/ErrorState';
 import { Trash2, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
 
 interface DraftsPageProps {
@@ -125,15 +126,17 @@ export function DraftsPage({ client = defaultApiClient }: DraftsPageProps) {
         onRetry={() => void query.refetch()}
       />
     );
-  } else if (items.length === 0) {
-    list = <StateCard title="No drafts." />;
   } else {
     list = (
-      <div>
-        {items.map((item) => (
-          <DraftRow key={`${item.thread_id}:${item.email_id}`} item={item} client={client} />
-        ))}
-      </div>
+      <ListView
+        items={items}
+        renderItem={(item) => <DraftRow item={item} client={client} />}
+        keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={() => {}}
+        emptyState={<StateCard title="No drafts." />}
+      />
     );
   }
 

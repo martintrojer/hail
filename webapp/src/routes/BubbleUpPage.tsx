@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { type BubbleUpViewItem } from '../api/client';
 import { useBubbleUpView, useCancelBubbleUpMutation } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
+import { ListView } from '../components/ListView';
 import { LoadingState } from '../components/LoadingState';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
@@ -88,16 +89,16 @@ function BubbleUpList() {
     );
   }
 
-  if (query.data.items.length === 0) {
-    return <EmptyBubbleUpState />;
-  }
-
   return (
-    <div>
-      {query.data.items.map((item) => (
-        <BubbleUpRow key={item.bubble_id} item={item} />
-      ))}
-    </div>
+    <ListView
+      items={query.data.items}
+      renderItem={(item) => <BubbleUpRow item={item} />}
+      keyExtractor={(item) => String(item.bubble_id)}
+      hasMore={false}
+      isLoadingMore={false}
+      onLoadMore={() => {}}
+      emptyState={<EmptyBubbleUpState />}
+    />
   );
 }
 

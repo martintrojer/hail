@@ -8,6 +8,7 @@ import { queryKeys } from '../api/queryKeys';
 import { ErrorState } from '../components/ErrorState';
 import { Bookmark, Clock, Send, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
 import { formatPileDate, pilePreview } from '../lib/pilePreview';
 
@@ -270,15 +271,22 @@ function ReplyLaterList({
     <div className="flex min-h-[400px] gap-0 sm:gap-0">
       {/* Left: thread list */}
       <div className={`min-w-0 ${selectedItem ? 'w-1/2 border-r border-border-hairline' : 'w-full'}`}>
-        {data.items.map((item) => (
-          <PileRow
-            key={item.thread_id}
-            item={item}
-            config={config}
-            selected={item.thread_id === selectedId}
-            onSelect={() => setSelectedId(item.thread_id === selectedId ? null : item.thread_id)}
-          />
-        ))}
+        <ListView
+          items={data.items}
+          renderItem={(item) => (
+            <PileRow
+              item={item}
+              config={config}
+              selected={item.thread_id === selectedId}
+              onSelect={() => setSelectedId(item.thread_id === selectedId ? null : item.thread_id)}
+            />
+          )}
+          keyExtractor={(item) => item.thread_id}
+          hasMore={false}
+          isLoadingMore={false}
+          onLoadMore={() => {}}
+          emptyState={<StateCard title={config.emptyTitle} body={config.emptyBody} />}
+        />
       </div>
 
       {/* Right: reply panel */}
@@ -328,11 +336,15 @@ function PileList({
   }
 
   return (
-    <div>
-      {data.items.map((item) => (
-        <PileRow key={item.thread_id} item={item} config={config} />
-      ))}
-    </div>
+    <ListView
+      items={data.items}
+      renderItem={(item) => <PileRow item={item} config={config} />}
+      keyExtractor={(item) => item.thread_id}
+      hasMore={false}
+      isLoadingMore={false}
+      onLoadMore={() => {}}
+      emptyState={<StateCard title={config.emptyTitle} body={config.emptyBody} />}
+    />
   );
 }
 

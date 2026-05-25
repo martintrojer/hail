@@ -15,6 +15,7 @@ import {
   type SearchScope,
 } from '../api/client';
 import { useSearch } from '../api/query';
+import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
 
 const scopeOptions: Array<{ value: SearchScope; label: string }> = [
@@ -138,16 +139,18 @@ function ContactNoteResultCard({ item }: { item: ContactNoteSearchResult }) {
   );
 }
 
-function ResultGroup({
+function ResultGroup<T>({
   title,
-  count,
-  children,
+  items,
+  renderItem,
+  keyExtractor,
 }: {
   title: string;
-  count: number;
-  children: ReactNode;
+  items: T[];
+  renderItem: (item: T, index: number) => ReactNode;
+  keyExtractor: (item: T) => string;
 }) {
-  if (count === 0) {
+  if (items.length === 0) {
     return null;
   }
 
@@ -156,10 +159,20 @@ function ResultGroup({
       <h2 className="flex items-center justify-between text-sm font-semibold uppercase tracking-[0.2em] text-ink-secondary">
         <span>{title}</span>
         <span className="rounded-full bg-hover px-2 py-0.5 text-xs tracking-normal text-ink-primary0">
-          {count}
+          {items.length}
         </span>
       </h2>
-      {children}
+      <div className="space-y-3">
+        <ListView
+          items={items}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          hasMore={false}
+          isLoadingMore={false}
+          onLoadMore={() => {}}
+          emptyState={null}
+        />
+      </div>
     </section>
   );
 }
@@ -245,23 +258,18 @@ export function SearchPage() {
   } else {
     list = (
       <div className="space-y-6">
-        <ResultGroup title="Mail" count={grouped.mail.length}>
-          <div className="space-y-3">
-            {grouped.mail.map((item) => (
-              <MailResultCard
-                key={`${item.thread_id}:${item.email_id}`}
-                item={item}
-              />
-            ))}
-          </div>
-        </ResultGroup>
-        <ResultGroup title="Contact notes" count={grouped.notes.length}>
-          <div className="space-y-3">
-            {grouped.notes.map((item) => (
-              <ContactNoteResultCard key={item.address} item={item} />
-            ))}
-          </div>
-        </ResultGroup>
+        <ResultGroup
+          title="Mail"
+          items={grouped.mail}
+          renderItem={(item) => <MailResultCard item={item} />}
+          keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
+        />
+        <ResultGroup
+          title="Contact notes"
+          items={grouped.notes}
+          renderItem={(item) => <ContactNoteResultCard item={item} />}
+          keyExtractor={(item) => item.address}
+        />
       </div>
     );
   }
