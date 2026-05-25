@@ -5,6 +5,7 @@ import {
   type BlobUploadResponse,
   type BubbleUpRequest,
   type ComposeRequest,
+  type CreateThreadNoteRequest,
   type DraftRequest,
   type PutContactNoteRequest,
   type ReplyRequest,
@@ -341,6 +342,105 @@ describe('HailApiClient non-composer mutating requests', () => {
     expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', body);
   });
 
+  it('sends CSRF header for undoing denied screener senders', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'undone' }));
+
+    await client.undoDeny('blocked+tag@example.org / team');
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL(
+        'http://localhost/api/screener/blocked%2Btag%40example.org%20%2F%20team/undo-deny',
+      ),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
+  });
+
+  it('sends CSRF header and JSON body for admin mutating requests', async () => {
+    const createBody = {
+      email: 'agent@example.org',
+      password: 'correct horse battery staple',
+      display_name: 'Agent',
+    };
+    const resetBody = { password: 'new correct horse battery staple' };
+    const domainBody = { domain: 'example.net' };
+    const userEnvelope = {
+      user: {
+        id: 42,
+        email: 'agent@example.org',
+        display_name: 'Agent',
+        is_admin: false,
+      },
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(201, userEnvelope))
+      .mockResolvedValueOnce(jsonResponse(200, userEnvelope))
+      .mockResolvedValueOnce(emptyResponse(204))
+      .mockResolvedValueOnce(jsonResponse(201, { domain: 'example.net' }))
+      .mockResolvedValueOnce(emptyResponse(204));
+
+    await client.createAdminUser(createBody);
+    await client.resetAdminUserPassword(42, resetBody);
+    await client.deleteAdminUser(42);
+    await client.addAdminDomain(domainBody);
+    await client.deleteAdminDomain('example.net');
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/admin/users'),
+    );
+    expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', createBody);
+    expect(fetchSpy.mock.calls[1]?.[0]).toEqual(
+      new URL('http://localhost/api/admin/users/42/reset-password'),
+    );
+    expectMutatingJsonRequest(fetchSpy.mock.calls[1]?.[1], 'POST', resetBody);
+    expect(fetchSpy.mock.calls[2]?.[0]).toEqual(
+      new URL('http://localhost/api/admin/users/42'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[2]?.[1], 'DELETE');
+    expect(fetchSpy.mock.calls[3]?.[0]).toEqual(
+      new URL('http://localhost/api/admin/domains'),
+    );
+    expectMutatingJsonRequest(fetchSpy.mock.calls[3]?.[1], 'POST', domainBody);
+    expect(fetchSpy.mock.calls[4]?.[0]).toEqual(
+      new URL('http://localhost/api/admin/domains/example.net'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[4]?.[1], 'DELETE');
+  });
+
+  it('sends CSRF header for login and logout', async () => {
+    const loginBody = {
+      email: 'reader@example.org',
+      password: 'correct horse battery staple',
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          user: {
+            id: 1,
+            email: 'reader@example.org',
+            display_name: 'Reader',
+            is_admin: false,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(emptyResponse(204));
+
+    await client.login(loginBody);
+    await client.logout();
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/auth/login'),
+    );
+    expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', loginBody);
+    expect(fetchSpy.mock.calls[1]?.[0]).toEqual(
+      new URL('http://localhost/api/auth/logout'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[1]?.[1], 'POST');
+  });
+
   it('sends CSRF header and JSON body for thread classification', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -373,10 +473,18 @@ describe('HailApiClient non-composer mutating requests', () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse(200, { undo: null }))
-      .mockResolvedValueOnce(jsonResponse(200, { undo: null }));
+      .mockResolvedValueOnce(jsonResponse(200, { undo: null }))
+      .mockResolvedValueOnce(jsonResponse(200, { undo: null }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'restored' }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'destroyed' }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'undone' }));
 
     await client.setAsideThread('thread/with spaces');
     await client.replyLaterThread('thread/with spaces');
+    await client.trashThread('thread/with spaces');
+    await client.restoreThread('thread/with spaces');
+    await client.destroyThread('thread/with spaces');
+    await client.undo('undo/with spaces');
 
     expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
       new URL('http://localhost/api/threads/thread%2Fwith%20spaces/set-aside'),
@@ -386,6 +494,58 @@ describe('HailApiClient non-composer mutating requests', () => {
       new URL('http://localhost/api/threads/thread%2Fwith%20spaces/reply-later'),
     );
     expectMutatingNoBodyRequest(fetchSpy.mock.calls[1]?.[1], 'POST');
+    expect(fetchSpy.mock.calls[2]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/trash'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[2]?.[1], 'POST');
+    expect(fetchSpy.mock.calls[3]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/restore'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[3]?.[1], 'POST');
+    expect(fetchSpy.mock.calls[4]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/destroy'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[4]?.[1], 'DELETE');
+    expect(fetchSpy.mock.calls[5]?.[0]).toEqual(
+      new URL('http://localhost/api/undo/undo%2Fwith%20spaces'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[5]?.[1], 'POST');
+  });
+
+  it('sends CSRF header and JSON body for thread note and mark updates', async () => {
+    const noteBody: CreateThreadNoteRequest = {
+      email_id: 'email-1',
+      body: 'follow up after the meeting',
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse(201, {
+          id: 7,
+          email_id: 'email-1',
+          body: 'follow up after the meeting',
+          created_at: '2026-05-23T13:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(emptyResponse(204))
+      .mockResolvedValueOnce(emptyResponse(204));
+
+    await client.createThreadNote('thread/with spaces', noteBody);
+    await client.deleteThreadNote('thread/with spaces', 7);
+    await client.markThread('thread/with spaces', true);
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/notes'),
+    );
+    expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', noteBody);
+    expect(fetchSpy.mock.calls[1]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/notes/7'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[1]?.[1], 'DELETE');
+    expect(fetchSpy.mock.calls[2]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/mark'),
+    );
+    expectMutatingJsonRequest(fetchSpy.mock.calls[2]?.[1], 'POST', { read: true });
   });
 
   it('sends CSRF header and JSON body for contact note updates', async () => {
@@ -448,6 +608,19 @@ describe('HailApiClient non-composer mutating requests', () => {
 
     expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
       new URL('http://localhost/api/threads/thread%2Fwith%20spaces/bubble-up'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'DELETE');
+  });
+
+  it('sends CSRF header without JSON content type for draft deletes', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(emptyResponse(204));
+
+    await client.deleteDraft('draft/with spaces');
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/drafts/draft%2Fwith%20spaces'),
     );
     expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'DELETE');
   });

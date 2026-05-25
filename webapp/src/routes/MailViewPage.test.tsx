@@ -1,8 +1,13 @@
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { MailViewKind, MailViewResponse } from '../api/client';
+import type {
+  MailClassification,
+  MailViewKind,
+  MailViewResponse,
+  ThreadVerbResponse,
+} from '../api/client';
 import { HailApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
@@ -29,6 +34,10 @@ const viewTitles: Record<MailViewKind, string> = {
 
 class MailViewPageTestClient extends TestHailApiClient {
   readonly calls: MailViewKind[] = [];
+  readonly classifyCalls: Array<{ threadId: string; to: MailClassification }> = [];
+  readonly setAsideCalls: string[] = [];
+  readonly replyLaterCalls: string[] = [];
+  failingActions = new Set<string>();
 
   constructor(
     private readonly responses: Partial<
@@ -54,6 +63,40 @@ class MailViewPageTestClient extends TestHailApiClient {
       this.responses.papertrail ??
       Promise.resolve(mailViewResponse('papertrail'))
     );
+  }
+
+  override async classifyThread(
+    threadId: string,
+    to: MailClassification,
+  ): Promise<ThreadVerbResponse> {
+    this.classifyCalls.push({ threadId, to });
+    return this.threadVerbResponse(`classify-${to}`);
+  }
+
+  override async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.setAsideCalls.push(threadId);
+    return this.threadVerbResponse('set-aside');
+  }
+
+  override async replyLaterThread(
+    threadId: string,
+  ): Promise<ThreadVerbResponse> {
+    this.replyLaterCalls.push(threadId);
+    return this.threadVerbResponse('reply-later');
+  }
+
+  private threadVerbResponse(action: string): ThreadVerbResponse {
+    if (this.failingActions.has(action)) {
+      throw new HailApiError(500, { error: 'boom' }, response(500));
+    }
+
+    return {
+      undo: {
+        id: `undo-${action}`,
+        action: 'thread.stack',
+        expires_at: '2026-05-23T13:00:00Z',
+      },
+    };
   }
 }
 
@@ -311,6 +354,121 @@ describe('MailViewPage', () => {
     expect(
       within(link).queryByText('Order #123 was paid.'),
     ).not.toBeInTheDocument();
+  });
+
+  it('powers through Imbox threads with thread actions and advances through the batch', async () => {
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-keep',
+              from: 'Alice',
+              subject: 'Keep me here',
+              preview: 'This one should stay in the Imbox.',
+            }),
+            mailItem('imbox', {
+              thread_id: 'thread-feed',
+              from: 'Feed Sender',
+              subject: 'Move me out',
+              preview: 'This belongs in the Feed.',
+            }),
+            mailItem('imbox', {
+              thread_id: 'thread-aside',
+              from: 'Later Sender',
+              subject: 'Handle later',
+              preview: 'Set this aside for later.',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Power through' }));
+
+    expect(
+      await screen.findByRole('region', { name: 'Power through Imbox' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Keep me here')).toBeInTheDocument();
+    expect(screen.getByText('2 threads after this one')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep in Imbox' }));
+    await waitFor(() =>
+      expect(client.classifyCalls).toEqual([
+        { threadId: 'thread-keep', to: 'imbox' },
+      ]),
+    );
+    expect(await screen.findByText('Move me out')).toBeInTheDocument();
+    expect(screen.getByText('Moved thread to Imbox.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Feed' }));
+    await waitFor(() =>
+      expect(client.classifyCalls).toContainEqual({
+        threadId: 'thread-feed',
+        to: 'feed',
+      }),
+    );
+    expect(await screen.findByText('Handle later')).toBeInTheDocument();
+    expect(screen.getByText('Moved thread to Feed.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set Aside' }));
+    await waitFor(() => expect(client.setAsideCalls).toEqual(['thread-aside']));
+    expect(await screen.findByText('Power through complete')).toBeInTheDocument();
+    expect(screen.getByText('Thread added to Set Aside.')).toBeInTheDocument();
+  });
+
+  it('shows power through action errors without advancing the current thread', async () => {
+    const client = new MailViewPageTestClient({
+      imbox: Promise.resolve(
+        mailViewResponse('imbox', [
+          mailItem('imbox', {
+            thread_id: 'thread-fails',
+            subject: 'Stays visible',
+          }),
+        ]),
+      ),
+    });
+    client.failingActions.add('reply-later');
+    renderMailView('imbox', client);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Power through' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply Later' }));
+
+    await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-fails']));
+    expect(
+      await screen.findByText('Thread action failed with HTTP 500.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Stays visible')).toBeInTheDocument();
+    expect(screen.queryByText('Power through complete')).not.toBeInTheDocument();
+  });
+
+  it('leaves power through and returns to the Imbox list when done is clicked', async () => {
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-list',
+              subject: 'Back to list',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Power through' }));
+    expect(await screen.findByText('Back to list')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(
+      screen.queryByRole('region', { name: 'Power through Imbox' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Open Back to list from Alice Sender' }),
+    ).toBeInTheDocument();
   });
 
   it.each([
