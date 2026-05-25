@@ -42,8 +42,8 @@ const DEFAULT_LIVE_CATCHUP_SECS: u64 = 60;
 const LIVE_CATCHUP_ENV: &str = "HAIL_IMPORT_CATCHUP_SECS";
 
 /// Reasons a per-user supervisor stops itself for good rather than
-/// retrying. FATAL outcomes are logged at ERROR; the supervisor exits
-/// `Ok(())` so the top-level JoinSet doesn't treat it as a crash.
+/// retrying. FATAL outcomes are logged at ERROR; terminal exits are surfaced to
+/// the top-level supervisor so it does not respawn the same user forever.
 #[derive(Debug, thiserror::Error)]
 enum FatalError {
     #[error("user {0} not found in hail.db")]
@@ -56,6 +56,12 @@ enum FatalError {
     AuthRevoked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserSupervisorExit {
+    Retryable,
+    Terminal,
+}
+
 /// Per-user supervisor entry point. Owns the JMAP EventSource stream
 /// for `user_id`, calls `handle_changes` on startup (catch-up shape)
 /// and on every push event, and reconnects with exponential backoff
@@ -65,7 +71,7 @@ pub async fn run_user_supervisor(
     user_id: i64,
     state: Arc<AppState>,
     cancel: CancellationToken,
-) -> Result<()> {
+) -> Result<UserSupervisorExit> {
     let decryptor = state.token_decryptor.clone();
     // Wrap the entire per-user pipeline in a top-level select! against
     // the cancel token. This is load-bearing: every `.await` inside
@@ -81,7 +87,7 @@ pub async fn run_user_supervisor(
         biased;
         _ = cancel.cancelled() => {
             info!(user_id, "per-user supervisor: cancelled (top-level)");
-            Ok(())
+            Ok(UserSupervisorExit::Retryable)
         }
         res = run_user_supervisor_with(user_id, state, decryptor, cancel.clone()) => res,
     }
@@ -93,7 +99,7 @@ async fn run_user_supervisor_with(
     state: Arc<AppState>,
     decryptor: Arc<dyn TokenDecryptor>,
     cancel: CancellationToken,
-) -> Result<()> {
+) -> Result<UserSupervisorExit> {
     info!(user_id, "per-user supervisor: starting");
 
     // Bring up the JMAP session once. Errors from this phase classify
@@ -103,7 +109,7 @@ async fn run_user_supervisor_with(
         Ok(s) => s,
         Err(SupervisorBringupError::Fatal(e)) => {
             error!(user_id, error = %e, "per-user supervisor: FATAL during bring-up, exiting");
-            return Ok(());
+            return Ok(UserSupervisorExit::Terminal);
         }
         Err(SupervisorBringupError::Transient(e)) => {
             // We don't loop here — the top-level supervisor will
@@ -111,7 +117,7 @@ async fn run_user_supervisor_with(
             // active. That keeps backoff state machine in one place
             // (the event-source loop below).
             warn!(user_id, error = %e, "per-user supervisor: transient bring-up failure, exiting for top-level retry");
-            return Ok(());
+            return Ok(UserSupervisorExit::Retryable);
         }
     };
 
@@ -138,7 +144,7 @@ async fn run_event_loop(
     fetcher: Arc<dyn JmapChangeFetcher>,
     jmap_ops: Arc<dyn JmapOps>,
     cancel: CancellationToken,
-) -> Result<()> {
+) -> Result<UserSupervisorExit> {
     let event_source = LiveEventSource {
         session: session.session.clone(),
     };
@@ -230,7 +236,7 @@ async fn run_event_loop_with(
     sleeper: &dyn CancelSleeper,
     live_catchup_interval: Duration,
     cancel: CancellationToken,
-) -> Result<()> {
+) -> Result<UserSupervisorExit> {
     let types = vec![
         DataType::Email,
         DataType::EmailDelivery,
@@ -241,21 +247,21 @@ async fn run_event_loop_with(
     loop {
         if cancel.is_cancelled() {
             info!(user_id, "per-user supervisor: cancelled");
-            return Ok(());
+            return Ok(UserSupervisorExit::Retryable);
         }
 
         let catchup_res = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
                 info!(user_id, "per-user supervisor: cancel during catchup");
-                return Ok(());
+                return Ok(UserSupervisorExit::Retryable);
             }
             result = catchup_user(db, user_id, fetcher, jmap_ops, cancel.clone()) => result,
         };
         if let Err(e) = catchup_res {
             if is_auth_anyhow(&e) {
                 error!(user_id, error = %e, "catchup: auth revoked (FATAL)");
-                return Ok(());
+                return Ok(UserSupervisorExit::Terminal);
             }
             let delay = backoff.next_delay();
             info!(
@@ -265,7 +271,7 @@ async fn run_event_loop_with(
                 "catchup: transient failure; backing off"
             );
             if sleeper.sleep(delay, &cancel).await {
-                return Ok(());
+                return Ok(UserSupervisorExit::Retryable);
             }
             continue;
         }
@@ -280,7 +286,7 @@ async fn run_event_loop_with(
             Err(e) => {
                 if is_auth_error(&e) {
                     error!(user_id, error = %e, "event_source: auth revoked (FATAL)");
-                    return Ok(());
+                    return Ok(UserSupervisorExit::Terminal);
                 }
                 let delay = backoff.next_delay();
                 info!(
@@ -290,7 +296,7 @@ async fn run_event_loop_with(
                     "event_source: connect failed; backing off"
                 );
                 if sleeper.sleep(delay, &cancel).await {
-                    return Ok(());
+                    return Ok(UserSupervisorExit::Retryable);
                 }
                 continue;
             }
@@ -309,21 +315,21 @@ async fn run_event_loop_with(
                 biased;
                 _ = cancel.cancelled() => {
                     info!(user_id, "per-user supervisor: cancel during stream");
-                    return Ok(());
+                    return Ok(UserSupervisorExit::Retryable);
                 }
                 _ = catchup_interval.tick() => {
                     let catchup_res = tokio::select! {
                         biased;
                         _ = cancel.cancelled() => {
                             info!(user_id, "per-user supervisor: cancel during live catchup");
-                            return Ok(());
+                            return Ok(UserSupervisorExit::Retryable);
                         }
                         result = catchup_user(db, user_id, fetcher, jmap_ops, cancel.clone()) => result,
                     };
                     if let Err(e) = catchup_res {
                         if is_auth_anyhow(&e) {
                             error!(user_id, error = %e, "live catchup: auth revoked (FATAL)");
-                            return Ok(());
+                            return Ok(UserSupervisorExit::Terminal);
                         }
                         warn!(user_id, error = %e, "live catchup: failed; reconnecting");
                         break;
@@ -338,7 +344,7 @@ async fn run_event_loop_with(
                         Some(Err(e)) => {
                             if is_auth_error(&e) {
                                 error!(user_id, error = %e, "event_source: auth revoked mid-stream (FATAL)");
-                                return Ok(());
+                                return Ok(UserSupervisorExit::Terminal);
                             }
                             warn!(user_id, error = %e, "event_source: stream error; reconnecting");
                             break;
@@ -367,7 +373,7 @@ async fn run_event_loop_with(
             "event_source: scheduling reconnect"
         );
         if sleeper.sleep(delay, &cancel).await {
-            return Ok(());
+            return Ok(UserSupervisorExit::Retryable);
         }
     }
 }

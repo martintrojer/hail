@@ -27,7 +27,9 @@ use chrono::Utc;
 use secrecy::SecretString;
 use subtle::ConstantTimeEq;
 
-use crate::middleware::session::{SESSION_COOKIE, cookie_value};
+use crate::middleware::session::{
+    SESSION_COOKIE, SESSION_TTL_DAYS, build_session_cookie, cookie_value,
+};
 use crate::state::AppState;
 /// CSRF header demanded on mutating methods. Same value the SPA sends.
 pub const CSRF_HEADER: &str = "X-Hail-Request";
@@ -199,15 +201,24 @@ pub async fn require_auth(
         }
     };
 
-    // Best-effort `last_used_at` bump. We don't fail the request if this
-    // INSERT-side-effect fails — auth has already succeeded.
-    if let Err(err) = sqlx::query("UPDATE sessions SET last_used_at = ?1 WHERE id = ?2")
-        .bind(now)
-        .bind(&cookie)
-        .execute(&state.db)
-        .await
+    // Best-effort sliding-session refresh. Auth has already succeeded, so
+    // a write failure should not fail the request, but downstream durable work
+    // must only see the extended expiry if it actually reached SQLite.
+    let refreshed_expires_at = now + chrono::Duration::days(SESSION_TTL_DAYS);
+    let mut session_expires_at = expires_at;
+    let mut refresh_cookie = false;
+    if let Err(err) =
+        sqlx::query("UPDATE sessions SET last_used_at = ?1, expires_at = ?2 WHERE id = ?3")
+            .bind(now)
+            .bind(refreshed_expires_at)
+            .bind(&cookie)
+            .execute(&state.db)
+            .await
     {
-        tracing::warn!(error = %err, "auth: last_used_at bump failed");
+        tracing::warn!(error = %err, "auth: sliding session refresh failed");
+    } else {
+        session_expires_at = refreshed_expires_at;
+        refresh_cookie = true;
     }
 
     req.extensions_mut().insert(AuthUser {
@@ -218,8 +229,19 @@ pub async fn require_auth(
     });
     req.extensions_mut().insert(AuthSession {
         id: session_id,
-        expires_at,
+        expires_at: session_expires_at,
     });
 
-    next.run(req).await
+    let mut response = next.run(req).await;
+    if refresh_cookie {
+        match header::HeaderValue::from_str(&build_session_cookie(&cookie)) {
+            Ok(cookie) => {
+                response.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "auth: failed to build session refresh cookie");
+            }
+        }
+    }
+    response
 }

@@ -34,7 +34,7 @@ use crate::scheduler::{
     process_trash_purge,
 };
 use crate::state::AppState;
-use crate::user::run_user_supervisor;
+use crate::user::{UserSupervisorExit, run_user_supervisor};
 
 /// Default tick cadence. Design.md §8.1 item 4 cites 60s; the env
 /// knob exists for smoke tests (the task contract bakes `HAIL_TICK_SECS=1`
@@ -83,7 +83,8 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     );
 
     let mut running: HashMap<i64, RunningUserTask> = HashMap::new();
-    let mut tasks: JoinSet<(i64, u64)> = JoinSet::new();
+    let mut terminal_users = TerminalUsers::default();
+    let mut tasks: JoinSet<UserTaskExit> = JoinSet::new();
     let mut next_run_id = 0;
     let bubble_jmap = LiveBubbleJmapOps::new(
         state.db.clone(),
@@ -107,7 +108,15 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     // Reconcile immediately so the first tick doesn't burn a full
     // cadence before users come online. Also run scheduled jobs once
     // so overdue bubble-ups and scheduled sends fire promptly after worker restart.
-    if reconcile(&state, &cancel, &mut running, &mut tasks, &mut next_run_id).await
+    if reconcile(
+        &state,
+        &cancel,
+        &mut running,
+        &mut terminal_users,
+        &mut tasks,
+        &mut next_run_id,
+    )
+    .await
         && run_scheduler_tick(
             &state,
             &bubble_jmap,
@@ -136,11 +145,12 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
                 break;
             }
             _ = sleep(tick) => {
-                reap_finished_user_tasks(&mut running, &mut tasks);
+                reap_finished_user_tasks(&mut running, &mut tasks, &mut terminal_users);
                 if !reconcile(
                     &state,
                     &cancel,
                     &mut running,
+                    &mut terminal_users,
                     &mut tasks,
                     &mut next_run_id,
                 )
@@ -173,7 +183,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             // Reap any finished per-user tasks so the JoinSet doesn't
             // grow unbounded across user churn.
             Some(res) = tasks.join_next() => {
-                handle_finished_user_task(res, &mut running);
+                handle_finished_user_task(res, &mut running, &mut terminal_users);
             }
         }
     }
@@ -193,7 +203,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     let drain = async {
         while let Some(res) = tasks.join_next().await {
             match res {
-                Ok((_user_id, _run_id)) => {}
+                Ok(_exit) => {}
                 Err(e) if e.is_cancelled() => {}
                 Err(e) => warn!(error = %e, "per-user task error on shutdown"),
             }
@@ -320,9 +330,41 @@ async fn cancel_or_complete<T>(
     }
 }
 
+struct UserTaskExit {
+    user_id: i64,
+    run_id: u64,
+    outcome: UserSupervisorExit,
+}
+
 struct RunningUserTask {
     cancel: CancellationToken,
     run_id: u64,
+}
+
+struct TerminalUsers(std::collections::HashSet<i64>);
+
+impl TerminalUsers {
+    fn contains(&self, user_id: i64) -> bool {
+        self.0.contains(&user_id)
+    }
+
+    fn mark(&mut self, user_id: i64) {
+        self.0.insert(user_id);
+    }
+
+    fn remove(&mut self, user_id: i64) {
+        self.0.remove(&user_id);
+    }
+
+    fn retain_active(&mut self, active: &[i64]) {
+        self.0.retain(|user_id| active.contains(user_id));
+    }
+}
+
+impl Default for TerminalUsers {
+    fn default() -> Self {
+        Self(std::collections::HashSet::new())
+    }
 }
 
 /// Reap all already-finished per-user tasks without blocking the supervisor
@@ -331,25 +373,43 @@ struct RunningUserTask {
 /// active-user reconciliation decides whether to spawn it again.
 fn reap_finished_user_tasks(
     running: &mut HashMap<i64, RunningUserTask>,
-    tasks: &mut JoinSet<(i64, u64)>,
+    tasks: &mut JoinSet<UserTaskExit>,
+    terminal_users: &mut TerminalUsers,
 ) {
     while let Some(res) = tasks.try_join_next() {
-        handle_finished_user_task(res, running);
+        handle_finished_user_task(res, running, terminal_users);
     }
 }
 
 fn handle_finished_user_task(
-    res: std::result::Result<(i64, u64), tokio::task::JoinError>,
+    res: std::result::Result<UserTaskExit, tokio::task::JoinError>,
     running: &mut HashMap<i64, RunningUserTask>,
+    terminal_users: &mut TerminalUsers,
 ) {
     match res {
-        Ok((user_id, run_id)) => {
+        Ok(UserTaskExit {
+            user_id,
+            run_id,
+            outcome,
+        }) => {
             if running
                 .get(&user_id)
                 .is_some_and(|task| task.run_id == run_id)
             {
                 running.remove(&user_id);
-                info!(user_id, run_id, "supervisor: per-user task finished");
+                match outcome {
+                    UserSupervisorExit::Terminal => {
+                        terminal_users.mark(user_id);
+                        warn!(
+                            user_id,
+                            run_id, "supervisor: per-user task exited terminally"
+                        );
+                    }
+                    UserSupervisorExit::Retryable => {
+                        terminal_users.remove(user_id);
+                        info!(user_id, run_id, "supervisor: per-user task finished");
+                    }
+                }
             }
         }
         Err(e) if e.is_cancelled() => {}
@@ -364,7 +424,8 @@ async fn reconcile(
     state: &Arc<AppState>,
     parent_cancel: &CancellationToken,
     running: &mut HashMap<i64, RunningUserTask>,
-    tasks: &mut JoinSet<(i64, u64)>,
+    terminal_users: &mut TerminalUsers,
+    tasks: &mut JoinSet<UserTaskExit>,
     next_run_id: &mut u64,
 ) -> bool {
     let active = match cancel_or_complete(parent_cancel, active_user_ids(&state.db)).await {
@@ -383,6 +444,7 @@ async fn reconcile(
         &active,
         parent_cancel,
         running,
+        terminal_users,
         tasks,
         next_run_id,
         |user_id, run_id, child, tasks| {
@@ -398,13 +460,16 @@ fn reconcile_active_users(
     active: &[i64],
     parent_cancel: &CancellationToken,
     running: &mut HashMap<i64, RunningUserTask>,
-    tasks: &mut JoinSet<(i64, u64)>,
+    terminal_users: &mut TerminalUsers,
+    tasks: &mut JoinSet<UserTaskExit>,
     next_run_id: &mut u64,
-    mut spawn: impl FnMut(i64, u64, CancellationToken, &mut JoinSet<(i64, u64)>),
+    mut spawn: impl FnMut(i64, u64, CancellationToken, &mut JoinSet<UserTaskExit>),
 ) {
+    terminal_users.retain_active(active);
+
     // Spawn for any user we're not already running.
     for uid in active {
-        if running.contains_key(uid) {
+        if running.contains_key(uid) || terminal_users.contains(*uid) {
             continue;
         }
         let child = parent_cancel.child_token();
@@ -441,7 +506,7 @@ fn reconcile_active_users(
 }
 
 fn spawn_user_task(
-    tasks: &mut JoinSet<(i64, u64)>,
+    tasks: &mut JoinSet<UserTaskExit>,
     user_id: i64,
     run_id: u64,
     task_state: Arc<AppState>,
@@ -451,15 +516,25 @@ fn spawn_user_task(
         // Per-user panic = log + exit *that* task only. Catching
         // unwind inside the task lets the top-level supervisor still
         // learn which user/run finished and clear `running` for retry.
-        match AssertUnwindSafe(run_user_supervisor(user_id, task_state, task_cancel))
+        let outcome = match AssertUnwindSafe(run_user_supervisor(user_id, task_state, task_cancel))
             .catch_unwind()
             .await
         {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => warn!(user_id, error = %e, "per-user supervisor exited with error"),
-            Err(_) => warn!(user_id, "per-user supervisor task panicked"),
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(e)) => {
+                warn!(user_id, error = %e, "per-user supervisor exited with error");
+                UserSupervisorExit::Retryable
+            }
+            Err(_) => {
+                warn!(user_id, "per-user supervisor task panicked");
+                UserSupervisorExit::Retryable
+            }
+        };
+        UserTaskExit {
+            user_id,
+            run_id,
+            outcome,
         }
-        (user_id, run_id)
     });
 }
 
@@ -511,20 +586,28 @@ mod tests {
         let mut tasks = JoinSet::new();
         let mut next_run_id = 0;
 
+        let mut terminal_users = TerminalUsers::default();
         reconcile_active_users(
             &[42],
             &parent_cancel,
             &mut running,
+            &mut terminal_users,
             &mut tasks,
             &mut next_run_id,
             |user_id, run_id, _cancel, tasks| {
-                tasks.spawn(async move { (user_id, run_id) });
+                tasks.spawn(async move {
+                    UserTaskExit {
+                        user_id,
+                        run_id,
+                        outcome: UserSupervisorExit::Retryable,
+                    }
+                });
             },
         );
         assert!(running.contains_key(&42));
 
         tokio::task::yield_now().await;
-        reap_finished_user_tasks(&mut running, &mut tasks);
+        reap_finished_user_tasks(&mut running, &mut tasks, &mut terminal_users);
 
         assert!(!running.contains_key(&42));
     }
@@ -537,29 +620,44 @@ mod tests {
         let mut next_run_id = 0;
         let mut spawned = Vec::new();
 
+        let mut terminal_users = TerminalUsers::default();
         reconcile_active_users(
             &[7],
             &parent_cancel,
             &mut running,
+            &mut terminal_users,
             &mut tasks,
             &mut next_run_id,
             |user_id, run_id, _cancel, tasks| {
                 spawned.push((user_id, run_id));
-                tasks.spawn(async move { (user_id, run_id) });
+                tasks.spawn(async move {
+                    UserTaskExit {
+                        user_id,
+                        run_id,
+                        outcome: UserSupervisorExit::Retryable,
+                    }
+                });
             },
         );
         tokio::task::yield_now().await;
-        reap_finished_user_tasks(&mut running, &mut tasks);
+        reap_finished_user_tasks(&mut running, &mut tasks, &mut terminal_users);
 
         reconcile_active_users(
             &[7],
             &parent_cancel,
             &mut running,
+            &mut terminal_users,
             &mut tasks,
             &mut next_run_id,
             |user_id, run_id, _cancel, tasks| {
                 spawned.push((user_id, run_id));
-                tasks.spawn(async move { (user_id, run_id) });
+                tasks.spawn(async move {
+                    UserTaskExit {
+                        user_id,
+                        run_id,
+                        outcome: UserSupervisorExit::Retryable,
+                    }
+                });
             },
         );
 
@@ -575,17 +673,23 @@ mod tests {
         let mut next_run_id = 0;
         let mut child = None;
 
+        let mut terminal_users = TerminalUsers::default();
         reconcile_active_users(
             &[99],
             &parent_cancel,
             &mut running,
+            &mut terminal_users,
             &mut tasks,
             &mut next_run_id,
             |user_id, run_id, cancel, tasks| {
                 child = Some(cancel.clone());
                 tasks.spawn(async move {
                     cancel.cancelled().await;
-                    (user_id, run_id)
+                    UserTaskExit {
+                        user_id,
+                        run_id,
+                        outcome: UserSupervisorExit::Retryable,
+                    }
                 });
             },
         );
@@ -593,6 +697,7 @@ mod tests {
             &[],
             &parent_cancel,
             &mut running,
+            &mut terminal_users,
             &mut tasks,
             &mut next_run_id,
             |_user_id, _run_id, _cancel, _tasks| unreachable!("no active users to spawn"),

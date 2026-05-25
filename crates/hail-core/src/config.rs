@@ -38,7 +38,6 @@ const ENV_NESTED_SEP: &str = "__";
 /// for a 256-bit key; we accept either 32 decoded hex bytes or at least
 /// 32 non-hex raw bytes so operators can rotate to a larger raw key
 /// without code changes.
-const MIN_SERVER_KEY_BYTES: usize = 32;
 
 /// Top-level configuration. Cheap to clone (held inside `Arc<AppState>`).
 #[derive(Debug, Clone, Deserialize)]
@@ -146,8 +145,7 @@ pub enum ConfigError {
     /// error verbatim — it already points at file + field.
     #[error(transparent)]
     Parse(Box<figment::Error>),
-    /// `secrets.server_key` was empty or does not provide at least
-    /// `MIN_SERVER_KEY_BYTES` of usable key material.
+    /// `secrets.server_key` was empty or invalid.
     #[error("invalid server_key: {0}")]
     InvalidServerKey(String),
 }
@@ -209,49 +207,17 @@ fn env_layer_empty() -> bool {
     std::env::vars().all(|(k, _)| !k.starts_with(ENV_PREFIX))
 }
 
-/// Validate the server key: non-empty, and either 64+ hex characters
-/// (representing at least 32 bytes) or a non-hex raw string of at least
-/// 32 bytes. `parse_server_key` uses the decoded 64-character hex value
-/// or the first 32 raw bytes; it does not base64-decode keys.
+/// Validate the server key by using the same parser that runtime crypto uses.
+/// This accepts exactly 64 ASCII hex characters (`openssl rand -hex 32`) or a
+/// non-hex raw string of at least 32 bytes. Longer pure-hex strings are rejected
+/// instead of silently becoming raw ASCII at runtime.
 fn validate_server_key(key: &SecretString) -> Result<(), ConfigError> {
-    let raw = key.expose_secret();
-    if raw.is_empty() {
-        return Err(ConfigError::InvalidServerKey(
-            "empty; set HAIL_SECRETS__SERVER_KEY or [secrets].server_key in TOML".to_string(),
-        ));
-    }
-
-    // Try hex first.
-    if let Some(bytes) = decode_hex(raw) {
-        if bytes >= MIN_SERVER_KEY_BYTES {
-            return Ok(());
-        }
-        return Err(ConfigError::InvalidServerKey(format!(
-            "hex-decoded length {bytes} < required {MIN_SERVER_KEY_BYTES} bytes"
-        )));
-    }
-
-    // Fall back to raw byte length. Anything ≥ 32 bytes is acceptable;
-    // parse_server_key will use the first 32 bytes directly.
-    if raw.len() >= MIN_SERVER_KEY_BYTES {
-        return Ok(());
-    }
-
-    Err(ConfigError::InvalidServerKey(format!(
-        "{} chars; need ≥ {} bytes (hex-encode 32 random bytes: `openssl rand -hex 32`)",
-        raw.len(),
-        MIN_SERVER_KEY_BYTES
-    )))
-}
-
-/// Hex-decode `s` and return its byte length. `None` if `s` isn't a pure
-/// hex string — we don't actually need the bytes, just the length.
-fn decode_hex(s: &str) -> Option<usize> {
-    if s.is_empty() || !s.len().is_multiple_of(2) {
-        return None;
-    }
-    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(s.len() / 2)
+    crate::parse_server_key(key).map(|_| ()).map_err(|err| {
+        let msg = if key.expose_secret().is_empty() {
+            "empty; set HAIL_SECRETS__SERVER_KEY or [secrets].server_key in TOML".to_string()
+        } else {
+            err.to_string()
+        };
+        ConfigError::InvalidServerKey(msg)
+    })
 }

@@ -177,6 +177,25 @@ server_key = "0123456789abcdef0123456789abcd"
 }
 
 #[test]
+fn longer_pure_hex_server_key_is_rejected() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let err = Config::load_from(Some(&path)).expect_err("must reject 66-char hex key");
+    assert!(matches!(err, ConfigError::InvalidServerKey(_)));
+}
+
+#[test]
 fn setup_bootstrap_defaults_to_disabled() {
     let _guard = env_lock();
     clear_hail_env();
