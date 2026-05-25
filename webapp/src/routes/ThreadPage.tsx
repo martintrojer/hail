@@ -1,9 +1,10 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
+  HailApiClient,
   HailApiError,
-
   type ThreadMessage,
+  type ThreadVerbResponse,
   type ThreadViewResponse,
 } from '../api/client';
 import {
@@ -22,6 +23,7 @@ import {
 } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { MessageActionPopup } from '../components/MessageActionPopup';
+import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 
 interface ThreadPageProps {
@@ -180,7 +182,7 @@ function MessageCard({
   popupAnchor,
   onTogglePopup,
   onClosePopup,
-  onStartAddNote,
+  onPopupAction,
   onCancelAddNote,
   onSaveNote,
 }: {
@@ -191,7 +193,7 @@ function MessageCard({
   popupAnchor: DOMRect | null;
   onTogglePopup: (messageId: string, anchorRect: DOMRect) => void;
   onClosePopup: () => void;
-  onStartAddNote: (messageId: string) => void;
+  onPopupAction: (message: ThreadMessage, action: string, payload?: unknown) => void;
   onCancelAddNote: () => void;
   onSaveNote: (messageId: string, text: string) => void;
 }) {
@@ -201,11 +203,8 @@ function MessageCard({
     onTogglePopup(message.email_id, event.currentTarget.getBoundingClientRect());
   }
 
-  function handlePopupAction(action: string) {
-    if (action === 'add-note') {
-      onStartAddNote(message.email_id);
-    }
-    onClosePopup();
+  function handlePopupAction(action: string, payload?: unknown) {
+    onPopupAction(message, action, payload);
   }
 
   return (
@@ -372,10 +371,13 @@ function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
 
 function ThreadDocument({
   thread,
+  client,
 }: {
   thread: ThreadViewResponse;
+  client: HailApiClient;
 }) {
   const navigate = useNavigate();
+  const { showToast } = useUndoToast();
   const messages = useMemo(
     () => sortedMessages(thread.messages),
     [thread.messages],
@@ -405,6 +407,90 @@ function ThreadDocument({
 
   function closeMessagePopup() {
     setMessagePopup(null);
+  }
+
+  function showUndoToast(
+    message: string,
+    response: ThreadVerbResponse,
+    undoSuccessMessage: string,
+  ) {
+    showToast({
+      message,
+      undo: response.undo ? { id: response.undo.id } : null,
+      undoSuccessMessage,
+    });
+  }
+
+  async function handlePopupAction(
+    message: ThreadMessage,
+    action: string,
+    payload?: unknown,
+  ) {
+    closeMessagePopup();
+
+    switch (action) {
+      case 'add-note':
+        setAddingNoteFor(message.email_id);
+        return;
+      case 'set-aside': {
+        const response = await client.setAsideThread(thread.thread_id);
+        showUndoToast('Thread added to Set Aside.', response, 'Set Aside undone.');
+        goBack();
+        return;
+      }
+      case 'reply-later': {
+        const response = await client.replyLaterThread(thread.thread_id);
+        showUndoToast('Thread added to Reply Later.', response, 'Reply Later undone.');
+        goBack();
+        return;
+      }
+      case 'trash': {
+        const response = await client.trashThread(thread.thread_id);
+        showUndoToast('Thread moved to trash.', response, 'Trash undone.');
+        goBack();
+        return;
+      }
+      case 'archive':
+        await client.archiveThread(thread.thread_id);
+        goBack();
+        return;
+      case 'reply':
+        void navigate({ to: '/compose', search: { replyTo: thread.thread_id } });
+        return;
+      case 'reply-all':
+        void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: '1' } });
+        return;
+      case 'forward':
+        void navigate({ to: '/compose', search: { forward: message.email_id } });
+        return;
+      case 'move-to': {
+        if (payload !== 'imbox' && payload !== 'feed' && payload !== 'papertrail') {
+          showToast({ message: 'Move target not supported.' });
+          return;
+        }
+        const response = await client.moveThread(thread.thread_id, payload);
+        const labels = {
+          imbox: 'Imbox',
+          feed: 'Feed',
+          papertrail: 'Paper Trail',
+        };
+        showUndoToast(
+          `Moved thread to ${labels[payload]}.`,
+          response,
+          'Thread move undone.',
+        );
+        goBack();
+        return;
+      }
+      case 'bubble-up':
+        showToast({ message: 'Bubble up coming soon.' });
+        return;
+      case 'mark-spam':
+        showToast({ message: 'Spam reporting coming soon.' });
+        return;
+      default:
+        return;
+    }
   }
 
   function saveNote(messageId: string, text: string) {
@@ -457,7 +543,9 @@ function ThreadDocument({
               }
               onTogglePopup={toggleMessagePopup}
               onClosePopup={closeMessagePopup}
-              onStartAddNote={setAddingNoteFor}
+              onPopupAction={(message, action, payload) => {
+                void handlePopupAction(message, action, payload);
+              }}
               onCancelAddNote={() => setAddingNoteFor(null)}
               onSaveNote={saveNote}
             />
@@ -496,7 +584,7 @@ export function ThreadPage({ threadId, client }: ThreadPageProps) {
       />
     );
   } else {
-    reading = <ThreadDocument thread={query.data} />;
+    reading = <ThreadDocument thread={query.data} client={apiClient} />;
   }
 
   return <AppShell title="Thread" description={undefined} reading={reading} />;

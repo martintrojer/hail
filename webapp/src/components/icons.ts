@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowLeft,
   ArrowUpCircle,
   Bookmark,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 
 export {
+  Archive,
   ArrowLeft,
   ArrowUpCircle,
   Bookmark,
