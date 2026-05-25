@@ -44,6 +44,9 @@ type PileGetSuccess = ResponseBody<
 type MailViewGetSuccess = ResponseBody<
   paths['/api/views/imbox']['get']['responses']['200']
 >;
+type TrashGetSuccess = ResponseBody<
+  paths['/api/views/trash']['get']['responses']['200']
+>;
 type SearchGetSuccess = ResponseBody<
   paths['/api/views/search']['get']['responses']['200']
 >;
@@ -129,12 +132,14 @@ export interface SetupAdminRequest {
 }
 
 export type MailClassification = components['schemas']['MailClassification'];
-export type MailViewKind = Exclude<MailClassification, 'drafts'>;
+export type MailViewKind = Extract<MailClassification, 'imbox' | 'feed' | 'papertrail'>;
 export type DraftsViewKind = 'drafts';
+export type TrashViewKind = 'trash';
 export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
+export type TrashViewResponse = TrashGetSuccess;
 export type SearchResult = components['schemas']['SearchResult'];
 export type MailSearchResult = Extract<SearchResult, { type: 'mail' }>;
 export type ContactNoteSearchResult = Extract<SearchResult, { type: 'contact_note' }>;
@@ -404,6 +409,13 @@ export class HailApiClient {
   async getDrafts(): Promise<MailViewResponse> {
     return this.#json<MailViewResponse>(
       await this.#request('/api/views/drafts'),
+      200,
+    );
+  }
+
+  async getTrash(): Promise<TrashViewResponse> {
+    return this.#json<TrashViewResponse>(
+      await this.#request('/api/views/trash'),
       200,
     );
   }

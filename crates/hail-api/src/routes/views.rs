@@ -80,6 +80,11 @@ impl MailViewProvider for JmapMailViewProvider {
                 if let Some(drafts_mailbox_id) = drafts_mailbox_id(&session).await? {
                     filter = Filter::from(email_query::Filter::in_mailbox(drafts_mailbox_id));
                 }
+            } else if view == MailView::Trash {
+                let Some(trash_mailbox_id) = trash_mailbox_id(&session).await? else {
+                    return Ok(Vec::new());
+                };
+                filter = Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id));
             }
             request
                 .query_email()
@@ -343,7 +348,8 @@ where
         .routes(routes!(get_imbox).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
-        .routes(routes!(get_drafts).layer(Extension(mail_provider)))
+        .routes(routes!(get_drafts).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_trash).layer(Extension(mail_provider)))
         .routes(routes!(get_bubble_up))
         .routes(routes!(get_search).layer(Extension(search_provider)))
 }
@@ -368,6 +374,7 @@ pub enum MailView {
     Feed,
     Papertrail,
     Drafts,
+    Trash,
 }
 
 impl MailView {
@@ -377,6 +384,7 @@ impl MailView {
             Self::Feed => "$hail_feed",
             Self::Papertrail => "$hail_papertrail",
             Self::Drafts => "$draft",
+            Self::Trash => "$deleted",
         }
     }
 
@@ -386,6 +394,7 @@ impl MailView {
             Self::Feed => MailClassification::Feed,
             Self::Papertrail => MailClassification::Papertrail,
             Self::Drafts => MailClassification::Drafts,
+            Self::Trash => MailClassification::Trash,
         }
     }
 }
@@ -397,6 +406,7 @@ pub enum MailClassification {
     Feed,
     Papertrail,
     Drafts,
+    Trash,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -608,6 +618,26 @@ async fn get_drafts(
     Query(query): Query<ViewQuery>,
 ) -> Response {
     get_view(state, user, provider, query, MailView::Drafts).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/trash",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Trash mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_trash(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+    Query(query): Query<ViewQuery>,
+) -> Response {
+    get_view(state, user, provider, query, MailView::Trash).await
 }
 
 #[utoipa::path(
@@ -865,6 +895,14 @@ async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String
     use hail_jmap::jmap_client::mailbox::Role;
 
     hail_jmap::mailbox_id_by_role(session, Role::Drafts)
+        .await
+        .map_err(|err| MailViewError::provider(err.to_string()))
+}
+
+async fn trash_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String>, MailViewError> {
+    use hail_jmap::jmap_client::mailbox::Role;
+
+    hail_jmap::mailbox_id_by_role(session, Role::Trash)
         .await
         .map_err(|err| MailViewError::provider(err.to_string()))
 }

@@ -218,6 +218,12 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
             MailClassification::Drafts,
             "drafts",
         ),
+        (
+            "/api/views/trash",
+            MailView::Trash,
+            MailClassification::Trash,
+            "trash",
+        ),
     ];
 
     for (path, expected_view, classification, expected_json) in cases {
@@ -235,6 +241,7 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
     assert_eq!(MailView::Feed.keyword(), "$hail_feed");
     assert_eq!(MailView::Papertrail.keyword(), "$hail_papertrail");
     assert_eq!(MailView::Drafts.keyword(), "$draft");
+    assert_eq!(MailView::Trash.keyword(), "$deleted");
 }
 
 #[tokio::test]

@@ -38,6 +38,7 @@ import {
   type SetupState,
   type ThreadVerbResponse,
   type ThreadViewResponse,
+  type TrashViewResponse,
   type UserEnvelope,
 } from './client';
 import { queryKeys } from './queryKeys';
@@ -277,6 +278,17 @@ export function useDraftsView(
   return useQuery({
     queryKey: queryKeys.view('drafts'),
     queryFn: () => client.getDrafts(),
+    ...options,
+  });
+}
+
+export function useTrashView(
+  client = defaultApiClient,
+  options?: QueryConfig<TrashViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('trash'),
+    queryFn: () => client.getTrash(),
     ...options,
   });
 }

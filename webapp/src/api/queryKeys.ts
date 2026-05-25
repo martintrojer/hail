@@ -9,7 +9,7 @@ export const queryKeys = {
   adminStats: () => [...queryKeys.admin(), 'stats'] as const,
   adminDomains: () => [...queryKeys.admin(), 'domains'] as const,
   views: () => [...queryKeys.all, 'views'] as const,
-  view: (view: 'imbox' | 'feed' | 'papertrail' | 'drafts' | 'set-aside' | 'reply-later' | 'bubble-up') =>
+  view: (view: 'imbox' | 'feed' | 'papertrail' | 'drafts' | 'trash' | 'set-aside' | 'reply-later' | 'bubble-up') =>
     [...queryKeys.views(), view] as const,
   search: (q: string, scope: 'all' | 'mail' | 'notes' | 'clips') =>
     [...queryKeys.views(), 'search', scope, q] as const,

@@ -497,6 +497,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/trash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_trash"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -675,7 +691,7 @@ export interface components {
             updated_at: string;
         };
         /** @enum {string} */
-        MailClassification: "imbox" | "feed" | "papertrail" | "drafts";
+        MailClassification: "imbox" | "feed" | "papertrail" | "drafts" | "trash";
         MailViewItem: {
             bcc: string[];
             cc: string[];
@@ -2393,6 +2409,43 @@ export interface operations {
                 content?: never;
             };
             /** @description Pile lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_trash: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trash mail view. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailViewResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP mail view lookup failed. */
             500: {
                 headers: {
                     [name: string]: unknown;

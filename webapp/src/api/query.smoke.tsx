@@ -18,6 +18,7 @@ import {
   useSetAsideThreadMutation,
   useSetupState,
   useTrashThreadMutation,
+  useTrashView,
 } from './query';
 import { queryKeys } from './queryKeys';
 
@@ -29,6 +30,7 @@ export function ApiHookSmoke() {
   void useImboxView();
   void useFeedView();
   void usePapertrailView();
+  void useTrashView();
   void useContact('person@example.com');
   void useLoginMutation();
   void useLogoutMutation();
@@ -42,6 +44,7 @@ export function ApiHookSmoke() {
   void useContactNoteMutation();
   void useBubbleUpMutation();
   void queryKeys.contact('person@example.com');
+  void queryKeys.view('trash');
   void queryKeys.view('imbox');
 
   return null;
