@@ -89,6 +89,20 @@ pub trait ThreadActions: Send + Sync + 'static {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
 
+    fn restore<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
+
+    fn destroy<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
+
     fn mark<'a>(
         &'a self,
         state: &'a AppState,
@@ -257,6 +271,36 @@ impl ThreadActions for JmapThreadActions {
         )
     }
 
+    fn restore<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(
+            async move { move_thread_to_role(state, token, thread_id, MailboxRole::Inbox).await },
+        )
+    }
+
+    fn destroy<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let session = login(state, token).await?;
+            let email_ids = email_ids_in_thread(&session, thread_id).await?;
+            let mut request = session.client().build();
+            request.set_email().destroy(email_ids.iter().map(String::as_str));
+            let mut response = request.send_set_email().await.map_err(provider_error)?;
+            for email_id in &email_ids {
+                response.destroyed(email_id).map_err(provider_error)?;
+            }
+            Ok(())
+        })
+    }
+
     fn mark<'a>(
         &'a self,
         state: &'a AppState,
@@ -342,6 +386,8 @@ where
         .routes(routes!(reply_later).layer(Extension(actions.clone())))
         .routes(routes!(archive_thread).layer(Extension(actions.clone())))
         .routes(routes!(trash_thread).layer(Extension(actions.clone())))
+        .routes(routes!(restore_thread).layer(Extension(actions.clone())))
+        .routes(routes!(destroy_thread).layer(Extension(actions.clone())))
         .routes(routes!(mark_thread).layer(Extension(actions)))
 }
 
@@ -399,6 +445,11 @@ impl Classification {
 #[derive(Debug, Serialize, ToSchema)]
 struct ThreadVerbResponse {
     undo: Option<UndoToken>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DestroyThreadResponse {
+    status: &'static str,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -876,6 +927,131 @@ async fn trash_thread(
 
 #[utoipa::path(
     post,
+    path = "/api/threads/{thread_id}/restore",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread restored to inbox.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread restore failed."),
+    ),
+)]
+async fn restore_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    if !looks_like_jmap_id(&thread_id) {
+        return bad_request("invalid_thread_id");
+    }
+    match actions
+        .restore(&state, user.jmap_token.clone(), &thread_id)
+        .await
+    {
+        Ok(()) => {
+            match actions
+                .classify(&state, user.jmap_token.clone(), &thread_id, Classification::Imbox)
+                .await
+            {
+                Ok(()) => {}
+                Err(ThreadActionError::NotFound) => return not_found(),
+                Err(ThreadActionError::Provider(err)) => {
+                    return action_internal(user.id, &thread_id, err);
+                }
+            }
+            let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await;
+            let _ = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await;
+
+            tracing::debug!(user_id = user.id, thread_id = %thread_id, "restore undo unavailable: previous mailbox snapshot not captured");
+            Json(ThreadVerbResponse { undo: None }).into_response()
+        }
+        Err(ThreadActionError::NotFound) => not_found(),
+        Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/threads/{thread_id}/destroy",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread permanently destroyed.", body = DestroyThreadResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread destroy failed."),
+    ),
+)]
+async fn destroy_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    if !looks_like_jmap_id(&thread_id) {
+        return bad_request("invalid_thread_id");
+    }
+    match actions
+        .destroy(&state, user.jmap_token.clone(), &thread_id)
+        .await
+    {
+        Ok(()) => {
+            if let Err(err) = sqlx::query("DELETE FROM thread_notes WHERE user_id = ?1 AND thread_id = ?2")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await
+            {
+                tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread note cleanup failed after destroy");
+                return internal();
+            }
+            if let Err(err) = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await
+            {
+                tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "stack cleanup failed after destroy");
+                return internal();
+            }
+            if let Err(err) = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await
+            {
+                tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "bubble-up cleanup failed after destroy");
+                return internal();
+            }
+
+            Json(DestroyThreadResponse {
+                status: "destroyed",
+            })
+            .into_response()
+        }
+        Err(ThreadActionError::NotFound) => not_found(),
+        Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
+    }
+}
+
+#[utoipa::path(
+    post,
     path = "/api/threads/{thread_id}/mark",
     tag = TAG,
     params(
@@ -1015,6 +1191,7 @@ async fn email_ids_in_thread(
 #[derive(Clone, Copy)]
 enum MailboxRole {
     Archive,
+    Inbox,
     Trash,
 }
 
@@ -1022,6 +1199,7 @@ impl MailboxRole {
     const fn jmap(self) -> hail_jmap::jmap_client::mailbox::Role {
         match self {
             Self::Archive => hail_jmap::jmap_client::mailbox::Role::Archive,
+            Self::Inbox => hail_jmap::jmap_client::mailbox::Role::Inbox,
             Self::Trash => hail_jmap::jmap_client::mailbox::Role::Trash,
         }
     }
@@ -1029,6 +1207,7 @@ impl MailboxRole {
     const fn name(self) -> &'static str {
         match self {
             Self::Archive => "archive",
+            Self::Inbox => "inbox",
             Self::Trash => "trash",
         }
     }

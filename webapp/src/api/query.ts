@@ -22,12 +22,14 @@ import {
   type ComposeResponse,
   type CreateAdminUserRequest,
   type DeniedSendersResponse,
+  type DestroyThreadResponse,
   type DraftRequest,
   type DraftResponse,
   type LoginRequest,
   type MailViewResponse,
   type PileViewResponse,
   type PutContactNoteRequest,
+  type RestoreThreadResponse,
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
@@ -521,6 +523,43 @@ export function useTrashThreadMutation(
       void queryClient.invalidateQueries({
         queryKey: queryKeys.thread(variables.threadId),
       });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useRestoreThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, RestoreThreadResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.restoreThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useDestroyThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, DestroyThreadResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.destroyThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.removeQueries({ queryKey: queryKeys.thread(variables.threadId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.view('trash') });
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
