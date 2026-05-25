@@ -642,11 +642,11 @@ UI: HEY-inspired warm paper aesthetic (single-column, no sidebar, dropdown menu 
 
 ### v1.1 — "Power user complete"
 
-Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Files view (per-contact, per-thread, global attachments browser), aliases / send-as identities, Screener Speakeasy (private bypass address), keyboard power-through-Imbox triage mode.
+Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Files view (per-contact, per-thread, global attachments browser), aliases / send-as identities, Screener Speakeasy (private bypass address), keyboard power-through-Imbox triage mode, Trash view (list/restore/auto-purge after N days), Spam view + mark-as-spam + Stalwart antispam integration.
 
 ### v2 — Polish + self-host bonus
 
-Per-identity delivery windows, user-defined auto-classification rules (Workflows — mail rules with conditions/actions, list/detail/edit UI), merge contacts, first-reply auto-promote Feed→Imbox, drag-to-classify in Screener, daily Feed digest, Sieve rules editor, vacation responder UI, multiple identities UI, backup/restore + data export, dark mode.
+Per-identity delivery windows, user-defined auto-classification rules (Workflows — mail rules with conditions/actions, list/detail/edit UI), merge contacts, first-reply auto-promote Feed→Imbox, drag-to-classify in Screener, daily Feed digest, Sieve rules editor, vacation responder UI, multiple identities UI, backup/restore + data export, dark mode, LLM-assisted spam classification (optional, local ollama or API provider).
 
 ### v2.1 / later — Alternate clients
 
