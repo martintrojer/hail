@@ -16,6 +16,7 @@ import { queryKeys } from '../api/queryKeys';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
+import { queryClient as appQueryClient } from '../lib/queryClient';
 import {
   createTestQueryClient,
   renderWithQueryClient,
@@ -38,6 +39,7 @@ class ThreadPageTestClient extends TestHailApiClient {
     threadId: string;
     request: BubbleUpRequest;
   }> = [];
+  readonly markThreadCalls: Array<{ threadId: string; read: boolean }> = [];
 
   failingActions = new Set<string>();
 
@@ -55,6 +57,10 @@ class ThreadPageTestClient extends TestHailApiClient {
       note: null,
       threads: [],
     };
+  }
+
+  override async markThread(threadId: string, read: boolean): Promise<void> {
+    this.markThreadCalls.push({ threadId, read });
   }
 
   override async createThreadNote(
@@ -169,6 +175,7 @@ function renderThread(thread: ThreadViewResponse) {
   const client = new ThreadPageTestClient(thread);
 
   seedMe(queryClient);
+  seedMe(appQueryClient);
   queryClient.setQueryData(queryKeys.thread(thread.thread_id), thread);
 
   currentTestBody = (
@@ -373,6 +380,92 @@ describe('ThreadPage', () => {
     );
     expect(screen.getByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
     expect(client.trashCalls).toEqual(['thread-1']);
+  });
+
+  it('routes every thread popup verb through API mutations, cache invalidation, and undo UI', async () => {
+    const { client, queryClient } = renderThread(sampleThread());
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Reply Later' }));
+    await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-1']));
+    expect(
+      await screen.findByText('Thread added to Reply Later.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(client.archiveCalls).toEqual(['thread-1']));
+
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Paper Trail' }));
+    await waitFor(() => {
+      expect(client.classifyCalls).toContainEqual({
+        threadId: 'thread-1',
+        to: 'papertrail',
+      });
+    });
+    expect(
+      await screen.findByText('Moved thread to Paper Trail.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    await waitFor(() => expect(client.trashCalls).toEqual(['thread-1']));
+    expect(await screen.findByText('Thread moved to trash.')).toBeInTheDocument();
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.thread('thread-1'),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
+    expect(client.markThreadCalls).toEqual([
+      { threadId: 'thread-1', read: true },
+    ]);
+  });
+
+  it('routes reply, reply-all, and forward popup actions to compose search params', async () => {
+    renderThread(sampleThread());
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/compose');
+      expect(window.location.search).toContain('replyTo=thread-1');
+      expect(window.location.search).toContain('replyAll=false');
+    });
+
+    window.history.pushState({}, '', '/thread/thread-1');
+    await router.invalidate();
+    const firstReplyAllActionButton = await screen
+      .findAllByRole('button', { name: 'Message actions' })
+      .then((buttons) => buttons[0]);
+    fireEvent.click(firstReplyAllActionButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Reply All' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/compose');
+      expect(window.location.search).toContain('replyTo=thread-1');
+      expect(window.location.search).toContain('replyAll=true');
+    });
+
+    window.history.pushState({}, '', '/thread/thread-1');
+    await router.invalidate();
+    const firstForwardActionButton = await screen
+      .findAllByRole('button', { name: 'Message actions' })
+      .then((buttons) => buttons[0]);
+    fireEvent.click(firstForwardActionButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Forward' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/compose');
+      expect(window.location.search).toContain('forward=message-html');
+    });
   });
 
   it('routes bubble-up selections through the shared mutation', async () => {
