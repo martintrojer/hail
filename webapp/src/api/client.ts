@@ -29,6 +29,12 @@ type ContactNotePutSuccess = ResponseBody<
 type ScreenerGetSuccess = ResponseBody<
   paths['/api/views/screener']['get']['responses']['200']
 >;
+type DeniedSendersGetSuccess = ResponseBody<
+  paths['/api/views/screener/denied']['get']['responses']['200']
+>;
+type UndoDenyPostSuccess = ResponseBody<
+  paths['/api/screener/{address}/undo-deny']['post']['responses']['200']
+>;
 type ScreenerDecisionPostSuccess = ResponseBody<
   paths['/api/screener/decisions']['post']['responses']['200']
 >;
@@ -164,6 +170,9 @@ export type BlobUploadPart =
 export type ScreenerDecision = 'approve' | 'deny';
 export type ScreenerClassification = components['schemas']['Classification'];
 export type ScreenerPendingSender = components['schemas']['ScreenerSender'];
+export type DeniedSender = components['schemas']['DeniedSender'];
+export type DeniedSendersResponse = DeniedSendersGetSuccess;
+export type UndoDenyResponse = UndoDenyPostSuccess;
 export type ScreenerView = ScreenerGetSuccess;
 export type ScreenerDecisionRequest = components['schemas']['DecisionRequest'];
 export type UndoToken = components['schemas']['UndoToken'];
@@ -342,6 +351,13 @@ export class HailApiClient {
     );
   }
 
+  async getDeniedSenders(): Promise<DeniedSendersResponse> {
+    return this.#json<DeniedSendersResponse>(
+      await this.#request('/api/views/screener/denied'),
+      200,
+    );
+  }
+
   async getImbox(): Promise<MailViewResponse> {
     return this.#json<MailViewResponse>(
       await this.#request('/api/views/imbox'),
@@ -446,6 +462,19 @@ export class HailApiClient {
         body,
         mutating: true,
       }),
+      200,
+    );
+  }
+
+  async undoDeny(address: string): Promise<UndoDenyResponse> {
+    return this.#json<UndoDenyResponse>(
+      await this.#request(
+        `/api/screener/${encodeURIComponent(address)}/undo-deny`,
+        {
+          method: 'POST',
+          mutating: true,
+        },
+      ),
       200,
     );
   }

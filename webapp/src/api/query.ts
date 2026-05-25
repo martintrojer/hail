@@ -18,6 +18,7 @@ import {
   type ComposeRequest,
   type ComposeResponse,
   type CreateAdminUserRequest,
+  type DeniedSendersResponse,
   type DraftRequest,
   type DraftResponse,
   type LoginRequest,
@@ -27,6 +28,7 @@ import {
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
+  type UndoDenyResponse,
   type SearchParams,
   type SearchResponse,
   type SetupAdminRequest,
@@ -210,6 +212,17 @@ export function useScreenerView(
   });
 }
 
+export function useDeniedSenders(
+  client = defaultApiClient,
+  options?: QueryConfig<DeniedSendersResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.screenerDenied(),
+    queryFn: () => client.getDeniedSenders(),
+    ...options,
+  });
+}
+
 export function useImboxView(
   client = defaultApiClient,
   options?: QueryConfig<MailViewResponse>,
@@ -360,6 +373,23 @@ export function useScreenerDecisionMutation(
 
   return useMutation({
     mutationFn: (body) => client.decideScreener(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useUndoDenyMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<string, UndoDenyResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (address) => client.undoDeny(address),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
