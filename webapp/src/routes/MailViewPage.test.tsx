@@ -151,6 +151,7 @@ function mailItem(
     received_at: '2026-05-23T12:00:00Z',
     unread: true,
     classification,
+    has_notes: false,
     ...overrides,
   };
 }
@@ -215,6 +216,7 @@ describe('MailViewPage', () => {
               subject: 'Read this first',
               preview: 'A direct note for the Imbox.',
               unread: true,
+              has_notes: true,
             }),
           ]),
         ),
@@ -229,6 +231,7 @@ describe('MailViewPage', () => {
     expect(within(link).getByText('Imbox')).toBeInTheDocument();
     expect(within(link).getByText('Unread')).toBeInTheDocument();
     expect(screen.getByLabelText('Unread thread')).toBeInTheDocument();
+    expect(within(link).getByLabelText('Thread has notes')).toBeInTheDocument();
     expect(within(link).getByText('A direct note for the Imbox.')).toBeInTheDocument();
   });
 

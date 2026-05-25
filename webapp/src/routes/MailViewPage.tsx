@@ -19,7 +19,7 @@ import {
   useTrashThreadMutation,
 } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
-import { ArrowUpCircle, X, iconSizeProps } from '../components/icons';
+import { ArrowUpCircle, StickyNote, X, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useOptionalUndoToast } from '../components/UndoToastProvider';
@@ -282,6 +282,27 @@ function MailThreadRow({ item, view }: { item: MailViewItem; view: MailViewKind 
   return <ImboxThreadRow item={item} />;
 }
 
+function SubjectWithNoteIcon({
+  item,
+  className,
+}: {
+  item: MailViewItem;
+  className: string;
+}) {
+  return (
+    <p className={className}>
+      <span className="truncate">{item.subject || '(no subject)'}</span>
+      {item.has_notes ? (
+        <StickyNote
+          {...iconSizeProps.sm}
+          className="ml-1.5 inline-block shrink-0 align-[-0.125em] text-ink-tertiary"
+          aria-label="Thread has notes"
+        />
+      ) : null}
+    </p>
+  );
+}
+
 function ImboxThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
@@ -304,9 +325,10 @@ function ImboxThreadRow({ item }: { item: MailViewItem }) {
           {formatDate(item.received_at)}
         </time>
       </div>
-      <p className="mt-1 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary">
-        {item.subject || '(no subject)'}
-      </p>
+      <SubjectWithNoteIcon
+        item={item}
+        className="mt-1 flex items-center truncate text-[0.95rem] font-normal leading-snug text-ink-secondary"
+      />
       <p className="mt-1 truncate text-sm font-normal leading-snug text-ink-tertiary">
         {item.preview || 'No preview available.'}
       </p>
@@ -336,9 +358,10 @@ function FeedThreadRow({ item }: { item: MailViewItem }) {
           {formatDate(item.received_at)}
         </time>
       </div>
-      <p className="mt-1 text-base font-normal leading-snug text-ink-primary">
-        {item.subject || '(no subject)'}
-      </p>
+      <SubjectWithNoteIcon
+        item={item}
+        className="mt-1 flex items-center text-base font-normal leading-snug text-ink-primary"
+      />
       <p className="mt-2 line-clamp-3 text-sm font-normal leading-6 text-ink-secondary">
         {item.preview || 'No preview available.'}
       </p>
@@ -358,9 +381,10 @@ function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
           <p className="truncate text-[0.95rem] font-semibold leading-snug text-ink-primary">
             {item.from || 'Unknown sender'}
           </p>
-          <p className="mt-0.5 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary sm:mt-0">
-            {item.subject || '(no subject)'}
-          </p>
+          <SubjectWithNoteIcon
+            item={item}
+            className="mt-0.5 flex min-w-0 items-center truncate text-[0.95rem] font-normal leading-snug text-ink-secondary sm:mt-0"
+          />
         </div>
         <time className="shrink-0 text-[0.8rem] leading-snug text-ink-tertiary">
           {formatDate(item.received_at)}

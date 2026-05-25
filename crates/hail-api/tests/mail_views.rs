@@ -174,6 +174,7 @@ fn item(n: i64, classification: MailClassification) -> MailViewItem {
         ),
         unread: n % 2 == 0,
         classification,
+        has_notes: false,
     }
 }
 
@@ -287,6 +288,52 @@ async fn response_preserves_provider_order() {
         .map(|value| value["email_id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec!["email-30", "email-10", "email-20"]);
+}
+
+#[tokio::test]
+async fn response_sets_has_notes_for_current_users_thread_notes() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "notes-owner@example.org").await;
+    let other_sid = seed_session(&state, &key, "other-notes@example.org").await;
+    let user_id: i64 = i64::from_str_radix(&sid, 16).expect("session id encodes test user id");
+    let other_user_id: i64 = i64::from_str_radix(&other_sid, 16).expect("session id encodes test user id");
+    sqlx::query(
+        "INSERT INTO thread_notes (user_id, thread_id, email_id, body) VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(user_id)
+    .bind("thread-20")
+    .bind("email-20")
+    .bind("owned note")
+    .execute(&state.db)
+    .await
+    .expect("insert owned note");
+    sqlx::query(
+        "INSERT INTO thread_notes (user_id, thread_id, email_id, body) VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(other_user_id)
+    .bind("thread-30")
+    .bind("email-30")
+    .bind("other note")
+    .execute(&state.db)
+    .await
+    .expect("insert other note");
+    let provider = Arc::new(FakeProvider::new(vec![
+        item(30, MailClassification::Imbox),
+        item(20, MailClassification::Imbox),
+        item(10, MailClassification::Imbox),
+    ]));
+
+    let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = response_json(resp).await;
+    let flags: Vec<bool> = json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["has_notes"].as_bool().unwrap())
+        .collect();
+    assert_eq!(flags, vec![false, true, false]);
 }
 
 #[tokio::test]
