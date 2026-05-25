@@ -161,6 +161,10 @@ function PileRow({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
     },
+    onError: () => {
+      // Still refresh the list even on error so stale rows are cleared.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+    },
   });
 
   const rowContent = (
