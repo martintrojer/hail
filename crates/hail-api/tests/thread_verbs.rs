@@ -559,6 +559,219 @@ async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
     assert_eq!(undo_count, 0);
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SidecarSnapshot {
+    stack_positions: Vec<(i64, String, String, i64, String)>,
+    bubble_ups: Vec<(i64, i64, String, String, Option<String>, String)>,
+    thread_notes: Vec<(i64, i64, String, String, String, String)>,
+}
+
+async fn snapshot_sidecar_state(state: &AppState) -> SidecarSnapshot {
+    let stack_positions = sqlx::query_as::<_, (i64, String, String, i64, String)>(
+        "SELECT user_id, stack, thread_id, position, added_at FROM stack_positions \
+         ORDER BY user_id, stack, thread_id",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+    let bubble_ups = sqlx::query_as::<_, (i64, i64, String, String, Option<String>, String)>(
+        "SELECT id, user_id, thread_id, surface_at, fired_at, created_at FROM bubble_ups \
+         ORDER BY id",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+    let thread_notes = sqlx::query_as::<_, (i64, i64, String, String, String, String)>(
+        "SELECT id, user_id, thread_id, email_id, body, created_at FROM thread_notes \
+         ORDER BY id",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+
+    SidecarSnapshot {
+        stack_positions,
+        bubble_ups,
+        thread_notes,
+    }
+}
+
+async fn seed_sidecar_state(state: &AppState, user_id: i64, other_user_id: i64, thread_id: &str) {
+    let now = Utc::now();
+    for (row_user_id, stack, row_thread_id, position) in [
+        (user_id, "set_aside", thread_id, 7),
+        (user_id, "reply_later", "other-thread", 8),
+        (other_user_id, "set_aside", thread_id, 9),
+    ] {
+        sqlx::query(
+            "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(row_user_id)
+        .bind(stack)
+        .bind(row_thread_id)
+        .bind(position)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+
+    for (row_user_id, row_thread_id, fired) in [
+        (user_id, thread_id, false),
+        (user_id, thread_id, true),
+        (other_user_id, thread_id, false),
+    ] {
+        if fired {
+            sqlx::query(
+                "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
+                 VALUES (?1, ?2, ?3, ?3, ?3)",
+            )
+            .bind(row_user_id)
+            .bind(row_thread_id)
+            .bind(now)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        } else {
+            sqlx::query(
+                "INSERT INTO bubble_ups (user_id, thread_id, surface_at, created_at) \
+                 VALUES (?1, ?2, ?3, ?3)",
+            )
+            .bind(row_user_id)
+            .bind(row_thread_id)
+            .bind(now)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+    }
+
+    for (row_user_id, row_thread_id, email_id, body) in [
+        (user_id, thread_id, "email-1", "target note"),
+        (other_user_id, thread_id, "email-2", "other note"),
+    ] {
+        sqlx::query(
+            "INSERT INTO thread_notes (user_id, thread_id, email_id, body) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(row_user_id)
+        .bind(row_thread_id)
+        .bind(email_id)
+        .bind(body)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn action_provider_failures_preserve_existing_sidecar_state() {
+    for (kind, method, thread_id, path, body) in [
+        (
+            ActionKind::SetKeyword,
+            Method::POST,
+            "thread-set-aside",
+            "/api/threads/thread-set-aside/set-aside",
+            None,
+        ),
+        (
+            ActionKind::SetKeyword,
+            Method::POST,
+            "thread-reply-later",
+            "/api/threads/thread-reply-later/reply-later",
+            None,
+        ),
+        (
+            ActionKind::Archive,
+            Method::POST,
+            "thread-archive",
+            "/api/threads/thread-archive/archive",
+            None,
+        ),
+        (
+            ActionKind::Trash,
+            Method::POST,
+            "thread-trash",
+            "/api/threads/thread-trash/trash",
+            None,
+        ),
+        (
+            ActionKind::Restore,
+            Method::POST,
+            "thread-restore",
+            "/api/threads/thread-restore/restore",
+            None,
+        ),
+        (
+            ActionKind::Destroy,
+            Method::DELETE,
+            "thread-destroy",
+            "/api/threads/thread-destroy/destroy",
+            None,
+        ),
+        (
+            ActionKind::Mark,
+            Method::POST,
+            "thread-mark",
+            "/api/threads/thread-mark/mark",
+            Some(r#"{"read":true}"#),
+        ),
+        (
+            ActionKind::CurrentClassification,
+            Method::POST,
+            "thread-classify-current",
+            "/api/threads/thread-classify-current/classify",
+            Some(r#"{"to":"feed"}"#),
+        ),
+        (
+            ActionKind::Classify,
+            Method::POST,
+            "thread-classify",
+            "/api/threads/thread-classify/classify",
+            Some(r#"{"to":"feed"}"#),
+        ),
+    ] {
+        let (state, key) = fixture_state().await;
+        let (user_id, sid) = seed_session(&state, &key, "action-preserve@example.org").await;
+        let (other_user_id, _other_sid) =
+            seed_session(&state, &key, "action-preserve-other@example.org").await;
+        seed_sidecar_state(&state, user_id, other_user_id, thread_id).await;
+        let before = snapshot_sidecar_state(&state).await;
+
+        let actions = Arc::new(FakeActions::default());
+        actions.fail_provider(kind);
+        *actions
+            .current_classification
+            .lock()
+            .expect("current classification mutex") = Some(Classification::Imbox);
+
+        let resp = request(
+            method,
+            state.clone(),
+            actions.clone(),
+            Some(&sid),
+            true,
+            path,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{path}");
+        let json = json_body(resp).await;
+        assert_eq!(json["error"], "internal", "{path}");
+        assert_eq!(actions.calls(), Vec::<Call>::new(), "{path}");
+        assert_eq!(snapshot_sidecar_state(&state).await, before, "{path}");
+
+        let undo_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM undo_actions WHERE user_id = ?1")
+                .bind(user_id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(undo_count, 0, "{path}");
+    }
+}
+
 #[tokio::test]
 async fn current_classification_provider_failure_stops_classify_before_action_or_undo() {
     let (state, key) = fixture_state().await;
