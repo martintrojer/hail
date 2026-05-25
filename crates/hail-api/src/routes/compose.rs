@@ -919,17 +919,11 @@ async fn login(state: &AppState, token: SecretString) -> Result<hail_jmap::Sessi
 }
 
 async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<String, ComposeError> {
-    use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
+    use hail_jmap::jmap_client::mailbox::Role;
 
-    let mut response = session
-        .client()
-        .mailbox_query(Some(Filter::role(Role::Drafts)), None::<Vec<_>>)
+    hail_jmap::mailbox_id_by_role(session, Role::Drafts)
         .await
-        .map_err(provider_error)?;
-    response
-        .take_ids()
-        .into_iter()
-        .next()
+        .map_err(provider_error)?
         .ok_or_else(|| ComposeError::Provider("drafts mailbox not found".to_string()))
 }
 

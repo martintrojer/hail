@@ -960,6 +960,7 @@ version = "0.1.0"
 dependencies = [
  "jmap-client",
  "secrecy",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
