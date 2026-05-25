@@ -111,13 +111,20 @@ pub fn open(ciphertext: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, CryptoErr
 pub fn parse_server_key(s: &SecretString) -> Result<[u8; KEY_LEN], CryptoError> {
     let raw = s.expose_secret();
 
-    // Hex path: 64 hex chars → 32 bytes.
-    if raw.len() == 2 * KEY_LEN && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
-        let decoded =
-            hex::decode(raw).map_err(|_| CryptoError::InvalidKey("hex decode failed"))?;
-        let mut out = [0u8; KEY_LEN];
-        out.copy_from_slice(&decoded);
-        return Ok(out);
+    // Hex path: exactly 64 hex chars → 32 bytes. Longer pure-hex strings are
+    // rejected rather than falling through to the raw-byte path, so config
+    // validation and runtime parsing agree on operator intent.
+    if raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if raw.len() == 2 * KEY_LEN {
+            let decoded =
+                hex::decode(raw).map_err(|_| CryptoError::InvalidKey("hex decode failed"))?;
+            let mut out = [0u8; KEY_LEN];
+            out.copy_from_slice(&decoded);
+            return Ok(out);
+        }
+        return Err(CryptoError::InvalidKey(
+            "server key must be exactly 64 hex chars or ≥ 32 non-hex raw bytes",
+        ));
     }
 
     // Raw-byte path: ≥ 32 bytes, take the first 32. Matches the
@@ -129,7 +136,7 @@ pub fn parse_server_key(s: &SecretString) -> Result<[u8; KEY_LEN], CryptoError> 
     }
 
     Err(CryptoError::InvalidKey(
-        "server key must be 64 hex chars or ≥ 32 raw bytes",
+        "server key must be exactly 64 hex chars or ≥ 32 non-hex raw bytes",
     ))
 }
 
@@ -202,6 +209,15 @@ mod tests {
         let raw: String = (0..40).map(|i| (b'a' + (i % 26)) as char).collect();
         let parsed = parse_server_key(&SecretString::from(raw.clone())).expect("raw parse");
         assert_eq!(&parsed[..], &raw.as_bytes()[..KEY_LEN]);
+    }
+
+    #[test]
+    fn parse_rejects_longer_pure_hex_key() {
+        let hex = "0".repeat(66);
+        assert!(matches!(
+            parse_server_key(&SecretString::from(hex)),
+            Err(CryptoError::InvalidKey(_))
+        ));
     }
 
     #[test]
