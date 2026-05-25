@@ -8,7 +8,6 @@ import {
 } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import {
-  HailApiError,
   type ComposeRequest,
   type ComposeResponse,
   type HailApiClient,
@@ -26,6 +25,9 @@ import {
 import { useAuth } from '../auth/AuthProvider';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { AppShell } from '../layout/AppShell';
+import { pillButtonClass } from '../lib/buttonStyles';
+import { formatFullDateTime } from '../lib/dates';
+import { composeErrorMessage } from '../lib/errorMessages';
 
 interface ComposerPageProps {
   replyToThreadId?: string;
@@ -80,25 +82,6 @@ function fileSizeLabel(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function apiErrorMessage(error: unknown, fallback: string) {
-  if (!(error instanceof HailApiError)) return fallback;
-  if (error.status === 401) return 'Your session expired. Sign in again before sending.';
-  if (error.status !== 400) return `${fallback} HTTP ${error.status}.`;
-
-  const body = error.body;
-  const code = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
-    ? body.error
-    : '';
-  if (code === 'attachments_not_supported') {
-    return 'Attachments are selected, but this server does not support sending attachments yet. Remove them and try again.';
-  }
-  if (code === 'invalid_send_at') return 'Choose a future send-later time.';
-  if (code.includes('recipient') || code.includes('to')) return 'Check recipient addresses and try again.';
-  if (code.includes('subject')) return 'Check the subject and try again.';
-  if (code.includes('body')) return 'Write a message body and try again.';
-  return 'Check the compose fields and try again.';
-}
-
 function composeResultMessage(response: ComposeResponse) {
   return response.status === 'pending'
     ? `Scheduled for later. Draft ${response.draft_email_id} is queued.`
@@ -132,16 +115,6 @@ function formatParticipant(participant: ThreadParticipant | undefined) {
   return name || participant?.email || 'Unknown sender';
 }
 
-function formatReplyDate(value: string | null | undefined) {
-  if (!value) return 'an earlier date';
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
-}
-
 function quotedPreview(message: ThreadMessage) {
   const preview = message.preview.trim() || 'No preview available.';
   return preview
@@ -151,7 +124,7 @@ function quotedPreview(message: ThreadMessage) {
 }
 
 function buildReplyQuote(message: ThreadMessage) {
-  return `\n\nOn ${formatReplyDate(message.received_at)}, ${formatParticipant(message.from[0])} wrote:\n${quotedPreview(message)}`;
+  return `\n\nOn ${formatFullDateTime(message.received_at, 'an earlier message')}, ${formatParticipant(message.from[0])} wrote:\n${quotedPreview(message)}`;
 }
 
 function prefillFromThread(
@@ -225,7 +198,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       setSendError(null);
       setSuccessMessage(composeResultMessage(response));
     },
-    onError: (error) => setSendError(apiErrorMessage(error, 'Message could not be sent.')),
+    onError: (error) => setSendError(composeErrorMessage(error, 'Message could not be sent.')),
   });
 
   const draftPayload = useMemo(() => ({
@@ -322,7 +295,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
   useEffect(() => {
     if (draftQuery.isError && initialDraftId && !replyToThreadId) {
-      setSendError(apiErrorMessage(draftQuery.error, 'Draft could not be loaded.'));
+      setSendError(composeErrorMessage(draftQuery.error, 'Draft could not be loaded.'));
     }
   }, [draftQuery.error, draftQuery.isError, initialDraftId, replyToThreadId]);
 
@@ -348,7 +321,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        setSendError(apiErrorMessage(error, 'Reply details could not be loaded.'));
+        setSendError(composeErrorMessage(error, 'Reply details could not be loaded.'));
       })
       .finally(() => {
         if (!cancelled) setReplyPrefillLoading(false);
@@ -545,14 +518,14 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
             {attachments.length > 0 ? <AttachmentNotice attachments={attachments} /> : null}
 
             <div className="mt-8 flex items-center gap-4 border-t border-border-hairline pt-5">
-              <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className="rounded-full bg-accent-blue px-4 py-1.5 text-xs font-semibold text-white outline-none transition hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60">{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
+              <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className={pillButtonClass('primary', 'md')}>{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
               <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="hail-chrome text-ink-secondary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-50">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
               {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-50">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
               <button type="button" onClick={closeComposer} className="ml-auto hail-chrome text-ink-tertiary outline-none hover:text-accent-red focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue">Discard</button>
             </div>
 
             <div className="mt-4 space-y-2">
-              {autosaveError ? <Status kind="warn" message={apiErrorMessage(autosaveError, 'Draft autosave failed.')} /> : null}
+              {autosaveError ? <Status kind="warn" message={composeErrorMessage(autosaveError, 'Draft autosave failed.')} /> : null}
               {sendError ? <Status kind="error" message={sendError} /> : null}
               {successMessage ? <Status kind="success" message={successMessage} /> : null}
             </div>

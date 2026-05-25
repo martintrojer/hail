@@ -1,4 +1,3 @@
-import { Link } from '@tanstack/react-router';
 import {
   useEffect,
   useId,
@@ -8,63 +7,24 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import {
-  HailApiError,
-  type ContactNoteSearchResult,
-  type MailSearchResult,
-  type SearchScope,
+import type {
+  ContactNoteSearchResult,
+  MailSearchResult,
+  SearchScope,
 } from '../api/client';
 import { useSearch } from '../api/query';
 import { ListView } from '../components/ListView';
+import { StateCard } from '../components/StateCard';
+import { ThreadLink } from '../components/ThreadLink';
 import { AppShell } from '../layout/AppShell';
+import { formatDateTime } from '../lib/dates';
+import { viewErrorMessage } from '../lib/errorMessages';
 
 const scopeOptions: Array<{ value: SearchScope; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'mail', label: 'Mail' },
   { value: 'notes', label: 'Notes' },
 ];
-
-function errorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 400 || error.status === 422) {
-      return 'Search terms must be at least 2 characters.';
-    }
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again to search.';
-    }
-    return `Search failed with HTTP ${error.status}.`;
-  }
-
-  return 'Search failed. Refresh and try again.';
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) {
-    return 'No date';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
-}
-
-function StateCard({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex min-h-64 flex-col items-center justify-center rounded-lg border border-dashed border-hairline bg-surface p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">{title}</p>
-      <p className="mt-2 max-w-sm text-sm text-ink-secondary">{body}</p>
-    </div>
-  );
-}
 
 function SearchSkeleton() {
   return (
@@ -90,11 +50,10 @@ function SearchSkeleton() {
 
 function MailResultCard({ item }: { item: MailSearchResult }) {
   return (
-    <Link
-      to="/thread/$threadId"
-      search={{ from: undefined }} params={{ threadId: item.thread_id }}
+    <ThreadLink
+      threadId={item.thread_id}
       className="group block rounded-lg border border-hairline bg-surface p-4 transition hover:border-accent-blue hover:bg-hover focus:outline-none focus:ring-2 focus:ring-accent-blue"
-      aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
+      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -106,13 +65,13 @@ function MailResultCard({ item }: { item: MailSearchResult }) {
           </p>
         </div>
         <time className="shrink-0 text-xs text-ink-primary0">
-          {formatDate(item.received_at)}
+          {formatDateTime(item.received_at)}
         </time>
       </div>
       <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-secondary">
         {item.preview || 'No preview available.'}
       </p>
-    </Link>
+    </ThreadLink>
   );
 }
 
@@ -129,7 +88,7 @@ function ContactNoteResultCard({ item }: { item: ContactNoteSearchResult }) {
           </p>
         </div>
         <time className="shrink-0 text-xs text-ink-primary0">
-          {formatDate(item.updated_at)}
+          {formatDateTime(item.updated_at)}
         </time>
       </div>
       <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">
@@ -247,7 +206,7 @@ export function SearchPage() {
   } else if (query.isPending) {
     list = <SearchSkeleton />;
   } else if (query.isError) {
-    list = <StateCard title="Could not search" body={errorMessage(query.error)} />;
+    list = <StateCard title="Could not search" body={viewErrorMessage(query.error, 'Search')} />;
   } else if (resultCount === 0) {
     list = (
       <StateCard
