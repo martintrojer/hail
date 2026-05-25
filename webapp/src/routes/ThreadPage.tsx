@@ -13,6 +13,7 @@ import {
   defaultApiClient,
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
+import { BubbleUpSubmenu } from '../components/BubbleUpSubmenu';
 import { ErrorState } from '../components/ErrorState';
 import { InlineNote, type InlineNoteProps } from '../components/InlineNote';
 import {
@@ -184,6 +185,43 @@ function noteTimestamp(value: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
+}
+
+function bubbleUpOptionToIso(option: string) {
+  const now = new Date();
+  const target = new Date(now);
+
+  switch (option) {
+    case 'Later today':
+      if (now.getHours() >= 14) {
+        target.setTime(now.getTime() + 3 * 60 * 60 * 1000);
+      } else {
+        target.setHours(17, 0, 0, 0);
+      }
+      break;
+    case 'Tomorrow morning':
+      target.setDate(now.getDate() + 1);
+      target.setHours(9, 0, 0, 0);
+      break;
+    case 'This weekend': {
+      const daysUntilSaturday = (6 - now.getDay() + 7) % 7 || 7;
+      target.setDate(now.getDate() + daysUntilSaturday);
+      target.setHours(10, 0, 0, 0);
+      break;
+    }
+    case 'Next week': {
+      const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
+      target.setDate(now.getDate() + daysUntilMonday);
+      target.setHours(9, 0, 0, 0);
+      break;
+    }
+    case 'Pick a date…':
+    default:
+      target.setTime(now.getTime() + 24 * 60 * 60 * 1000);
+      break;
+  }
+
+  return target.toISOString();
 }
 
 function toLocalNote(note: ThreadNote): LocalNote {
@@ -411,6 +449,8 @@ function ThreadDocument({
     messageId: string;
     anchorRect: DOMRect;
   } | null>(null);
+  const [bubbleUpOpen, setBubbleUpOpen] = useState(false);
+  const [bubbleUpAnchor, setBubbleUpAnchor] = useState<DOMRect | null>(null);
   const [notes, setNotes] = useState<LocalNote[]>(() => thread.notes.map(toLocalNote));
 
   useEffect(() => {
@@ -446,6 +486,13 @@ function ThreadDocument({
       undo: response.undo ? { id: response.undo.id } : null,
       undoSuccessMessage,
     });
+  }
+
+  async function handleBubbleUpSelect(option: string) {
+    const isoDate = bubbleUpOptionToIso(option);
+    await client.bubbleUpThread(thread.thread_id, { at: isoDate });
+    showToast({ message: `Thread will bubble up at ${formatDate(isoDate)}` });
+    goBack();
   }
 
   async function handlePopupAction(
@@ -510,7 +557,8 @@ function ThreadDocument({
         return;
       }
       case 'bubble-up':
-        showToast({ message: 'Bubble up coming soon.' });
+        setBubbleUpAnchor(messagePopup?.anchorRect ?? null);
+        setBubbleUpOpen(true);
         return;
       case 'mark-spam':
         showToast({ message: 'Spam reporting coming soon.' });
@@ -579,6 +627,14 @@ function ThreadDocument({
 
       <MiniReplyComposer
         senderName={sender ? formatParticipantName(sender) : 'sender'}
+      />
+      <BubbleUpSubmenu
+        open={bubbleUpOpen}
+        anchorRect={bubbleUpAnchor}
+        onClose={() => setBubbleUpOpen(false)}
+        onSelect={(option) => {
+          void handleBubbleUpSelect(option);
+        }}
       />
     </div>
   );
