@@ -23,6 +23,7 @@ import {
   type CreateAdminUserRequest,
   type DeniedSendersResponse,
   type DestroyThreadResponse,
+  type DraftDetails,
   type DraftRequest,
   type DraftResponse,
   type LoginRequest,
@@ -691,6 +692,19 @@ export function useCreateDraftMutation(
   return useMutation({
     mutationFn: (request) => client.createDraft(request),
     ...options,
+  });
+}
+
+export function useDraft(
+  draftId: string | undefined,
+  client = defaultApiClient,
+  options?: QueryConfig<DraftDetails>,
+) {
+  return useQuery({
+    queryKey: queryKeys.draft(draftId ?? ''),
+    queryFn: () => client.getDraft(draftId ?? ''),
+    ...options,
+    enabled: Boolean(draftId) && (options?.enabled ?? true),
   });
 }
 

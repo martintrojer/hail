@@ -42,6 +42,13 @@ pub trait DraftStore: Send + Sync + 'static {
         draft: DraftCreate,
     ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>>;
 
+    fn get<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>>;
+
     fn update<'a>(
         &'a self,
         state: &'a AppState,
@@ -103,6 +110,55 @@ impl DraftStore for JmapDraftStore {
             } else {
                 Ok(id)
             }
+        })
+    }
+
+    fn get<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let session = login(state, token).await?;
+            let mut request = session.client().build();
+            let get_email = request.get_email();
+            get_email.ids([draft_id]).properties([
+                hail_jmap::jmap_client::email::Property::Id,
+                hail_jmap::jmap_client::email::Property::Keywords,
+                hail_jmap::jmap_client::email::Property::To,
+                hail_jmap::jmap_client::email::Property::Cc,
+                hail_jmap::jmap_client::email::Property::Bcc,
+                hail_jmap::jmap_client::email::Property::Subject,
+                hail_jmap::jmap_client::email::Property::TextBody,
+                hail_jmap::jmap_client::email::Property::BodyValues,
+            ]);
+            get_email
+                .arguments()
+                .fetch_text_body_values(true)
+                .max_body_value_bytes(MAX_BODY_BYTES);
+
+            let mut response = request.send_get_email().await.map_err(provider_error)?;
+            let Some(email) = response.take_list().pop() else {
+                return Ok(None);
+            };
+            if !email
+                .keywords()
+                .into_iter()
+                .any(|keyword| keyword == "$draft")
+            {
+                return Ok(None);
+            }
+
+            Ok(Some(DraftDetails {
+                draft_id: draft_id.to_string(),
+                to: addresses_from_jmap(email.to()),
+                cc: addresses_from_jmap(email.cc()),
+                bcc: addresses_from_jmap(email.bcc()),
+                subject: email.subject().unwrap_or_default().to_string(),
+                body_markdown: text_body_from_email(&email),
+            }))
         })
     }
 
@@ -180,6 +236,16 @@ pub struct DraftUpdate {
     pub body_markdown: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DraftDetails {
+    pub draft_id: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub body_markdown: String,
+}
+
 pub fn router() -> Router<AppState> {
     Router::from(openapi_router_with_store(Arc::new(JmapDraftStore)))
 }
@@ -203,6 +269,7 @@ where
     let store: Arc<dyn DraftStore> = store;
     OpenApiRouter::new()
         .routes(routes!(create_draft).layer(Extension(store.clone())))
+        .routes(routes!(get_draft).layer(Extension(store.clone())))
         .routes(routes!(update_draft).layer(Extension(store.clone())))
         .routes(routes!(delete_draft).layer(Extension(store)))
 }
@@ -262,6 +329,38 @@ async fn create_draft(
             }),
         )
             .into_response(),
+        Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/drafts/{draft_id}",
+    tag = TAG,
+    params(
+        ("draft_id" = String, Path, description = "JMAP draft email id to fetch."),
+    ),
+    responses(
+        (status = 200, description = "Draft details for composer resume.", body = DraftDetails),
+        (status = 400, description = "Invalid draft id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Draft not found or no longer a draft."),
+        (status = 500, description = "JMAP draft store failure."),
+    ),
+)]
+async fn get_draft(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(store): Extension<Arc<dyn DraftStore>>,
+    Path(draft_id): Path<String>,
+) -> Response {
+    if !looks_like_jmap_id(&draft_id) {
+        return bad_request("invalid_draft_id");
+    }
+
+    match store.get(&state, user.jmap_token.clone(), &draft_id).await {
+        Ok(Some(draft)) => Json(draft).into_response(),
+        Ok(None) => not_found(),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -506,6 +605,35 @@ fn set_text_body(
         .body_value("text".to_string(), body);
 }
 
+fn addresses_from_jmap(
+    addresses: Option<&[hail_jmap::jmap_client::email::EmailAddress]>,
+) -> Vec<String> {
+    addresses
+        .unwrap_or_default()
+        .iter()
+        .map(|address| address.email().to_string())
+        .filter(|address| !address.is_empty())
+        .collect()
+}
+
+fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
+    let Some(parts) = email.text_body() else {
+        return String::new();
+    };
+
+    let mut body = String::new();
+    for part in parts {
+        let Some(part_id) = part.part_id() else {
+            continue;
+        };
+        let Some(value) = email.body_value(part_id) else {
+            continue;
+        };
+        body.push_str(value.value());
+    }
+    body
+}
+
 fn provider_error(err: impl std::fmt::Display) -> DraftStoreError {
     DraftStoreError::Provider(err.to_string())
 }
@@ -520,6 +648,15 @@ fn bad_request(error: &'static str) -> Response {
         StatusCode::BAD_REQUEST,
         [(header::CONTENT_TYPE, "application/json")],
         format!(r#"{{"error":"{error}"}}"#),
+    )
+        .into_response()
+}
+
+fn not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"not_found"}"#,
     )
         .into_response()
 }

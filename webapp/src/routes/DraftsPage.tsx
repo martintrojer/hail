@@ -87,7 +87,7 @@ function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient 
     <div className="relative flex items-center gap-3 border-b border-border-hairline py-4 pl-3 pr-0 hover:bg-bg-hover sm:py-5">
       <Link
         to="/compose"
-        search={{ draft: item.email_id }}
+        search={{ draftId: item.email_id }}
         className="min-w-0 flex-1 outline-none focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
         data-hail-mail-list-item="true"
         aria-label={`Resume draft ${item.subject || '(no subject)'}`}

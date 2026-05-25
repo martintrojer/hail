@@ -20,4 +20,6 @@ export const queryKeys = {
     [...queryKeys.contacts(), address.trim().toLowerCase()] as const,
   threads: () => [...queryKeys.all, 'threads'] as const,
   thread: (threadId: string) => [...queryKeys.threads(), threadId] as const,
+  drafts: () => [...queryKeys.all, 'drafts'] as const,
+  draft: (draftId: string) => [...queryKeys.drafts(), draftId] as const,
 };
