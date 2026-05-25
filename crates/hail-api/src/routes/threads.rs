@@ -125,16 +125,19 @@ impl ThreadVerifier for JmapThreadVerifier {
             let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
                 .await
                 .map_err(|err| ThreadVerifyError(err.to_string()))?;
-            let mut request = session.client().build();
-            request
-                .get_thread()
-                .ids([thread_id])
-                .properties([hail_jmap::jmap_client::thread::Property::Id]);
-            let mut response = request
-                .send_get_thread()
+
+            use hail_jmap::jmap_client::core::query::Filter;
+            use hail_jmap::jmap_client::email::query as email_query;
+
+            let mut response = session
+                .client()
+                .email_query(
+                    Some(Filter::from(email_query::Filter::in_thread(thread_id))),
+                    None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
+                )
                 .await
                 .map_err(|err| ThreadVerifyError(err.to_string()))?;
-            Ok(!response.take_list().is_empty())
+            Ok(!response.take_ids().is_empty())
         })
     }
 }
