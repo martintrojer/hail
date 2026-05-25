@@ -1,6 +1,20 @@
-use jmap_client::mailbox::{Mailbox, Property, Role};
+use jmap_client::mailbox::{Mailbox, Property, Role, query::Filter};
 
 use crate::Session;
+
+/// Hail-owned mailbox where unknown senders wait for user approval.
+pub const SCREENER_MAILBOX_NAME: &str = "Screener";
+
+pub async fn mailbox_id_by_name(
+    session: &Session,
+    name: &str,
+) -> jmap_client::Result<Option<String>> {
+    let mut query = session
+        .client()
+        .mailbox_query(Some(Filter::name(name)), None::<Vec<_>>)
+        .await?;
+    Ok(query.take_ids().into_iter().next())
+}
 
 /// Return the id of the mailbox with the requested JMAP role.
 ///

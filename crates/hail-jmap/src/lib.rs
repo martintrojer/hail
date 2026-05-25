@@ -25,5 +25,5 @@ mod session;
 
 pub use error::Error;
 pub use jmap_client;
-pub use mailbox::mailbox_id_by_role;
+pub use mailbox::{SCREENER_MAILBOX_NAME, mailbox_id_by_name, mailbox_id_by_role};
 pub use session::{Session, login_basic, login_bearer};

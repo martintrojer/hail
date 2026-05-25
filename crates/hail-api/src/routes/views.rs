@@ -26,7 +26,7 @@ use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{
-    drafts_mailbox_id, hydrate_thread_previews, jmap_session, trash_mailbox_id,
+    MAIL_VIEW_PROPERTIES, hydrate_thread_previews, jmap_session, trash_mailbox_id,
 };
 use crate::routes::response::{bad_request, internal};
 use crate::state::AppState;
@@ -70,7 +70,6 @@ impl MailViewProvider for JmapMailViewProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
             use hail_jmap::jmap_client::core::query::Filter;
-            use hail_jmap::jmap_client::email::Property;
             use hail_jmap::jmap_client::email::query as email_query;
 
             let session = jmap_session(state, token)
@@ -80,9 +79,12 @@ impl MailViewProvider for JmapMailViewProvider {
             let mut request = session.client().build();
             let mut filter = Filter::from(email_query::Filter::has_keyword(view.keyword()));
             if view == MailView::Drafts {
-                if let Some(drafts_mailbox_id) = drafts_mailbox_id(&session)
-                    .await
-                    .map_err(MailViewError::provider)?
+                if let Some(drafts_mailbox_id) = hail_jmap::mailbox_id_by_role(
+                    &session,
+                    hail_jmap::jmap_client::mailbox::Role::Drafts,
+                )
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))?
                 {
                     filter = Filter::from(email_query::Filter::in_mailbox(drafts_mailbox_id));
                 }
@@ -109,20 +111,11 @@ impl MailViewProvider for JmapMailViewProvider {
                 return Ok(Vec::new());
             }
 
-            let props = [
-                Property::Id,
-                Property::ThreadId,
-                Property::From,
-                Property::To,
-                Property::Cc,
-                Property::Bcc,
-                Property::Subject,
-                Property::Preview,
-                Property::ReceivedAt,
-                Property::Keywords,
-            ];
             let mut request = session.client().build();
-            request.get_email().ids(ids).properties(props);
+            request
+                .get_email()
+                .ids(ids)
+                .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
             let mut response = request
                 .send_get_email()
                 .await
@@ -245,7 +238,6 @@ impl SearchProvider for JmapSearchProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
         Box::pin(async move {
             use hail_jmap::jmap_client::core::query::Filter;
-            use hail_jmap::jmap_client::email::Property;
             use hail_jmap::jmap_client::email::query as email_query;
 
             let session = jmap_session(state, token)
@@ -267,16 +259,11 @@ impl SearchProvider for JmapSearchProvider {
                 return Ok(Vec::new());
             }
 
-            let props = [
-                Property::Id,
-                Property::ThreadId,
-                Property::From,
-                Property::Subject,
-                Property::Preview,
-                Property::ReceivedAt,
-            ];
             let mut request = session.client().build();
-            request.get_email().ids(ids).properties(props);
+            request
+                .get_email()
+                .ids(ids)
+                .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
             let mut response = request
                 .send_get_email()
                 .await
