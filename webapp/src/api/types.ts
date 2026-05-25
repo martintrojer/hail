@@ -193,6 +193,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/threads/{thread_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_thread_notes"];
+        put?: never;
+        post: operations["create_thread_note"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/{thread_id}/notes/{note_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete_thread_note"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/threads/{thread_id}/reply": {
         parameters: {
             query?: never;
@@ -513,6 +545,10 @@ export interface components {
              */
             threads: unknown[];
         };
+        CreateThreadNoteRequest: {
+            body: string;
+            email_id: string;
+        };
         DecisionRequest: {
             apply_to_history: boolean;
             classify_as?: string | null;
@@ -634,11 +670,22 @@ export interface components {
             received_at?: string | null;
             to: components["schemas"]["Participant"][];
         };
+        ThreadNoteResponse: {
+            body: string;
+            created_at: string;
+            email_id: string;
+            /** Format: int64 */
+            id: number;
+        };
+        ThreadNotesResponse: {
+            notes: components["schemas"]["ThreadNoteResponse"][];
+        };
         ThreadVerbResponse: {
             undo?: null | components["schemas"]["UndoToken"];
         };
         ThreadViewResponse: {
             messages: components["schemas"]["ThreadMessageResponse"][];
+            notes: components["schemas"]["ThreadNoteResponse"][];
             participants: components["schemas"]["Participant"][];
             subject: string;
             thread_id: string;
@@ -1330,6 +1377,142 @@ export interface operations {
                 content?: never;
             };
             /** @description Thread mark failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_thread_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id whose notes should be listed. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thread notes for this user and thread. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadNotesResponse"];
+                };
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread note lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_thread_note: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id receiving a note. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateThreadNoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Thread note created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadNoteResponse"];
+                };
+            };
+            /** @description Invalid thread note payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread note creation failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_thread_note: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id containing the note. */
+                thread_id: string;
+                /** @description Thread note id to delete. */
+                note_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thread note deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid thread or note id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread note deletion failed. */
             500: {
                 headers: {
                     [name: string]: unknown;

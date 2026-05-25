@@ -9,10 +9,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::{
     plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history,
@@ -24,6 +24,7 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::notes::ThreadNoteResponse;
 use crate::state::AppState;
 
 /// Dependency-injection seam for assembling a thread. Production uses JMAP;
@@ -216,6 +217,7 @@ struct ThreadViewResponse {
     subject: String,
     participants: Vec<Participant>,
     messages: Vec<ThreadMessageResponse>,
+    notes: Vec<ThreadNoteResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -256,8 +258,7 @@ async fn get_thread(
     Extension(user): Extension<AuthUser>,
     Extension(assembler): Extension<Arc<dyn ThreadAssembler>>,
     Path(thread_id): Path<String>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -281,11 +282,22 @@ async fn get_thread(
         .map(render_message)
         .collect::<Vec<_>>();
 
+    let notes = match crate::routes::notes::load_thread_notes(&state, user.id, &assembled.thread_id)
+        .await
+    {
+        Ok(notes) => notes,
+        Err(err) => {
+            tracing::error!(user_id = user.id, thread_id = %assembled.thread_id, error = %err, "thread note lookup failed");
+            return internal();
+        }
+    };
+
     Json(ThreadViewResponse {
         thread_id: assembled.thread_id,
         subject: assembled.subject,
         participants,
         messages,
+        notes,
     })
     .into_response()
 }
@@ -377,7 +389,7 @@ fn body_from_parts(
     body
 }
 
-fn looks_like_jmap_id(id: &str) -> bool {
+pub fn looks_like_jmap_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
