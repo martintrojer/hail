@@ -177,6 +177,8 @@ impl DraftStore for JmapDraftStore {
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
             let session = jmap_session(state, token).await.map_err(provider_error)?;
+            ensure_draft_email(&session, draft_id).await?;
+
             let mut request = session.client().build();
             let email = request.set_email().update(draft_id);
 
@@ -210,6 +212,7 @@ impl DraftStore for JmapDraftStore {
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
             let session = jmap_session(state, token).await.map_err(provider_error)?;
+            ensure_draft_email(&session, draft_id).await?;
             session
                 .client()
                 .email_destroy(draft_id)
@@ -221,6 +224,7 @@ impl DraftStore for JmapDraftStore {
 
 #[derive(Debug)]
 pub enum DraftStoreError {
+    NotFound,
     Provider(String),
 }
 
@@ -341,6 +345,7 @@ async fn create_draft(
             }),
         )
             .into_response(),
+        Err(DraftStoreError::NotFound) => not_found(),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -373,6 +378,7 @@ async fn get_draft(
     match store.get(&state, user.jmap_token.clone(), &draft_id).await {
         Ok(Some(draft)) => Json(draft).into_response(),
         Ok(None) => not_found(),
+        Err(DraftStoreError::NotFound) => not_found(),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -389,6 +395,7 @@ async fn get_draft(
         (status = 200, description = "Draft updated.", body = DraftResponse),
         (status = 400, description = "Invalid draft id or payload."),
         (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Draft not found or no longer a draft."),
         (status = 500, description = "JMAP draft store failure."),
     ),
 )]
@@ -419,6 +426,7 @@ async fn update_draft(
             updated_at: Utc::now(),
         })
         .into_response(),
+        Err(DraftStoreError::NotFound) => not_found(),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -434,6 +442,7 @@ async fn update_draft(
         (status = 204, description = "Draft deleted."),
         (status = 400, description = "Invalid draft id."),
         (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Draft not found or no longer a draft."),
         (status = 500, description = "JMAP draft store failure."),
     ),
 )]
@@ -452,6 +461,7 @@ async fn delete_draft(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(DraftStoreError::NotFound) => not_found(),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -578,6 +588,30 @@ fn looks_like_email(address: &str) -> bool {
         && !domain.starts_with('.')
         && !domain.ends_with('.')
         && !domain.contains("..")
+}
+
+async fn ensure_draft_email(
+    session: &hail_jmap::Session,
+    draft_id: &str,
+) -> Result<(), DraftStoreError> {
+    let mut request = session.client().build();
+    request.get_email().ids([draft_id]).properties([
+        hail_jmap::jmap_client::email::Property::Id,
+        hail_jmap::jmap_client::email::Property::Keywords,
+    ]);
+    let mut response = request.send_get_email().await.map_err(provider_error)?;
+    let Some(email) = response.take_list().pop() else {
+        return Err(DraftStoreError::NotFound);
+    };
+    if email
+        .keywords()
+        .into_iter()
+        .any(|keyword| keyword == "$draft")
+    {
+        Ok(())
+    } else {
+        Err(DraftStoreError::NotFound)
+    }
 }
 
 fn set_text_body(
