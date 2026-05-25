@@ -1,14 +1,16 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
-import type {
-  BubbleUpRequest,
-  BubbleUpResponse,
-  CreateThreadNoteRequest,
-  ContactResponse,
-  ThreadVerbResponse,
-  ThreadViewResponse,
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  HailApiError,
+  type BubbleUpRequest,
+  type BubbleUpResponse,
+  type CreateThreadNoteRequest,
+  type ContactResponse,
+  type MailClassification,
+  type ThreadVerbResponse,
+  type ThreadViewResponse,
 } from '../api/client';
 import { queryKeys } from '../api/queryKeys';
 import { AuthProvider } from '../auth/AuthProvider';
@@ -25,6 +27,9 @@ import { ThreadPage } from './ThreadPage';
 class ThreadPageTestClient extends TestHailApiClient {
   readonly setAsideCalls: string[] = [];
   readonly replyLaterCalls: string[] = [];
+  readonly trashCalls: string[] = [];
+  readonly archiveCalls: string[] = [];
+  readonly classifyCalls: Array<{ threadId: string; to: MailClassification }> = [];
   readonly createdNotes: Array<{
     threadId: string;
     request: CreateThreadNoteRequest;
@@ -33,6 +38,8 @@ class ThreadPageTestClient extends TestHailApiClient {
     threadId: string;
     request: BubbleUpRequest;
   }> = [];
+
+  failingActions = new Set<string>();
 
   constructor(private readonly thread: ThreadViewResponse) {
     super();
@@ -63,28 +70,52 @@ class ThreadPageTestClient extends TestHailApiClient {
     };
   }
 
-  override async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
-    this.setAsideCalls.push(threadId);
+  private threadVerbResponse(action: string): ThreadVerbResponse {
+    if (this.failingActions.has(action)) {
+      throw new HailApiError(
+        500,
+        { error: 'boom' },
+        new Response(JSON.stringify({ error: 'boom' }), { status: 500 }),
+      );
+    }
+
     return {
       undo: {
-        id: 'undo-set-aside',
+        id: `undo-${action}`,
         action: 'thread.stack',
         expires_at: '2026-05-23T13:00:00Z',
       },
     };
   }
 
+  override async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.setAsideCalls.push(threadId);
+    return this.threadVerbResponse('set-aside');
+  }
+
   override async replyLaterThread(
     threadId: string,
   ): Promise<ThreadVerbResponse> {
     this.replyLaterCalls.push(threadId);
-    return {
-      undo: {
-        id: 'undo-reply-later',
-        action: 'thread.stack',
-        expires_at: '2026-05-23T13:00:00Z',
-      },
-    };
+    return this.threadVerbResponse('reply-later');
+  }
+
+  override async trashThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.trashCalls.push(threadId);
+    return this.threadVerbResponse('trash');
+  }
+
+  override async archiveThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.archiveCalls.push(threadId);
+    return this.threadVerbResponse('archive');
+  }
+
+  override async classifyThread(
+    threadId: string,
+    to: MailClassification,
+  ): Promise<ThreadVerbResponse> {
+    this.classifyCalls.push({ threadId, to });
+    return this.threadVerbResponse(`move-${to}`);
   }
 
   override async bubbleUpThread(
@@ -92,6 +123,13 @@ class ThreadPageTestClient extends TestHailApiClient {
     request: BubbleUpRequest,
   ): Promise<BubbleUpResponse> {
     this.bubbleUpCalls.push({ threadId, request });
+    if (this.failingActions.has('bubble-up')) {
+      throw new HailApiError(
+        500,
+        { error: 'boom' },
+        new Response(JSON.stringify({ error: 'boom' }), { status: 500 }),
+      );
+    }
     return {
       bubble_id: 1,
       surface_at: request.at,
@@ -294,6 +332,67 @@ describe('ThreadPage', () => {
     expect(screen.getByText('No messages in this thread')).toBeInTheDocument();
   });
 
-  // TODO: re-add set-aside/reply-later/bubble-up tests once they're
-  // accessible through the per-message popup instead of inline controls.
+  it('routes thread popup actions through mutations and invalidates thread/view caches', async () => {
+    const { client, queryClient } = renderThread(sampleThread());
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Set Aside' }));
+
+    await waitFor(() => {
+      expect(client.setAsideCalls).toEqual(['thread-1']);
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
+    expect(await screen.findByText('Thread added to Set Aside.')).toBeInTheDocument();
+
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Feed' }));
+
+    await waitFor(() => {
+      expect(client.classifyCalls).toEqual([{ threadId: 'thread-1', to: 'feed' }]);
+    });
+    expect(await screen.findByText('Moved thread to Feed.')).toBeInTheDocument();
+  });
+
+  it('keeps the thread open and shows an action error when a mutation fails', async () => {
+    const { client } = renderThread(sampleThread());
+    client.failingActions.add('trash');
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Thread action failed with HTTP 500.',
+    );
+    expect(screen.getByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
+    expect(client.trashCalls).toEqual(['thread-1']);
+  });
+
+  it('routes bubble-up selections through the shared mutation', async () => {
+    const { client, queryClient } = renderThread(sampleThread());
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+    fireEvent.click(actionButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Bubble Up' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Tomorrow morning' }));
+
+    await waitFor(() => {
+      expect(client.bubbleUpCalls).toHaveLength(1);
+    });
+    expect(client.bubbleUpCalls[0].threadId).toBe('thread-1');
+    expect(new Date(client.bubbleUpCalls[0].request.at).valueOf()).not.toBeNaN();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
+    expect(await screen.findByText(/Thread will bubble up at/)).toBeInTheDocument();
+  });
 });
