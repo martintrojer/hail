@@ -505,7 +505,7 @@ function PowerThroughMode({
     if (!currentItem) {
       return;
     }
-    void navigate({ to: '/compose', search: { replyTo: currentItem.thread_id } });
+    void navigate({ to: '/compose', search: { replyTo: currentItem.thread_id, replyAll: false } });
   }
 
   if (!currentItem) {

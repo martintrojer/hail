@@ -482,10 +482,10 @@ function ThreadDocument({
         goBack();
         return;
       case 'reply':
-        void navigate({ to: '/compose', search: { replyTo: thread.thread_id } });
+        void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: false } });
         return;
       case 'reply-all':
-        void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: '1' } });
+        void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: true } });
         return;
       case 'forward':
         void navigate({ to: '/compose', search: { forward: message.email_id } });

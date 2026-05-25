@@ -7,18 +7,28 @@ import {
   type FormEvent,
 } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { HailApiError, type HailApiClient, type ComposeRequest, type ComposeResponse } from '../api/client';
+import {
+  HailApiError,
+  type ComposeRequest,
+  type ComposeResponse,
+  type HailApiClient,
+  type ThreadMessage,
+  type ThreadParticipant,
+  type ThreadViewResponse,
+} from '../api/client';
 import {
   defaultApiClient,
   useCreateDraftMutation,
   useSendComposeMutation,
   useUpdateDraftMutation,
 } from '../api/query';
+import { useAuth } from '../auth/AuthProvider';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { AppShell } from '../layout/AppShell';
 
 interface ComposerPageProps {
   replyToThreadId?: string;
+  replyAll?: boolean;
   initialTo?: string[];
   initialSubject?: string;
   client?: HailApiClient;
@@ -93,8 +103,96 @@ function composeResultMessage(response: ComposeResponse) {
     : 'Sent.';
 }
 
-export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
+function uniqueEmails(emails: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const email of emails) {
+    const trimmed = email.trim();
+    const normalized = trimmed.toLowerCase();
+    if (!trimmed || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
+function withoutCurrentUser(emails: string[], currentUserEmail: string | undefined) {
+  const current = currentUserEmail?.trim().toLowerCase();
+  return uniqueEmails(emails).filter((email) => email.toLowerCase() !== current);
+}
+
+function replySubject(subject: string) {
+  return /^\s*re:/i.test(subject) ? subject : `Re: ${subject}`;
+}
+
+function formatParticipant(participant: ThreadParticipant | undefined) {
+  const name = participant?.name?.trim();
+  return name || participant?.email || 'Unknown sender';
+}
+
+function formatReplyDate(value: string | null | undefined) {
+  if (!value) return 'an earlier date';
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function quotedPreview(message: ThreadMessage) {
+  const preview = message.preview.trim() || 'No preview available.';
+  return preview
+    .split(/\r?\n/)
+    .map((line) => `> ${line}`)
+    .join('\n');
+}
+
+function buildReplyQuote(message: ThreadMessage) {
+  return `\n\nOn ${formatReplyDate(message.received_at)}, ${formatParticipant(message.from[0])} wrote:\n${quotedPreview(message)}`;
+}
+
+function prefillFromThread(
+  thread: ThreadViewResponse,
+  replyAll: boolean,
+  currentUserEmail: string | undefined,
+): ComposerForm | null {
+  const lastMessage = thread.messages.at(-1);
+  if (!lastMessage) return null;
+
+  const senderEmail = lastMessage.from[0]?.email ?? '';
+  const to = replyAll
+    ? withoutCurrentUser(
+        [senderEmail, ...lastMessage.to.map((participant) => participant.email)],
+        currentUserEmail,
+      )
+    : uniqueEmails(senderEmail ? [senderEmail] : []);
+  const possibleCc = (lastMessage as ThreadMessage & { cc?: ThreadParticipant[] }).cc ?? [];
+  const cc = replyAll
+    ? withoutCurrentUser(possibleCc.map((participant) => participant.email), currentUserEmail)
+    : [];
+
+  return {
+    to: to.join(', '),
+    cc: cc.join(', '),
+    bcc: '',
+    subject: replySubject(thread.subject),
+    body: buildReplyQuote(lastMessage),
+    sendAt: '',
+  };
+}
+
+function placeCaretAtStart(element: HTMLTextAreaElement | null) {
+  if (!element) return;
+  window.requestAnimationFrame(() => {
+    element.focus();
+    element.setSelectionRange(0, 0);
+  });
+}
+
+export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [form, setForm] = useState<ComposerForm>({
     to: initialTo.join(', '),
     cc: '',
@@ -110,6 +208,8 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [showCarbonCopyFields, setShowCarbonCopyFields] = useState(false);
+  const [replyPrefillLoading, setReplyPrefillLoading] = useState(Boolean(replyToThreadId));
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
   const snapshotRef = useRef('');
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
@@ -135,7 +235,8 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
   }), [form]);
 
   const canSaveDraft = !replyToThreadId;
-  const canSubmit = (Boolean(replyToThreadId) || draftPayload.to.length > 0)
+  const canSubmit = !replyPrefillLoading
+    && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
     && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
     && form.body.trim().length > 0;
 
@@ -187,6 +288,45 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
       createDraft.mutate(draftPayload, { onSuccess });
     }
   }
+
+  useEffect(() => {
+    if (!replyToThreadId) {
+      setReplyPrefillLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setReplyPrefillLoading(true);
+    setSendError(null);
+
+    client.getThread(replyToThreadId)
+      .then((thread) => {
+        if (cancelled) return;
+        const nextForm = prefillFromThread(thread, replyAll, user?.email);
+        if (nextForm) {
+          setForm(nextForm);
+          setShowCarbonCopyFields(nextForm.cc.length > 0);
+          setDirty(false);
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setSendError(apiErrorMessage(error, 'Reply details could not be loaded.'));
+      })
+      .finally(() => {
+        if (!cancelled) setReplyPrefillLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, replyAll, replyToThreadId, user?.email]);
+
+  useEffect(() => {
+    if (replyToThreadId && !replyPrefillLoading) {
+      placeCaretAtStart(bodyRef.current);
+    }
+  }, [replyPrefillLoading, replyToThreadId]);
 
   useEffect(() => {
     const timer = window.setInterval(saveDraft, autosaveIntervalMs);
@@ -262,32 +402,35 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
             <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : 'Compose message'}</h2>
           </div>
 
+          {replyPrefillLoading ? (
+            <div className="flex min-h-[22rem] flex-1 items-center justify-center hail-chrome text-ink-secondary">
+              Loading reply details…
+            </div>
+          ) : (
           <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
             <div className="space-y-1">
-              {!replyToThreadId ? (
-                <div className="flex items-center gap-3 border-b border-border-hairline">
-                  <label htmlFor="compose-to" className="w-16 shrink-0 hail-chrome text-ink-tertiary">To</label>
-                  <input
-                    id="compose-to"
-                    type="text"
-                    value={form.to}
-                    onChange={(event) => updateField('to', event.target.value)}
-                    placeholder="alice@example.com, bob@example.com"
-                    className={lineInputClass}
-                    autoComplete="email"
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowCarbonCopyFields((shown) => !shown)}
-                    className="shrink-0 hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
-                    aria-expanded={showCarbonCopyFields}
-                    aria-controls="compose-carbon-copy-fields"
-                  >
-                    Cc / Bcc
-                  </button>
-                </div>
-              ) : null}
+              <div className="flex items-center gap-3 border-b border-border-hairline">
+                <label htmlFor="compose-to" className="w-16 shrink-0 hail-chrome text-ink-tertiary">To</label>
+                <input
+                  id="compose-to"
+                  type="text"
+                  value={form.to}
+                  onChange={(event) => updateField('to', event.target.value)}
+                  placeholder="alice@example.com, bob@example.com"
+                  className={lineInputClass}
+                  autoComplete="email"
+                  autoFocus={!replyToThreadId}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCarbonCopyFields((shown) => !shown)}
+                  className="shrink-0 hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                  aria-expanded={showCarbonCopyFields}
+                  aria-controls="compose-carbon-copy-fields"
+                >
+                  Cc / Bcc
+                </button>
+              </div>
 
               <div id="compose-carbon-copy-fields" className={showCarbonCopyFields ? 'grid gap-1' : 'hidden'}>
                 <div className="flex items-center gap-3 border-b border-border-hairline">
@@ -314,24 +457,23 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
                 </div>
               </div>
 
-              {!replyToThreadId ? (
-                <div className="flex items-center gap-3 border-b border-border-hairline">
-                  <label htmlFor="compose-subject" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Subject</label>
-                  <input
-                    id="compose-subject"
-                    type="text"
-                    value={form.subject}
-                    onChange={(event) => updateField('subject', event.target.value)}
-                    className={lineInputClass}
-                    placeholder="Subject"
-                  />
-                </div>
-              ) : null}
+              <div className="flex items-center gap-3 border-b border-border-hairline">
+                <label htmlFor="compose-subject" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Subject</label>
+                <input
+                  id="compose-subject"
+                  type="text"
+                  value={form.subject}
+                  onChange={(event) => updateField('subject', event.target.value)}
+                  className={lineInputClass}
+                  placeholder="Subject"
+                />
+              </div>
             </div>
 
             <div className="mt-8 flex min-h-[22rem] flex-1 flex-col">
               <label htmlFor="compose-body" className="sr-only">Body</label>
               <textarea
+                ref={bodyRef}
                 id="compose-body"
                 value={form.body}
                 onChange={(event) => updateField('body', event.target.value)}
@@ -378,6 +520,7 @@ export function ComposerPage({ replyToThreadId, initialTo = [], initialSubject =
               {successMessage ? <Status kind="success" message={successMessage} /> : null}
             </div>
           </form>
+          )}
         </section>
       }
     />

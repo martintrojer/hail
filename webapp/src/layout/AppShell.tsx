@@ -139,7 +139,7 @@ export function AppShell({
     onSetAside: () => dispatchMailShortcut('set-aside'),
     onReplyLater: () => dispatchMailShortcut('reply-later'),
     onReply: focusReplyBox,
-    onCompose: () => void navigate({ to: '/compose' }),
+    onCompose: () => void navigate({ to: '/compose', search: {} }),
     onFocusSearch: () => {
       void navigate({ to: '/search' });
       focusSearchInput();
@@ -286,6 +286,7 @@ export function AppShell({
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <Link
               to="/compose"
+              search={{}}
               className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
             >
               <PenSquare {...iconSizeProps.sm} aria-hidden="true" />
