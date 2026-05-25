@@ -158,7 +158,7 @@ function CreateUserForm() {
         <button
           type="submit"
           disabled={createUser.isPending}
-          className="w-full rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded-full bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {createUser.isPending ? 'Creating…' : 'Create user'}
         </button>
@@ -199,7 +199,7 @@ function ResetPasswordForm({ user }: { user: UserView }) {
         <button
           type="submit"
           disabled={resetPassword.isPending}
-          className="rounded-lg border border-hairline px-3 py-2 text-sm font-semibold text-ink-primary transition hover:border-accent-blue hover:text-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-full border border-hairline px-3 py-2 text-sm font-semibold text-ink-primary transition hover:border-accent-blue hover:text-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
         >
           {resetPassword.isPending ? 'Saving…' : 'Reset'}
         </button>
@@ -231,7 +231,7 @@ function UserCard({ user, currentUserId }: { user: UserView; currentUserId: numb
             onClick={() => deleteUser.mutate(user.id)}
             disabled={deleteUser.isPending || isSelf}
             title={isSelf ? 'You cannot delete your own admin account.' : undefined}
-            className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-red hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-red hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-50"
           >
             {deleteUser.isPending ? 'Deleting…' : 'Delete'}
           </button>
@@ -298,7 +298,7 @@ function AddDomainForm() {
         <button
           type="submit"
           disabled={addDomain.isPending}
-          className="w-full rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded-full bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {addDomain.isPending ? 'Adding…' : 'Add domain'}
         </button>
@@ -332,7 +332,7 @@ function DomainsSection() {
                   type="button"
                   onClick={() => deleteDomain.mutate(domain)}
                   disabled={deleteDomain.isPending}
-                  className="rounded-lg border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-red hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-red hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Delete
                 </button>

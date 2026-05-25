@@ -219,7 +219,7 @@ function PileRow({
       <div className="flex shrink-0 items-center pr-1 sm:pr-0">
         <button
           type="button"
-          className="rounded-md px-2 py-1.5 text-xs font-semibold text-ink-secondary opacity-90 outline-none hover:bg-bg-selected hover:text-accent-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary opacity-90 outline-none hover:bg-bg-selected hover:text-accent-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
           onClick={() => moveBack.mutate({ threadId: item.thread_id, to: 'imbox' })}
           disabled={moveBack.isPending}
         >
