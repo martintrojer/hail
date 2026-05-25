@@ -20,6 +20,7 @@ import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
 import { ComposerPage } from './routes/ComposerPage';
+import { DraftsPage } from './routes/DraftsPage';
 import { MailViewPage } from './routes/MailViewPage';
 import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
@@ -373,6 +374,10 @@ function PaperTrailPage() {
   );
 }
 
+function DraftsRoutePage() {
+  return <DraftsPage />;
+}
+
 function ComposePage() {
   return <ComposerPage />;
 }
@@ -476,6 +481,13 @@ const paperTrailRoute = createRoute({
   component: PaperTrailPage,
 });
 
+const draftsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/drafts',
+  beforeLoad: requireAuth,
+  component: DraftsRoutePage,
+});
+
 const screenerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/screener',
@@ -552,6 +564,7 @@ const routeTree = rootRoute.addChildren([
   imboxRoute,
   feedRoute,
   paperTrailRoute,
+  draftsRoute,
   screenerRoute,
   setAsideRoute,
   replyLaterRoute,

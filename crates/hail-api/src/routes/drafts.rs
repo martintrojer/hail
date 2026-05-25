@@ -49,6 +49,13 @@ pub trait DraftStore: Send + Sync + 'static {
         draft_id: &'a str,
         draft: DraftUpdate,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>>;
+
+    fn delete<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>>;
 }
 
 pub struct JmapDraftStore;
@@ -132,6 +139,22 @@ impl DraftStore for JmapDraftStore {
             Ok(())
         })
     }
+
+    fn delete<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            let session = login(state, token).await?;
+            session
+                .client()
+                .email_destroy(draft_id)
+                .await
+                .map_err(provider_error)
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -180,7 +203,8 @@ where
     let store: Arc<dyn DraftStore> = store;
     OpenApiRouter::new()
         .routes(routes!(create_draft).layer(Extension(store.clone())))
-        .routes(routes!(update_draft).layer(Extension(store)))
+        .routes(routes!(update_draft).layer(Extension(store.clone())))
+        .routes(routes!(delete_draft).layer(Extension(store)))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -217,8 +241,7 @@ async fn create_draft(
     Extension(user): Extension<AuthUser>,
     Extension(store): Extension<Arc<dyn DraftStore>>,
     body: Result<Json<DraftPayload>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
     };
@@ -264,8 +287,7 @@ async fn update_draft(
     Extension(store): Extension<Arc<dyn DraftStore>>,
     Path(draft_id): Path<String>,
     body: Result<Json<DraftPayload>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&draft_id) {
         return bad_request("invalid_draft_id");
     }
@@ -286,6 +308,39 @@ async fn update_draft(
             updated_at: Utc::now(),
         })
         .into_response(),
+        Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/drafts/{draft_id}",
+    tag = TAG,
+    params(
+        ("draft_id" = String, Path, description = "JMAP draft email id to delete."),
+    ),
+    responses(
+        (status = 204, description = "Draft deleted."),
+        (status = 400, description = "Invalid draft id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP draft store failure."),
+    ),
+)]
+async fn delete_draft(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(store): Extension<Arc<dyn DraftStore>>,
+    Path(draft_id): Path<String>,
+) -> Response {
+    if !looks_like_jmap_id(&draft_id) {
+        return bad_request("invalid_draft_id");
+    }
+
+    match store
+        .delete(&state, user.jmap_token.clone(), &draft_id)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }

@@ -1,4 +1,4 @@
-// This file is auto-generated from http://localhost:8080/api/openapi.json.
+// This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
     "/api/blobs": {
@@ -91,7 +91,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["delete_draft"];
         options?: never;
         head?: never;
         patch: operations["update_draft"];
@@ -267,6 +267,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["post_undo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/views/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_drafts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -523,8 +539,10 @@ export interface components {
             updated_at: string;
         };
         /** @enum {string} */
-        MailClassification: "imbox" | "feed" | "papertrail";
+        MailClassification: "imbox" | "feed" | "papertrail" | "drafts";
         MailViewItem: {
+            bcc: string[];
+            cc: string[];
             classification: components["schemas"]["MailClassification"];
             email_id: string;
             from: string;
@@ -533,6 +551,7 @@ export interface components {
             received_at?: string | null;
             subject: string;
             thread_id: string;
+            to: string[];
             unread: boolean;
         };
         MailViewResponse: {
@@ -897,6 +916,48 @@ export interface operations {
                 };
             };
             /** @description Invalid draft payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP draft store failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP draft email id to delete. */
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid draft id. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1552,6 +1613,43 @@ export interface operations {
             };
             /** @description Undo action is not implemented. */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_drafts: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Drafts mail view. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailViewResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP mail view lookup failed. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

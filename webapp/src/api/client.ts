@@ -111,7 +111,8 @@ export interface SetupAdminRequest {
 }
 
 export type MailClassification = components['schemas']['MailClassification'];
-export type MailViewKind = MailClassification;
+export type MailViewKind = Exclude<MailClassification, 'drafts'>;
+export type DraftsViewKind = 'drafts';
 export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type MailViewItem = components['schemas']['MailViewItem'];
@@ -357,6 +358,13 @@ export class HailApiClient {
     );
   }
 
+  async getDrafts(): Promise<MailViewResponse> {
+    return this.#json<MailViewResponse>(
+      await this.#request('/api/views/drafts'),
+      200,
+    );
+  }
+
   async search(params: SearchParams): Promise<SearchResponse> {
     const query = new URLSearchParams({ q: params.q });
     if (params.scope) {
@@ -576,6 +584,16 @@ export class HailApiClient {
         mutating: true,
       }),
       200,
+    );
+  }
+
+  async deleteDraft(draftId: string): Promise<void> {
+    await this.#empty(
+      await this.#request(`/api/drafts/${encodeURIComponent(draftId)}`, {
+        method: 'DELETE',
+        mutating: true,
+      }),
+      204,
     );
   }
 
