@@ -154,7 +154,7 @@ function sampleScreenerView(overrides: Partial<ScreenerView> = {}): ScreenerView
         sender: 'newsletter@example.com',
         first_seen_at: '2026-05-23T12:00:00Z',
         message_count: 3,
-        latest_preview: { text: 'Latest dispatch from the newsletter.' },
+        latest_preview: { subject: 'Newsletter dispatch', preview: 'Latest dispatch from the newsletter.', from: 'newsletter@shop.example.com' },
       },
     ],
     ...overrides,
