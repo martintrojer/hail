@@ -16,6 +16,7 @@ use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
 use crate::routes::response::{bad_request, internal, not_found};
+use crate::routes::validation::valid_email;
 use crate::state::AppState;
 
 pub trait StalwartUserManagement: Send + Sync + 'static {
@@ -464,9 +465,7 @@ fn management_path(base: &str, segments: &[&str]) -> String {
     let mut url = base.trim_end_matches('/').to_string();
     for segment in segments {
         url.push('/');
-        url.push_str(
-            &url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>(),
-        );
+        url.push_str(&url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>());
     }
     url
 }
@@ -574,26 +573,6 @@ fn normalize_display_name(display_name: Option<&str>) -> Option<String> {
 
 fn valid_password(password: &SecretString) -> bool {
     password.expose_secret().len() >= 12
-}
-
-fn valid_email(email: &str) -> bool {
-    let Some((local, domain)) = email.split_once('@') else {
-        return false;
-    };
-    !local.is_empty()
-        && valid_domain(domain)
-        && !email.contains(char::is_whitespace)
-        && email.matches('@').count() == 1
-}
-
-fn valid_domain(domain: &str) -> bool {
-    !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-        && domain
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
 fn invalid_input(field: &'static str) -> Response {

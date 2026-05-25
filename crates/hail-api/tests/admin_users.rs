@@ -335,18 +335,24 @@ async fn invalid_email_or_short_password_return_400_without_management() {
     let (_admin_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
     let management = Arc::new(FakeUserManagement::default());
 
-    let bad_email = request(
-        state.clone(),
-        management.clone(),
-        Method::POST,
-        "/api/admin/users",
-        Some(&sid),
-        true,
-        Some(r#"{"email":"bad","password":"correct horse battery"}"#),
-    )
-    .await;
-    assert_eq!(bad_email.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(bad_email).await["field"], "email");
+    for email in [
+        r#"{"email":"bad","password":"correct horse battery"}"#,
+        r#"{"email":"bob@-bad.example","password":"correct horse battery"}"#,
+        r#"{"email":"bob@example..org","password":"correct horse battery"}"#,
+    ] {
+        let resp = request(
+            state.clone(),
+            management.clone(),
+            Method::POST,
+            "/api/admin/users",
+            Some(&sid),
+            true,
+            Some(email),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "email={email}");
+        assert_eq!(json_body(resp).await["field"], "email", "email={email}");
+    }
 
     let short_password = request(
         state,

@@ -228,22 +228,32 @@ async fn delete_uses_fake_management_and_normalizes_domain() {
 
 #[tokio::test]
 async fn invalid_domain_returns_400_and_does_not_call_management() {
-    let (state, key) = fixture_state().await;
-    let (_user_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
-    let management = Arc::new(FakeManagement::default());
+    let invalid_domains = ["-bad.example", "bad-.example", "example..org", "123.456"];
 
-    let resp = request(
-        state,
-        management.clone(),
-        Method::POST,
-        "/api/admin/domains",
-        Some(&sid),
-        true,
-        Some(r#"{"domain":"-bad.example"}"#),
-    )
-    .await;
+    for domain in invalid_domains {
+        let (state, key) = fixture_state().await;
+        let (_user_id, sid) =
+            seed_session_with_admin(&state, &key, "admin@example.org", true).await;
+        let management = Arc::new(FakeManagement::default());
+        let body = serde_json::json!({ "domain": domain }).to_string();
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(resp).await["error"], "invalid_domain");
-    assert!(management.calls().is_empty());
+        let resp = request(
+            state,
+            management.clone(),
+            Method::POST,
+            "/api/admin/domains",
+            Some(&sid),
+            true,
+            Some(&body),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "domain={domain:?}");
+        assert_eq!(
+            json_body(resp).await["error"],
+            "invalid_domain",
+            "domain={domain:?}"
+        );
+        assert!(management.calls().is_empty(), "domain={domain:?}");
+    }
 }

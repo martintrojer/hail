@@ -588,6 +588,10 @@ async fn post_setup_admin_rejects_invalid_domain() {
         ".example.org",
         "example.org.",
         "exa mple.org",
+        "example..org",
+        "-bad.example",
+        "bad-.example",
+        "123.456",
     ];
 
     for domain in invalid_domains {

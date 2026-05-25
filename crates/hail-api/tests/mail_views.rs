@@ -103,6 +103,10 @@ fn item(n: i64, classification: MailClassification) -> MailViewItem {
     }
 }
 
+fn item_with_view(n: i64, view: MailView) -> MailViewItem {
+    item(n, view.classification())
+}
+
 #[tokio::test]
 async fn auth_required_returns_401() {
     let (state, _key) = fixture_state().await;
@@ -119,40 +123,15 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
 
     let cases = [
-        (
-            "/api/views/imbox",
-            MailView::Imbox,
-            MailClassification::Imbox,
-            "imbox",
-        ),
-        (
-            "/api/views/feed",
-            MailView::Feed,
-            MailClassification::Feed,
-            "feed",
-        ),
-        (
-            "/api/views/papertrail",
-            MailView::Papertrail,
-            MailClassification::Papertrail,
-            "papertrail",
-        ),
-        (
-            "/api/views/drafts",
-            MailView::Drafts,
-            MailClassification::Drafts,
-            "drafts",
-        ),
-        (
-            "/api/views/trash",
-            MailView::Trash,
-            MailClassification::Trash,
-            "trash",
-        ),
+        ("/api/views/imbox", MailView::Imbox, "imbox"),
+        ("/api/views/feed", MailView::Feed, "feed"),
+        ("/api/views/papertrail", MailView::Papertrail, "papertrail"),
+        ("/api/views/drafts", MailView::Drafts, "drafts"),
+        ("/api/views/trash", MailView::Trash, "trash"),
     ];
 
-    for (path, expected_view, classification, expected_json) in cases {
-        let provider = Arc::new(FakeProvider::new(vec![item(1, classification)]));
+    for (path, expected_view, expected_json) in cases {
+        let provider = Arc::new(FakeProvider::new(vec![item_with_view(1, expected_view)]));
         let resp = get_view(state.clone(), provider.clone(), Some(&sid), path).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
@@ -204,9 +183,9 @@ async fn response_preserves_provider_order() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "carol@example.org").await;
     let provider = Arc::new(FakeProvider::new(vec![
-        item(30, MailClassification::Imbox),
-        item(10, MailClassification::Imbox),
-        item(20, MailClassification::Imbox),
+        item_with_view(30, MailView::Imbox),
+        item_with_view(10, MailView::Imbox),
+        item_with_view(20, MailView::Imbox),
     ]));
 
     let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
@@ -248,9 +227,9 @@ async fn response_sets_has_notes_for_current_users_thread_notes() {
     .await
     .expect("insert other note");
     let provider = Arc::new(FakeProvider::new(vec![
-        item(30, MailClassification::Imbox),
-        item(20, MailClassification::Imbox),
-        item(10, MailClassification::Imbox),
+        item_with_view(30, MailView::Imbox),
+        item_with_view(20, MailView::Imbox),
+        item_with_view(10, MailView::Imbox),
     ]));
 
     let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
