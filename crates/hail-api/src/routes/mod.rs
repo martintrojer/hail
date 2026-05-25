@@ -13,6 +13,7 @@ pub mod contacts;
 pub mod drafts;
 pub mod health;
 pub mod jmap_helpers;
+pub mod management_http;
 pub mod notes;
 pub mod pile;
 pub mod response;
