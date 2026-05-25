@@ -566,10 +566,17 @@ export interface components {
             /** Format: date-time */
             send_at?: string | null;
         };
+        ScreenerLatestPreview: {
+            from: string;
+            preview: string;
+            /** Format: date-time */
+            received_at?: string | null;
+            subject: string;
+        };
         ScreenerSender: {
             /** Format: date-time */
             first_seen_at: string;
-            latest_preview?: unknown;
+            latest_preview?: null | components["schemas"]["ScreenerLatestPreview"];
             /** Format: int64 */
             message_count: number;
             sender: string;
