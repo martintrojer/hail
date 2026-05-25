@@ -77,7 +77,7 @@ impl StalwartManagement for HttpStalwartManagement {
     ) -> Pin<Box<dyn Future<Output = Result<(), ManagementError>> + Send + 'a>> {
         Box::pin(async move {
             let base = management_base(state)?;
-            let url = format!("{}/api/domain/{}", base, domain);
+            let url = management_path(&base, &["api", "domain", domain]);
             let response = reqwest::Client::new()
                 .post(&url)
                 .json(&serde_json::json!({ "domain": domain }))
@@ -102,7 +102,7 @@ impl StalwartManagement for HttpStalwartManagement {
     ) -> Pin<Box<dyn Future<Output = Result<(), ManagementError>> + Send + 'a>> {
         Box::pin(async move {
             let base = management_base(state)?;
-            let url = format!("{}/api/domain/{}", base, domain);
+            let url = management_path(&base, &["api", "domain", domain]);
             let response = reqwest::Client::new()
                 .delete(&url)
                 .send()
@@ -266,6 +266,17 @@ fn management_base(state: &AppState) -> Result<String, ManagementError> {
         .ok_or(ManagementError::NotConfigured)
 }
 
+fn management_path(base: &str, segments: &[&str]) -> String {
+    let mut url = base.trim_end_matches('/').to_string();
+    for segment in segments {
+        url.push('/');
+        url.push_str(
+            &url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>(),
+        );
+    }
+    url
+}
+
 async fn decode_domain_list(response: reqwest::Response) -> Result<Vec<String>, ManagementError> {
     let value = response
         .json::<serde_json::Value>()
@@ -361,5 +372,22 @@ fn management_error(err: ManagementError) -> Response {
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn management_path_percent_encodes_each_path_segment() {
+        let url = management_path(
+            "http://stalwart.local/",
+            &["api", "domain", "Example+Domain/xn--bcher-kva.example"],
+        );
+        assert_eq!(
+            url,
+            "http://stalwart.local/api/domain/Example%2BDomain%2Fxn--bcher-kva.example"
+        );
     }
 }

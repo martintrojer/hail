@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 import {
   HailApiClient,
   type ThreadMessage,
@@ -23,9 +23,7 @@ import { ErrorState } from '../components/ErrorState';
 import { InlineNote, type InlineNoteProps } from '../components/InlineNote';
 import {
   ArrowLeft,
-  Clock,
   MoreHorizontal,
-  Paperclip,
   iconSizeProps,
 } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
@@ -34,7 +32,6 @@ import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { useGoBack } from '../hooks/useGoBack';
 import { AppShell } from '../layout/AppShell';
-import { pillButtonClass } from '../lib/buttonStyles';
 import { formatFullDateTime } from '../lib/dates';
 import { actionErrorMessage, threadErrorMessage } from '../lib/errorMessages';
 import { formatParticipantEmail, formatParticipantList, formatParticipantName } from '../lib/participants';
@@ -303,56 +300,6 @@ function MessageCard({
   );
 }
 
-function MiniReplyComposer({ senderName }: { senderName: string }) {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  function resizeTextarea() {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    textarea.style.height = 'auto';
-    textarea.style.height = `${textarea.scrollHeight}px`;
-  }
-
-  return (
-    <section className="pt-2" aria-label="Reply composer">
-      <textarea
-        ref={textareaRef}
-        rows={3}
-        onInput={resizeTextarea}
-        placeholder={`Reply to ${senderName}…`}
-        className="min-h-28 w-full resize-none rounded-lg border border-border-hairline bg-bg-surface p-3 text-base leading-relaxed text-ink-primary outline-none placeholder:text-ink-tertiary focus:border-accent-blue"
-      />
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <button
-          type="button"
-          className={pillButtonClass('primary', 'md')}
-        >
-          Send
-        </button>
-        <div className="flex items-center gap-2 text-ink-tertiary">
-          <button
-            type="button"
-            aria-label="Attach file"
-            className="rounded-full p-2 focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-          >
-            <Paperclip {...iconSizeProps.md} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="Send later"
-            className="rounded-full p-2 focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-          >
-            <Clock {...iconSizeProps.md} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
   const sender = primarySender(thread);
   const firstMessage = sortedMessages(thread.messages)[0];
@@ -401,7 +348,6 @@ function ThreadDocument({
     () => sortedMessages(thread.messages),
     [thread.messages],
   );
-  const sender = primarySender(thread);
   const hiddenPopupActions = sourceView === 'set-aside' || sourceView === 'reply-later'
     ? ['bubble-up', 'set-aside', 'reply-later']
     : [];
@@ -647,9 +593,6 @@ function ThreadDocument({
         </div>
       )}
 
-      <MiniReplyComposer
-        senderName={sender ? formatParticipantName(sender) : 'sender'}
-      />
       <BubbleUpSubmenu
         open={bubbleUpOpen}
         anchorRect={bubbleUpAnchor}

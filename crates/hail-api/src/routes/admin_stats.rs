@@ -223,7 +223,7 @@ async fn stalwart_quota_size(
         return Ok(None);
     };
     let response = reqwest::Client::new()
-        .get(format!("{}/api/store/quota/{}", base, email))
+        .get(management_path(&base, &["api", "store", "quota", email]))
         .send()
         .await?;
     if !response.status().is_success() {
@@ -242,6 +242,17 @@ fn management_base(state: &AppState) -> Option<String> {
         .map(str::trim)
         .filter(|url| !url.is_empty())
         .map(|url| url.trim_end_matches('/').to_string())
+}
+
+fn management_path(base: &str, segments: &[&str]) -> String {
+    let mut url = base.trim_end_matches('/').to_string();
+    for segment in segments {
+        url.push('/');
+        url.push_str(
+            &url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>(),
+        );
+    }
+    url
 }
 
 fn size_bytes_from_value(value: &serde_json::Value) -> Option<u64> {
@@ -282,6 +293,18 @@ mod tests {
         assert_eq!(
             size_bytes_from_value(&serde_json::json!({ "quota": {} })),
             None
+        );
+    }
+
+    #[test]
+    fn management_path_percent_encodes_email_path_segment() {
+        let url = management_path(
+            "http://stalwart.local/",
+            &["api", "store", "quota", "User+tag@example.org"],
+        );
+        assert_eq!(
+            url,
+            "http://stalwart.local/api/store/quota/User%2Btag%40example.org"
         );
     }
 }

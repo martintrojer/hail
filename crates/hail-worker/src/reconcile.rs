@@ -20,7 +20,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 /// Verifies which JMAP Thread ids still exist for one hail user.
 #[async_trait]
 pub trait ThreadVerifier: Send + Sync {
-    async fn existing_threads(&self, user_id: i64, ids: &[String]) -> Result<HashSet<String>>;
+    async fn existing_threads(&self, user_id: i64, ids: &[String]) -> Result<VerificationOutcome>;
 }
 
 /// Structured reconciliation counters logged by the supervisor and returned to
@@ -28,6 +28,7 @@ pub trait ThreadVerifier: Send + Sync {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ReconcileReport {
     pub users_checked: usize,
+    pub users_unverifiable: usize,
     pub thread_ids_checked: usize,
     pub stack_positions_checked: usize,
     pub stack_positions_deleted: u64,
@@ -46,6 +47,12 @@ struct ThreadRef {
 enum SidecarTable {
     StackPositions,
     PendingBubbleUps,
+}
+
+#[derive(Debug)]
+pub enum VerificationOutcome {
+    Verified(HashSet<String>),
+    Unverifiable(String),
 }
 
 /// Reconcile sidecar rows that point at missing JMAP Thread objects.
@@ -80,10 +87,22 @@ pub async fn process_reconciliation(
     let mut missing_by_user: BTreeMap<i64, Vec<String>> = BTreeMap::new();
     for (user_id, ids_set) in by_user {
         let ids: Vec<String> = ids_set.into_iter().collect();
-        let existing = verifier
+        let outcome = verifier
             .existing_threads(user_id, &ids)
             .await
             .with_context(|| format!("verify JMAP threads for user {user_id}"))?;
+        let existing = match outcome {
+            VerificationOutcome::Verified(existing) => existing,
+            VerificationOutcome::Unverifiable(reason) => {
+                report.users_unverifiable += 1;
+                tracing::warn!(
+                    user_id,
+                    reason = %reason,
+                    "reconciliation skipped unverifiable user"
+                );
+                continue;
+            }
+        };
         let missing: Vec<String> = ids
             .into_iter()
             .filter(|id| !existing.contains(id))
@@ -199,7 +218,7 @@ mod live {
     use secrecy::SecretString;
     use sqlx::SqlitePool;
 
-    use super::ThreadVerifier;
+    use super::{ThreadVerifier, VerificationOutcome};
     use crate::crypto::TokenDecryptor;
 
     /// Live JMAP-backed verifier for nightly reconciliation.
@@ -230,12 +249,19 @@ mod live {
 
     #[async_trait]
     impl ThreadVerifier for LiveThreadVerifier {
-        async fn existing_threads(&self, user_id: i64, ids: &[String]) -> Result<HashSet<String>> {
+        async fn existing_threads(
+            &self,
+            user_id: i64,
+            ids: &[String],
+        ) -> Result<VerificationOutcome> {
             if ids.is_empty() {
-                return Ok(HashSet::new());
+                return Ok(VerificationOutcome::Verified(HashSet::new()));
             }
 
-            let token = self.latest_active_token(user_id).await?;
+            let token = match self.latest_active_token(user_id).await {
+                Ok(token) => token,
+                Err(err) => return Ok(VerificationOutcome::Unverifiable(err.to_string())),
+            };
             let session = hail_jmap::login_bearer(&self.jmap_url, token)
                 .await
                 .with_context(|| format!("JMAP login for user {user_id}"))?;
@@ -260,7 +286,7 @@ mod live {
                     existing.insert(id.clone());
                 }
             }
-            Ok(existing)
+            Ok(VerificationOutcome::Verified(existing))
         }
     }
 }
