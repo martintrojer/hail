@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  Archive,
   Bookmark,
   ChevronDown,
   Clock,
@@ -35,6 +36,7 @@ const actionGroups: ActionItem[][] = [
     { action: 'forward', label: 'Forward', icon: Forward },
   ],
   [
+    { action: 'archive', label: 'Archive', icon: Archive },
     { action: 'set-aside', label: 'Set Aside', icon: Bookmark },
     { action: 'reply-later', label: 'Reply Later', icon: Clock },
     { action: 'bubble-up', label: 'Bubble Up', icon: icons.bubbleUp },

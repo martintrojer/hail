@@ -425,6 +425,13 @@ export class HailApiClient {
     );
   }
 
+  async moveThread(
+    threadId: string,
+    to: 'imbox' | 'feed' | 'papertrail',
+  ): Promise<ThreadVerbResponse> {
+    return this.classifyThread(threadId, to);
+  }
+
   async archiveThread(threadId: string): Promise<ThreadVerbResponse> {
     return this.#json<ThreadVerbResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}/archive`, {
