@@ -1,7 +1,7 @@
 use http_body_util::BodyExt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Body;
@@ -30,6 +30,20 @@ fn app(state: AppState, assembler: Arc<FakeAssembler>) -> Router {
 #[derive(Clone)]
 struct FakeAssembler {
     result: Result<Option<AssembledThread>, String>,
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakeAssembler {
+    fn new(result: Result<Option<AssembledThread>, String>) -> Self {
+        Self {
+            result,
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn called_thread_ids(&self) -> Vec<String> {
+        self.calls.lock().expect("calls lock").clone()
+    }
 }
 
 impl ThreadAssembler for FakeAssembler {
@@ -37,11 +51,17 @@ impl ThreadAssembler for FakeAssembler {
         &'a self,
         _state: &'a AppState,
         _token: SecretString,
-        _thread_id: &'a str,
+        thread_id: &'a str,
     ) -> Pin<
         Box<dyn Future<Output = Result<Option<AssembledThread>, ThreadAssembleError>> + Send + 'a>,
     > {
-        Box::pin(async move { self.result.clone().map_err(ThreadAssembleError) })
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .expect("calls lock")
+                .push(thread_id.to_string());
+            self.result.clone().map_err(ThreadAssembleError)
+        })
     }
 }
 
@@ -79,14 +99,19 @@ fn sample_text_message(email_id: &str, text: &str) -> AssembledMessage {
     }
 }
 
-async fn get_json(
+fn default_assembler() -> Arc<FakeAssembler> {
+    Arc::new(FakeAssembler::new(Ok(Some(sample_thread(Vec::new())))))
+}
+
+async fn get_json_at(
     state: AppState,
     sid: &str,
     assembler: Arc<FakeAssembler>,
+    path: &str,
 ) -> (StatusCode, serde_json::Value) {
     let req = Request::builder()
         .method(Method::GET)
-        .uri("/api/threads/thread-123")
+        .uri(path)
         .header(header::COOKIE, format!("hail_session={sid}"))
         .body(Body::empty())
         .unwrap();
@@ -96,6 +121,92 @@ async fn get_json(
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
     (status, json)
+}
+
+async fn get_json(
+    state: AppState,
+    sid: &str,
+    assembler: Arc<FakeAssembler>,
+) -> (StatusCode, serde_json::Value) {
+    get_json_at(state, sid, assembler, "/api/threads/thread-123").await
+}
+
+#[tokio::test]
+async fn requested_thread_id_is_passed_to_assembler() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let assembler = Arc::new(FakeAssembler::new(Ok(Some(AssembledThread {
+        thread_id: "thread-abc".to_string(),
+        subject: "Status".to_string(),
+        messages: Vec::new(),
+    }))));
+
+    let (status, json) =
+        get_json_at(state, &sid, assembler.clone(), "/api/threads/thread-abc").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["thread_id"], "thread-abc");
+    assert_eq!(assembler.called_thread_ids(), vec!["thread-abc"]);
+}
+
+#[tokio::test]
+async fn invalid_thread_id_returns_400_without_assembling() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let assembler = default_assembler();
+
+    let (status, json) = get_json_at(
+        state,
+        &sid,
+        assembler.clone(),
+        "/api/threads/invalid.thread",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "invalid_thread_id");
+    assert!(assembler.called_thread_ids().is_empty());
+}
+
+#[tokio::test]
+async fn response_embeds_current_user_thread_notes_ordered_by_id() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "notes-owner@example.org").await;
+    let (other_user_id, _other_sid) = seed_session(&state, &key, "other-notes@example.org").await;
+
+    for (note_user_id, thread_id, email_id, body) in [
+        (user_id, "thread-123", "email-b", "second note"),
+        (other_user_id, "thread-123", "email-x", "other user note"),
+        (user_id, "thread-other", "email-z", "other thread note"),
+        (user_id, "thread-123", "email-a", "first note"),
+    ] {
+        sqlx::query(
+            "INSERT INTO thread_notes (user_id, thread_id, email_id, body) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(note_user_id)
+        .bind(thread_id)
+        .bind(email_id)
+        .bind(body)
+        .execute(&state.db)
+        .await
+        .expect("insert thread note");
+    }
+
+    let thread = sample_thread(vec![
+        sample_message("email-a", "<p>first</p>"),
+        sample_message("email-b", "<p>second</p>"),
+    ]);
+
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let notes = json["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[0]["email_id"], "email-b");
+    assert_eq!(notes[0]["body"], "second note");
+    assert_eq!(notes[1]["email_id"], "email-a");
+    assert_eq!(notes[1]["body"], "first note");
 }
 
 #[tokio::test]
@@ -109,9 +220,7 @@ async fn auth_required_returns_401() {
 
     let resp = app(
         state,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(sample_thread(Vec::new()))),
-        }),
+        Arc::new(FakeAssembler::new(Ok(Some(sample_thread(Vec::new()))))),
     )
     .oneshot(req)
     .await
@@ -125,7 +234,7 @@ async fn not_found_returns_404() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
 
-    let (status, json) = get_json(state, &sid, Arc::new(FakeAssembler { result: Ok(None) })).await;
+    let (status, json) = get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(None)))).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "not_found");
@@ -140,14 +249,8 @@ async fn html_is_sanitized_and_script_removed() {
         "<p>Hello</p><script>alert('xss')</script>",
     )]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let html = json["messages"][0]["html"].as_str().unwrap();
@@ -165,14 +268,8 @@ async fn quoted_history_is_stripped() {
         r#"<p>New reply</p><div class="gmail_quote"><p>Old quoted text</p></div>"#,
     )]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let html = json["messages"][0]["html"].as_str().unwrap();
@@ -190,14 +287,8 @@ async fn plaintext_only_body_renders_full_escaped_body() {
         "Hello <Alice> & Bob\nSecond line\n\nFinal line",
     )]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let html = json["messages"][0]["html"].as_str().unwrap();
@@ -218,14 +309,8 @@ async fn plaintext_quote_history_is_stripped() {
         "Fresh answer\n\n> old quoted line\n> another old line",
     )]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let html = json["messages"][0]["html"].as_str().unwrap();
@@ -242,14 +327,8 @@ async fn html_body_wins_over_plaintext_fallback() {
     message.text = "Plaintext body".to_string();
     let thread = sample_thread(vec![message]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let html = json["messages"][0]["html"].as_str().unwrap();
@@ -266,14 +345,8 @@ async fn tracking_pixel_is_counted_and_removed() {
         r#"<p>Hi</p><img src="https://tracker.example/open.gif" width="1" height="1">"#,
     )]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let html = json["messages"][0]["html"].as_str().unwrap();
@@ -293,14 +366,8 @@ async fn messages_preserve_assembler_order() {
         sample_message("email-b", "<p>second third</p>"),
     ]);
 
-    let (status, json) = get_json(
-        state,
-        &sid,
-        Arc::new(FakeAssembler {
-            result: Ok(Some(thread)),
-        }),
-    )
-    .await;
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
 
     assert_eq!(status, StatusCode::OK);
     let ids = json["messages"]

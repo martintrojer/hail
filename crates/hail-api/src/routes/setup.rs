@@ -22,6 +22,7 @@ use crate::middleware::session::{
 };
 use crate::routes::auth::UserView;
 use crate::routes::response::internal;
+use crate::routes::validation::{valid_domain, valid_email};
 use crate::state::AppState;
 
 static SETUP_PROVISION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -433,26 +434,6 @@ async fn create_stalwart_principal(
     Err(ProvisionError::Management(format!(
         "POST {path} returned HTTP {status}"
     )))
-}
-
-fn valid_email(email: &str) -> bool {
-    let Some((local, domain)) = email.split_once('@') else {
-        return false;
-    };
-    !local.is_empty()
-        && valid_domain(domain)
-        && !email.contains(char::is_whitespace)
-        && email.matches('@').count() == 1
-}
-
-fn valid_domain(domain: &str) -> bool {
-    !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-        && domain
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
 fn setup_bootstrap_authorized(state: &AppState, provided: Option<&SecretString>) -> bool {

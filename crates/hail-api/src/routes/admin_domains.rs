@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
+use crate::routes::validation::valid_domain;
 use crate::state::AppState;
 
 /// Dependency-injection seam for Stalwart domain administration.
@@ -270,9 +271,7 @@ fn management_path(base: &str, segments: &[&str]) -> String {
     let mut url = base.trim_end_matches('/').to_string();
     for segment in segments {
         url.push('/');
-        url.push_str(
-            &url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>(),
-        );
+        url.push_str(&url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>());
     }
     url
 }
@@ -312,29 +311,6 @@ async fn decode_domain_list(response: reqwest::Response) -> Result<Vec<String>, 
 
 fn normalize_domain(domain: &str) -> String {
     domain.trim().trim_end_matches('.').to_ascii_lowercase()
-}
-
-fn valid_domain(domain: &str) -> bool {
-    if domain.is_empty()
-        || domain.len() > 253
-        || !domain.contains('.')
-        || domain.starts_with('.')
-        || domain.ends_with('.')
-        || domain.contains("..")
-        || !domain
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-    {
-        return false;
-    }
-
-    domain.split('.').all(|label| {
-        !label.is_empty()
-            && label.len() <= 63
-            && !label.starts_with('-')
-            && !label.ends_with('-')
-            && label.bytes().any(|b| b.is_ascii_alphabetic())
-    })
 }
 
 fn invalid_domain() -> Response {

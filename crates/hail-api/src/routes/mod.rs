@@ -21,6 +21,7 @@ pub mod setup;
 pub mod threads;
 pub mod threads_view;
 pub mod undo;
+pub mod validation;
 pub mod views;
 pub mod ws;
 
