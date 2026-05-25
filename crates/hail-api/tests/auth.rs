@@ -21,49 +21,10 @@ use chrono::{Duration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
 use hail_core::{Config, KEY_LEN, parse_server_key};
-use hail_db::connect;
+use hail_test::fixture_state;
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
-
-/// Build a fully-initialized `AppState` against a fresh in-memory SQLite.
-/// Returns the state plus the 32-byte server key so tests can encrypt
-/// fixture tokens with the same key.
-async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    // Distinct shared-cache URI per call so tests don't share state.
-    // `mode=memory&cache=shared` keeps the DB alive across the pool's
-    // multiple connections.
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_test_{uniq}?mode=memory&cache=shared");
-    let db = connect(&url).await.expect("open sqlite");
-    hail_db::migrate(&db).await.expect("migrate");
-
-    // Deterministic 32-byte key so we can assert specific behaviour
-    // (notably: "wrong key → 401" tests use a *different* key here).
-    let key = [0x5Au8; KEY_LEN];
-    let server_key_hex = hex::encode(key);
-
-    // We construct Config via the env layer so the `validate_server_key`
-    // path is exercised. This is what the binary does in production too.
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", &server_key_hex);
-        std::env::remove_var("HAIL_ADMIN__EMAIL");
-    }
-    let config = Config::load_from(None).expect("load config");
-
-    let state = AppState {
-        db,
-        config,
-        server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
-        events: hail_api::events::AppEventBus::default(),
-    };
-    (state, key)
-}
 
 async fn fixture_state_with_admin(admin_email: Option<&str>) -> (AppState, [u8; KEY_LEN]) {
     let (mut state, key) = fixture_state().await;
@@ -78,16 +39,6 @@ async fn fixture_state_with_admin(admin_email: Option<&str>) -> (AppState, [u8; 
     state.server_key =
         Arc::new(parse_server_key(&state.config.secrets.server_key).expect("parse server key"));
     (state, key)
-}
-
-/// Cheap unique suffix — we don't need real UUIDs, just per-test
-/// uniqueness for the in-memory DB name.
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    format!("{pid}_{n}")
 }
 
 /// Insert a `(user, session)` pair so a request carrying that session

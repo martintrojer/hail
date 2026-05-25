@@ -1,3 +1,4 @@
+use http_body_util::BodyExt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -5,83 +6,12 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, Utc};
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
-use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::blobs::{BlobUploadError, BlobUploader, UploadedBlob};
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
-use hail_db::connect;
-use http_body_util::BodyExt;
+use hail_test::{fixture_state, seed_session};
 use secrecy::SecretString;
 use tower::ServiceExt;
-
-async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_blobs_test_{uniq}?mode=memory&cache=shared");
-    let db = connect(&url).await.expect("open sqlite");
-    hail_db::migrate(&db).await.expect("migrate");
-
-    let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-    }
-    let config = Config::load_from(None).expect("load config");
-
-    let state = AppState {
-        db,
-        config,
-        server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
-        events: hail_api::events::AppEventBus::default(),
-    };
-    (state, key)
-}
-
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}_{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> String {
-    let now = Utc::now();
-    let user_id: i64 = sqlx::query_scalar(
-        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
-         VALUES (?1, ?2, 0, ?3) RETURNING id",
-    )
-    .bind(email)
-    .bind("account-id")
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .expect("insert user");
-
-    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
-    let session_id = format!("{:064x}", user_id);
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(&token_enc)
-    .bind(Some("test-ua"))
-    .bind(now + Duration::days(30))
-    .bind(now)
-    .execute(&state.db)
-    .await
-    .expect("insert session");
-    session_id
-}
 
 fn app(state: AppState, uploader: Arc<FakeUploader>) -> Router {
     let protected = hail_api::routes::blobs::router_with_uploader(uploader).layer(
@@ -155,7 +85,7 @@ fn multipart_parts(boundary: &str, parts: &[(&str, Option<&str>, &str, &[u8])]) 
 #[tokio::test]
 async fn one_file_upload_returns_blob_id() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let boundary = "hail-boundary";
     let body = multipart_body(boundary, "text/plain", b"hello");
 
@@ -183,7 +113,7 @@ async fn one_file_upload_returns_blob_id() {
 #[tokio::test]
 async fn file_over_50mb_returns_413() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "bob@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "bob@example.org").await;
     let boundary = "hail-boundary";
     let bytes = vec![b'x'; 50 * 1024 * 1024 + 1];
     let body = multipart_body(boundary, "application/octet-stream", &bytes);
@@ -228,7 +158,7 @@ async fn no_auth_returns_401() {
 #[tokio::test]
 async fn missing_csrf_returns_403_before_upload() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "carol@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "carol@example.org").await;
     let boundary = "hail-boundary";
     let body = multipart_body(boundary, "text/plain", b"hello");
 
@@ -256,7 +186,7 @@ async fn missing_csrf_returns_403_before_upload() {
 #[tokio::test]
 async fn no_file_parts_returns_empty_created_response() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "dana@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "dana@example.org").await;
     let boundary = "hail-boundary";
     let body = multipart_parts(boundary, &[("note", None, "text/plain", b"ignored")]);
 
@@ -282,7 +212,7 @@ async fn no_file_parts_returns_empty_created_response() {
 #[tokio::test]
 async fn multiple_file_parts_upload_in_order() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "erin@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "erin@example.org").await;
     let boundary = "hail-boundary";
     let body = multipart_parts(
         boundary,
@@ -323,7 +253,7 @@ async fn multiple_file_parts_upload_in_order() {
 #[tokio::test]
 async fn missing_boundary_returns_400() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "frank@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "frank@example.org").await;
 
     let req = Request::builder()
         .method(Method::POST)
@@ -344,7 +274,7 @@ async fn missing_boundary_returns_400() {
 #[tokio::test]
 async fn malformed_multipart_returns_stable_400_json() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "grace@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "grace@example.org").await;
     let boundary = "hail-boundary";
     let body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"broken.bin\"\r\nContent-Type: text/plain\r\n\r\nunterminated"
@@ -372,7 +302,7 @@ async fn malformed_multipart_returns_stable_400_json() {
 #[tokio::test]
 async fn uploader_error_returns_stable_500_json() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "heidi@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "heidi@example.org").await;
     let boundary = "hail-boundary";
     let body = multipart_body(boundary, "text/plain", b"hello");
 

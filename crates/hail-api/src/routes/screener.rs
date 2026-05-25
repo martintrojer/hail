@@ -270,7 +270,9 @@ async fn get_screener(
 
     let mut senders: Vec<ScreenerSender> = rows
         .into_iter()
-        .map(|(sender, first_seen_at)| ScreenerSender::fallback(sender, first_seen_at))
+        .map(|(sender, first_seen_at)| {
+            ScreenerSender::fallback(normalize_sender(&sender), first_seen_at)
+        })
         .collect();
 
     if let Err(err) = enrich_screener_senders(&state, &user, &mut senders).await {
@@ -323,7 +325,7 @@ async fn get_denied_senders(
         Ok(rows) => rows
             .into_iter()
             .map(|(sender_address, denied_at)| DeniedSender {
-                sender_address,
+                sender_address: normalize_sender(&sender_address),
                 denied_at,
             })
             .collect(),
@@ -756,7 +758,12 @@ struct ScreenerRuleSnapshot {
 }
 
 fn normalize_sender(sender: &str) -> String {
-    sender.trim().to_ascii_lowercase()
+    let trimmed = sender.trim();
+    let email = match (trimmed.rfind('<'), trimmed.rfind('>')) {
+        (Some(start), Some(end)) if start < end => &trimmed[start + 1..end],
+        _ => trimmed,
+    };
+    email.trim().to_ascii_lowercase()
 }
 
 fn looks_like_sender(sender: &str) -> bool {

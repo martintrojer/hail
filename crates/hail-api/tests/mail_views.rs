@@ -1,3 +1,5 @@
+use chrono::{Duration, TimeZone, Utc};
+use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -5,86 +7,14 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
-use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::views::{
     MailClassification, MailView, MailViewError, MailViewItem, MailViewProvider,
 };
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
-use hail_db::connect;
-use http_body_util::BodyExt;
+use hail_test::{fixture_state, json_body, seed_session};
 use secrecy::SecretString;
-use serde_json::Value;
 use tower::ServiceExt;
-
-async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_mail_views_test_{uniq}?mode=memory&cache=shared");
-    let db = connect(&url).await.expect("open sqlite");
-    hail_db::migrate(&db).await.expect("migrate");
-
-    let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-    }
-    let config = Config::load_from(None).expect("load config");
-
-    let state = AppState {
-        db,
-        config,
-        server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
-        events: hail_api::events::AppEventBus::default(),
-    };
-    (state, key)
-}
-
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}_{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i64, String) {
-    let now = Utc::now();
-    let user_id: i64 = sqlx::query_scalar(
-        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
-         VALUES (?1, ?2, 0, ?3) RETURNING id",
-    )
-    .bind(email)
-    .bind(format!("account-{email}"))
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .expect("insert user");
-
-    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
-    let session_id = format!("{:064x}", user_id);
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(&token_enc)
-    .bind(Some("test-ua"))
-    .bind(now + Duration::days(30))
-    .bind(now)
-    .execute(&state.db)
-    .await
-    .expect("insert session");
-    (user_id, session_id)
-}
 
 fn app(state: AppState, provider: Arc<FakeProvider>) -> Router {
     let protected = hail_api::routes::views::router_with_provider(provider).layer(
@@ -152,11 +82,6 @@ async fn get_view(
     }
     let req = builder.body(Body::empty()).unwrap();
     app(state, provider).oneshot(req).await.unwrap()
-}
-
-async fn response_json(resp: axum::response::Response) -> Value {
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&body).unwrap()
 }
 
 fn item(n: i64, classification: MailClassification) -> MailViewItem {
@@ -232,7 +157,7 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(provider.calls(), vec![(expected_view, 50)]);
-        let json = response_json(resp).await;
+        let json = json_body(resp).await;
         assert_eq!(json["items"][0]["classification"], expected_json);
         assert_eq!(json["next_cursor"], Value::Null);
     }
@@ -287,7 +212,7 @@ async fn response_preserves_provider_order() {
     let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     let ids: Vec<&str> = json["items"]
         .as_array()
         .unwrap()
@@ -331,7 +256,7 @@ async fn response_sets_has_notes_for_current_users_thread_notes() {
     let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     let flags: Vec<bool> = json["items"]
         .as_array()
         .unwrap()
@@ -355,8 +280,18 @@ async fn bubble_up_view_returns_current_users_future_pending_rows_ordered_by_sur
         (alice_id, "thread-second", second_at, None),
         (alice_id, "thread-first", first_at, None),
         (alice_id, "thread-past", now - Duration::minutes(5), None),
-        (alice_id, "thread-fired", now + Duration::minutes(15), Some(now)),
-        (bob_id, "thread-other-user", now + Duration::minutes(1), None),
+        (
+            alice_id,
+            "thread-fired",
+            now + Duration::minutes(15),
+            Some(now),
+        ),
+        (
+            bob_id,
+            "thread-other-user",
+            now + Duration::minutes(1),
+            None,
+        ),
     ] {
         sqlx::query(
             "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
@@ -382,13 +317,19 @@ async fn bubble_up_view_returns_current_users_future_pending_rows_ordered_by_sur
 
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(provider.calls(), Vec::<(MailView, usize)>::new());
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     assert_eq!(json["items"].as_array().unwrap().len(), 2);
     assert_eq!(json["items"][0]["thread_id"], "thread-first");
     assert_eq!(json["items"][1]["thread_id"], "thread-second");
     assert!(json["items"][0]["bubble_id"].as_i64().is_some());
-    assert_eq!(json["items"][0]["surface_at"], first_at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
-    assert_eq!(json["items"][0]["created_at"], now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(
+        json["items"][0]["surface_at"],
+        first_at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
+    assert_eq!(
+        json["items"][0]["created_at"],
+        now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
 }
 
 #[tokio::test]
@@ -402,7 +343,7 @@ async fn provider_error_returns_stable_internal_json() {
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(provider.calls(), vec![(MailView::Imbox, 50)]);
     assert_eq!(
-        response_json(resp).await,
+        json_body(resp).await,
         serde_json::json!({"error": "internal"})
     );
 }
@@ -424,7 +365,7 @@ async fn required_identifier_provider_error_returns_stable_internal_json() {
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(provider.calls(), vec![(MailView::Feed, 2)]);
     assert_eq!(
-        response_json(resp).await,
+        json_body(resp).await,
         serde_json::json!({"error": "internal"})
     );
 }
@@ -438,7 +379,7 @@ async fn empty_list_returns_empty_items_and_null_cursor() {
     let resp = get_view(state, provider, Some(&sid), "/api/views/papertrail").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     assert_eq!(
         json,
         serde_json::json!({ "items": [], "next_cursor": null })

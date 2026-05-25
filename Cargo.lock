@@ -970,10 +970,15 @@ dependencies = [
 name = "hail-test"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64",
  "chrono",
+ "hail-api",
+ "hail-core",
  "hail-db",
  "hail-jmap",
+ "hex",
+ "http-body-util",
  "reqwest",
  "secrecy",
  "serde",
@@ -996,6 +1001,7 @@ dependencies = [
  "hail-core",
  "hail-db",
  "hail-jmap",
+ "hail-test",
  "rand 0.9.4",
  "secrecy",
  "serde_json",

@@ -1,84 +1,12 @@
-use std::sync::Arc;
+use chrono::{Duration, TimeZone, Utc};
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
-use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
-use hail_db::connect;
-use http_body_util::BodyExt;
-use serde_json::Value;
+use hail_test::{fixture_state, json_body, seed_session};
 use tower::ServiceExt;
-
-async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_pile_test_{uniq}?mode=memory&cache=shared");
-    let db = connect(&url).await.expect("open sqlite");
-    hail_db::migrate(&db).await.expect("migrate");
-
-    let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-    }
-    let config = Config::load_from(None).expect("load config");
-
-    let state = AppState {
-        db,
-        config,
-        server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
-        events: hail_api::events::AppEventBus::default(),
-    };
-    (state, key)
-}
-
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}_{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i64, String) {
-    let now = Utc::now();
-    let user_id: i64 = sqlx::query_scalar(
-        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
-         VALUES (?1, ?2, 0, ?3) RETURNING id",
-    )
-    .bind(email)
-    .bind(format!("account-{email}"))
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .expect("insert user");
-
-    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
-    let session_id = format!("{:064x}", user_id);
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(&token_enc)
-    .bind(Some("test-ua"))
-    .bind(now + Duration::days(30))
-    .bind(now)
-    .execute(&state.db)
-    .await
-    .expect("insert session");
-    (user_id, session_id)
-}
 
 async fn insert_stack_row(
     state: &AppState,
@@ -120,11 +48,6 @@ async fn get_view(state: AppState, sid: Option<&str>, path: &str) -> axum::respo
     app(state).oneshot(req).await.unwrap()
 }
 
-async fn response_json(resp: axum::response::Response) -> Value {
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&body).unwrap()
-}
-
 #[tokio::test]
 async fn auth_required_returns_401() {
     let (state, _key) = fixture_state().await;
@@ -148,7 +71,7 @@ async fn set_aside_returns_only_current_user_set_aside_sorted_by_position() {
     let resp = get_view(state, Some(&alice_sid), "/api/views/set-aside").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     assert_eq!(json["items"].as_array().unwrap().len(), 3);
     assert_eq!(json["items"][0]["thread_id"], "alice-first");
     assert_eq!(json["items"][0]["position"], 10);
@@ -169,7 +92,7 @@ async fn reply_later_returns_only_reply_later_rows_sorted_by_position() {
     let resp = get_view(state, Some(&sid), "/api/views/reply-later").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     assert_eq!(json["items"].as_array().unwrap().len(), 2);
     assert_eq!(json["items"][0]["thread_id"], "reply-early");
     assert_eq!(json["items"][0]["position"], 10);
@@ -189,7 +112,7 @@ async fn wrong_user_isolation() {
     let resp = get_view(state, Some(&bob_sid), "/api/views/reply-later").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     assert_eq!(json["items"].as_array().unwrap().len(), 1);
     assert_eq!(json["items"][0]["thread_id"], "bob-visible");
 }
@@ -202,6 +125,6 @@ async fn empty_list_returns_empty_items() {
     let resp = get_view(state, Some(&sid), "/api/views/set-aside").await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let json = response_json(resp).await;
+    let json = json_body(resp).await;
     assert_eq!(json, serde_json::json!({ "items": [] }));
 }

@@ -63,7 +63,9 @@ services:
     environment:
       - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
       - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080
       - HAIL_SERVER__BIND=0.0.0.0:8080
+      # Intentional difference from docker-compose.local.yml: production default is HTTPS.
       - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
       - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
       - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
@@ -84,7 +86,9 @@ services:
     environment:
       - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
       - HAIL_STALWART__JMAP_URL=http://stalwart:8080
+      - HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080
       - HAIL_SERVER__BIND=0.0.0.0:8080
+      # Intentional difference from docker-compose.local.yml: production default is HTTPS.
       - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
       - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
       - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}

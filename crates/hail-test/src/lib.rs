@@ -8,6 +8,159 @@ pub mod local_mail_testbed;
 pub mod stalwart;
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use chrono::{Duration, Utc};
+use hail_api::middleware::rate_limit::IpRateLimiter;
+use hail_api::state::AppState;
+use hail_core::{Config, KEY_LEN};
+use hail_db::connect;
+
+/// Build a fresh in-memory API [`AppState`] for integration tests.
+pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
+    let uniq = uuid_like();
+    let url = format!("sqlite:file:hail_api_test_{uniq}?mode=memory&cache=shared");
+    let db = connect(&url).await.expect("open sqlite");
+    hail_db::migrate(&db).await.expect("migrate");
+
+    let key = [0x5Au8; KEY_LEN];
+    unsafe {
+        std::env::set_var("HAIL_DATABASE_URL", &url);
+        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
+        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
+        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
+        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
+        std::env::remove_var("HAIL_STALWART__MANAGEMENT_URL");
+        std::env::remove_var("HAIL_ADMIN__EMAIL");
+        std::env::remove_var("HAIL_ADMIN__PASSWORD_HASH");
+        std::env::remove_var("HAIL_ADMIN__DISPLAY_NAME");
+    }
+    let config = Config::load_from(None).expect("load config");
+
+    let state = AppState {
+        db,
+        config,
+        server_key: Arc::new(key),
+        login_limiter: Arc::new(IpRateLimiter::default()),
+        events: hail_api::events::AppEventBus::default(),
+    };
+    (state, key)
+}
+
+/// Insert a non-admin user plus authenticated session for API tests.
+pub async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i64, String) {
+    seed_session_with_options(state, key, email, false, Duration::days(30), b"dummy-token").await
+}
+
+/// Insert a user/session with configurable admin flag for API tests.
+pub async fn seed_session_with_admin(
+    state: &AppState,
+    key: &[u8; KEY_LEN],
+    email: &str,
+    is_admin: bool,
+) -> (i64, String) {
+    seed_session_with_options(
+        state,
+        key,
+        email,
+        is_admin,
+        Duration::days(30),
+        b"dummy-token",
+    )
+    .await
+}
+
+async fn seed_session_with_options(
+    state: &AppState,
+    key: &[u8; KEY_LEN],
+    email: &str,
+    is_admin: bool,
+    expires_in: Duration,
+    token: &[u8],
+) -> (i64, String) {
+    let now = Utc::now();
+    let user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
+         VALUES (?1, ?2, ?3, ?4) RETURNING id",
+    )
+    .bind(email)
+    .bind(format!("account-{email}"))
+    .bind(if is_admin { 1_i64 } else { 0_i64 })
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .expect("insert user");
+
+    let token_enc = hail_core::seal(token, key).expect("seal");
+    let session_id = format!("{:064x}", user_id);
+    sqlx::query(
+        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+    )
+    .bind(&session_id)
+    .bind(user_id)
+    .bind(&token_enc)
+    .bind(Some("test-ua"))
+    .bind(now + expires_in)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .expect("insert session");
+    (user_id, session_id)
+}
+
+/// Decode an Axum JSON response body for assertions.
+pub async fn json_body(resp: axum::response::Response) -> serde_json::Value {
+    use http_body_util::BodyExt;
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Build a fresh SQLite temp-file URL and guard for worker/database tests.
+pub fn fresh_db_url(prefix: &str) -> (String, TempDb) {
+    static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let mut path = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    let pid = std::process::id();
+    let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+    path.push(format!("{prefix}-{pid}-{nanos}-{counter}.sqlite"));
+    let url = format!("sqlite://{}", path.display());
+    (url, TempDb(path))
+}
+
+/// Temp DB guard. Files are intentionally left on disk because SQLite pools can
+/// outlive the guard during parallel integration-test teardown.
+#[derive(Debug)]
+pub struct TempDb(PathBuf);
+
+impl TempDb {
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        let _ = &self.0;
+    }
+}
+
+fn uuid_like() -> String {
+    static N: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}_{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 /// Relative path to the synthetic RFC822 corpus from the workspace root.
 pub const MAIL_FIXTURE_DIR: &str = "tests/fixtures/mail";

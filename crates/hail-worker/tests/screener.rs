@@ -1,7 +1,7 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use hail_test::{TempDb, fresh_db_url};
 use sqlx::{Connection, SqliteConnection};
 
 #[path = "../src/screener.rs"]
@@ -91,31 +91,8 @@ impl JmapOps for FakeJmapOps {
     }
 }
 
-fn fresh_db_url() -> (String, PathBuf) {
-    let mut path = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time")
-        .as_nanos();
-    let pid = std::process::id();
-    path.push(format!("hail-worker-screener-test-{pid}-{nanos}.sqlite"));
-    let url = format!("sqlite://{}", path.display());
-    (url, path)
-}
-
-struct TempDb(PathBuf);
-
-impl Drop for TempDb {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(self.0.with_extension("sqlite-shm"));
-    }
-}
-
 async fn setup_db() -> (SqliteConnection, TempDb, i64, i64) {
-    let (url, path) = fresh_db_url();
-    let guard = TempDb(path);
+    let (url, guard) = fresh_db_url("hail-worker-screener-test");
     let pool = hail_db::connect(&url).await.expect("connect");
     hail_db::migrate(&pool).await.expect("migrate");
 
