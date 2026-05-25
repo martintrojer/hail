@@ -1,4 +1,4 @@
-//! Scheduled worker jobs for bubble-up reminders and scheduled sends.
+//! Scheduled worker jobs for bubble-up reminders, scheduled sends, and trash purge.
 //!
 //! The scheduler owns hail-side state transitions for due rows:
 //! - `bubble_ups`: query due pending rows, ask JMAP to resurface the
@@ -7,6 +7,8 @@
 //!   ordering state.
 //! - `scheduled_sends`: atomically claim due `status='pending'` rows as
 //!   `processing`, ask JMAP to submit the saved draft, then mark sent or failed.
+//! - trash purge: ask JMAP to permanently destroy emails in the Trash mailbox
+//!   whose `receivedAt` is older than the configured retention window.
 //!
 //! Failure policy is intentionally split by operation. Bubble-up JMAP failures
 //! are treated as transient per design.md §8.3: the row remains pending and the
@@ -33,6 +35,7 @@ use tracing::{info, warn};
 
 use crate::app_events::{WorkerAppEvent, publish_app_event, publish_app_event_payload};
 
+pub const DEFAULT_TRASH_RETENTION_DAYS: u16 = 30;
 const STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS: i64 = 60 * 60;
 const STALE_SCHEDULED_SEND_CLAIM_ERROR: &str = "scheduled send processing claim is stale or missing claimed_at; submission state unknown; manual review required";
 
@@ -53,6 +56,11 @@ struct ScheduledSendRow {
 #[async_trait]
 pub trait BubbleJmapOps: Send + Sync {
     async fn resurface_thread(&self, user_id: i64, thread_id: &str) -> Result<()>;
+}
+
+#[async_trait]
+pub trait TrashPurgeOps: Send + Sync {
+    async fn purge_old_trash(&self, user_id: i64, cutoff: DateTime<Utc>) -> Result<usize>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -500,6 +508,60 @@ pub async fn process_due_bubble_ups(
     Ok(fired)
 }
 
+/// Permanently delete messages in JMAP Trash older than `retention_days`.
+///
+/// The JMAP adapter owns mailbox lookup, Email/query filtering, and Email/set
+/// destroy. This scheduler function fans the purge out across hail users with an
+/// active session. A per-user JMAP failure is logged and does not prevent later
+/// users from being purged.
+pub async fn process_trash_purge(
+    db: &SqlitePool,
+    jmap_ops: &dyn TrashPurgeOps,
+    retention_days: u16,
+    now: DateTime<Utc>,
+) -> Result<usize> {
+    let retention_days = i64::from(retention_days.max(1));
+    let cutoff = now - Duration::days(retention_days);
+    let user_ids = select_users_with_active_sessions(db, now).await?;
+
+    let mut purged = 0;
+    for user_id in user_ids {
+        match jmap_ops.purge_old_trash(user_id, cutoff).await {
+            Ok(count) => {
+                purged += count;
+                if count > 0 {
+                    info!(user_id, count, "trash purge destroyed old messages");
+                }
+            }
+            Err(err) => {
+                warn!(
+                    user_id,
+                    error = %err,
+                    "trash purge JMAP failure; continuing with later users"
+                );
+            }
+        }
+    }
+
+    if purged > 0 {
+        info!(purged, retention_days, "trash purge processed");
+    }
+    Ok(purged)
+}
+
+async fn select_users_with_active_sessions(
+    db: &SqlitePool,
+    now: DateTime<Utc>,
+) -> Result<Vec<i64>> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT DISTINCT user_id FROM sessions WHERE expires_at > ? ORDER BY user_id ASC",
+    )
+    .bind(now.to_rfc3339())
+    .fetch_all(db)
+    .await
+    .context("select users with active sessions")
+}
+
 async fn select_due_bubble_ups(db: &SqlitePool, now: &str) -> Result<Vec<BubbleUpRow>> {
     sqlx::query_as::<_, (i64, i64, String)>(
         "SELECT id, user_id, thread_id \
@@ -531,10 +593,12 @@ pub(crate) mod live {
     use hail_jmap::jmap_client::core::query::Filter;
     use hail_jmap::jmap_client::core::set::{SetErrorType, SetObject};
     use hail_jmap::jmap_client::email::query as email_query;
+    use hail_jmap::jmap_client::mailbox::Role;
     use secrecy::SecretString;
     use sqlx::SqlitePool;
 
-    use super::{BubbleJmapOps, SendSubmitError, SendSubmitter};
+    use super::{BubbleJmapOps, SendSubmitError, SendSubmitter, TrashPurgeOps};
+
     use crate::crypto::TokenDecryptor;
 
     /// Live JMAP adapter for bubble-ups.
@@ -635,6 +699,52 @@ pub(crate) mod live {
             }
 
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl TrashPurgeOps for LiveBubbleJmapOps {
+        async fn purge_old_trash(
+            &self,
+            user_id: i64,
+            cutoff: chrono::DateTime<chrono::Utc>,
+        ) -> Result<usize> {
+            let token = self.latest_active_token(user_id).await?;
+            let session = hail_jmap::login_bearer(&self.jmap_url, token)
+                .await
+                .with_context(|| format!("JMAP login for user {user_id}"))?;
+
+            let Some(trash_mailbox_id) = hail_jmap::mailbox_id_by_role(&session, Role::Trash)
+                .await
+                .context("Mailbox/get Trash role lookup")?
+            else {
+                return Ok(0);
+            };
+
+            let filter = Filter::and([
+                Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id)),
+                Filter::from(email_query::Filter::before(cutoff.timestamp())),
+            ]);
+            let mut query = session
+                .client()
+                .email_query(
+                    Some(filter),
+                    Some([email_query::Comparator::received_at().ascending()]),
+                )
+                .await
+                .context("Email/query old Trash messages")?;
+            let email_ids = query.take_ids();
+            let count = email_ids.len();
+
+            for email_id in email_ids {
+                session
+                    .client()
+                    .email_destroy(&email_id)
+                    .await
+                    .with_context(|| format!("Email/set destroy {email_id}"))?;
+            }
+
+            Ok(count)
         }
     }
 
