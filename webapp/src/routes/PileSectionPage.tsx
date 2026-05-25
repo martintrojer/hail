@@ -84,6 +84,8 @@ function ReplyPanel({
     setError(null);
     try {
       await client.sendReply(item.thread_id, { body_markdown: body.trim() });
+      // Move thread back to Imbox after replying (removes from Reply Later pile)
+      await client.classifyThread(item.thread_id, 'imbox').catch(() => {});
       setBody('');
       setSent(true);
       onSent();
