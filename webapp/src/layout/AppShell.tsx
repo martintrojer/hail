@@ -294,6 +294,13 @@ export function AppShell({
 
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <Link
+              to="/compose"
+              className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+            >
+              <PenSquare {...iconSizeProps.sm} aria-hidden="true" />
+              <span className="hidden sm:inline">Compose</span>
+            </Link>
+            <Link
               to="/search"
               aria-label="Search"
               className="rounded-full p-2 text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
