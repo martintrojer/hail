@@ -17,6 +17,7 @@ import {
   PenSquare,
   Search,
   Settings,
+  Trash2,
   UserPlus,
   iconSizeProps,
 } from '../components/icons';
@@ -47,6 +48,7 @@ const navItems: MenuItem[] = [
   { to: '/reply-later', label: 'Reply Later', Icon: Clock },
   { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
   { to: '/search', label: 'Search', Icon: Search },
+  { to: '/trash', label: 'Trash', Icon: Trash2 },
 ];
 
 function EmptyList({ title }: { title: string }) {

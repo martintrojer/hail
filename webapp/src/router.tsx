@@ -26,6 +26,7 @@ import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
 import { ThreadPage } from './routes/ThreadPage';
+import { TrashPage } from './routes/TrashPage';
 
 function AppShell() {
   return (
@@ -527,6 +528,13 @@ const searchRoute = createRoute({
   component: SearchPage,
 });
 
+const trashRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/trash',
+  beforeLoad: requireAuth,
+  component: TrashPage,
+});
+
 interface ComposeSearch {
   replyTo?: string;
   replyAll?: boolean;
@@ -575,6 +583,7 @@ const routeTree = rootRoute.addChildren([
   threadRoute,
   threadReplyRoute,
   searchRoute,
+  trashRoute,
   composeRoute,
   adminRoute,
 ]);
