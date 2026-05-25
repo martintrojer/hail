@@ -1,8 +1,10 @@
 //! Scheduled worker jobs for bubble-up reminders and scheduled sends.
 //!
 //! The scheduler owns hail-side state transitions for due rows:
-//! - `bubble_ups`: query due pending rows, ask JMAP to make the corresponding
-//!   thread unread, then stamp `fired_at`.
+//! - `bubble_ups`: query due pending rows, ask JMAP to resurface the
+//!   corresponding thread to Imbox by making it unread and resetting hail
+//!   classification keywords, then stamp `fired_at` and clear sidecar pile
+//!   ordering state.
 //! - `scheduled_sends`: atomically claim due `status='pending'` rows as
 //!   `processing`, ask JMAP to submit the saved draft, then mark sent or failed.
 //!
@@ -50,7 +52,7 @@ struct ScheduledSendRow {
 
 #[async_trait]
 pub trait BubbleJmapOps: Send + Sync {
-    async fn mark_thread_unread(&self, user_id: i64, thread_id: &str) -> Result<()>;
+    async fn resurface_thread(&self, user_id: i64, thread_id: &str) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -428,7 +430,9 @@ async fn select_due_scheduled_sends(db: &SqlitePool, now: &str) -> Result<Vec<Sc
 ///
 /// Returns the number of rows successfully fired. A transient JMAP failure for
 /// one row leaves that row pending (`fired_at IS NULL`), logs a warning, and does
-/// not stop later due rows from being processed.
+/// not stop later due rows from being processed. Successfully fired rows also
+/// remove any sidecar pile ordering rows for that user/thread so the resurfaced
+/// thread returns cleanly to Imbox.
 pub async fn process_due_bubble_ups(
     db: &SqlitePool,
     jmap_ops: &dyn BubbleJmapOps,
@@ -439,10 +443,7 @@ pub async fn process_due_bubble_ups(
 
     let mut fired = 0;
     for row in rows {
-        match jmap_ops
-            .mark_thread_unread(row.user_id, &row.thread_id)
-            .await
-        {
+        match jmap_ops.resurface_thread(row.user_id, &row.thread_id).await {
             Ok(()) => {
                 let result = sqlx::query(
                     "UPDATE bubble_ups SET fired_at = ? WHERE id = ? AND fired_at IS NULL",
@@ -453,6 +454,18 @@ pub async fn process_due_bubble_ups(
                 .await
                 .with_context(|| format!("mark bubble_up {} fired", row.id))?;
                 if result.rows_affected() > 0 {
+                    sqlx::query("DELETE FROM stack_positions WHERE user_id = ? AND thread_id = ?")
+                        .bind(row.user_id)
+                        .bind(&row.thread_id)
+                        .execute(db)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "clear stack_positions for bubble_up {} user={} thread={}",
+                                row.id, row.user_id, row.thread_id
+                            )
+                        })?;
+
                     fired += 1;
                     if let Err(err) =
                         publish_app_event(db, row.user_id, WorkerAppEvent::BubbleFired).await
@@ -478,7 +491,7 @@ pub async fn process_due_bubble_ups(
                     user_id = row.user_id,
                     thread_id = %row.thread_id,
                     error = %err,
-                    "bubble-up JMAP mark unread failed; leaving pending"
+                    "bubble-up JMAP resurface failed; leaving pending"
                 );
             }
         }
@@ -526,12 +539,12 @@ pub(crate) mod live {
 
     /// Live JMAP adapter for bubble-ups.
     ///
-    /// Implementation detail: JMAP has no direct "Thread/set" unread verb. To
-    /// mark a thread unread, query `Email/query` with Stalwart's `inThread`
-    /// filter, then call `Email/set` for each returned Email with keyword
-    /// `$seen = false` (`email_set_keyword(id, "$seen", false)`). If Stalwart
-    /// later exposes a first-class thread unread operation, this adapter is the
-    /// only place that needs to change.
+    /// Implementation detail: JMAP has no direct "Thread/set" resurface verb.
+    /// To return a thread to Imbox, query `Email/query` with Stalwart's
+    /// `inThread` filter, then call `Email/set` for each returned Email to clear
+    /// `$seen`, set `$hail_imbox`, and remove other hail-owned classification or
+    /// pile keywords. If Stalwart later exposes a first-class thread operation,
+    /// this adapter is the only place that needs to change.
     pub struct LiveBubbleJmapOps {
         db: SqlitePool,
         jmap_url: String,
@@ -574,7 +587,7 @@ pub(crate) mod live {
 
     #[async_trait]
     impl BubbleJmapOps for LiveBubbleJmapOps {
-        async fn mark_thread_unread(&self, user_id: i64, thread_id: &str) -> Result<()> {
+        async fn resurface_thread(&self, user_id: i64, thread_id: &str) -> Result<()> {
             let token = self.latest_active_token(user_id).await?;
             let session = hail_jmap::login_bearer(&self.jmap_url, token)
                 .await
@@ -602,6 +615,23 @@ pub(crate) mod live {
                     .email_set_keyword(&email_id, "$seen", false)
                     .await
                     .with_context(|| format!("Email/set clear $seen for {email_id}"))?;
+                session
+                    .client()
+                    .email_set_keyword(&email_id, "$hail_imbox", true)
+                    .await
+                    .with_context(|| format!("Email/set add $hail_imbox for {email_id}"))?;
+                for keyword in [
+                    "$hail_setaside",
+                    "$hail_replylater",
+                    "$hail_feed",
+                    "$hail_papertrail",
+                ] {
+                    session
+                        .client()
+                        .email_set_keyword(&email_id, keyword, false)
+                        .await
+                        .with_context(|| format!("Email/set remove {keyword} for {email_id}"))?;
+                }
             }
 
             Ok(())

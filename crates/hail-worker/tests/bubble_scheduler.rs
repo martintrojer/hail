@@ -22,9 +22,17 @@ mod scheduler;
 
 use scheduler::{BubbleJmapOps, process_due_bubble_ups};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResurfaceCall {
+    user_id: i64,
+    thread_id: String,
+    set_keywords: Vec<String>,
+    removed_keywords: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 struct FakeBubbleJmapOps {
-    calls: Mutex<Vec<(i64, String)>>,
+    resurfaces: Mutex<Vec<ResurfaceCall>>,
     fail_threads: Mutex<HashSet<String>>,
 }
 
@@ -36,18 +44,29 @@ impl FakeBubbleJmapOps {
             .insert(thread_id.to_string());
     }
 
-    fn calls(&self) -> Vec<(i64, String)> {
-        self.calls.lock().expect("calls mutex").clone()
+    fn resurfaces(&self) -> Vec<ResurfaceCall> {
+        self.resurfaces.lock().expect("resurfaces mutex").clone()
     }
 }
 
 #[async_trait]
 impl BubbleJmapOps for FakeBubbleJmapOps {
-    async fn mark_thread_unread(&self, user_id: i64, thread_id: &str) -> Result<()> {
-        self.calls
+    async fn resurface_thread(&self, user_id: i64, thread_id: &str) -> Result<()> {
+        self.resurfaces
             .lock()
-            .expect("calls mutex")
-            .push((user_id, thread_id.to_string()));
+            .expect("resurfaces mutex")
+            .push(ResurfaceCall {
+                user_id,
+                thread_id: thread_id.to_string(),
+                set_keywords: vec!["$hail_imbox".to_string()],
+                removed_keywords: vec![
+                    "$seen".to_string(),
+                    "$hail_setaside".to_string(),
+                    "$hail_replylater".to_string(),
+                    "$hail_feed".to_string(),
+                    "$hail_papertrail".to_string(),
+                ],
+            });
         if self
             .fail_threads
             .lock()
@@ -134,11 +153,37 @@ async fn fired_at(pool: &SqlitePool, id: i64) -> Option<String> {
         .expect("select fired_at")
 }
 
+async fn stack_position_count(pool: &SqlitePool, user_id: i64, thread_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM stack_positions WHERE user_id = ? AND thread_id = ?")
+        .bind(user_id)
+        .bind(thread_id)
+        .fetch_one(pool)
+        .await
+        .expect("select stack_position count")
+}
+
+async fn insert_stack_position(pool: &SqlitePool, user_id: i64, stack: &str, thread_id: &str) {
+    sqlx::query(
+        "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(stack)
+    .bind(thread_id)
+    .bind(1_i64)
+    .bind("2026-01-01T00:00:00Z")
+    .execute(pool)
+    .await
+    .expect("insert stack_position");
+}
+
 #[tokio::test]
-async fn due_row_fires_and_sets_fired_at() {
+async fn due_row_fires_resurfaces_thread_cleans_stack_and_sets_fired_at() {
     let (pool, _guard, user_id) = setup_db().await;
     let now = Utc::now();
     let id = insert_bubble_up(&pool, user_id, "thread-due", now - Duration::minutes(1)).await;
+    insert_stack_position(&pool, user_id, "set_aside", "thread-due").await;
+    insert_stack_position(&pool, user_id, "reply_later", "thread-due").await;
     let jmap = FakeBubbleJmapOps::default();
 
     let fired = process_due_bubble_ups(&pool, &jmap, now)
@@ -146,7 +191,22 @@ async fn due_row_fires_and_sets_fired_at() {
         .expect("process due");
 
     assert_eq!(fired, 1);
-    assert_eq!(jmap.calls(), vec![(user_id, "thread-due".to_string())]);
+    assert_eq!(
+        jmap.resurfaces(),
+        vec![ResurfaceCall {
+            user_id,
+            thread_id: "thread-due".to_string(),
+            set_keywords: vec!["$hail_imbox".to_string()],
+            removed_keywords: vec![
+                "$seen".to_string(),
+                "$hail_setaside".to_string(),
+                "$hail_replylater".to_string(),
+                "$hail_feed".to_string(),
+                "$hail_papertrail".to_string(),
+            ],
+        }]
+    );
+    assert_eq!(stack_position_count(&pool, user_id, "thread-due").await, 0);
     assert_eq!(
         fired_at(&pool, id).await.as_deref(),
         Some(now.to_rfc3339().as_str())
@@ -173,7 +233,7 @@ async fn future_row_not_touched() {
         .expect("process due");
 
     assert_eq!(fired, 0);
-    assert!(jmap.calls().is_empty());
+    assert!(jmap.resurfaces().is_empty());
     assert!(fired_at(&pool, id).await.is_none());
 }
 
@@ -190,7 +250,13 @@ async fn jmap_failure_leaves_row_pending() {
         .expect("process due");
 
     assert_eq!(fired, 0);
-    assert_eq!(jmap.calls(), vec![(user_id, "thread-fails".to_string())]);
+    assert_eq!(
+        jmap.resurfaces()
+            .into_iter()
+            .map(|call| (call.user_id, call.thread_id))
+            .collect::<Vec<_>>(),
+        vec![(user_id, "thread-fails".to_string())]
+    );
     assert!(fired_at(&pool, id).await.is_none());
 }
 
@@ -210,7 +276,10 @@ async fn multiple_due_rows_continue_after_one_failure() {
 
     assert_eq!(fired, 2);
     assert_eq!(
-        jmap.calls(),
+        jmap.resurfaces()
+            .into_iter()
+            .map(|call| (call.user_id, call.thread_id))
+            .collect::<Vec<_>>(),
         vec![
             (user_id, "thread-first".to_string()),
             (user_id, "thread-fails".to_string()),
