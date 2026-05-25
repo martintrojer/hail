@@ -14,7 +14,6 @@ import {
   type AdminUsersResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
-  type BubbleUpViewResponse,
   type CancelBubbleUpResponse,
   type ContactNote,
   type ContactResponse,
@@ -27,8 +26,6 @@ import {
   type DraftRequest,
   type DraftResponse,
   type LoginRequest,
-  type MailViewResponse,
-  type PileViewResponse,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
   type ScreenerDecisionRequest,
@@ -41,7 +38,6 @@ import {
   type SetupState,
   type ThreadVerbResponse,
   type ThreadViewResponse,
-  type TrashViewResponse,
   type UserEnvelope,
 } from './client';
 import { queryKeys } from './queryKeys';
@@ -60,6 +56,20 @@ type MutationConfig<TVariables, TData> = Omit<
   UseMutationOptions<TData, Error, TVariables>,
   'mutationFn'
 >;
+
+type ViewKey = Parameters<typeof queryKeys.view>[0];
+
+function createViewHook<TData>(
+  key: ViewKey,
+  fetcher: (client: HailApiClient) => Promise<TData>,
+) {
+  return (client = defaultApiClient, options?: QueryConfig<TData>) =>
+    useQuery({
+      queryKey: queryKeys.view(key),
+      queryFn: () => fetcher(client),
+      ...options,
+    });
+}
 
 export function useMe(
   client = defaultApiClient,
@@ -241,60 +251,17 @@ export function useDeniedSenders(
   });
 }
 
-export function useImboxView(
-  client = defaultApiClient,
-  options?: QueryConfig<MailViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('imbox'),
-    queryFn: () => client.getImbox(),
-    ...options,
-  });
-}
+export const useImboxView = createViewHook('imbox', (client) => client.getImbox());
 
-export function useFeedView(
-  client = defaultApiClient,
-  options?: QueryConfig<MailViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('feed'),
-    queryFn: () => client.getFeed(),
-    ...options,
-  });
-}
+export const useFeedView = createViewHook('feed', (client) => client.getFeed());
 
-export function usePapertrailView(
-  client = defaultApiClient,
-  options?: QueryConfig<MailViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('papertrail'),
-    queryFn: () => client.getPapertrail(),
-    ...options,
-  });
-}
+export const usePapertrailView = createViewHook('papertrail', (client) =>
+  client.getPapertrail(),
+);
 
-export function useDraftsView(
-  client = defaultApiClient,
-  options?: QueryConfig<MailViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('drafts'),
-    queryFn: () => client.getDrafts(),
-    ...options,
-  });
-}
+export const useDraftsView = createViewHook('drafts', (client) => client.getDrafts());
 
-export function useTrashView(
-  client = defaultApiClient,
-  options?: QueryConfig<TrashViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('trash'),
-    queryFn: () => client.getTrash(),
-    ...options,
-  });
-}
+export const useTrashView = createViewHook('trash', (client) => client.getTrash());
 
 export function useSearch(
   params: SearchParams,
@@ -325,38 +292,17 @@ export function useThread(
   });
 }
 
-export function useSetAsideView(
-  client = defaultApiClient,
-  options?: QueryConfig<PileViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('set-aside'),
-    queryFn: () => client.getSetAside(),
-    ...options,
-  });
-}
+export const useSetAsideView = createViewHook('set-aside', (client) =>
+  client.getSetAside(),
+);
 
-export function useReplyLaterView(
-  client = defaultApiClient,
-  options?: QueryConfig<PileViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('reply-later'),
-    queryFn: () => client.getReplyLater(),
-    ...options,
-  });
-}
+export const useReplyLaterView = createViewHook('reply-later', (client) =>
+  client.getReplyLater(),
+);
 
-export function useBubbleUpView(
-  client = defaultApiClient,
-  options?: QueryConfig<BubbleUpViewResponse>,
-) {
-  return useQuery({
-    queryKey: queryKeys.view('bubble-up'),
-    queryFn: () => client.getBubbleUps(),
-    ...options,
-  });
-}
+export const useBubbleUpView = createViewHook('bubble-up', (client) =>
+  client.getBubbleUps(),
+);
 
 export function useContact(
   address: string,
