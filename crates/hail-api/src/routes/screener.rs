@@ -117,6 +117,16 @@ struct ScreenerSender {
     first_seen_at: DateTime<Utc>,
     message_count: i64,
     latest_preview: Option<ScreenerLatestPreview>,
+    emails: Vec<ScreenerEmail>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ScreenerEmail {
+    email_id: String,
+    subject: String,
+    preview: String,
+    #[schema(value_type = Option<String>, format = DateTime)]
+    received_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -280,6 +290,7 @@ impl ScreenerSender {
             first_seen_at,
             message_count: 1,
             latest_preview: None,
+            emails: Vec::new(),
         }
     }
 }
@@ -384,9 +395,7 @@ async fn enrich_screener_senders(
         return Ok(());
     }
 
-    use hail_jmap::jmap_client::core::query::Filter;
     use hail_jmap::jmap_client::email::Property;
-    use hail_jmap::jmap_client::email::query as email_query;
     use hail_jmap::jmap_client::mailbox::query as mailbox_query;
 
     let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
@@ -408,35 +417,21 @@ async fn enrich_screener_senders(
         .ok_or_else(|| format!("{SCREENER_MAILBOX_NAME} mailbox not found"))?;
 
     for sender in senders {
-        let filter = Filter::and([
-            email_query::Filter::in_mailbox(screener_mailbox_id.clone()),
-            email_query::Filter::from(sender.sender.clone()),
-        ]);
+        let ids =
+            jmap_email_ids_from_sender_in_mailbox(&session, &sender.sender, &screener_mailbox_id)
+                .await
+                .map_err(|err| err.0)?;
 
-        let mut request = session.client().build();
-        request
-            .query_email()
-            .filter(filter)
-            .sort([email_query::Comparator::received_at().descending()])
-            .limit(1)
-            .calculate_total(true);
-        let mut query = request
-            .send_query_email()
-            .await
-            .map_err(|err| err.to_string())?;
-
-        sender.message_count = query
-            .total()
-            .and_then(|total| i64::try_from(total).ok())
-            .unwrap_or(sender.message_count);
-
-        let ids = query.take_ids();
+        sender.message_count = i64::try_from(ids.len())
+            .map_err(|_| "too many matching screener messages to render in the view".to_string())?;
         if ids.is_empty() {
             sender.latest_preview = None;
+            sender.emails.clear();
             continue;
         }
 
         let props = [
+            Property::Id,
             Property::Subject,
             Property::Preview,
             Property::From,
@@ -449,19 +444,31 @@ async fn enrich_screener_senders(
             .await
             .map_err(|err| err.to_string())?;
 
-        sender.latest_preview =
-            response
-                .take_list()
-                .into_iter()
-                .next()
-                .map(|email| ScreenerLatestPreview {
+        let emails: Vec<_> = response
+            .take_list()
+            .into_iter()
+            .map(|email| {
+                let received_at = email
+                    .received_at()
+                    .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+                let summary = ScreenerEmail {
+                    email_id: email.id().unwrap_or_default().to_string(),
                     subject: email.subject().unwrap_or_default().to_string(),
                     preview: email.preview().unwrap_or_default().to_string(),
+                    received_at,
+                };
+                let preview = ScreenerLatestPreview {
+                    subject: summary.subject.clone(),
+                    preview: summary.preview.clone(),
                     from: format_from(email.from()),
-                    received_at: email
-                        .received_at()
-                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
-                });
+                    received_at,
+                };
+                (summary, preview)
+            })
+            .collect();
+
+        sender.latest_preview = emails.first().map(|(_, preview)| preview.clone());
+        sender.emails = emails.into_iter().map(|(summary, _)| summary).collect();
     }
 
     Ok(())
@@ -610,6 +617,7 @@ async fn jmap_email_ids_from_sender_in_mailbox(
         request
             .query_email()
             .filter(filter)
+            .sort([email_query::Comparator::received_at().descending()])
             .position(position)
             .limit(PAGE_LIMIT);
         let mut query = request.send_query_email().await.map_err(backfill_error)?;

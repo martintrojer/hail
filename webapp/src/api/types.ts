@@ -675,6 +675,7 @@ export interface components {
             /** Format: int64 */
             message_count: number;
             sender: string;
+            emails: components["schemas"]["ScreenerEmail"][];
         };
         ScreenerViewResponse: {
             senders: components["schemas"]["ScreenerSender"][];
@@ -747,6 +748,13 @@ export interface components {
             blob_id: string;
             size: number;
             type: string;
+        };
+        ScreenerEmail: {
+            email_id: string;
+            preview: string;
+            /** Format: date-time */
+            received_at?: string | null;
+            subject: string;
         };
     };
     responses: never;

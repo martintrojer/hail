@@ -177,6 +177,26 @@ function sampleScreenerView(overrides: Partial<ScreenerView> = {}): ScreenerView
           preview: 'Latest dispatch from the newsletter.',
           received_at: '2026-05-23T12:15:00Z',
         },
+        emails: [
+          {
+            email_id: 'email-3',
+            subject: 'Newsletter dispatch',
+            preview: 'Latest dispatch from the newsletter.',
+            received_at: '2026-05-23T12:15:00Z',
+          },
+          {
+            email_id: 'email-2',
+            subject: 'Earlier dispatch',
+            preview: 'Earlier newsletter issue.',
+            received_at: '2026-05-22T12:15:00Z',
+          },
+          {
+            email_id: 'email-1',
+            subject: '',
+            preview: '',
+            received_at: null,
+          },
+        ],
       },
     ],
     ...overrides,
@@ -205,6 +225,26 @@ function response(status: number, body: unknown = {}) {
 }
 
 describe('ScreenerPage', () => {
+  it('expands a sender card to show all pending emails', async () => {
+    renderScreener();
+
+    expect(await screen.findByText('Newsletter dispatch')).toBeInTheDocument();
+    expect(screen.queryByText('Earlier dispatch')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Show · 3 pending emails/i }));
+
+    expect(screen.getByRole('button', { name: /Hide · 3 pending emails/i })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByText('Earlier dispatch')).toBeInTheDocument();
+    expect(screen.getByText('Earlier newsletter issue.')).toBeInTheDocument();
+    expect(screen.getByText('May 22, 2026')).toBeInTheDocument();
+    expect(screen.getByText('No subject')).toBeInTheDocument();
+    expect(screen.getByText('Preview unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('Date unavailable')).toBeInTheDocument();
+  });
+
   it('opens routing choices before approving a sender with history backfill', async () => {
     const client = renderScreener();
 
