@@ -29,7 +29,10 @@ use tracing::{info, warn};
 
 use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
 use crate::scheduler::live::{LiveBubbleJmapOps, LiveSendSubmitter};
-use crate::scheduler::{process_due_bubble_ups, process_due_scheduled_sends};
+use crate::scheduler::{
+    DEFAULT_TRASH_RETENTION_DAYS, process_due_bubble_ups, process_due_scheduled_sends,
+    process_trash_purge,
+};
 use crate::state::AppState;
 use crate::user::run_user_supervisor;
 
@@ -55,6 +58,18 @@ fn reconcile_every_secs() -> u64 {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_RECONCILE_EVERY_SECS)
 }
+
+fn trash_retention_days() -> u16 {
+    env::var("HAIL_TRASH_RETENTION_DAYS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|days| *days > 0)
+        .unwrap_or(DEFAULT_TRASH_RETENTION_DAYS)
+}
+
+/// Trash purge is safe to run hourly; avoid doing account-wide Trash scans on
+/// every short dev/smoke tick.
+const TRASH_PURGE_EVERY_SECS: i64 = 60 * 60;
 
 /// Run the top-level supervisor loop until `cancel` is triggered.
 pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> {
@@ -85,13 +100,23 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
         state.config.stalwart.jmap_url.clone(),
         state.token_decryptor.clone(),
     );
+    let trash_retention_days = trash_retention_days();
+    let mut next_trash_purge_at = chrono::Utc::now();
     let mut next_reconcile_at = chrono::Utc::now();
 
     // Reconcile immediately so the first tick doesn't burn a full
     // cadence before users come online. Also run scheduled jobs once
     // so overdue bubble-ups and scheduled sends fire promptly after worker restart.
     if reconcile(&state, &cancel, &mut running, &mut tasks, &mut next_run_id).await
-        && run_scheduler_tick(&state, &bubble_jmap, &send_submitter, &cancel).await
+        && run_scheduler_tick(
+            &state,
+            &bubble_jmap,
+            &send_submitter,
+            &mut next_trash_purge_at,
+            trash_retention_days,
+            &cancel,
+        )
+        .await
     {
         run_reconciliation_if_due(
             &state,
@@ -123,7 +148,14 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
                 {
                     break;
                 }
-                if !run_scheduler_tick(&state, &bubble_jmap, &send_submitter, &cancel).await {
+                if !run_scheduler_tick(
+                    &state,
+                    &bubble_jmap,
+                    &send_submitter,
+                    &mut next_trash_purge_at,
+                    trash_retention_days,
+                    &cancel,
+                ).await {
                     break;
                 }
                 if !run_reconciliation_if_due(
@@ -191,6 +223,8 @@ async fn run_scheduler_tick(
     state: &AppState,
     bubble_jmap: &LiveBubbleJmapOps,
     send_submitter: &LiveSendSubmitter,
+    next_trash_purge_at: &mut chrono::DateTime<chrono::Utc>,
+    trash_retention_days: u16,
     cancel: &CancellationToken,
 ) -> bool {
     let now = chrono::Utc::now();
@@ -216,6 +250,24 @@ async fn run_scheduler_tick(
         None => {
             info!("scheduler: scheduled-send tick cancelled");
             return false;
+        }
+    }
+
+    if now >= *next_trash_purge_at {
+        *next_trash_purge_at = now + chrono::Duration::seconds(TRASH_PURGE_EVERY_SECS);
+        match cancel_or_complete(
+            cancel,
+            process_trash_purge(&state.db, bubble_jmap, trash_retention_days, now),
+        )
+        .await
+        {
+            Some(Ok(purged)) if purged > 0 => info!(purged, "scheduler: trash purge processed"),
+            Some(Ok(_)) => {}
+            Some(Err(e)) => warn!(error = %e, "scheduler: trash purge tick failed"),
+            None => {
+                info!("scheduler: trash purge tick cancelled");
+                return false;
+            }
         }
     }
 
