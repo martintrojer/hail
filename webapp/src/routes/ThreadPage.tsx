@@ -26,6 +26,7 @@ import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
+import { useGoBack } from '../hooks/useGoBack';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatFullDateTime } from '../lib/dates';
@@ -385,6 +386,7 @@ function ThreadDocument({
   sourceView?: string;
 }) {
   const navigate = useNavigate();
+  const goBack = useGoBack();
   const { showToast } = useUndoToast();
   const messages = useMemo(
     () => sortedMessages(thread.messages),
@@ -406,15 +408,6 @@ function ThreadDocument({
   useEffect(() => {
     setNotes(thread.notes.map(toLocalNote));
   }, [thread.notes]);
-
-  function goBack() {
-    if (window.history.length > 1) {
-      window.history.back();
-      return;
-    }
-
-    void navigate({ to: '/imbox' });
-  }
 
   function toggleMessagePopup(messageId: string, anchorRect: DOMRect) {
     setMessagePopup((current) =>
