@@ -1,19 +1,14 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   HailApiError,
-  type MailClassification,
+
   type ThreadMessage,
   type ThreadViewResponse,
 } from '../api/client';
 import {
-  useArchiveThreadMutation,
-  useBubbleUpMutation,
-  useClassifyThreadMutation,
-  useReplyLaterThreadMutation,
-  useSetAsideThreadMutation,
   useThread,
-  useTrashThreadMutation,
+  defaultApiClient,
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
 import { ErrorState } from '../components/ErrorState';
@@ -27,17 +22,7 @@ import {
 } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { MessageActionPopup } from '../components/MessageActionPopup';
-import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
-
-const classificationOptions: Array<{
-  value: MailClassification;
-  label: string;
-}> = [
-  { value: 'imbox', label: 'Imbox' },
-  { value: 'feed', label: 'Feed' },
-  { value: 'papertrail', label: 'Paper Trail' },
-];
 
 interface ThreadPageProps {
   threadId: string;
@@ -103,19 +88,6 @@ function errorCopy(error: Error) {
   return 'Thread failed to load. Refresh and try again.';
 }
 
-function threadActionErrorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again before changing this thread.';
-    }
-    if (error.status === 404) {
-      return 'This thread was not found. Refresh and try again.';
-    }
-    return `Thread action failed with HTTP ${error.status}.`;
-  }
-
-  return 'Thread action failed. Try again.';
-}
 
 function StateCard({ title, body }: { title: string; body: string }) {
   return (
@@ -199,238 +171,6 @@ function sortedMessages(messages: ThreadMessage[]) {
   });
 }
 
-function tomorrowAt(hour: number, minute = 0) {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  date.setHours(hour, minute, 0, 0);
-  return date;
-}
-
-function datetimeLocalValue(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-}
-
-function toApiDateTime(localValue: string) {
-  return new Date(localValue).toISOString();
-}
-
-function ThreadActions({
-  thread,
-  client,
-}: {
-  thread: ThreadViewResponse;
-  client?: Parameters<typeof useThread>[1];
-}) {
-  const navigate = useNavigate();
-  const { showToast } = useUndoToast();
-  const [classification, setClassification] =
-    useState<MailClassification>('imbox');
-  function returnToPreviousList() {
-    if (window.history.length > 1) {
-      window.history.back();
-      return;
-    }
-
-    void navigate({ to: '/imbox' });
-  }
-
-  const classify = useClassifyThreadMutation(client, {
-    onSuccess: (data, variables) => {
-      const label =
-        classificationOptions.find((option) => option.value === variables.to)
-          ?.label ?? variables.to;
-      showToast({
-        message: `Moved thread to ${label}.`,
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Thread classification undone.',
-      });
-      returnToPreviousList();
-    },
-  });
-  const archive = useArchiveThreadMutation(client, {
-    onSuccess: (data) => {
-      showToast({
-        message: 'Thread archived.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Archive undone.',
-      });
-      returnToPreviousList();
-    },
-  });
-  const trash = useTrashThreadMutation(client, {
-    onSuccess: (data) => {
-      showToast({
-        message: 'Thread moved to trash.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Trash undone.',
-      });
-      returnToPreviousList();
-    },
-  });
-  const setAside = useSetAsideThreadMutation(client, {
-    onSuccess: (data) => {
-      showToast({
-        message: 'Thread added to Set Aside.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Set Aside undone.',
-      });
-    },
-  });
-  const replyLater = useReplyLaterThreadMutation(client, {
-    onSuccess: (data) => {
-      showToast({
-        message: 'Thread added to Reply Later.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Reply Later undone.',
-      });
-    },
-  });
-  const [bubbleAt, setBubbleAt] = useState(() =>
-    datetimeLocalValue(tomorrowAt(9)),
-  );
-  const bubbleUp = useBubbleUpMutation(client, {
-    onSuccess: (data) => {
-      showToast({
-        message: `Thread will bubble up ${formatDate(data.surface_at)}.`,
-      });
-    },
-  });
-  const busy =
-    classify.isPending ||
-    archive.isPending ||
-    trash.isPending ||
-    setAside.isPending ||
-    replyLater.isPending ||
-    bubbleUp.isPending;
-  const error =
-    classify.error ??
-    archive.error ??
-    trash.error ??
-    setAside.error ??
-    replyLater.error ??
-    bubbleUp.error;
-
-  function scheduleBubbleUp() {
-    if (!bubbleAt) {
-      return;
-    }
-
-    bubbleUp.mutate({
-      threadId: thread.thread_id,
-      request: { at: toApiDateTime(bubbleAt) },
-    });
-  }
-
-  return (
-    <section
-      className="rounded-lg border border-border-hairline bg-bg-surface p-4"
-      aria-label="Thread actions"
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-        <label className="min-w-0 flex-1 text-sm font-medium text-ink-secondary">
-          Move to
-          <select
-            value={classification}
-            onChange={(event) =>
-              setClassification(event.target.value as MailClassification)
-            }
-            disabled={busy}
-            className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-page px-3 py-2 text-ink-primary outline-none focus:border-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {classificationOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              classify.mutate({
-                threadId: thread.thread_id,
-                to: classification,
-              })
-            }
-            className="rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {classify.isPending ? 'Moving…' : 'Move'}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => archive.mutate({ threadId: thread.thread_id })}
-            className="rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {archive.isPending ? 'Archiving…' : 'Archive'}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => trash.mutate({ threadId: thread.thread_id })}
-            className="rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-accent-red hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {trash.isPending ? 'Trashing…' : 'Trash'}
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-col gap-3 border-t border-border-hairline pt-4 sm:flex-row sm:items-end">
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setAside.mutate({ threadId: thread.thread_id })}
-            className="rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {setAside.isPending ? 'Setting aside…' : 'Set Aside'}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => replyLater.mutate({ threadId: thread.thread_id })}
-            className="rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {replyLater.isPending ? 'Saving…' : 'Reply Later'}
-          </button>
-        </div>
-
-        <label className="min-w-0 flex-1 text-sm font-medium text-ink-secondary">
-          Bubble up at
-          <input
-            type="datetime-local"
-            value={bubbleAt}
-            onChange={(event) => setBubbleAt(event.target.value)}
-            disabled={busy}
-            className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-page px-3 py-2 text-ink-primary outline-none focus:border-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
-          />
-        </label>
-        <button
-          type="button"
-          disabled={busy || !bubbleAt}
-          onClick={scheduleBubbleUp}
-          className="rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {bubbleUp.isPending ? 'Scheduling…' : 'Bubble Up'}
-        </button>
-      </div>
-
-      {error ? (
-        <p role="alert" className="mt-3 text-sm text-accent-red">
-          {threadActionErrorMessage(error)}
-        </p>
-      ) : null}
-    </section>
-  );
-}
 
 function MessageCard({
   message,
@@ -632,10 +372,8 @@ function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
 
 function ThreadDocument({
   thread,
-  client,
 }: {
   thread: ThreadViewResponse;
-  client?: Parameters<typeof useThread>[1];
 }) {
   const navigate = useNavigate();
   const messages = useMemo(
@@ -695,7 +433,6 @@ function ThreadDocument({
       </button>
 
       <ThreadHeader thread={thread} />
-      <ThreadActions thread={thread} client={client} />
 
       {messages.length === 0 ? (
         <StateCard
@@ -737,6 +474,16 @@ function ThreadDocument({
 
 export function ThreadPage({ threadId, client }: ThreadPageProps) {
   const query = useThread(threadId, client);
+  const apiClient = client ?? defaultApiClient;
+
+  // Mark thread as read when it loads successfully
+  useEffect(() => {
+    if (query.isSuccess) {
+      apiClient.markThread(threadId, true).catch(() => {
+        // Silently ignore mark-as-read failures
+      });
+    }
+  }, [query.isSuccess, threadId, apiClient]);
 
   let reading;
   if (query.isPending) {
@@ -749,7 +496,7 @@ export function ThreadPage({ threadId, client }: ThreadPageProps) {
       />
     );
   } else {
-    reading = <ThreadDocument thread={query.data} client={client} />;
+    reading = <ThreadDocument thread={query.data} />;
   }
 
   return <AppShell title="Thread" description={undefined} reading={reading} />;
