@@ -21,6 +21,7 @@ import {
 import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle, StickyNote, X, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { ListView } from '../components/ListView';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useOptionalUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
@@ -235,7 +236,7 @@ function ThreadShortcutActions({
   );
 }
 
-function ThreadCard({
+function MailRow({
   item,
   view,
   client,
@@ -695,14 +696,6 @@ export function MailViewPage({
         onRetry={() => void query.refetch()}
       />
     );
-  } else if (query.data.items.length === 0) {
-    const emptyState = emptyStates[view];
-    list = (
-      <div>
-        {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
-        <StateCard title={emptyState.title} body={emptyState.body} />
-      </div>
-    );
   } else if (view === 'imbox' && powerThroughOpen) {
     list = (
       <PowerThroughMode
@@ -712,19 +705,19 @@ export function MailViewPage({
       />
     );
   } else {
+    const emptyState = emptyStates[view];
     list = (
       <div>
         {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
-        <div>
-          {query.data.items.map((item) => (
-            <ThreadCard
-              key={`${item.thread_id}:${item.email_id}`}
-              item={item}
-              view={view}
-              client={client}
-            />
-          ))}
-        </div>
+        <ListView
+          items={query.data.items}
+          renderItem={(item) => <MailRow item={item} view={view} client={client} />}
+          keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
+          hasMore={false}
+          isLoadingMore={false}
+          onLoadMore={() => {}}
+          emptyState={<StateCard title={emptyState.title} body={emptyState.body} />}
+        />
       </div>
     );
   }

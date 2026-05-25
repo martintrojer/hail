@@ -14,6 +14,7 @@ import {
 } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
+import { ListView } from '../components/ListView';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import {
   ScreenerRoutingDropdown,
@@ -343,7 +344,7 @@ function DeniedSenderRow({
   });
 
   return (
-    <li className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg-surface px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg-surface px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-ink-primary">
           {sender.sender_address}
@@ -365,7 +366,29 @@ function DeniedSenderRow({
       >
         {undo.isPending ? 'Undoing…' : 'Undo'}
       </button>
-    </li>
+    </div>
+  );
+}
+
+function DeniedSendersList({
+  senders,
+  client,
+}: {
+  senders: DeniedSender[];
+  client?: HailApiClient;
+}) {
+  return (
+    <div className="space-y-3">
+      <ListView
+        items={senders}
+        renderItem={(sender) => <DeniedSenderRow sender={sender} client={client} />}
+        keyExtractor={(sender) => sender.sender_address}
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={() => {}}
+        emptyState={<p className="text-sm text-ink-tertiary">No denied senders yet.</p>}
+      />
+    </div>
   );
 }
 
@@ -408,15 +431,7 @@ function PreviouslyDeniedSection({ client }: { client?: HailApiClient }) {
           ) : query.data.denied.length === 0 ? (
             <p className="text-sm text-ink-tertiary">No denied senders yet.</p>
           ) : (
-            <ul className="space-y-2">
-              {query.data.denied.map((sender) => (
-                <DeniedSenderRow
-                  key={sender.sender_address}
-                  sender={sender}
-                  client={client}
-                />
-              ))}
-            </ul>
+            <DeniedSendersList senders={query.data.denied} client={client} />
           )}
         </div>
       ) : null}
@@ -438,14 +453,18 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
         onRetry={() => void query.refetch()}
       />
     );
-  } else if (query.data.senders.length === 0) {
-    list = <EmptyState />;
   } else {
     list = (
       <div className="space-y-5">
-        {query.data.senders.map((sender) => (
-          <PendingSenderCard key={sender.sender} sender={sender} client={client} />
-        ))}
+        <ListView
+          items={query.data.senders}
+          renderItem={(sender) => <PendingSenderCard sender={sender} client={client} />}
+          keyExtractor={(sender) => sender.sender}
+          hasMore={false}
+          isLoadingMore={false}
+          onLoadMore={() => {}}
+          emptyState={<EmptyState />}
+        />
       </div>
     );
   }
