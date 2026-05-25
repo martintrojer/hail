@@ -254,6 +254,14 @@ impl FakeActions {
         self.calls.lock().expect("calls mutex").clone()
     }
 
+    /// Return calls excluding pile-keyword removals (noise from classify cleanup).
+    fn calls_without_pile_cleanup(&self) -> Vec<Call> {
+        self.calls()
+            .into_iter()
+            .filter(|c| !matches!(c, Call::RemoveKeyword { keyword, .. } if keyword == "$hail_setaside" || keyword == "$hail_replylater"))
+            .collect()
+    }
+
     fn mark_missing(&self, thread_id: &str) {
         self.missing
             .lock()
@@ -680,7 +688,7 @@ async fn classify_calls_action_and_rejects_invalid_classification() {
     let json = json_body(resp).await;
     assert!(json["undo"].is_null());
     assert_eq!(
-        actions.calls(),
+        actions.calls_without_pile_cleanup(),
         vec![Call::Classify {
             thread_id: "thread-1".to_string(),
             classification: Classification::Feed,
@@ -738,7 +746,7 @@ async fn classify_creates_undo_with_previous_and_new_classification() {
     assert_eq!(payload["previous_classification"], "imbox");
     assert_eq!(payload["new_classification"], "feed");
     assert_eq!(
-        actions.calls(),
+        actions.calls_without_pile_cleanup(),
         vec![Call::Classify {
             thread_id: "thread-1".to_string(),
             classification: Classification::Feed,
@@ -774,7 +782,7 @@ async fn classify_without_previous_classification_has_no_undo() {
     .unwrap();
     assert_eq!(count, 0);
     assert_eq!(
-        actions.calls(),
+        actions.calls_without_pile_cleanup(),
         vec![Call::Classify {
             thread_id: "thread-1".to_string(),
             classification: Classification::Papertrail,
@@ -814,7 +822,7 @@ async fn classify_same_classification_is_noop_for_undo() {
     .unwrap();
     assert_eq!(count, 0);
     assert_eq!(
-        actions.calls(),
+        actions.calls_without_pile_cleanup(),
         vec![Call::Classify {
             thread_id: "thread-1".to_string(),
             classification: Classification::Feed,

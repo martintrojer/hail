@@ -504,6 +504,24 @@ async fn classify_thread(
         .await
     {
         Ok(()) => {
+            // Remove pile keywords + stack rows so thread leaves Set Aside / Reply Later.
+            for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
+                if let Err(err) = actions
+                    .remove_keyword(&state, user.jmap_token.clone(), &thread_id, pile_keyword)
+                    .await
+                {
+                    tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during classify");
+                }
+            }
+            // Clean up sidecar stack rows.
+            let _ = sqlx::query(
+                "DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2",
+            )
+            .bind(user.id)
+            .bind(&thread_id)
+            .execute(&state.db)
+            .await;
+
             let undo = match previous_classification {
                 Some(previous) if previous != body.to => {
                     create_thread_classify_undo(&state, user.id, &thread_id, previous, body.to)
