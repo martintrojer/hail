@@ -44,7 +44,7 @@ pub trait ThreadAssembler: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct ThreadAssembleError(pub String);
 
-/// Production assembler backed by JMAP `Thread/get` + `Email/get`.
+/// Production assembler backed by JMAP `Email/query` + `Email/get`.
 pub struct JmapThreadAssembler;
 
 impl ThreadAssembler for JmapThreadAssembler {
@@ -61,45 +61,18 @@ impl ThreadAssembler for JmapThreadAssembler {
                 .await
                 .map_err(|err| ThreadAssembleError(err.to_string()))?;
 
-            let mut thread_request = session.client().build();
-            thread_request.get_thread().ids([thread_id]).properties([
-                hail_jmap::jmap_client::thread::Property::Id,
-                hail_jmap::jmap_client::thread::Property::EmailIds,
-            ]);
-            let mut thread_response = thread_request
-                .send_get_thread()
-                .await
-                .map_err(|err| ThreadAssembleError(err.to_string()))?;
-            let Some(thread) = thread_response.take_list().pop() else {
-                return Ok(None);
-            };
-
-            let thread_email_ids = thread.email_ids().to_vec();
-            if thread_email_ids.is_empty() {
-                return Ok(Some(AssembledThread {
-                    thread_id: thread.id().to_string(),
-                    subject: String::new(),
-                    messages: Vec::new(),
-                }));
-            }
-
             let mut query_request = session.client().build();
             query_request
                 .query_email()
                 .filter(hail_jmap::jmap_client::email::query::Filter::in_thread(
                     thread_id,
                 ))
-                .sort([hail_jmap::jmap_client::email::query::Comparator::received_at().ascending()])
-                .limit(thread_email_ids.len());
+                .sort([hail_jmap::jmap_client::email::query::Comparator::received_at().ascending()]);
             let mut query_response = query_request
                 .send_query_email()
                 .await
                 .map_err(|err| ThreadAssembleError(err.to_string()))?;
-            let email_ids = query_response
-                .take_ids()
-                .into_iter()
-                .filter(|id| thread_email_ids.iter().any(|thread_id| thread_id == id))
-                .collect::<Vec<_>>();
+            let email_ids = query_response.take_ids();
             if email_ids.is_empty() {
                 return Ok(None);
             }
@@ -136,7 +109,7 @@ impl ThreadAssembler for JmapThreadAssembler {
                 let Some(email) = emails_by_id.remove(&email_id) else {
                     continue;
                 };
-                if email.thread_id() != Some(thread.id()) {
+                if email.thread_id() != Some(thread_id) {
                     continue;
                 }
                 messages.push(AssembledMessage {
@@ -159,7 +132,7 @@ impl ThreadAssembler for JmapThreadAssembler {
                 .unwrap_or_default();
 
             Ok(Some(AssembledThread {
-                thread_id: thread.id().to_string(),
+                thread_id: thread_id.to_string(),
                 subject,
                 messages,
             }))

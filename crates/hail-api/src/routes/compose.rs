@@ -146,26 +146,20 @@ impl Composer for JmapComposer {
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReplyContext>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            let mut thread_request = session.client().build();
-            thread_request.get_thread().ids([thread_id]).properties([
-                hail_jmap::jmap_client::thread::Property::Id,
-                hail_jmap::jmap_client::thread::Property::EmailIds,
-            ]);
-            let mut thread_response = thread_request
-                .send_get_thread()
+            use hail_jmap::jmap_client::core::query::Filter;
+            use hail_jmap::jmap_client::email::query as email_query;
+
+            let mut query = session
+                .client()
+                .email_query(
+                    Some(Filter::from(email_query::Filter::in_thread(thread_id))),
+                    Some([email_query::Comparator::received_at().ascending()]),
+                )
                 .await
                 .map_err(provider_error)?;
-            let Some(thread) = thread_response.take_list().pop() else {
-                return Ok(None);
-            };
-            let email_ids = thread.email_ids().to_vec();
+            let email_ids = query.take_ids();
             if email_ids.is_empty() {
-                return Ok(Some(ReplyContext {
-                    to: Vec::new(),
-                    subject: String::new(),
-                    in_reply_to: Vec::new(),
-                    references: Vec::new(),
-                }));
+                return Ok(None);
             }
             let mut email_request = session.client().build();
             email_request

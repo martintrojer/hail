@@ -191,6 +191,8 @@ mod live {
 
     use anyhow::{Context, Result, anyhow};
     use async_trait::async_trait;
+    use hail_jmap::jmap_client::core::query::Filter;
+    use hail_jmap::jmap_client::email::query as email_query;
     use secrecy::SecretString;
     use sqlx::SqlitePool;
 
@@ -250,22 +252,21 @@ mod live {
                 .await
                 .with_context(|| format!("JMAP login for user {user_id}"))?;
 
-            let mut request = session.client().build();
-            request
-                .get_thread()
-                .ids(ids.iter().cloned())
-                .properties([hail_jmap::jmap_client::thread::Property::Id]);
-            let mut response = request
-                .send_get_thread()
-                .await
-                .with_context(|| format!("Thread/get for user {user_id}"))?;
-
-            let not_found: HashSet<String> = response.take_not_found().into_iter().collect();
-            Ok(ids
-                .iter()
-                .filter(|id| !not_found.contains(*id))
-                .cloned()
-                .collect())
+            let mut existing = HashSet::new();
+            for id in ids {
+                let mut query = session
+                    .client()
+                    .email_query(
+                        Some(Filter::from(email_query::Filter::in_thread(id))),
+                        None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
+                    )
+                    .await
+                    .with_context(|| format!("Email/query inThread={id} for user {user_id}"))?;
+                if !query.take_ids().is_empty() {
+                    existing.insert(id.clone());
+                }
+            }
+            Ok(existing)
         }
     }
 }
