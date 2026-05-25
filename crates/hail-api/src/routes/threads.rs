@@ -317,7 +317,11 @@ where
     let verifier: Arc<dyn ThreadVerifier> = verifier;
     let actions: Arc<dyn ThreadActions> = actions;
     OpenApiRouter::new()
-        .routes(routes!(bubble_up).layer(Extension(verifier)))
+        .routes(
+            routes!(bubble_up)
+                .layer::<_, std::convert::Infallible>(Extension(verifier))
+                .layer::<_, std::convert::Infallible>(Extension(actions.clone())),
+        )
         .routes(routes!(cancel_bubble_up))
         .routes(routes!(classify_thread).layer(Extension(actions.clone())))
         .routes(routes!(set_aside).layer(Extension(actions.clone())))
@@ -408,10 +412,10 @@ async fn bubble_up(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
     Extension(verifier): Extension<Arc<dyn ThreadVerifier>>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
     Json(body): Json<BubbleUpRequest>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -453,6 +457,35 @@ async fn bubble_up(
         }
     };
 
+    for classification in Classification::ALL {
+        if let Err(err) = actions
+            .remove_keyword(
+                &state,
+                user.jmap_token.clone(),
+                &thread_id,
+                classification.keyword(),
+            )
+            .await
+        {
+            tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during bubble-up");
+        }
+    }
+
+    for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
+        if let Err(err) = actions
+            .remove_keyword(&state, user.jmap_token.clone(), &thread_id, pile_keyword)
+            .await
+        {
+            tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during bubble-up");
+        }
+    }
+
+    let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+        .bind(user.id)
+        .bind(&thread_id)
+        .execute(&state.db)
+        .await;
+
     (
         StatusCode::CREATED,
         Json(BubbleUpResponse {
@@ -486,13 +519,11 @@ async fn cancel_bubble_up(
         return bad_request("invalid_thread_id");
     }
 
-    if let Err(err) = sqlx::query(
-        "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2",
-    )
-    .bind(user.id)
-    .bind(&thread_id)
-    .execute(&state.db)
-    .await
+    if let Err(err) = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2")
+        .bind(user.id)
+        .bind(&thread_id)
+        .execute(&state.db)
+        .await
     {
         tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "bubble-up cancel failed");
         return internal();
@@ -526,8 +557,7 @@ async fn classify_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
     body: Result<Json<ClassifyRequest>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -561,13 +591,12 @@ async fn classify_thread(
                 }
             }
             // Clean up sidecar stack rows.
-            let _ = sqlx::query(
-                "DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2",
-            )
-            .bind(user.id)
-            .bind(&thread_id)
-            .execute(&state.db)
-            .await;
+            let _ =
+                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                    .bind(user.id)
+                    .bind(&thread_id)
+                    .execute(&state.db)
+                    .await;
 
             let undo = match previous_classification {
                 Some(previous) if previous != body.to => {
@@ -603,8 +632,7 @@ async fn set_aside(
     Extension(user): Extension<AuthUser>,
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
-) -> Response
-{
+) -> Response {
     add_to_stack(
         state,
         user,
@@ -635,8 +663,7 @@ async fn reply_later(
     Extension(user): Extension<AuthUser>,
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
-) -> Response
-{
+) -> Response {
     add_to_stack(
         state,
         user,
@@ -653,8 +680,7 @@ async fn add_to_stack(
     actions: Arc<dyn ThreadActions>,
     thread_id: String,
     target: ThreadStackUndoTarget,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -673,7 +699,12 @@ async fn add_to_stack(
     // Remove classification keywords so the thread leaves Imbox/Feed/Paper Trail.
     for classification in Classification::ALL {
         if let Err(err) = actions
-            .remove_keyword(&state, user.jmap_token.clone(), &thread_id, classification.keyword())
+            .remove_keyword(
+                &state,
+                user.jmap_token.clone(),
+                &thread_id,
+                classification.keyword(),
+            )
             .await
         {
             tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during stack add");
@@ -737,8 +768,7 @@ async fn archive_thread(
     Extension(user): Extension<AuthUser>,
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -775,8 +805,7 @@ async fn trash_thread(
     Extension(user): Extension<AuthUser>,
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
@@ -815,8 +844,7 @@ async fn mark_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
     body: Result<Json<MarkRequest>, JsonRejection>,
-) -> Response
-{
+) -> Response {
     if !looks_like_jmap_id(&thread_id) {
         return bad_request("invalid_thread_id");
     }
