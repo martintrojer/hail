@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
+use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
 pub trait StalwartUserManagement: Send + Sync + 'static {
@@ -593,38 +594,11 @@ fn invalid_input(field: &'static str) -> Response {
         .into_response()
 }
 
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"not_found"}"#,
-    )
-        .into_response()
-}
-
 fn forbidden_admin() -> Response {
     (
         StatusCode::FORBIDDEN,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"admin_required"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
     )
         .into_response()
 }

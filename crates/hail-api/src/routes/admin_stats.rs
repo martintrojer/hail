@@ -16,6 +16,8 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::jmap_session;
+use crate::routes::response::internal;
 use crate::state::AppState;
 
 pub const TAG: &str = "admin";
@@ -177,7 +179,7 @@ async fn jmap_mailbox_counts(
 ) -> Result<(u64, u64), Box<dyn std::error::Error + Send + Sync>> {
     let token_bytes = hail_core::open(token_enc, &state.server_key)?;
     let token = SecretString::from(String::from_utf8(token_bytes)?);
-    let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token).await?;
+    let session = jmap_session(state, token).await?;
     let mut request = session.client().build();
     request.get_mailbox().properties([
         hail_jmap::jmap_client::mailbox::Property::Id,
@@ -259,15 +261,6 @@ fn forbidden_admin() -> Response {
         StatusCode::FORBIDDEN,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"admin_required"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
     )
         .into_response()
 }

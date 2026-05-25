@@ -21,6 +21,7 @@ use crate::middleware::session::{
     SESSION_TTL_DAYS, basic_bearer, build_session_cookie, new_session_id,
 };
 use crate::routes::auth::UserView;
+use crate::routes::response::internal;
 use crate::state::AppState;
 
 static SETUP_PROVISION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -493,15 +494,6 @@ fn conflict_setup_disabled() -> Response {
         StatusCode::CONFLICT,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"setup_disabled"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
     )
         .into_response()
 }

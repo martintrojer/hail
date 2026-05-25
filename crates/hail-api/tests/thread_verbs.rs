@@ -232,13 +232,10 @@ enum Call {
         thread_id: String,
         classification: Classification,
     },
-    AddKeyword {
+    SetKeyword {
         thread_id: String,
         keyword: String,
-    },
-    RemoveKeyword {
-        thread_id: String,
-        keyword: String,
+        enabled: bool,
     },
     Archive {
         thread_id: String,
@@ -262,8 +259,7 @@ enum Call {
 enum ActionKind {
     CurrentClassification,
     Classify,
-    AddKeyword,
-    RemoveKeyword,
+    SetKeyword,
     Archive,
     Trash,
     Restore,
@@ -288,7 +284,7 @@ impl FakeActions {
     fn calls_without_pile_cleanup(&self) -> Vec<Call> {
         self.calls()
             .into_iter()
-            .filter(|c| !matches!(c, Call::RemoveKeyword { keyword, .. } if keyword == "$hail_setaside" || keyword == "$hail_replylater"))
+            .filter(|c| !matches!(c, Call::SetKeyword { keyword, enabled: false, .. } if keyword == "$hail_setaside" || keyword == "$hail_replylater"))
             .collect()
     }
 
@@ -373,43 +369,24 @@ impl ThreadActions for FakeActions {
         })
     }
 
-    fn add_keyword<'a>(
+    fn set_keyword<'a>(
         &'a self,
         _state: &'a AppState,
         _token: SecretString,
         thread_id: &'a str,
         keyword: &'static str,
+        enabled: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
-            self.maybe_fail(ActionKind::AddKeyword)?;
+            self.maybe_fail(ActionKind::SetKeyword)?;
             self.maybe_missing(thread_id)?;
             self.calls
                 .lock()
                 .expect("calls mutex")
-                .push(Call::AddKeyword {
+                .push(Call::SetKeyword {
                     thread_id: thread_id.to_string(),
                     keyword: keyword.to_string(),
-                });
-            Ok(())
-        })
-    }
-
-    fn remove_keyword<'a>(
-        &'a self,
-        _state: &'a AppState,
-        _token: SecretString,
-        thread_id: &'a str,
-        keyword: &'static str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.maybe_fail(ActionKind::RemoveKeyword)?;
-            self.maybe_missing(thread_id)?;
-            self.calls
-                .lock()
-                .expect("calls mutex")
-                .push(Call::RemoveKeyword {
-                    thread_id: thread_id.to_string(),
-                    keyword: keyword.to_string(),
+                    enabled,
                 });
             Ok(())
         })
@@ -556,14 +533,14 @@ async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
 
     for (kind, method, path, body, stack) in [
         (
-            ActionKind::AddKeyword,
+            ActionKind::SetKeyword,
             Method::POST,
             "/api/threads/thread-set-aside/set-aside",
             None,
             Some("set_aside"),
         ),
         (
-            ActionKind::AddKeyword,
+            ActionKind::SetKeyword,
             Method::POST,
             "/api/threads/thread-reply-later/reply-later",
             None,
@@ -619,7 +596,16 @@ async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
             .lock()
             .expect("current classification mutex") = Some(Classification::Imbox);
 
-        let resp = request(method, state.clone(), actions.clone(), Some(&sid), true, path, body).await;
+        let resp = request(
+            method,
+            state.clone(),
+            actions.clone(),
+            Some(&sid),
+            true,
+            path,
+            body,
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{path}");
         let json = json_body(resp).await;
         assert_eq!(json["error"], "internal", "{path}");
@@ -1016,37 +1002,45 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
     assert_eq!(
         actions.calls(),
         vec![
-            Call::AddKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_setaside".to_string()
+                keyword: "$hail_setaside".to_string(),
+                enabled: true,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_imbox".to_string()
+                keyword: "$hail_imbox".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_feed".to_string()
+                keyword: "$hail_feed".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_papertrail".to_string()
+                keyword: "$hail_papertrail".to_string(),
+                enabled: false,
             },
-            Call::AddKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_setaside".to_string()
+                keyword: "$hail_setaside".to_string(),
+                enabled: true,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_imbox".to_string()
+                keyword: "$hail_imbox".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_feed".to_string()
+                keyword: "$hail_feed".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "shared".to_string(),
-                keyword: "$hail_papertrail".to_string()
+                keyword: "$hail_papertrail".to_string(),
+                enabled: false,
             },
         ]
     );
@@ -1097,21 +1091,25 @@ async fn reply_later_inserts_stack_row() {
     assert_eq!(
         actions.calls(),
         vec![
-            Call::AddKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-2".to_string(),
-                keyword: "$hail_replylater".to_string()
+                keyword: "$hail_replylater".to_string(),
+                enabled: true,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-2".to_string(),
-                keyword: "$hail_imbox".to_string()
+                keyword: "$hail_imbox".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-2".to_string(),
-                keyword: "$hail_feed".to_string()
+                keyword: "$hail_feed".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-2".to_string(),
-                keyword: "$hail_papertrail".to_string()
+                keyword: "$hail_papertrail".to_string(),
+                enabled: false,
             },
         ]
     );
@@ -1183,25 +1181,30 @@ async fn archive_trash_restore_destroy_and_mark_call_actions() {
             Call::Trash {
                 thread_id: "thread-3".to_string()
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-3".to_string(),
-                keyword: "$hail_imbox".to_string()
+                keyword: "$hail_imbox".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-3".to_string(),
-                keyword: "$hail_feed".to_string()
+                keyword: "$hail_feed".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-3".to_string(),
-                keyword: "$hail_papertrail".to_string()
+                keyword: "$hail_papertrail".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-3".to_string(),
-                keyword: "$hail_setaside".to_string()
+                keyword: "$hail_setaside".to_string(),
+                enabled: false,
             },
-            Call::RemoveKeyword {
+            Call::SetKeyword {
                 thread_id: "thread-3".to_string(),
-                keyword: "$hail_replylater".to_string()
+                keyword: "$hail_replylater".to_string(),
+                enabled: false,
             },
             Call::Restore {
                 thread_id: "thread-3".to_string()

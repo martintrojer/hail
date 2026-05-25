@@ -55,31 +55,24 @@ impl ThreadActions for FakeActions {
         Box::pin(async { Ok(()) })
     }
 
-    fn add_keyword<'a>(
-        &'a self,
-        _state: &'a AppState,
-        _token: SecretString,
-        _thread_id: &'a str,
-        _keyword: &'static str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn remove_keyword<'a>(
+    fn set_keyword<'a>(
         &'a self,
         _state: &'a AppState,
         _token: SecretString,
         thread_id: &'a str,
         keyword: &'static str,
+        enabled: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
-            self.calls
-                .lock()
-                .expect("calls mutex")
-                .push(Call::RemoveKeyword {
-                    thread_id: thread_id.to_string(),
-                    keyword: keyword.to_string(),
-                });
+            if !enabled {
+                self.calls
+                    .lock()
+                    .expect("calls mutex")
+                    .push(Call::RemoveKeyword {
+                        thread_id: thread_id.to_string(),
+                        keyword: keyword.to_string(),
+                    });
+            }
             Ok(())
         })
     }

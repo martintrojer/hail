@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::{
@@ -24,7 +23,9 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::{jmap_session, validate_thread_id};
 use crate::routes::notes::ThreadNoteResponse;
+use crate::routes::response::{internal, not_found};
 use crate::state::AppState;
 
 /// Dependency-injection seam for assembling a thread. Production uses JMAP;
@@ -57,9 +58,9 @@ impl ThreadAssembler for JmapThreadAssembler {
         Box<dyn Future<Output = Result<Option<AssembledThread>, ThreadAssembleError>> + Send + 'a>,
     > {
         Box::pin(async move {
-            let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
+            let session = jmap_session(state, token)
                 .await
-                .map_err(|err| ThreadAssembleError(err.to_string()))?;
+                .map_err(ThreadAssembleError)?;
 
             let mut query_request = session.client().build();
             query_request
@@ -67,7 +68,9 @@ impl ThreadAssembler for JmapThreadAssembler {
                 .filter(hail_jmap::jmap_client::email::query::Filter::in_thread(
                     thread_id,
                 ))
-                .sort([hail_jmap::jmap_client::email::query::Comparator::received_at().ascending()]);
+                .sort([
+                    hail_jmap::jmap_client::email::query::Comparator::received_at().ascending(),
+                ]);
             let mut query_response = query_request
                 .send_query_email()
                 .await
@@ -232,8 +235,8 @@ async fn get_thread(
     Extension(assembler): Extension<Arc<dyn ThreadAssembler>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
 
     let assembled = match assembler
@@ -360,35 +363,4 @@ fn body_from_parts(
         body.push_str(value.value());
     }
     body
-}
-
-pub fn looks_like_jmap_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"not_found"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }

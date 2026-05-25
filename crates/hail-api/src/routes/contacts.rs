@@ -5,7 +5,7 @@
 //! placeholder until the view-building tasks assemble contact thread history.
 
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
@@ -15,6 +15,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::response::{bad_request, internal};
 use crate::state::AppState;
 
 /// OpenAPI tag for contact note endpoints.
@@ -84,7 +85,10 @@ async fn get_contact(
     .fetch_optional(&state.db)
     .await
     {
-        Ok(Some((markdown, updated_at))) => Some(ContactNote { markdown, updated_at }),
+        Ok(Some((markdown, updated_at))) => Some(ContactNote {
+            markdown,
+            updated_at,
+        }),
         Ok(None) => None,
         Err(err) => {
             tracing::error!(user_id = user.id, address = %address, error = %err, "contact note lookup failed");
@@ -141,7 +145,10 @@ async fn put_note(
     .fetch_one(&state.db)
     .await
     {
-        Ok((markdown, updated_at)) => ContactNote { markdown, updated_at },
+        Ok((markdown, updated_at)) => ContactNote {
+            markdown,
+            updated_at,
+        },
         Err(err) => {
             tracing::error!(user_id = user.id, address = %address, error = %err, "contact note upsert failed");
             return internal();
@@ -186,22 +193,4 @@ async fn delete_note(
 
 fn normalize_address(address: &str) -> String {
     address.trim().to_lowercase()
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }

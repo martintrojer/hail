@@ -6,7 +6,7 @@
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,8 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::threads_view::looks_like_jmap_id;
+use crate::routes::jmap_helpers::{looks_like_jmap_id, validate_thread_id};
+use crate::routes::response::{bad_request, internal};
 use crate::state::AppState;
 
 /// OpenAPI tag for thread note endpoints.
@@ -74,8 +75,8 @@ async fn list_thread_notes(
     Extension(user): Extension<AuthUser>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
 
     let notes = match load_thread_notes(&state, user.id, &thread_id).await {
@@ -110,8 +111,8 @@ async fn create_thread_note(
     Path(thread_id): Path<String>,
     body: Result<Json<CreateThreadNoteRequest>, JsonRejection>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
 
     let Ok(Json(body)) = body else {
@@ -219,22 +220,4 @@ pub async fn load_thread_notes(
             })
             .collect()
     })
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }
