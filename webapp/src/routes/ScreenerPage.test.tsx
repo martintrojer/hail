@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  DeniedSendersResponse,
   ScreenerDecisionRequest,
   ScreenerDecisionResponse,
   ScreenerView,
@@ -24,24 +25,31 @@ import { ScreenerPage } from './ScreenerPage';
 
 class ScreenerPageTestClient extends HailApiClient {
   readonly decideScreenerCalls: ScreenerDecisionRequest[] = [];
+  readonly undoDenyCalls: string[] = [];
   private viewPromise: Promise<ScreenerView>;
+  private deniedPromise: Promise<DeniedSendersResponse>;
   private decisionHandler: (
     body: ScreenerDecisionRequest,
   ) => Promise<ScreenerDecisionResponse>;
 
   constructor({
     view = sampleScreenerView(),
+    denied = sampleDeniedSenders(),
     viewPromise,
+    deniedPromise,
     decisionHandler,
   }: {
     view?: ScreenerView;
+    denied?: DeniedSendersResponse;
     viewPromise?: Promise<ScreenerView>;
+    deniedPromise?: Promise<DeniedSendersResponse>;
     decisionHandler?: (
       body: ScreenerDecisionRequest,
     ) => Promise<ScreenerDecisionResponse>;
   } = {}) {
     super({ baseUrl: 'http://localhost' });
     this.viewPromise = viewPromise ?? Promise.resolve(view);
+    this.deniedPromise = deniedPromise ?? Promise.resolve(denied);
     this.decisionHandler =
       decisionHandler ??
       ((body) =>
@@ -72,11 +80,20 @@ class ScreenerPageTestClient extends HailApiClient {
     return this.viewPromise;
   }
 
+  override async getDeniedSenders(): Promise<DeniedSendersResponse> {
+    return this.deniedPromise;
+  }
+
   override async decideScreener(
     body: ScreenerDecisionRequest,
   ): Promise<ScreenerDecisionResponse> {
     this.decideScreenerCalls.push(body);
     return this.decisionHandler(body);
+  }
+
+  override async undoDeny(address: string) {
+    this.undoDenyCalls.push(address);
+    return { status: 'undone' as const };
   }
 }
 
@@ -166,6 +183,20 @@ function sampleScreenerView(overrides: Partial<ScreenerView> = {}): ScreenerView
   };
 }
 
+function sampleDeniedSenders(
+  overrides: Partial<DeniedSendersResponse> = {},
+): DeniedSendersResponse {
+  return {
+    denied: [
+      {
+        sender_address: 'blocked@example.com',
+        denied_at: '2026-05-22T10:00:00Z',
+      },
+    ],
+    ...overrides,
+  };
+}
+
 function response(status: number, body: unknown = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -207,6 +238,28 @@ describe('ScreenerPage', () => {
       decision: 'deny',
       apply_to_history: true,
     });
+  });
+
+  it('shows denied senders after expanding and can undo a denied sender', async () => {
+    const client = renderScreener();
+
+    expect(screen.getByRole('button', { name: /Previously denied/i })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.queryByText('blocked@example.com')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Previously denied/i }));
+
+    expect(await screen.findByText('blocked@example.com')).toBeInTheDocument();
+    expect(screen.getByText(/Denied/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+    await waitFor(() => expect(client.undoDenyCalls).toEqual(['blocked@example.com']));
+    expect(
+      await screen.findByText('Restored blocked@example.com to the Screener.'),
+    ).toBeInTheDocument();
   });
 
   it('shows initial pending, error, and empty states', async () => {

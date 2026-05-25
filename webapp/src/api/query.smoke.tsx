@@ -4,6 +4,7 @@ import {
   useClassifyThreadMutation,
   useContact,
   useContactNoteMutation,
+  useDeniedSenders,
   useFeedView,
   useImboxView,
   useLoginMutation,
@@ -13,6 +14,7 @@ import {
   useReplyLaterThreadMutation,
   useScreenerDecisionMutation,
   useScreenerView,
+  useUndoDenyMutation,
   useSetAsideThreadMutation,
   useSetupState,
   useTrashThreadMutation,
@@ -23,6 +25,7 @@ export function ApiHookSmoke() {
   void useMe();
   void useSetupState();
   void useScreenerView();
+  void useDeniedSenders();
   void useImboxView();
   void useFeedView();
   void usePapertrailView();
@@ -30,6 +33,7 @@ export function ApiHookSmoke() {
   void useLoginMutation();
   void useLogoutMutation();
   void useScreenerDecisionMutation();
+  void useUndoDenyMutation();
   void useClassifyThreadMutation();
   void useArchiveThreadMutation();
   void useTrashThreadMutation();

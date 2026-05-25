@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::extract::{Extension, State, rejection::JsonRejection};
+use axum::extract::{Extension, Path, State, rejection::JsonRejection};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -100,6 +100,8 @@ where
     let backfill: Arc<dyn ScreenerBackfill> = backfill;
     OpenApiRouter::new()
         .routes(routes!(get_screener))
+        .routes(routes!(get_denied_senders))
+        .routes(routes!(post_undo_deny))
         .routes(routes!(post_decision).layer(Extension(backfill)))
 }
 
@@ -132,6 +134,23 @@ struct DecisionRequest {
     decision: String,
     classify_as: Option<String>,
     apply_to_history: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DeniedSendersResponse {
+    denied: Vec<DeniedSender>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct DeniedSender {
+    sender_address: String,
+    #[schema(value_type = String, format = DateTime)]
+    denied_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct UndoDenyResponse {
+    status: &'static str,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -263,6 +282,97 @@ impl ScreenerSender {
             latest_preview: None,
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/screener/denied",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Denied screener senders.", body = DeniedSendersResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Denied sender lookup failed."),
+    ),
+)]
+async fn get_denied_senders(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    let denied = match sqlx::query_as::<_, (String, DateTime<Utc>)>(
+        "SELECT sender_address, COALESCE(decided_at, first_seen_at) AS denied_at \
+         FROM screener_rules \
+         WHERE user_id = ?1 AND decision = 'deny' \
+         ORDER BY denied_at DESC",
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(sender_address, denied_at)| DeniedSender {
+                sender_address,
+                denied_at,
+            })
+            .collect(),
+        Err(err) => {
+            tracing::error!(user_id = user.id, error = %err, "denied screener lookup failed");
+            return internal();
+        }
+    };
+
+    Json(DeniedSendersResponse { denied }).into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/screener/{address}/undo-deny",
+    tag = TAG,
+    params(
+        ("address" = String, Path, description = "Normalized sender address to return to pending screener."),
+    ),
+    responses(
+        (status = 200, description = "Denied sender restored to pending screener.", body = UndoDenyResponse),
+        (status = 400, description = "Invalid sender address."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Undo deny failed."),
+    ),
+)]
+async fn post_undo_deny(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(address): Path<String>,
+) -> Response {
+    let sender = normalize_sender(&address);
+    if !looks_like_sender(&sender) {
+        return bad_request("invalid_sender");
+    }
+
+    if let Err(err) = sqlx::query(
+        "DELETE FROM screener_rules \
+         WHERE user_id = ?1 AND sender_address = ?2 AND decision = 'deny'",
+    )
+    .bind(user.id)
+    .bind(&sender)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener undo deny failed");
+        return internal();
+    }
+
+    if let Err(err) = audit::record(
+        &state.db,
+        user.id,
+        "screener.undo_deny",
+        &serde_json::json!({ "sender": &sender }),
+    )
+    .await
+    {
+        tracing::warn!(user_id = user.id, sender = %sender, error = %err, "audit log write failed");
+    }
+
+    Json(UndoDenyResponse { status: "undone" }).into_response()
 }
 
 async fn enrich_screener_senders(

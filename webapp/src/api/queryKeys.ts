@@ -13,6 +13,7 @@ export const queryKeys = {
   search: (q: string, scope: 'all' | 'mail' | 'notes' | 'clips') =>
     [...queryKeys.views(), 'search', scope, q] as const,
   screener: () => [...queryKeys.views(), 'screener'] as const,
+  screenerDenied: () => [...queryKeys.screener(), 'denied'] as const,
   contacts: () => [...queryKeys.all, 'contacts'] as const,
   contact: (address: string) =>
     [...queryKeys.contacts(), address.trim().toLowerCase()] as const,

@@ -113,6 +113,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/screener/{address}/undo-deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["post_undo_deny"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/threads/{thread_id}": {
         parameters: {
             query?: never;
@@ -401,6 +417,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/screener/denied": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_denied_senders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/views/search": {
         parameters: {
             query?: never;
@@ -561,6 +593,14 @@ export interface components {
             sender: string;
             undo?: null | components["schemas"]["UndoToken"];
         };
+        DeniedSender: {
+            /** Format: date-time */
+            denied_at: string;
+            sender_address: string;
+        };
+        DeniedSendersResponse: {
+            denied: components["schemas"]["DeniedSender"][];
+        };
         DraftPayload: {
             attachments?: unknown[] | null;
             bcc?: string[] | null;
@@ -689,6 +729,9 @@ export interface components {
             participants: components["schemas"]["Participant"][];
             subject: string;
             thread_id: string;
+        };
+        UndoDenyResponse: {
+            status: string;
         };
         UndoResponse: {
             action: string;
@@ -1112,6 +1155,50 @@ export interface operations {
                 content?: never;
             };
             /** @description Screener decision failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    post_undo_deny: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Normalized sender address to return to pending screener. */
+                address: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Denied sender restored to pending screener. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UndoDenyResponse"];
+                };
+            };
+            /** @description Invalid sender address. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Undo deny failed. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2011,6 +2098,40 @@ export interface operations {
                 content?: never;
             };
             /** @description Screener lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_denied_senders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Denied screener senders. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeniedSendersResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Denied sender lookup failed. */
             500: {
                 headers: {
                     [name: string]: unknown;

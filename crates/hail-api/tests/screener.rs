@@ -314,6 +314,141 @@ async fn screener_view_sorts_newest_first() {
 }
 
 #[tokio::test]
+async fn denied_senders_view_returns_current_user_denied_rows() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (bob_id, _) = seed_session(&state, &key, "bob@example.org").await;
+    let now = Utc::now();
+    seed_rule(
+        &state,
+        alice_id,
+        "old-denied@example.org",
+        "deny",
+        None,
+        now - Duration::hours(2),
+    )
+    .await;
+    seed_rule(
+        &state,
+        alice_id,
+        "allowed@example.org",
+        "allow",
+        Some("imbox"),
+        now,
+    )
+    .await;
+    seed_rule(
+        &state,
+        alice_id,
+        "new-denied@example.org",
+        "deny",
+        None,
+        now,
+    )
+    .await;
+    seed_rule(&state, bob_id, "bob-denied@example.org", "deny", None, now).await;
+    sqlx::query(
+        "UPDATE screener_rules SET decided_at = first_seen_at WHERE user_id = ?1 AND decision = 'deny'",
+    )
+    .bind(alice_id)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/views/screener/denied",
+        Some(&alice_sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let denied = json["denied"].as_array().unwrap();
+    assert_eq!(denied.len(), 2);
+    assert_eq!(denied[0]["sender_address"], "new-denied@example.org");
+    assert!(denied[0]["denied_at"].is_string());
+    assert_eq!(denied[1]["sender_address"], "old-denied@example.org");
+}
+
+#[tokio::test]
+async fn undo_deny_deletes_current_user_denied_rule() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (bob_id, _) = seed_session(&state, &key, "bob@example.org").await;
+    let now = Utc::now();
+    seed_rule(&state, alice_id, "spam@example.org", "deny", None, now).await;
+    seed_rule(&state, bob_id, "spam@example.org", "deny", None, now).await;
+    seed_rule(
+        &state,
+        alice_id,
+        "allowed@example.org",
+        "allow",
+        Some("feed"),
+        now,
+    )
+    .await;
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/screener/spam%40example.org/undo-deny",
+        Some(&alice_sid),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "undone");
+
+    let alice_spam_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    )
+    .bind(alice_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(alice_spam_count, 0);
+
+    let bob_spam_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    )
+    .bind(bob_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(bob_spam_count, 1);
+
+    let allowed_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'allowed@example.org'",
+    )
+    .bind(alice_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(allowed_count, 1);
+}
+
+#[tokio::test]
+async fn undo_deny_missing_csrf_returns_403() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let resp = request(
+        state,
+        Method::POST,
+        "/api/screener/spam%40example.org/undo-deny",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn approve_creates_or_updates_row_and_classify_as() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
