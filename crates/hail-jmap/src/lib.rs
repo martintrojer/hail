@@ -20,8 +20,10 @@
 //! ```
 
 mod error;
+mod mailbox;
 mod session;
 
 pub use error::Error;
 pub use jmap_client;
-pub use session::{login_basic, login_bearer, Session};
+pub use mailbox::mailbox_id_by_role;
+pub use session::{Session, login_basic, login_bearer};

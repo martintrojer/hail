@@ -750,14 +750,11 @@ fn format_address(address: &hail_jmap::jmap_client::email::EmailAddress) -> Stri
 }
 
 async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String>, MailViewError> {
-    use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
+    use hail_jmap::jmap_client::mailbox::Role;
 
-    let mut response = session
-        .client()
-        .mailbox_query(Some(Filter::role(Role::Drafts)), None::<Vec<_>>)
+    hail_jmap::mailbox_id_by_role(session, Role::Drafts)
         .await
-        .map_err(|err| MailViewError::provider(err.to_string()))?;
-    Ok(response.take_ids().into_iter().next())
+        .map_err(|err| MailViewError::provider(err.to_string()))
 }
 
 fn bad_request(error: &'static str) -> Response {
