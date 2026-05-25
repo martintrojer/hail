@@ -209,7 +209,7 @@ function PendingSenderCard({
           aria-expanded={routingOpen}
           onClick={showRoutingDropdown}
           disabled={isPending}
-          className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-full bg-accent-blue px-4 py-1.5 text-xs font-semibold text-white hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isPending ? 'Saving…' : 'Yes'}
         </button>
@@ -218,7 +218,7 @@ function PendingSenderCard({
           aria-label="Deny"
           onClick={deny}
           disabled={isPending}
-          className="rounded-lg border border-border-menu px-4 py-2 text-sm font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-full border border-border-menu px-4 py-1.5 text-xs font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
         >
           No
         </button>

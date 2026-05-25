@@ -306,7 +306,7 @@ export function SearchPage() {
         </label>
         <button
           type="submit"
-          className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover"
+          className="rounded-full bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover"
         >
           Search
         </button>

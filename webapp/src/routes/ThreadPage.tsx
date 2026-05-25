@@ -312,7 +312,7 @@ function MiniReplyComposer({ senderName }: { senderName: string }) {
       <div className="mt-3 flex items-center justify-between gap-3">
         <button
           type="button"
-          className="rounded-lg bg-accent-blue px-4 py-2 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="rounded-full bg-accent-blue px-4 py-1.5 text-xs font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
         >
           Send
         </button>
