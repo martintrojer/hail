@@ -8,7 +8,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router, routing::get};
+use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::sanitize_and_strip_trackers;
 use hail_jmap::jmap_client::core::set::SetObject;
@@ -274,11 +274,6 @@ where
     C: Composer,
 {
     Router::from(openapi_router_with_composer(composer))
-        .route("/api/scheduled-sends", get(list_scheduled_sends))
-        .route(
-            "/api/scheduled-sends/{scheduled_send_id}",
-            get(get_scheduled_send).delete(cancel_scheduled_send),
-        )
 }
 
 fn openapi_router_with_composer<C>(composer: Arc<C>) -> OpenApiRouter<AppState>
@@ -289,6 +284,9 @@ where
     OpenApiRouter::new()
         .routes(routes!(compose).layer(Extension(composer.clone())))
         .routes(routes!(reply).layer(Extension(composer)))
+        .routes(routes!(list_scheduled_sends))
+        .routes(routes!(get_scheduled_send))
+        .routes(routes!(cancel_scheduled_send))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -326,18 +324,22 @@ enum ComposeResponse {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct ScheduledSendResponse {
     id: i64,
     draft_email_id: String,
+    #[schema(value_type = String, format = DateTime)]
     send_at: DateTime<Utc>,
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, format = DateTime)]
     claimed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, format = DateTime)]
     sent_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[schema(value_type = String, format = DateTime)]
     created_at: DateTime<Utc>,
 }
 
@@ -441,6 +443,16 @@ async fn reply(
     .await
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/scheduled-sends",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Scheduled sends for the current user.", body = [ScheduledSendResponse]),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Scheduled send list failed."),
+    ),
+)]
 async fn list_scheduled_sends(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
@@ -480,6 +492,20 @@ async fn list_scheduled_sends(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/scheduled-sends/{scheduled_send_id}",
+    tag = TAG,
+    params(
+        ("scheduled_send_id" = i64, Path, description = "Scheduled send id."),
+    ),
+    responses(
+        (status = 200, description = "Scheduled send detail for the current user.", body = ScheduledSendResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Scheduled send not found."),
+        (status = 500, description = "Scheduled send lookup failed."),
+    ),
+)]
 async fn get_scheduled_send(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
@@ -495,6 +521,21 @@ async fn get_scheduled_send(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/scheduled-sends/{scheduled_send_id}",
+    tag = TAG,
+    params(
+        ("scheduled_send_id" = i64, Path, description = "Scheduled send id."),
+    ),
+    responses(
+        (status = 200, description = "Scheduled send cancelled or already cancelled.", body = ScheduledSendResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Scheduled send not found."),
+        (status = 409, description = "Scheduled send is not cancellable."),
+        (status = 500, description = "Scheduled send cancel failed."),
+    ),
+)]
 async fn cancel_scheduled_send(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,

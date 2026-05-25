@@ -262,6 +262,115 @@ async fn compose_send_later_inserts_pending_row_without_submit() {
 }
 
 #[tokio::test]
+async fn reply_send_now_creates_reply_draft_and_submits() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "reply-now@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/threads/thread-1/reply",
+        Some(&sid),
+        true,
+        Some(r#"{"body_markdown":"Thanks for the update"}"#.to_string()),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "sent");
+    assert_eq!(json["email_id"], "draft-2");
+    assert_eq!(json["submission_id"], "submission-1");
+    assert_eq!(
+        composer.calls(),
+        vec![
+            Call::ThreadContext {
+                thread_id: "thread-1".to_string()
+            },
+            Call::Create {
+                from: "reply-now@example.org".to_string(),
+                to: vec!["sender@example.org".to_string()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Re: Hello".to_string(),
+                plain_text: "Thanks for the update".to_string(),
+                html: "<p>Thanks for the update</p>\n".to_string(),
+                reply: Some(ReplyHeaders {
+                    in_reply_to: vec!["m1@example.org".to_string()],
+                    references: vec!["m0@example.org".to_string(), "m1@example.org".to_string()],
+                }),
+            },
+            Call::Submit {
+                from: "reply-now@example.org".to_string(),
+                email_id: "draft-2".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn reply_send_later_inserts_pending_row_without_submit() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "reply-later@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    let send_at = Utc::now() + Duration::hours(2);
+
+    let resp = request(
+        state.clone(),
+        composer.clone(),
+        Method::POST,
+        "/api/threads/thread-1/reply",
+        Some(&sid),
+        true,
+        Some(format!(
+            r#"{{"body_markdown":"Later please","send_at":"{}"}}"#,
+            send_at.to_rfc3339()
+        )),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "pending");
+    assert_eq!(json["draft_email_id"], "draft-2");
+    assert_eq!(
+        composer.calls(),
+        vec![
+            Call::ThreadContext {
+                thread_id: "thread-1".to_string()
+            },
+            Call::Create {
+                from: "reply-later@example.org".to_string(),
+                to: vec!["sender@example.org".to_string()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                subject: "Re: Hello".to_string(),
+                plain_text: "Later please".to_string(),
+                html: "<p>Later please</p>\n".to_string(),
+                reply: Some(ReplyHeaders {
+                    in_reply_to: vec!["m1@example.org".to_string()],
+                    references: vec!["m0@example.org".to_string(), "m1@example.org".to_string()],
+                }),
+            },
+        ]
+    );
+
+    let row: (String, String, Option<String>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT draft_email_id, status, auth_session_id, auth_session_expires_at FROM scheduled_sends WHERE id = ?1",
+    )
+    .bind(json["scheduled_send_id"].as_i64().expect("id"))
+    .fetch_one(&state.db)
+    .await
+    .expect("scheduled row");
+    assert_eq!(row.0, "draft-2");
+    assert_eq!(row.1, "pending");
+    assert_eq!(row.2.as_deref(), Some(sid.as_str()));
+    assert!(row.3.expect("session expiry") > Utc::now() + Duration::days(29));
+}
+
+#[tokio::test]
 async fn scheduled_send_list_and_get_are_scoped_to_user() {
     let (state, key) = fixture_state().await;
     let (_user_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;

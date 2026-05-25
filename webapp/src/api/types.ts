@@ -113,6 +113,38 @@ export interface paths {
         patch: operations["update_draft"];
         trace?: never;
     };
+    "/api/scheduled-sends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_scheduled_sends"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scheduled-sends/{scheduled_send_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_scheduled_send"];
+        put?: never;
+        post?: never;
+        delete: operations["cancel_scheduled_send"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/screener/decisions": {
         parameters: {
             query?: never;
@@ -635,9 +667,9 @@ export interface components {
             created_at: string;
             from: string;
             preview: string;
+            subject: string;
             /** Format: date-time */
             surface_at: string;
-            subject: string;
             thread_id: string;
         };
         BubbleUpViewResponse: {
@@ -783,6 +815,21 @@ export interface components {
             body_markdown: string;
             /** Format: date-time */
             send_at?: string | null;
+        };
+        ScheduledSendResponse: {
+            /** Format: date-time */
+            claimed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            draft_email_id: string;
+            error?: string | null;
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            send_at: string;
+            /** Format: date-time */
+            sent_at?: string | null;
+            status: string;
         };
         ScreenerEmail: {
             email_id: string;
@@ -1279,6 +1326,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Draft not found or no longer a draft. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description JMAP draft store failure. */
             500: {
                 headers: {
@@ -1327,7 +1381,143 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Draft not found or no longer a draft. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description JMAP draft store failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_scheduled_sends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scheduled sends for the current user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledSendResponse"][];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scheduled send list failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_scheduled_send: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Scheduled send id. */
+                scheduled_send_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scheduled send detail for the current user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledSendResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scheduled send not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scheduled send lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    cancel_scheduled_send: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Scheduled send id. */
+                scheduled_send_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scheduled send cancelled or already cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduledSendResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scheduled send not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scheduled send is not cancellable. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scheduled send cancel failed. */
             500: {
                 headers: {
                     [name: string]: unknown;
