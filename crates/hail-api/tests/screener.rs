@@ -754,6 +754,61 @@ async fn backfill_failure_preserves_previous_screener_rule() {
 }
 
 #[tokio::test]
+async fn backfill_failure_rolls_back_decision_audit_and_undo_together() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "backfill-atomic@example.org").await;
+    let first_seen_at = Utc::now() - Duration::days(2);
+    seed_rule(
+        &state,
+        user_id,
+        "sender@example.org",
+        "pending",
+        None,
+        first_seen_at,
+    )
+    .await;
+    let backfill = Arc::new(FakeBackfill::failing());
+
+    let resp = request_with_backfill(
+        state.clone(),
+        backfill.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"sender@example.org","decision":"deny","apply_to_history":true}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(backfill.calls.lock().unwrap().len(), 1);
+
+    let row: (String, Option<String>, Option<chrono::DateTime<Utc>>, chrono::DateTime<Utc>) =
+        sqlx::query_as(
+            "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
+             WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
+        )
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(row.0, "pending");
+    assert_eq!(row.1, None);
+    assert_eq!(row.2, None);
+    assert_eq!(row.3, first_seen_at);
+
+    let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(audit_count, 0);
+    let undo_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM undo_actions")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(undo_count, 0);
+}
+
+#[tokio::test]
 async fn invalid_sender_returns_400_without_persisting_or_backfill() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "invalid-sender@example.org").await;

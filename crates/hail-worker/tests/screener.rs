@@ -241,6 +241,53 @@ async fn deny_rule_moves_to_trash() {
 }
 
 #[tokio::test]
+async fn rule_lookup_normalizes_envelope_sender_before_matching() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_rule(
+        &mut conn,
+        alice_id,
+        "sender@example.com",
+        "allow",
+        Some("feed"),
+    )
+    .await;
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope(" Sender Name <SENDER@Example.COM> "),
+    )
+    .await
+    .expect("route");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::Classified {
+            classification: Classification::Feed
+        }
+    );
+    assert_eq!(
+        jmap.calls(),
+        vec![Call::ApplyKeyword {
+            email_id: "email-1".to_string(),
+            keyword: "$hail_feed".to_string()
+        }]
+    );
+
+    let pending_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("sender name <sender@example.com>")
+    .fetch_one(&mut conn)
+    .await
+    .expect("pending count");
+    assert_eq!(pending_count, 0, "normalized match must not create a pending rule");
+}
+
+#[tokio::test]
 async fn no_rule_moves_to_screener_and_inserts_pending() {
     let (mut conn, _guard, alice_id, _) = setup_db().await;
     let jmap = Arc::new(FakeJmapOps::new());

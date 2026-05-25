@@ -81,7 +81,7 @@ enum Call {
 #[derive(Default)]
 struct FakeDraftStore {
     calls: Mutex<Vec<Call>>,
-    fail: Mutex<bool>,
+    fail: Mutex<Option<DraftStoreError>>,
 }
 
 impl FakeDraftStore {
@@ -89,15 +89,16 @@ impl FakeDraftStore {
         self.calls.lock().expect("calls mutex").clone()
     }
 
-    fn fail_next(&self) {
-        *self.fail.lock().expect("fail mutex") = true;
+    fn fail_next(&self, error: DraftStoreError) {
+        *self.fail.lock().expect("fail mutex") = Some(error);
     }
 
-    fn should_fail(&self) -> bool {
-        let mut fail = self.fail.lock().expect("fail mutex");
-        let value = *fail;
-        *fail = false;
-        value
+    fn fail_next_provider(&self) {
+        self.fail_next(DraftStoreError::Provider("boom".to_string()));
+    }
+
+    fn should_fail(&self) -> Option<DraftStoreError> {
+        self.fail.lock().expect("fail mutex").take()
     }
 }
 
@@ -110,8 +111,8 @@ impl DraftStore for FakeDraftStore {
         draft: DraftCreate,
     ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
-            if self.should_fail() {
-                return Err(DraftStoreError::Provider("boom".to_string()));
+            if let Some(error) = self.should_fail() {
+                return Err(error);
             }
             self.calls.lock().expect("calls mutex").push(Call::Create {
                 from: from.to_string(),
@@ -133,8 +134,8 @@ impl DraftStore for FakeDraftStore {
     ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>>
     {
         Box::pin(async move {
-            if self.should_fail() {
-                return Err(DraftStoreError::Provider("boom".to_string()));
+            if let Some(error) = self.should_fail() {
+                return Err(error);
             }
             self.calls.lock().expect("calls mutex").push(Call::Get {
                 draft_id: draft_id.to_string(),
@@ -158,8 +159,8 @@ impl DraftStore for FakeDraftStore {
         draft: DraftUpdate,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
-            if self.should_fail() {
-                return Err(DraftStoreError::Provider("boom".to_string()));
+            if let Some(error) = self.should_fail() {
+                return Err(error);
             }
             self.calls.lock().expect("calls mutex").push(Call::Update {
                 draft_id: draft_id.to_string(),
@@ -180,8 +181,8 @@ impl DraftStore for FakeDraftStore {
         draft_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
-            if self.should_fail() {
-                return Err(DraftStoreError::Provider("boom".to_string()));
+            if let Some(error) = self.should_fail() {
+                return Err(error);
             }
             self.calls.lock().expect("calls mutex").push(Call::Delete {
                 draft_id: draft_id.to_string(),
@@ -770,7 +771,7 @@ async fn provider_error_returns_500() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let store = Arc::new(FakeDraftStore::default());
-    store.fail_next();
+    store.fail_next_provider();
 
     let resp = request(
         state,
@@ -786,6 +787,58 @@ async fn provider_error_returns_500() {
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = json_body(resp).await;
     assert_eq!(body["error"], "internal");
+}
+
+#[tokio::test]
+async fn update_not_found_returns_404() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+    store.fail_next(DraftStoreError::NotFound);
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/missing-draft",
+        Some(&sid),
+        true,
+        Some(r#"{"subject":"Revised"}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        store.calls(),
+        Vec::<Call>::new(),
+        "fake store returns before recording the mutation"
+    );
+}
+
+#[tokio::test]
+async fn delete_not_found_returns_404() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+    store.fail_next(DraftStoreError::NotFound);
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::DELETE,
+        "/api/drafts/missing-draft",
+        Some(&sid),
+        true,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        store.calls(),
+        Vec::<Call>::new(),
+        "fake store returns before recording the mutation"
+    );
 }
 
 #[tokio::test]
