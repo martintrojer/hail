@@ -67,6 +67,14 @@ pub trait ThreadActions: Send + Sync + 'static {
         keyword: &'static str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
 
+    fn remove_keyword<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+        keyword: &'static str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
+
     fn archive<'a>(
         &'a self,
         state: &'a AppState,
@@ -186,6 +194,26 @@ impl ThreadActions for JmapThreadActions {
                 session
                     .client()
                     .email_set_keyword(&email_id, keyword, true)
+                    .await
+                    .map_err(provider_error)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn remove_keyword<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+        keyword: &'static str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let session = login(state, token).await?;
+            for email_id in email_ids_in_thread(&session, thread_id).await? {
+                session
+                    .client()
+                    .email_set_keyword(&email_id, keyword, false)
                     .await
                     .map_err(provider_error)?;
             }
@@ -575,6 +603,16 @@ async fn add_to_stack(
         Ok(()) => {}
         Err(ThreadActionError::NotFound) => return not_found(),
         Err(ThreadActionError::Provider(err)) => return action_internal(user.id, &thread_id, err),
+    }
+
+    // Remove classification keywords so the thread leaves Imbox/Feed/Paper Trail.
+    for classification in Classification::ALL {
+        if let Err(err) = actions
+            .remove_keyword(&state, user.jmap_token.clone(), &thread_id, classification.keyword())
+            .await
+        {
+            tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during stack add");
+        }
     }
 
     let previous_position = match select_stack_position(&state, user.id, stack, &thread_id).await {
