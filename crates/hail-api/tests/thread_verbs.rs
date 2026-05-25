@@ -1437,29 +1437,98 @@ async fn invalid_thread_id_returns_400() {
 }
 
 #[tokio::test]
-async fn provider_missing_thread_returns_404_and_does_not_insert_stack_row() {
-    let (state, key) = fixture_state().await;
-    let (user_id, sid) = seed_session(&state, &key, "missing@example.org").await;
-    let actions = Arc::new(FakeActions::default());
-    actions.mark_missing("missing-thread");
+async fn provider_missing_thread_returns_404_and_does_not_mutate_sidecar_state() {
+    for (method, path, body, stack) in [
+        (
+            Method::POST,
+            "/api/threads/missing-thread/set-aside",
+            None,
+            Some("set_aside"),
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/reply-later",
+            None,
+            Some("reply_later"),
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/archive",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/trash",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/restore",
+            None,
+            None,
+        ),
+        (
+            Method::DELETE,
+            "/api/threads/missing-thread/destroy",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/mark",
+            Some(r#"{"read":true}"#),
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/classify",
+            Some(r#"{"to":"feed"}"#),
+            None,
+        ),
+    ] {
+        let (state, key) = fixture_state().await;
+        let (user_id, sid) = seed_session(&state, &key, "missing@example.org").await;
+        let actions = Arc::new(FakeActions::default());
+        actions.mark_missing("missing-thread");
+        *actions
+            .current_classification
+            .lock()
+            .expect("current classification mutex") = Some(Classification::Imbox);
 
-    let resp = post(
-        state.clone(),
-        actions,
-        Some(&sid),
-        true,
-        "/api/threads/missing-thread/set-aside",
-        None,
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let resp = request(
+            method,
+            state.clone(),
+            actions.clone(),
+            Some(&sid),
+            true,
+            path,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(actions.calls(), Vec::<Call>::new(), "{path}");
 
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM stack_positions WHERE user_id = ?1 AND thread_id = 'missing-thread'",
-    )
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
-    assert_eq!(count, 0);
+        if let Some(stack) = stack {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM stack_positions WHERE user_id = ?1 AND stack = ?2 AND thread_id = 'missing-thread'",
+            )
+            .bind(user_id)
+            .bind(stack)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+            assert_eq!(count, 0, "{path}");
+        }
+
+        let undo_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM undo_actions WHERE user_id = ?1 AND payload_json LIKE '%missing-thread%'",
+        )
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert_eq!(undo_count, 0, "{path}");
+    }
 }

@@ -19,6 +19,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "audit_log",
     "undo_actions",
     "app_events",
+    "thread_notes",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -30,6 +31,7 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_undo_actions_user_live",
     "idx_app_events_id",
     "idx_app_events_user_id",
+    "idx_thread_notes_thread",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
@@ -147,7 +149,10 @@ async fn v1_1_tables_are_not_present() {
         .expect("query sqlite_master");
     let names: std::collections::HashSet<String> =
         rows.iter().map(|r| r.get::<String, _>("name")).collect();
-    assert!(!names.contains("email_notes"), "v1.1 table leaked into baseline");
+    assert!(
+        !names.contains("email_notes"),
+        "v1.1 table leaked into baseline"
+    );
     assert!(!names.contains("clips"), "v1.1 table leaked into baseline");
 }
 
@@ -155,48 +160,45 @@ async fn v1_1_tables_are_not_present() {
 async fn users_email_is_unique() {
     let (pool, _guard) = setup().await;
 
-    sqlx::query(
-        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind("alice@example.com")
-    .bind("acct-1")
-    .bind("2026-01-01T00:00:00Z")
-    .execute(&pool)
-    .await
-    .expect("first insert");
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("alice@example.com")
+        .bind("acct-1")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("first insert");
 
-    let dup = sqlx::query(
-        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind("alice@example.com")
-    .bind("acct-2")
-    .bind("2026-01-02T00:00:00Z")
-    .execute(&pool)
-    .await;
+    let dup =
+        sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+            .bind("alice@example.com")
+            .bind("acct-2")
+            .bind("2026-01-02T00:00:00Z")
+            .execute(&pool)
+            .await;
 
-    assert!(dup.is_err(), "duplicate email must violate UNIQUE constraint");
+    assert!(
+        dup.is_err(),
+        "duplicate email must violate UNIQUE constraint"
+    );
 }
 
 #[tokio::test]
 async fn screener_rules_decision_check_enforced() {
     let (pool, _guard) = setup().await;
 
-    sqlx::query(
-        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind("bob@example.com")
-    .bind("acct-bob")
-    .bind("2026-01-01T00:00:00Z")
-    .execute(&pool)
-    .await
-    .expect("user insert");
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("bob@example.com")
+        .bind("acct-bob")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
 
-    let user_id: i64 =
-        sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
-            .bind("bob@example.com")
-            .fetch_one(&pool)
-            .await
-            .expect("fetch user id");
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("bob@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
 
     let bad = sqlx::query(
         "INSERT INTO screener_rules (user_id, sender_address, decision, first_seen_at) \
@@ -209,7 +211,10 @@ async fn screener_rules_decision_check_enforced() {
     .execute(&pool)
     .await;
 
-    assert!(bad.is_err(), "CHECK constraint on decision must reject `maybe`");
+    assert!(
+        bad.is_err(),
+        "CHECK constraint on decision must reject `maybe`"
+    );
 }
 
 #[tokio::test]
@@ -230,22 +235,19 @@ async fn scheduled_sends_has_processing_claim_schema() {
         );
     }
 
-    sqlx::query(
-        "INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)",
-    )
-    .bind("schedule@example.com")
-    .bind("acct-schedule")
-    .bind("2026-01-01T00:00:00Z")
-    .execute(&pool)
-    .await
-    .expect("user insert");
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("schedule@example.com")
+        .bind("acct-schedule")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
 
-    let user_id: i64 =
-        sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
-            .bind("schedule@example.com")
-            .fetch_one(&pool)
-            .await
-            .expect("fetch user id");
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("schedule@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
 
     sqlx::query(
         "INSERT INTO scheduled_sends \
@@ -290,6 +292,52 @@ async fn scheduled_sends_has_processing_claim_schema() {
     .execute(&pool)
     .await
     .expect("auth_required scheduled_send should satisfy status check and session reference");
+}
+
+#[tokio::test]
+async fn thread_notes_cascade_when_user_is_deleted() {
+    let (pool, _guard) = setup().await;
+
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("notes-cascade@example.com")
+        .bind("acct-notes-cascade")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
+
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("notes-cascade@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
+
+    sqlx::query(
+        "INSERT INTO thread_notes (user_id, thread_id, email_id, body) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("thread-1")
+    .bind("email-1")
+    .bind("remember this")
+    .execute(&pool)
+    .await
+    .expect("thread note insert");
+
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("user delete cascades");
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM thread_notes WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("thread note count");
+    assert_eq!(
+        count, 0,
+        "thread_notes must be user-scoped with ON DELETE CASCADE"
+    );
 }
 
 #[tokio::test]
