@@ -9,6 +9,7 @@ import type {
   DraftRequest,
   DraftResponse,
   ReplyRequest,
+  ThreadViewResponse,
   UserEnvelope,
 } from '../api/client';
 import { HailApiClient, HailApiError } from '../api/client';
@@ -23,6 +24,24 @@ class ComposerPageTestClient extends HailApiClient {
   readonly sendReplyCalls: Array<{ threadId: string; body: ReplyRequest }> = [];
   readonly createDraftCalls: DraftRequest[] = [];
   readonly updateDraftCalls: Array<{ draftId: string; body: DraftRequest }> = [];
+  getThreadCalls: string[] = [];
+  threadResponse: ThreadViewResponse = {
+    thread_id: 'thread-123',
+    subject: 'Launch plan',
+    participants: [],
+    notes: [],
+    messages: [
+      {
+        email_id: 'email-1',
+        from: [{ email: 'alice@example.com', name: 'Alice' }],
+        to: [{ email: 'composer@example.com', name: 'Composer' }],
+        html: '<p>Can you review this?</p>',
+        preview: 'Can you review this?\nThanks!',
+        received_at: '2026-05-25T12:30:00Z',
+        blocked_trackers: [],
+      },
+    ],
+  };
   sendComposeError: unknown;
   sendReplyError: unknown;
   createDraftError: unknown;
@@ -41,6 +60,11 @@ class ComposerPageTestClient extends HailApiClient {
         is_admin: false,
       },
     };
+  }
+
+  override async getThread(threadId: string): Promise<ThreadViewResponse> {
+    this.getThreadCalls.push(threadId);
+    return this.threadResponse;
   }
 
   override async sendCompose(body: ComposeRequest): Promise<ComposeResponse> {
@@ -128,6 +152,7 @@ interface RenderComposerOptions {
   replyToThreadId?: string;
   initialTo?: string[];
   initialSubject?: string;
+  replyAll?: boolean;
 }
 
 function renderComposer({
@@ -135,6 +160,7 @@ function renderComposer({
   replyToThreadId,
   initialTo,
   initialSubject,
+  replyAll,
 }: RenderComposerOptions = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -158,6 +184,7 @@ function renderComposer({
         <ComposerPage
           client={client}
           replyToThreadId={replyToThreadId}
+          replyAll={replyAll}
           initialTo={initialTo}
           initialSubject={initialSubject}
         />
@@ -390,8 +417,8 @@ describe('ComposerPage', () => {
     });
     await screen.findByText('Reply to thread');
 
-    expect(screen.queryByLabelText('To')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Subject')).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('To')).toHaveValue('alice@example.com');
+    expect(screen.getByLabelText('Subject')).toHaveValue('Re: Launch plan');
     expect(screen.queryByRole('button', { name: 'Save draft' })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Cc'), {
@@ -411,6 +438,52 @@ describe('ComposerPage', () => {
       },
     });
     expect(await screen.findByText('Sent.')).toBeInTheDocument();
+  });
+
+  it('prefills reply-all recipients and quoted body while excluding the current user', async () => {
+    const client = new ComposerPageTestClient();
+    client.threadResponse = {
+      thread_id: 'thread-456',
+      subject: 'Re: Existing subject',
+      participants: [],
+      notes: [],
+      messages: [
+        {
+          email_id: 'email-2',
+          from: [{ email: 'bob@example.com', name: 'Bob Sender' }],
+          to: [
+            { email: 'composer@example.com', name: 'Composer' },
+            { email: 'team@example.com', name: 'Team' },
+            { email: 'bob@example.com', name: 'Bob Sender' },
+          ],
+          cc: [
+            { email: 'carol@example.com', name: 'Carol' },
+            { email: 'composer@example.com', name: 'Composer' },
+          ],
+          html: '<p>Line one</p>',
+          preview: 'Line one\nLine two',
+          received_at: '2026-05-25T13:45:00Z',
+          blocked_trackers: [],
+        },
+      ],
+    } as unknown as ThreadViewResponse;
+
+    renderComposer({ client, replyToThreadId: 'thread-456', replyAll: true });
+
+    expect(await screen.findByLabelText('To')).toHaveValue('bob@example.com, team@example.com');
+    expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
+    expect(screen.getByLabelText('Subject')).toHaveValue('Re: Existing subject');
+    const body = screen.getByLabelText('Body') as HTMLTextAreaElement;
+    expect(body.value).toContain('Bob Sender wrote:');
+    expect(body.value).toContain('> Line one\n> Line two');
+    expect(client.getThreadCalls).toEqual(['thread-456']);
+  });
+
+  it('shows a loading state while fetching reply prefill data', async () => {
+    renderComposer({ replyToThreadId: 'thread-123' });
+
+    expect(screen.getByText('Loading reply details…')).toBeInTheDocument();
+    expect(((await screen.findByLabelText('Body')) as HTMLTextAreaElement).value).toContain('> Can you review this?');
   });
 
   it('shows send mutation error messages from API failures', async () => {

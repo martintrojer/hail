@@ -379,7 +379,8 @@ function DraftsRoutePage() {
 }
 
 function ComposePage() {
-  return <ComposerPage />;
+  const { replyTo, replyAll } = composeRoute.useSearch();
+  return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} />;
 }
 
 function ThreadReplyPage({ threadId }: { threadId: string }) {
@@ -526,10 +527,29 @@ const searchRoute = createRoute({
   component: SearchPage,
 });
 
+interface ComposeSearch {
+  replyTo?: string;
+  replyAll?: boolean;
+  draft?: string;
+  forward?: string;
+}
+
 const composeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/compose',
   beforeLoad: requireAuth,
+  validateSearch: (search: Record<string, unknown>): ComposeSearch => ({
+    replyTo: typeof search.replyTo === 'string' && search.replyTo.length > 0
+      ? search.replyTo
+      : undefined,
+    replyAll: search.replyAll === '1' || search.replyAll === 'true' || search.replyAll === true,
+    draft: typeof search.draft === 'string' && search.draft.length > 0
+      ? search.draft
+      : undefined,
+    forward: typeof search.forward === 'string' && search.forward.length > 0
+      ? search.forward
+      : undefined,
+  }),
   component: ComposePage,
 });
 
