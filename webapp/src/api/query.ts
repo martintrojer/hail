@@ -10,6 +10,7 @@ import {
   type AddAdminDomainRequest,
   type AdminDomainResponse,
   type AdminDomainsResponse,
+  type AdminStatsResponse,
   type AdminUsersResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
@@ -102,6 +103,17 @@ export function useAdminUsers(
   return useQuery({
     queryKey: queryKeys.adminUsers(),
     queryFn: () => client.listAdminUsers(),
+    ...options,
+  });
+}
+
+export function useAdminStats(
+  client = defaultApiClient,
+  options?: QueryConfig<AdminStatsResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.adminStats(),
+    queryFn: () => client.getAdminStats(),
     ...options,
   });
 }
