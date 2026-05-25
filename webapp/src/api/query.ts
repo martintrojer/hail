@@ -243,6 +243,17 @@ export function usePapertrailView(
   });
 }
 
+export function useDraftsView(
+  client = defaultApiClient,
+  options?: QueryConfig<MailViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('drafts'),
+    queryFn: () => client.getDrafts(),
+    ...options,
+  });
+}
+
 export function useSearch(
   params: SearchParams,
   client = defaultApiClient,
@@ -566,5 +577,21 @@ export function useUpdateDraftMutation(
   return useMutation({
     mutationFn: ({ draftId, request }) => client.updateDraft(draftId, request),
     ...options,
+  });
+}
+
+export function useDeleteDraftMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<string, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (draftId) => client.deleteDraft(draftId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.view('drafts') });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
 }

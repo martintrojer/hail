@@ -164,6 +164,9 @@ fn item(n: i64, classification: MailClassification) -> MailViewItem {
         thread_id: format!("thread-{n}"),
         email_id: format!("email-{n}"),
         from: format!("Sender {n} <sender{n}@example.org>"),
+        to: vec![format!("Recipient {n} <recipient{n}@example.org>")],
+        cc: Vec::new(),
+        bcc: Vec::new(),
         subject: format!("Subject {n}"),
         preview: format!("Preview {n}"),
         received_at: Some(
@@ -208,6 +211,12 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
             MailClassification::Papertrail,
             "papertrail",
         ),
+        (
+            "/api/views/drafts",
+            MailView::Drafts,
+            MailClassification::Drafts,
+            "drafts",
+        ),
     ];
 
     for (path, expected_view, classification, expected_json) in cases {
@@ -224,6 +233,7 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
     assert_eq!(MailView::Imbox.keyword(), "$hail_imbox");
     assert_eq!(MailView::Feed.keyword(), "$hail_feed");
     assert_eq!(MailView::Papertrail.keyword(), "$hail_papertrail");
+    assert_eq!(MailView::Drafts.keyword(), "$draft");
 }
 
 #[tokio::test]

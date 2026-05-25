@@ -2,7 +2,8 @@
 //!
 //! Imbox, Feed, and Paper Trail are sourced from Stalwart/JMAP by querying
 //! hail-owned classification keywords (`$hail_imbox`, `$hail_feed`,
-//! `$hail_papertrail`). Unified search combines JMAP mail text search with
+//! `$hail_papertrail`). Drafts are sourced from the user's JMAP Drafts mailbox
+//! or `$draft` keyword. Unified search combines JMAP mail text search with
 //! hail-owned contact notes stored in SQLite.
 //! `cursor` is accepted for API compatibility but intentionally ignored for v1;
 //! responses always return `next_cursor: null`.
@@ -73,11 +74,15 @@ impl MailViewProvider for JmapMailViewProvider {
                 .map_err(|err| MailViewError::provider(err.to_string()))?;
 
             let mut request = session.client().build();
+            let mut filter = Filter::from(email_query::Filter::has_keyword(view.keyword()));
+            if view == MailView::Drafts {
+                if let Some(drafts_mailbox_id) = drafts_mailbox_id(&session).await? {
+                    filter = Filter::from(email_query::Filter::in_mailbox(drafts_mailbox_id));
+                }
+            }
             request
                 .query_email()
-                .filter(Filter::from(email_query::Filter::has_keyword(
-                    view.keyword(),
-                )))
+                .filter(filter)
                 .sort([email_query::Comparator::received_at().descending()])
                 .limit(limit);
             let mut query = request
@@ -93,6 +98,9 @@ impl MailViewProvider for JmapMailViewProvider {
                 Property::Id,
                 Property::ThreadId,
                 Property::From,
+                Property::To,
+                Property::Cc,
+                Property::Bcc,
                 Property::Subject,
                 Property::Preview,
                 Property::ReceivedAt,
@@ -119,6 +127,9 @@ impl MailViewProvider for JmapMailViewProvider {
                         thread_id,
                         email_id,
                         from: format_from(email.from()),
+                        to: format_addresses(email.to()),
+                        cc: format_addresses(email.cc()),
+                        bcc: format_addresses(email.bcc()),
                         subject: email.subject().unwrap_or_default().to_string(),
                         preview: email.preview().unwrap_or_default().to_string(),
                         received_at: email
@@ -310,7 +321,10 @@ where
     P: MailViewProvider,
     S: SearchProvider,
 {
-    Router::from(openapi_router_with_providers(mail_provider, search_provider))
+    Router::from(openapi_router_with_providers(
+        mail_provider,
+        search_provider,
+    ))
 }
 
 fn openapi_router_with_providers<P, S>(
@@ -326,7 +340,8 @@ where
     OpenApiRouter::new()
         .routes(routes!(get_imbox).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
-        .routes(routes!(get_papertrail).layer(Extension(mail_provider)))
+        .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_drafts).layer(Extension(mail_provider)))
         .routes(routes!(get_search).layer(Extension(search_provider)))
 }
 
@@ -349,6 +364,7 @@ pub enum MailView {
     Imbox,
     Feed,
     Papertrail,
+    Drafts,
 }
 
 impl MailView {
@@ -357,6 +373,7 @@ impl MailView {
             Self::Imbox => "$hail_imbox",
             Self::Feed => "$hail_feed",
             Self::Papertrail => "$hail_papertrail",
+            Self::Drafts => "$draft",
         }
     }
 
@@ -365,6 +382,7 @@ impl MailView {
             Self::Imbox => MailClassification::Imbox,
             Self::Feed => MailClassification::Feed,
             Self::Papertrail => MailClassification::Papertrail,
+            Self::Drafts => MailClassification::Drafts,
         }
     }
 }
@@ -375,6 +393,7 @@ pub enum MailClassification {
     Imbox,
     Feed,
     Papertrail,
+    Drafts,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -382,6 +401,9 @@ pub struct MailViewItem {
     pub thread_id: String,
     pub email_id: String,
     pub from: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
     pub subject: String,
     pub preview: String,
     #[schema(value_type = Option<String>, format = DateTime)]
@@ -505,8 +527,7 @@ async fn get_imbox(
     Extension(user): Extension<AuthUser>,
     Extension(provider): Extension<Arc<dyn MailViewProvider>>,
     Query(query): Query<ViewQuery>,
-) -> Response
-{
+) -> Response {
     get_view(state, user, provider, query, MailView::Imbox).await
 }
 
@@ -526,8 +547,7 @@ async fn get_feed(
     Extension(user): Extension<AuthUser>,
     Extension(provider): Extension<Arc<dyn MailViewProvider>>,
     Query(query): Query<ViewQuery>,
-) -> Response
-{
+) -> Response {
     get_view(state, user, provider, query, MailView::Feed).await
 }
 
@@ -547,9 +567,28 @@ async fn get_papertrail(
     Extension(user): Extension<AuthUser>,
     Extension(provider): Extension<Arc<dyn MailViewProvider>>,
     Query(query): Query<ViewQuery>,
-) -> Response
-{
+) -> Response {
     get_view(state, user, provider, query, MailView::Papertrail).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/drafts",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Drafts mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_drafts(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+    Query(query): Query<ViewQuery>,
+) -> Response {
+    get_view(state, user, provider, query, MailView::Drafts).await
 }
 
 #[utoipa::path(
@@ -569,8 +608,7 @@ async fn get_search(
     Extension(user): Extension<AuthUser>,
     Extension(provider): Extension<Arc<dyn SearchProvider>>,
     Query(query): Query<SearchQuery>,
-) -> Response
-{
+) -> Response {
     let q = match query.q.as_deref().map(str::trim) {
         Some(q) if q.chars().count() >= 2 => q,
         _ => return bad_request("q_min_length"),
@@ -664,8 +702,7 @@ async fn get_view(
     provider: Arc<dyn MailViewProvider>,
     query: ViewQuery,
     view: MailView,
-) -> Response
-{
+) -> Response {
     // TODO(cursor): implement opaque JMAP anchor/queryState pagination. v1 only
     // accepts and ignores the cursor parameter, returning `next_cursor: null`.
     let _cursor = query.cursor.as_deref();
@@ -691,11 +728,36 @@ async fn get_view(
 
 fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {
     from.and_then(|addresses| addresses.first())
-        .map(|address| match address.name() {
-            Some(name) if !name.is_empty() => format!("{} <{}>", name, address.email()),
-            _ => address.email().to_string(),
-        })
+        .map(format_address)
         .unwrap_or_default()
+}
+
+fn format_addresses(
+    addresses: Option<&[hail_jmap::jmap_client::email::EmailAddress]>,
+) -> Vec<String> {
+    addresses
+        .unwrap_or_default()
+        .iter()
+        .map(format_address)
+        .collect()
+}
+
+fn format_address(address: &hail_jmap::jmap_client::email::EmailAddress) -> String {
+    match address.name() {
+        Some(name) if !name.is_empty() => format!("{} <{}>", name, address.email()),
+        _ => address.email().to_string(),
+    }
+}
+
+async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String>, MailViewError> {
+    use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
+
+    let mut response = session
+        .client()
+        .mailbox_query(Some(Filter::role(Role::Drafts)), None::<Vec<_>>)
+        .await
+        .map_err(|err| MailViewError::provider(err.to_string()))?;
+    Ok(response.take_ids().into_iter().next())
 }
 
 fn bad_request(error: &'static str) -> Response {

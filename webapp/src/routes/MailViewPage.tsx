@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   HailApiError,
   type HailApiClient,
-  type MailClassification,
+
   type MailViewItem,
   type MailViewKind,
 } from '../api/client';
@@ -96,8 +96,8 @@ function formatDate(value: string | null | undefined) {
   }).format(date);
 }
 
-function classificationLabel(classification: MailViewItem['classification']) {
-  return viewLabels[classification];
+function classificationLabel(classification: string) {
+  return (viewLabels as Record<string, string>)[classification] ?? classification;
 }
 
 function StateCard({ title, body }: { title: string; body: string }) {
@@ -444,7 +444,7 @@ function PowerThroughMode({
   const busy = classify.isPending || setAside.isPending;
   const error = classify.error ?? setAside.error;
 
-  function classifyCurrent(to: MailClassification) {
+  function classifyCurrent(to: MailViewKind) {
     if (!currentItem) {
       return;
     }

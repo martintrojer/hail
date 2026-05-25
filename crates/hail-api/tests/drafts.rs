@@ -144,6 +144,9 @@ enum Call {
         subject: Option<String>,
         body_markdown: Option<String>,
     },
+    Delete {
+        draft_id: String,
+    },
 }
 
 #[derive(Default)]
@@ -211,6 +214,23 @@ impl DraftStore for FakeDraftStore {
                 bcc: draft.bcc,
                 subject: draft.subject,
                 body_markdown: draft.body_markdown,
+            });
+            Ok(())
+        })
+    }
+
+    fn delete<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.should_fail() {
+                return Err(DraftStoreError::Provider("boom".to_string()));
+            }
+            self.calls.lock().expect("calls mutex").push(Call::Delete {
+                draft_id: draft_id.to_string(),
             });
             Ok(())
         })
@@ -397,7 +417,6 @@ async fn create_draft_accepts_empty_send_fields() {
         }]
     );
 }
-
 
 #[tokio::test]
 async fn update_draft_calls_store_and_returns_id() {
@@ -780,4 +799,41 @@ async fn provider_error_returns_500() {
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = json_body(resp).await;
     assert_eq!(body["error"], "internal");
+}
+
+#[tokio::test]
+async fn delete_draft_requires_csrf_and_deletes_by_id() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "delete-draft@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state.clone(),
+        store.clone(),
+        Method::DELETE,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::DELETE,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Delete {
+            draft_id: "draft-1".to_string()
+        }]
+    );
 }
