@@ -300,14 +300,6 @@ export function AppShell({
             >
               <Search {...iconSizeProps.lg} />
             </Link>
-            <Link
-              to="/screener"
-              aria-label="The Screener"
-              className="relative rounded-full p-2 text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
-            >
-              <UserPlus {...iconSizeProps.lg} />
-              <span className="sr-only">Screener</span>
-            </Link>
             <div
               className="grid h-9 w-9 place-items-center rounded-full bg-bg-selected text-sm font-semibold text-ink-primary"
               title={user?.email ?? undefined}
