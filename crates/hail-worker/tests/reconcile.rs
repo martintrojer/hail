@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
 use hail_test::{TempDb, fresh_db_url};
@@ -18,12 +18,12 @@ mod jmap_helpers;
 #[path = "../src/reconcile.rs"]
 mod reconcile;
 
-use reconcile::{ReconcileReport, ThreadVerifier, process_reconciliation};
+use reconcile::{ReconcileReport, ThreadVerifier, VerificationOutcome, process_reconciliation};
 
 #[derive(Debug, Default)]
 struct FakeThreadVerifier {
     existing_by_user: HashMap<i64, HashSet<String>>,
-    fail_by_user: HashMap<i64, &'static str>,
+    unverifiable_by_user: HashMap<i64, &'static str>,
 }
 
 impl FakeThreadVerifier {
@@ -34,24 +34,29 @@ impl FakeThreadVerifier {
     }
 
     fn with_failure(mut self, user_id: i64, message: &'static str) -> Self {
-        self.fail_by_user.insert(user_id, message);
+        self.unverifiable_by_user.insert(user_id, message);
         self
     }
 }
 
 #[async_trait]
 impl ThreadVerifier for FakeThreadVerifier {
-    async fn existing_threads(&self, user_id: i64, ids: &[String]) -> Result<HashSet<String>> {
-        if let Some(message) = self.fail_by_user.get(&user_id) {
-            return Err(anyhow!(*message));
+    async fn existing_threads(
+        &self,
+        user_id: i64,
+        ids: &[String],
+    ) -> Result<VerificationOutcome> {
+        if let Some(message) = self.unverifiable_by_user.get(&user_id) {
+            return Ok(VerificationOutcome::Unverifiable((*message).to_string()));
         }
 
         let allowed = self.existing_by_user.get(&user_id);
-        Ok(ids
-            .iter()
-            .filter(|id| allowed.is_some_and(|set| set.contains(*id)))
-            .cloned()
-            .collect())
+        Ok(VerificationOutcome::Verified(
+            ids.iter()
+                .filter(|id| allowed.is_some_and(|set| set.contains(*id)))
+                .cloned()
+                .collect(),
+        ))
     }
 }
 
@@ -159,6 +164,7 @@ async fn stack_positions_orphan_removed_existing_kept() {
         report,
         ReconcileReport {
             users_checked: 1,
+            users_unverifiable: 0,
             thread_ids_checked: 2,
             stack_positions_checked: 2,
             stack_positions_deleted: 1,
@@ -225,7 +231,7 @@ async fn wrong_user_isolation() {
 }
 
 #[tokio::test]
-async fn verifier_error_leaves_all_sidecar_refs_untouched() {
+async fn unverifiable_user_is_skipped_without_deleting_that_users_refs() {
     let (pool, _guard, alice, bob) = setup_db().await;
     insert_stack(&pool, alice, "reply_later", "alice-stack-missing", 1).await;
     insert_bubble(&pool, alice, "alice-bubble-missing", None).await;
@@ -238,32 +244,21 @@ async fn verifier_error_leaves_all_sidecar_refs_untouched() {
         .with_existing(alice, &[])
         .with_failure(bob, "synthetic JMAP verifier failure");
 
-    let err = process_reconciliation(&pool, &verifier, Utc::now())
+    let report = process_reconciliation(&pool, &verifier, Utc::now())
         .await
-        .expect_err("reconcile should fail on verifier error");
-    let err = format!("{err:#}");
+        .expect("reconcile should skip unverifiable users");
 
-    assert!(
-        err.contains(&format!("verify JMAP threads for user {bob}")),
-        "error should include user context, got: {err}"
-    );
-    assert!(
-        err.contains("synthetic JMAP verifier failure"),
-        "error should preserve verifier source, got: {err}"
-    );
-    assert_eq!(
-        stack_threads(&pool, alice).await,
-        vec!["alice-stack-missing"]
-    );
-    assert_eq!(
-        pending_bubble_threads(&pool, alice).await,
-        vec!["alice-bubble-missing"]
-    );
+    assert_eq!(stack_threads(&pool, alice).await, Vec::<String>::new());
+    assert_eq!(pending_bubble_threads(&pool, alice).await, Vec::<String>::new());
     assert_eq!(stack_threads(&pool, bob).await, vec!["bob-stack-unchecked"]);
     assert_eq!(
         pending_bubble_threads(&pool, bob).await,
         vec!["bob-bubble-unchecked"]
     );
+    assert_eq!(report.users_checked, 2);
+    assert_eq!(report.users_unverifiable, 1);
+    assert_eq!(report.stack_positions_deleted, 1);
+    assert_eq!(report.bubble_ups_deleted, 1);
 }
 
 #[tokio::test]

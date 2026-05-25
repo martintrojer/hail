@@ -107,7 +107,7 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
         Box::pin(async move {
             let base = management_base(state)?;
             let response = reqwest::Client::new()
-                .delete(format!("{}/api/principal/{}", base, email))
+                .delete(management_path(&base, &["api", "principal", email]))
                 .send()
                 .await
                 .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
@@ -460,6 +460,17 @@ fn management_base(state: &AppState) -> Result<String, UserManagementError> {
         .ok_or(UserManagementError::NotConfigured)
 }
 
+fn management_path(base: &str, segments: &[&str]) -> String {
+    let mut url = base.trim_end_matches('/').to_string();
+    for segment in segments {
+        url.push('/');
+        url.push_str(
+            &url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>(),
+        );
+    }
+    url
+}
+
 async fn create_or_update_principal(
     base: &str,
     email: &str,
@@ -620,5 +631,22 @@ fn management_error(err: UserManagementError) -> Response {
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn management_path_percent_encodes_email_path_segment() {
+        let url = management_path(
+            "http://stalwart.local/",
+            &["api", "principal", "User+tag@example.org"],
+        );
+        assert_eq!(
+            url,
+            "http://stalwart.local/api/principal/User%2Btag%40example.org"
+        );
     }
 }
