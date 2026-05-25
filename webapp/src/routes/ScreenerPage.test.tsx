@@ -1,12 +1,5 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -14,16 +7,20 @@ import type {
   ScreenerDecisionRequest,
   ScreenerDecisionResponse,
   ScreenerView,
-  UserEnvelope,
 } from '../api/client';
-import { HailApiClient, HailApiError } from '../api/client';
-import { queryKeys } from '../api/queryKeys';
+import { HailApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+  seedMe,
+  TestHailApiClient,
+} from '../test-utils';
 import { ScreenerPage } from './ScreenerPage';
 
-class ScreenerPageTestClient extends HailApiClient {
+class ScreenerPageTestClient extends TestHailApiClient {
   readonly decideScreenerCalls: ScreenerDecisionRequest[] = [];
   readonly undoDenyCalls: string[] = [];
   private viewPromise: Promise<ScreenerView>;
@@ -47,7 +44,14 @@ class ScreenerPageTestClient extends HailApiClient {
       body: ScreenerDecisionRequest,
     ) => Promise<ScreenerDecisionResponse>;
   } = {}) {
-    super({ baseUrl: 'http://localhost' });
+    super({
+      user: {
+        id: 1,
+        email: 'screener@example.com',
+        display_name: 'Screener',
+        is_admin: false,
+      },
+    });
     this.viewPromise = viewPromise ?? Promise.resolve(view);
     this.deniedPromise = deniedPromise ?? Promise.resolve(denied);
     this.decisionHandler =
@@ -63,17 +67,6 @@ class ScreenerPageTestClient extends HailApiClient {
               ? body.classify_as
               : null,
         }));
-  }
-
-  override async me(): Promise<UserEnvelope> {
-    return {
-      user: {
-        id: 1,
-        email: 'screener@example.com',
-        display_name: 'Screener',
-        is_admin: false,
-      },
-    };
   }
 
   override async getScreenerView(): Promise<ScreenerView> {
@@ -129,21 +122,9 @@ function installTestRouteComponent() {
 }
 
 function renderScreener(client = new ScreenerPageTestClient()) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
+  const queryClient = createTestQueryClient();
 
-  queryClient.setQueryData(queryKeys.me(), {
-    user: {
-      id: 1,
-      email: 'screener@example.com',
-      display_name: 'Screener',
-      is_admin: false,
-    },
-  } satisfies UserEnvelope);
+  seedMe(queryClient, client.testUser);
 
   currentTestBody = (
     <AuthProvider>
@@ -155,16 +136,14 @@ function renderScreener(client = new ScreenerPageTestClient()) {
   installTestRouteComponent();
   window.history.pushState({}, '', '/screener');
 
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
+  renderWithQueryClient(<RouterProvider router={router} />, queryClient);
 
   return client;
 }
 
-function sampleScreenerView(overrides: Partial<ScreenerView> = {}): ScreenerView {
+function sampleScreenerView(
+  overrides: Partial<ScreenerView> = {},
+): ScreenerView {
   return {
     senders: [
       {
@@ -231,12 +210,13 @@ describe('ScreenerPage', () => {
     expect(await screen.findByText('Newsletter dispatch')).toBeInTheDocument();
     expect(screen.queryByText('Earlier dispatch')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Show · 3 pending emails/i }));
-
-    expect(screen.getByRole('button', { name: /Hide · 3 pending emails/i })).toHaveAttribute(
-      'aria-expanded',
-      'true',
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show · 3 pending emails/i }),
     );
+
+    expect(
+      screen.getByRole('button', { name: /Hide · 3 pending emails/i }),
+    ).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Earlier dispatch')).toBeInTheDocument();
     expect(screen.getByText('Earlier newsletter issue.')).toBeInTheDocument();
     expect(screen.getByText('May 22, 2026')).toBeInTheDocument();
@@ -283,10 +263,9 @@ describe('ScreenerPage', () => {
   it('shows denied senders after expanding and can undo a denied sender', async () => {
     const client = renderScreener();
 
-    expect(screen.getByRole('button', { name: /Previously denied/i })).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
+    expect(
+      screen.getByRole('button', { name: /Previously denied/i }),
+    ).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText('blocked@example.com')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Previously denied/i }));
@@ -296,7 +275,9 @@ describe('ScreenerPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
 
-    await waitFor(() => expect(client.undoDenyCalls).toEqual(['blocked@example.com']));
+    await waitFor(() =>
+      expect(client.undoDenyCalls).toEqual(['blocked@example.com']),
+    );
     expect(
       await screen.findByText('Restored blocked@example.com to the Screener.'),
     ).toBeInTheDocument();
@@ -308,7 +289,9 @@ describe('ScreenerPage', () => {
       new ScreenerPageTestClient({ viewPromise: neverResolves }),
     );
 
-    expect(screen.getByLabelText('Loading pending senders')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Loading pending senders'),
+    ).toBeInTheDocument();
     expect(pendingClient.decideScreenerCalls).toEqual([]);
     cleanup();
     restoreRoute();
@@ -322,17 +305,23 @@ describe('ScreenerPage', () => {
       await screen.findByText('Something went wrong.'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('Your session expired. Sign in again to refresh the Screener.'),
+      screen.getByText(
+        'Your session expired. Sign in again to refresh the Screener.',
+      ),
     ).toBeInTheDocument();
     cleanup();
     restoreRoute();
 
-    renderScreener(new ScreenerPageTestClient({ view: sampleScreenerView({ senders: [] }) }));
+    renderScreener(
+      new ScreenerPageTestClient({ view: sampleScreenerView({ senders: [] }) }),
+    );
     expect(await screen.findByText('No unknown senders')).toBeInTheDocument();
   });
 
   it('disables card controls while a decision is pending', async () => {
-    const decisionPromise = new Promise<ScreenerDecisionResponse>(() => undefined);
+    const decisionPromise = new Promise<ScreenerDecisionResponse>(
+      () => undefined,
+    );
     const client = renderScreener(
       new ScreenerPageTestClient({
         decisionHandler: () => decisionPromise,
@@ -361,7 +350,9 @@ describe('ScreenerPage', () => {
       await screen.findByRole('alert', {
         name: '',
       }),
-    ).toHaveTextContent('The server rejected this decision. Refresh and try again.');
+    ).toHaveTextContent(
+      'The server rejected this decision. Refresh and try again.',
+    );
     expect(client.decideScreenerCalls[0]).toMatchObject({
       classify_as: 'papertrail',
       apply_to_history: true,
@@ -386,7 +377,9 @@ describe('ScreenerPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
 
-    expect(await screen.findByText('Denied newsletter@example.com.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Denied newsletter@example.com.'),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
     expect(client.decideScreenerCalls).toHaveLength(1);
   });

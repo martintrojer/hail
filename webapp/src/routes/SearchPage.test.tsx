@@ -1,31 +1,19 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SearchResponse, UserEnvelope } from '../api/client';
-import { HailApiClient } from '../api/client';
-import { queryKeys } from '../api/queryKeys';
+import type { SearchResponse } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
 import { router } from '../router';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+  seedMe,
+  TestHailApiClient,
+} from '../test-utils';
 import { SearchPage } from './SearchPage';
 
-class SearchPageTestClient extends HailApiClient {
-  constructor() {
-    super({ baseUrl: 'http://localhost' });
-  }
-
-  override async me(): Promise<UserEnvelope> {
-    return {
-      user: {
-        id: 1,
-        email: 'reader@example.com',
-        display_name: 'Reader',
-        is_admin: false,
-      },
-    };
-  }
-
+class SearchPageTestClient extends TestHailApiClient {
   override async search(): Promise<SearchResponse> {
     return { results: [] };
   }
@@ -59,21 +47,9 @@ function installTestRouteComponent() {
 }
 
 function renderSearchPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
+  const queryClient = createTestQueryClient();
 
-  queryClient.setQueryData(queryKeys.me(), {
-    user: {
-      id: 1,
-      email: 'reader@example.com',
-      display_name: 'Reader',
-      is_admin: false,
-    },
-  } satisfies UserEnvelope);
+  seedMe(queryClient);
 
   currentTestBody = (
     <AuthProvider>
@@ -83,10 +59,12 @@ function renderSearchPage() {
   installTestRouteComponent();
   window.history.pushState({}, '', '/search');
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} context={{ client: new SearchPageTestClient() }} />
-    </QueryClientProvider>,
+  return renderWithQueryClient(
+    <RouterProvider
+      router={router}
+      context={{ client: new SearchPageTestClient() }}
+    />,
+    queryClient,
   );
 }
 
@@ -96,10 +74,20 @@ describe('SearchPage', () => {
 
     const scope = await screen.findByLabelText('Scope');
     expect(scope).toHaveValue('all');
-    expect(within(scope).getByRole('option', { name: 'All' })).toBeInTheDocument();
-    expect(within(scope).getByRole('option', { name: 'Mail' })).toBeInTheDocument();
-    expect(within(scope).getByRole('option', { name: 'Notes' })).toBeInTheDocument();
-    expect(within(scope).queryByRole('option', { name: 'Clips' })).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search mail and notes')).toBeInTheDocument();
+    expect(
+      within(scope).getByRole('option', { name: 'All' }),
+    ).toBeInTheDocument();
+    expect(
+      within(scope).getByRole('option', { name: 'Mail' }),
+    ).toBeInTheDocument();
+    expect(
+      within(scope).getByRole('option', { name: 'Notes' }),
+    ).toBeInTheDocument();
+    expect(
+      within(scope).queryByRole('option', { name: 'Clips' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText('Search mail and notes'),
+    ).toBeInTheDocument();
   });
 });

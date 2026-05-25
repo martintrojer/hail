@@ -24,7 +24,9 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id, required_drafts_mailbox_id};
+use crate::routes::jmap_helpers::{
+    jmap_session, looks_like_jmap_id, provider_error, required_drafts_mailbox_id,
+};
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
@@ -78,7 +80,7 @@ impl DraftStore for JmapDraftStore {
         draft: DraftCreate,
     ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let drafts_mailbox_id = required_drafts_mailbox_id(&session)
                 .await
                 .map_err(provider_error)?;
@@ -125,7 +127,7 @@ impl DraftStore for JmapDraftStore {
     ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let mut request = session.client().build();
             let get_email = request.get_email();
             get_email.ids([draft_id]).properties([
@@ -174,7 +176,7 @@ impl DraftStore for JmapDraftStore {
         draft: DraftUpdate,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let mut request = session.client().build();
             let email = request.set_email().update(draft_id);
 
@@ -207,7 +209,7 @@ impl DraftStore for JmapDraftStore {
         draft_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             session
                 .client()
                 .email_destroy(draft_id)
@@ -220,6 +222,12 @@ impl DraftStore for JmapDraftStore {
 #[derive(Debug)]
 pub enum DraftStoreError {
     Provider(String),
+}
+
+impl crate::routes::jmap_helpers::ProviderError for DraftStoreError {
+    fn provider(message: String) -> Self {
+        Self::Provider(message)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -572,13 +580,6 @@ fn looks_like_email(address: &str) -> bool {
         && !domain.contains("..")
 }
 
-async fn login(
-    state: &AppState,
-    token: SecretString,
-) -> Result<hail_jmap::Session, DraftStoreError> {
-    jmap_session(state, token).await.map_err(provider_error)
-}
-
 fn set_text_body(
     email: &mut hail_jmap::jmap_client::email::Email<hail_jmap::jmap_client::Set>,
     body: String,
@@ -621,10 +622,6 @@ fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String 
         body.push_str(value.value());
     }
     body
-}
-
-fn provider_error(err: impl std::fmt::Display) -> DraftStoreError {
-    DraftStoreError::Provider(err.to_string())
 }
 
 fn provider_failed(user_id: i64, err: String) -> Response {

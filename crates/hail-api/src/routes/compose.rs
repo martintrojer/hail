@@ -20,7 +20,7 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::{AuthSession, AuthUser};
-use crate::routes::jmap_helpers::{jmap_session, required_drafts_mailbox_id};
+use crate::routes::jmap_helpers::{jmap_session, provider_error, required_drafts_mailbox_id};
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
@@ -67,7 +67,7 @@ impl Composer for JmapComposer {
         message: OutboundMessage,
     ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let drafts_mailbox_id = required_drafts_mailbox_id(&session)
                 .await
                 .map_err(provider_error)?;
@@ -120,7 +120,7 @@ impl Composer for JmapComposer {
         email_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let identity_id = identity_id_for(&session, from).await?;
             let mut request = session.client().build();
             let create_id = request
@@ -149,7 +149,7 @@ impl Composer for JmapComposer {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReplyContext>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             use hail_jmap::jmap_client::core::query::Filter;
             use hail_jmap::jmap_client::email::query as email_query;
 
@@ -252,6 +252,12 @@ pub struct ReplyContext {
 #[derive(Debug)]
 pub enum ComposeError {
     Provider(String),
+}
+
+impl crate::routes::jmap_helpers::ProviderError for ComposeError {
+    fn provider(message: String) -> Self {
+        Self::Provider(message)
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -906,10 +912,6 @@ fn scheduled_send_response_from_row(
     }
 }
 
-async fn login(state: &AppState, token: SecretString) -> Result<hail_jmap::Session, ComposeError> {
-    jmap_session(state, token).await.map_err(provider_error)
-}
-
 async fn identity_id_for(session: &hail_jmap::Session, from: &str) -> Result<String, ComposeError> {
     let mut request = session.client().build();
     request.get_identity().properties([
@@ -951,10 +953,6 @@ fn set_body_values(
         )
         .body_value("text".to_string(), body.plain_text.clone())
         .body_value("html".to_string(), body.html.clone());
-}
-
-fn provider_error(err: impl std::fmt::Display) -> ComposeError {
-    ComposeError::Provider(err.to_string())
 }
 
 fn provider_failed(user_id: i64, err: String) -> Response {
