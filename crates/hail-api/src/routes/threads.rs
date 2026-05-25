@@ -164,7 +164,16 @@ impl ThreadActions for JmapThreadActions {
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            for email_id in email_ids_in_thread(&session, thread_id).await? {
+            let email_ids = email_ids_in_thread(&session, thread_id).await?;
+            let inbox_id = hail_jmap::mailbox_id_by_role(
+                &session,
+                hail_jmap::jmap_client::mailbox::Role::Inbox,
+            )
+            .await
+            .map_err(provider_error)?
+            .ok_or_else(|| ThreadActionError::Provider("inbox mailbox not found".to_string()))?;
+
+            for email_id in email_ids {
                 for candidate in Classification::ALL {
                     session
                         .client()
@@ -176,6 +185,11 @@ impl ThreadActions for JmapThreadActions {
                         .await
                         .map_err(provider_error)?;
                 }
+                session
+                    .client()
+                    .email_set_mailboxes(&email_id, [inbox_id.clone()])
+                    .await
+                    .map_err(provider_error)?;
             }
             Ok(())
         })
@@ -817,7 +831,12 @@ async fn trash_thread(
             // Remove classification keywords so thread leaves Imbox/Feed/Paper Trail.
             for classification in Classification::ALL {
                 if let Err(err) = actions
-                    .remove_keyword(&state, user.jmap_token.clone(), &thread_id, classification.keyword())
+                    .remove_keyword(
+                        &state,
+                        user.jmap_token.clone(),
+                        &thread_id,
+                        classification.keyword(),
+                    )
                     .await
                 {
                     tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during trash");
@@ -833,16 +852,19 @@ async fn trash_thread(
                 }
             }
             // Clean up sidecar state.
-            let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await;
-            let _ = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await;
+            let _ =
+                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                    .bind(user.id)
+                    .bind(&thread_id)
+                    .execute(&state.db)
+                    .await;
+            let _ = sqlx::query(
+                "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
+            )
+            .bind(user.id)
+            .bind(&thread_id)
+            .execute(&state.db)
+            .await;
 
             tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
             Json(ThreadVerbResponse { undo: None }).into_response()
