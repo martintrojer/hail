@@ -1,39 +1,11 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
-import { HailApiError } from '../api/client';
 import { useContact, useContactNoteMutation } from '../api/query';
+import { contactErrorMessage, contactNoteMutationErrorMessage } from '../lib/errorMessages';
 import { useUndoToast } from './UndoToastProvider';
 
 interface ContactNotePanelProps {
   address: string;
   displayName?: string | null;
-}
-
-function contactErrorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again to view this note.';
-    }
-    if (error.status === 404) {
-      return 'This contact was not found yet.';
-    }
-    return `Contact note failed with HTTP ${error.status}.`;
-  }
-
-  return 'Contact note failed to load. Refresh and try again.';
-}
-
-function noteMutationErrorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 400 || error.status === 422) {
-      return 'The server rejected this note. Check the markdown and try again.';
-    }
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again before changing this note.';
-    }
-    return `Contact note update failed with HTTP ${error.status}.`;
-  }
-
-  return 'Contact note update failed. Try again.';
 }
 
 function formatUpdatedAt(value: string | null | undefined) {
@@ -216,7 +188,7 @@ export function ContactNotePanel({
               ) : null}
               {noteMutation.isError ? (
                 <p role="alert" className="text-sm text-accent-red">
-                  {noteMutationErrorMessage(noteMutation.error)}
+                  {contactNoteMutationErrorMessage(noteMutation.error)}
                 </p>
               ) : null}
             </form>
