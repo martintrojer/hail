@@ -242,16 +242,6 @@ export function AppShell({
                   ))}
                 </nav>
 
-                <Link
-                  to="/compose"
-                  role="menuitem"
-                  onClick={closeMenu}
-                  className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-accent-blue px-3 py-2.5 hail-chrome font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
-                >
-                  <PenSquare {...iconSizeProps.sm} />
-                  Compose
-                </Link>
-
                 {user?.is_admin ? (
                   <Link
                     to="/admin"
