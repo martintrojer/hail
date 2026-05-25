@@ -232,6 +232,7 @@ async fn screener_view_returns_only_current_user_pending_rows() {
     assert_eq!(senders[0]["sender"], "alice-pending@example.org");
     assert_eq!(senders[0]["message_count"], 1);
     assert!(senders[0]["latest_preview"].is_null());
+    assert!(senders[0]["emails"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

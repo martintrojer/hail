@@ -88,6 +88,23 @@ function previewText(preview: unknown) {
   ]);
 }
 
+function formatPendingEmailDate(value?: string | null) {
+  if (!value) {
+    return 'Date unavailable';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
 function parseSender(sender: string) {
   const trimmed = sender.trim();
   const mailbox = trimmed.match(/^(.*?)\s*<([^>]+)>$/);
@@ -142,6 +159,7 @@ function PendingSenderCard({
 }) {
   const [routingOpen, setRoutingOpen] = useState(false);
   const [routingAnchor, setRoutingAnchor] = useState<DOMRect | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const approveButtonRef = useRef<HTMLButtonElement | null>(null);
   const { showToast } = useUndoToast();
   const decision = useScreenerDecisionMutation(client, {
@@ -163,6 +181,10 @@ function PendingSenderCard({
   const preview =
     previewText(sender.latest_preview) ??
     'Preview unavailable until this message is indexed.';
+  const emails = sender.emails ?? [];
+  const expandedId = `screener-emails-${encodeURIComponent(sender.sender)}`;
+  const pendingEmailCount = sender.message_count ?? emails.length;
+  const emailCountLabel = `${pendingEmailCount} pending ${pendingEmailCount === 1 ? 'email' : 'emails'}`;
 
   function showRoutingDropdown() {
     if (approveButtonRef.current) {
@@ -190,21 +212,68 @@ function PendingSenderCard({
 
   return (
     <article className="rounded-lg bg-bg-surface p-5">
-      <div>
-        <h2 className="hail-sender truncate text-ink-primary">
-          {senderIdentity.name}
-        </h2>
-        <p className="mt-1 truncate text-sm text-ink-secondary">
-          {senderIdentity.email}
-        </p>
-      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        aria-controls={expandedId}
+        className="block w-full rounded-md text-left focus:outline-none focus:ring-2 focus:ring-accent-blue focus:ring-offset-2 focus:ring-offset-bg-surface"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="hail-sender truncate text-ink-primary">
+              {senderIdentity.name}
+            </h2>
+            <p className="mt-1 truncate text-sm text-ink-secondary">
+              {senderIdentity.email}
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary">
+            {expanded ? 'Hide' : 'Show'} · {emailCountLabel}
+          </span>
+        </div>
 
-      <div className="mt-5 space-y-2">
-        <p className="text-[0.95rem] leading-6 text-ink-secondary">{subject}</p>
-        <p className="line-clamp-2 text-sm leading-6 text-ink-tertiary">
-          {preview}
-        </p>
-      </div>
+        <div className="mt-5 space-y-2">
+          <p className="text-[0.95rem] leading-6 text-ink-secondary">{subject}</p>
+          <p className="line-clamp-2 text-sm leading-6 text-ink-tertiary">
+            {preview}
+          </p>
+        </div>
+      </button>
+
+      {expanded ? (
+        <div id={expandedId} className="mt-5 border-t border-border-subtle pt-4">
+          {emails.length === 0 ? (
+            <p className="text-sm text-ink-tertiary">
+              Pending email details are unavailable right now.
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {emails.map((email) => (
+                <li
+                  key={email.email_id}
+                  className="rounded-md border border-border-subtle bg-bg-canvas/50 px-4 py-3"
+                >
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                    <p className="min-w-0 text-sm font-semibold text-ink-primary">
+                      {email.subject || 'No subject'}
+                    </p>
+                    <time
+                      dateTime={email.received_at ?? undefined}
+                      className="shrink-0 text-xs text-ink-tertiary"
+                    >
+                      {formatPendingEmailDate(email.received_at)}
+                    </time>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-tertiary">
+                    {email.preview || 'Preview unavailable.'}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
 
       <div className="mt-5 flex flex-wrap gap-3">
         <button
