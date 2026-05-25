@@ -8,6 +8,7 @@
 //! `cursor` is accepted for API compatibility but intentionally ignored for v1;
 //! responses always return `next_cursor: null`.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -137,6 +138,7 @@ impl MailViewProvider for JmapMailViewProvider {
                             .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
                         unread: !email.keywords().into_iter().any(|kw| kw == "$seen"),
                         classification,
+                        has_notes: false,
                     })
                 })
                 .collect()
@@ -410,6 +412,7 @@ pub struct MailViewItem {
     pub received_at: Option<DateTime<Utc>>,
     pub unread: bool,
     pub classification: MailClassification,
+    pub has_notes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -708,7 +711,7 @@ async fn get_view(
     let _cursor = query.cursor.as_deref();
     let limit = query.normalized_limit();
 
-    let items = match provider
+    let mut items = match provider
         .list(&state, user.jmap_token.clone(), view, limit)
         .await
     {
@@ -719,11 +722,56 @@ async fn get_view(
         }
     };
 
+    if let Err(err) = annotate_note_flags(&state, user.id, &mut items).await {
+        tracing::error!(user_id = user.id, view = ?view, error = %err, "thread note flag lookup failed");
+        return internal();
+    }
+
     Json(MailViewResponse {
         items,
         next_cursor: None,
     })
     .into_response()
+}
+
+async fn annotate_note_flags(
+    state: &AppState,
+    user_id: i64,
+    items: &mut [MailViewItem],
+) -> Result<(), sqlx::Error> {
+    let thread_ids: Vec<String> = items
+        .iter()
+        .map(|item| item.thread_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if thread_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT DISTINCT thread_id FROM thread_notes WHERE user_id = ",
+    );
+    builder.push_bind(user_id);
+    builder.push(" AND thread_id IN (");
+    let mut separated = builder.separated(", ");
+    for thread_id in &thread_ids {
+        separated.push_bind(thread_id);
+    }
+    separated.push_unseparated(")");
+
+    let note_thread_ids: HashSet<String> = builder
+        .build_query_scalar()
+        .fetch_all(&state.db)
+        .await?
+        .into_iter()
+        .collect();
+
+    for item in items {
+        item.has_notes = note_thread_ids.contains(&item.thread_id);
+    }
+
+    Ok(())
 }
 
 fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {

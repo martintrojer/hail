@@ -622,6 +622,7 @@ export interface components {
             classification: components["schemas"]["MailClassification"];
             email_id: string;
             from: string;
+            has_notes: boolean;
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
