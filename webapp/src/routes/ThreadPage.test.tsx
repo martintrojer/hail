@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   BubbleUpRequest,
   BubbleUpResponse,
+  CreateThreadNoteRequest,
   ContactResponse,
   ThreadVerbResponse,
   ThreadViewResponse,
@@ -21,6 +22,7 @@ import { ThreadPage } from './ThreadPage';
 class ThreadPageTestClient extends HailApiClient {
   readonly setAsideCalls: string[] = [];
   readonly replyLaterCalls: string[] = [];
+  readonly createdNotes: Array<{ threadId: string; request: CreateThreadNoteRequest }> = [];
   readonly bubbleUpCalls: Array<{ threadId: string; request: BubbleUpRequest }> = [];
 
   constructor(private readonly thread: ThreadViewResponse) {
@@ -47,6 +49,19 @@ class ThreadPageTestClient extends HailApiClient {
       address,
       note: null,
       threads: [],
+    };
+  }
+
+  override async createThreadNote(
+    threadId: string,
+    request: CreateThreadNoteRequest,
+  ) {
+    this.createdNotes.push({ threadId, request });
+    return {
+      id: 99,
+      email_id: request.email_id,
+      body: request.body,
+      created_at: '2026-05-23T13:00:00Z',
     };
   }
 
@@ -183,6 +198,7 @@ function sampleThread(
         blocked_trackers: [],
       },
     ],
+    notes: [],
     ...overrides,
   };
 }
@@ -229,6 +245,46 @@ describe('ThreadPage', () => {
     expect(
       screen.queryByRole('menu', { name: 'Message actions' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('renders persisted notes from the thread response and saves new notes via API', async () => {
+    const { client } = renderThread(
+      sampleThread({
+        notes: [
+          {
+            id: 7,
+            email_id: 'message-html',
+            body: 'Check expense category.',
+            created_at: '2026-05-23T12:30:00Z',
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText('Check expense category.')).toBeInTheDocument();
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+    fireEvent.click(actionButtons[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a Note' }));
+    fireEvent.change(screen.getByLabelText('Note text'), {
+      target: { value: 'Follow up on plain message.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(client.createdNotes).toEqual([
+        {
+          threadId: 'thread-1',
+          request: {
+            email_id: 'message-plain',
+            body: 'Follow up on plain message.',
+          },
+        },
+      ]);
+    });
+    expect(await screen.findByText('Follow up on plain message.')).toBeInTheDocument();
   });
 
   it('does not crash on empty participants or messages', async () => {

@@ -11,6 +11,7 @@ pub mod compose;
 pub mod contacts;
 pub mod drafts;
 pub mod health;
+pub mod notes;
 pub mod pile;
 pub mod screener;
 pub mod setup;

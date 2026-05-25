@@ -130,6 +130,11 @@ export interface SearchParams {
 export type BlockedTracker = components['schemas']['BlockedTrackerResponse'];
 export type ThreadParticipant = components['schemas']['Participant'];
 export type ThreadMessage = components['schemas']['ThreadMessageResponse'];
+export type ThreadNote = components['schemas']['ThreadNoteResponse'];
+export type ThreadNotesResponse = NonNullable<ResponseBody<
+  paths['/api/threads/{thread_id}/notes']['get']['responses']['200']
+>>;
+export type CreateThreadNoteRequest = components['schemas']['CreateThreadNoteRequest'];
 export type ThreadViewResponse = ThreadGetSuccess;
 
 export type PileItem = components['schemas']['PileItem'];
@@ -381,6 +386,40 @@ export class HailApiClient {
     return this.#json<ThreadViewResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}`),
       200,
+    );
+  }
+
+  async getThreadNotes(threadId: string): Promise<ThreadNotesResponse> {
+    return this.#json<ThreadNotesResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/notes`),
+      200,
+    );
+  }
+
+  async createThreadNote(
+    threadId: string,
+    body: CreateThreadNoteRequest,
+  ): Promise<ThreadNote> {
+    return this.#json<ThreadNote>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/notes`, {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async deleteThreadNote(threadId: string, noteId: number): Promise<void> {
+    await this.#empty(
+      await this.#request(
+        `/api/threads/${encodeURIComponent(threadId)}/notes/${encodeURIComponent(String(noteId))}`,
+        {
+          method: 'DELETE',
+          mutating: true,
+        },
+      ),
+      204,
     );
   }
 

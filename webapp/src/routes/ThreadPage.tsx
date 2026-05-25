@@ -4,6 +4,7 @@ import {
   HailApiClient,
   HailApiError,
   type ThreadMessage,
+  type ThreadNote,
   type ThreadVerbResponse,
   type ThreadViewResponse,
 } from '../api/client';
@@ -32,7 +33,7 @@ interface ThreadPageProps {
 }
 
 interface LocalNote extends InlineNoteProps {
-  id: string;
+  id: number;
   messageId: string;
 }
 
@@ -171,6 +172,28 @@ function sortedMessages(messages: ThreadMessage[]) {
 
     return leftTime - rightTime;
   });
+}
+
+function noteTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function toLocalNote(note: ThreadNote): LocalNote {
+  return {
+    id: note.id,
+    messageId: note.email_id,
+    text: note.body,
+    author: 'You',
+    timestamp: noteTimestamp(note.created_at),
+  };
 }
 
 
@@ -388,7 +411,11 @@ function ThreadDocument({
     messageId: string;
     anchorRect: DOMRect;
   } | null>(null);
-  const [notes, setNotes] = useState<LocalNote[]>([]);
+  const [notes, setNotes] = useState<LocalNote[]>(() => thread.notes.map(toLocalNote));
+
+  useEffect(() => {
+    setNotes(thread.notes.map(toLocalNote));
+  }, [thread.notes]);
 
   function goBack() {
     if (window.history.length > 1) {
@@ -493,17 +520,12 @@ function ThreadDocument({
     }
   }
 
-  function saveNote(messageId: string, text: string) {
-    setNotes((current) => [
-      ...current,
-      {
-        id: `${messageId}-${Date.now()}`,
-        messageId,
-        text,
-        author: 'You',
-        timestamp: 'Just now',
-      },
-    ]);
+  async function saveNote(messageId: string, text: string) {
+    const note = await client.createThreadNote(thread.thread_id, {
+      email_id: messageId,
+      body: text,
+    });
+    setNotes((current) => [...current, toLocalNote(note)]);
     setAddingNoteFor(null);
   }
 
@@ -547,7 +569,9 @@ function ThreadDocument({
                 void handlePopupAction(message, action, payload);
               }}
               onCancelAddNote={() => setAddingNoteFor(null)}
-              onSaveNote={saveNote}
+              onSaveNote={(messageId, text) => {
+                void saveNote(messageId, text);
+              }}
             />
           ))}
         </div>
