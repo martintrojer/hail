@@ -1,12 +1,12 @@
 //! Integration tests for startup/reconnect catch-up behavior.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use hail_test::{TempDb, fresh_db_url};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -126,37 +126,8 @@ impl JmapOps for NoopJmapOps {
     }
 }
 
-static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn fresh_db_url() -> (String, PathBuf) {
-    let mut path = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let pid = std::process::id();
-    let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-    path.push(format!(
-        "hail-worker-catchup-test-{pid}-{nanos}-{counter}.sqlite"
-    ));
-    let url = format!("sqlite://{}", path.display());
-    (url, path)
-}
-
-struct TempDb(PathBuf);
-
-impl Drop for TempDb {
-    fn drop(&mut self) {
-        // Intentionally leave temp DB files behind. Integration tests
-        // bind the pool before the guard, so removing the files here
-        // can race SQLite's pool close under parallel test execution.
-        let _ = &self.0;
-    }
-}
-
 async fn setup_db() -> (SqlitePool, TempDb, i64) {
-    let (url, path) = fresh_db_url();
-    let guard = TempDb(path);
+    let (url, guard) = fresh_db_url("hail-worker-catchup-test");
     let pool = hail_db::connect(&url).await.expect("connect");
     hail_db::migrate(&pool).await.expect("migrate");
 

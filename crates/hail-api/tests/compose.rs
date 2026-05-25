@@ -1,3 +1,4 @@
+use chrono::{DateTime, Duration, Utc};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -5,86 +6,14 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{DateTime, Duration, Utc};
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
-use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::compose::{
     ComposeError, Composer, OutboundMessage, ReplyContext, ReplyHeaders,
 };
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
-use hail_db::connect;
-use http_body_util::BodyExt;
+use hail_test::{fixture_state, json_body, seed_session};
 use secrecy::SecretString;
-use serde_json::Value;
 use tower::ServiceExt;
-
-async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_compose_test_{uniq}?mode=memory&cache=shared");
-    let db = connect(&url).await.expect("open sqlite");
-    hail_db::migrate(&db).await.expect("migrate");
-
-    let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-    }
-    let config = Config::load_from(None).expect("load config");
-
-    let state = AppState {
-        db,
-        config,
-        server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
-        events: hail_api::events::AppEventBus::default(),
-    };
-    (state, key)
-}
-
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}_{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> String {
-    let now = Utc::now();
-    let user_id: i64 = sqlx::query_scalar(
-        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
-         VALUES (?1, ?2, 0, ?3) RETURNING id",
-    )
-    .bind(email)
-    .bind(format!("account-{email}"))
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .expect("insert user");
-
-    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
-    let session_id = format!("{:064x}", user_id);
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(&token_enc)
-    .bind(Some("test-ua"))
-    .bind(now + Duration::days(30))
-    .bind(now)
-    .execute(&state.db)
-    .await
-    .expect("insert session");
-    session_id
-}
 
 fn app(state: AppState, composer: Arc<FakeComposer>) -> Router {
     let protected = hail_api::routes::compose::router_with_composer(composer).layer(
@@ -121,11 +50,6 @@ async fn request(
         )
         .await
         .unwrap()
-}
-
-async fn json_body(resp: axum::response::Response) -> Value {
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,7 +185,7 @@ fn recipient_list(count: usize) -> Vec<String> {
 #[tokio::test]
 async fn compose_send_now_creates_draft_and_submits() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     let resp = request(
@@ -303,7 +227,7 @@ async fn compose_send_now_creates_draft_and_submits() {
 #[tokio::test]
 async fn compose_send_later_inserts_pending_row_without_submit() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     let send_at = Utc::now() + Duration::hours(2);
 
@@ -340,8 +264,8 @@ async fn compose_send_later_inserts_pending_row_without_submit() {
 #[tokio::test]
 async fn scheduled_send_list_and_get_are_scoped_to_user() {
     let (state, key) = fixture_state().await;
-    let alice_sid = seed_session(&state, &key, "alice@example.org").await;
-    let _bob_sid = seed_session(&state, &key, "bob@example.org").await;
+    let (_user_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, _bob_sid) = seed_session(&state, &key, "bob@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     let alice_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
         .bind("alice@example.org")
@@ -440,7 +364,7 @@ async fn scheduled_send_list_and_get_are_scoped_to_user() {
 #[tokio::test]
 async fn scheduled_send_cancel_marks_pending_row_cancelled_for_owner() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     let send_at = Utc::now() + Duration::hours(2);
 
@@ -495,8 +419,8 @@ async fn scheduled_send_cancel_marks_pending_row_cancelled_for_owner() {
 #[tokio::test]
 async fn scheduled_send_cancel_rejects_non_pending_and_non_owner_rows() {
     let (state, key) = fixture_state().await;
-    let alice_sid = seed_session(&state, &key, "alice@example.org").await;
-    let bob_sid = seed_session(&state, &key, "bob@example.org").await;
+    let (_user_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, bob_sid) = seed_session(&state, &key, "bob@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     let alice_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
         .bind("alice@example.org")
@@ -575,7 +499,7 @@ async fn scheduled_send_cancel_rejects_non_pending_and_non_owner_rows() {
 #[tokio::test]
 async fn compose_rejects_non_future_send_at_without_creating_draft() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     let send_at = Utc::now() - Duration::minutes(1);
 
@@ -605,7 +529,7 @@ async fn compose_rejects_non_future_send_at_without_creating_draft() {
 #[tokio::test]
 async fn reply_rejects_non_future_send_at_before_thread_lookup() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     let send_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
 
@@ -631,7 +555,7 @@ async fn reply_rejects_non_future_send_at_before_thread_lookup() {
 #[tokio::test]
 async fn compose_rejects_invalid_recipient() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     let resp = request(
@@ -654,7 +578,7 @@ async fn compose_rejects_invalid_recipient() {
 #[tokio::test]
 async fn compose_rejects_attachments_without_creating_draft() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     let resp = request(
@@ -680,7 +604,7 @@ async fn compose_rejects_attachments_without_creating_draft() {
 #[tokio::test]
 async fn compose_rejects_invalid_cc_bcc_without_creating_draft() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     for (field, expected_error) in [("cc", "invalid_cc"), ("bcc", "invalid_bcc")] {
@@ -712,7 +636,7 @@ async fn compose_rejects_invalid_cc_bcc_without_creating_draft() {
 #[tokio::test]
 async fn compose_rejects_too_many_recipients_without_creating_draft() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     for (field, expected_error) in [
@@ -747,7 +671,7 @@ async fn compose_rejects_too_many_recipients_without_creating_draft() {
 #[tokio::test]
 async fn compose_rejects_subject_crlf_without_creating_draft() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     let body = serde_json::json!({
@@ -776,7 +700,7 @@ async fn compose_rejects_subject_crlf_without_creating_draft() {
 #[tokio::test]
 async fn compose_rejects_body_too_large_without_creating_draft() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     let body = serde_json::json!({
@@ -805,7 +729,7 @@ async fn compose_rejects_body_too_large_without_creating_draft() {
 #[tokio::test]
 async fn compose_requires_csrf() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
 
     let resp = request(
@@ -844,7 +768,7 @@ async fn compose_requires_auth() {
 #[tokio::test]
 async fn reply_not_found_returns_404() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let composer = Arc::new(FakeComposer::default());
     composer.set_not_found();
 

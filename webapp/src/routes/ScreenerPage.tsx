@@ -66,40 +66,6 @@ function previewText(preview: unknown) {
   ]);
 }
 
-function parseSender(sender: string) {
-  const trimmed = sender.trim();
-  const mailbox = trimmed.match(/^(.*?)\s*<([^>]+)>$/);
-  if (mailbox) {
-    const [, rawName, rawEmail] = mailbox;
-    const name = rawName.replace(/^['"]|['"]$/g, '').trim();
-    const email = rawEmail.trim();
-
-    return {
-      name: name || email,
-      email,
-    };
-  }
-
-  if (trimmed.includes('@')) {
-    const localPart = trimmed.split('@')[0] ?? trimmed;
-    const name = localPart
-      .split(/[._+-]+/)
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ');
-
-    return {
-      name: name || trimmed,
-      email: trimmed,
-    };
-  }
-
-  return {
-    name: trimmed || 'Unknown sender',
-    email: trimmed || 'unknown address',
-  };
-}
-
 function EmptyState() {
   return (
     <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
@@ -137,7 +103,10 @@ function PendingSenderCard({
     },
   });
   const isPending = decision.isPending;
-  const senderIdentity = parseSender(sender.sender);
+  const senderIdentity = {
+    name: sender.sender || 'Unknown sender',
+    email: sender.sender || 'unknown address',
+  };
   const subject = subjectText(sender.latest_preview) ?? 'First message from this sender';
   const preview =
     previewText(sender.latest_preview) ??

@@ -1,13 +1,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
+use hail_test::{TempDb, fresh_db_url};
 use sqlx::SqlitePool;
 
 #[path = "../src/app_events.rs"]
@@ -83,34 +82,8 @@ impl BubbleJmapOps for FakeBubbleJmapOps {
     }
 }
 
-static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn fresh_db_url() -> (String, PathBuf) {
-    let mut path = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time")
-        .as_nanos();
-    let pid = std::process::id();
-    let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-    path.push(format!(
-        "hail-worker-bubble-scheduler-test-{pid}-{nanos}-{counter}.sqlite"
-    ));
-    let url = format!("sqlite://{}", path.display());
-    (url, path)
-}
-
-struct TempDb(PathBuf);
-
-impl Drop for TempDb {
-    fn drop(&mut self) {
-        let _ = &self.0;
-    }
-}
-
 async fn setup_db() -> (SqlitePool, TempDb, i64) {
-    let (url, path) = fresh_db_url();
-    let guard = TempDb(path);
+    let (url, guard) = fresh_db_url("hail-worker-bubble-scheduler-test");
     let pool = hail_db::connect(&url).await.expect("connect");
     hail_db::migrate(&pool).await.expect("migrate");
 

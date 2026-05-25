@@ -5,89 +5,11 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use chrono::{Duration, Utc};
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
-use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::routes::admin_domains::{ManagementError, StalwartManagement};
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
-use hail_db::connect;
-use http_body_util::BodyExt;
+use hail_test::{fixture_state, json_body, seed_session_with_admin};
 use tower::ServiceExt;
-
-async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_admin_domains_test_{uniq}?mode=memory&cache=shared");
-    let db = connect(&url).await.expect("open sqlite");
-    hail_db::migrate(&db).await.expect("migrate");
-
-    let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-        std::env::remove_var("HAIL_STALWART__MANAGEMENT_URL");
-    }
-    let config = Config::load_from(None).expect("load config");
-
-    let state = AppState {
-        db,
-        config,
-        server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
-        events: hail_api::events::AppEventBus::default(),
-    };
-    (state, key)
-}
-
-fn uuid_like() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}_{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-async fn seed_session(
-    state: &AppState,
-    key: &[u8; KEY_LEN],
-    email: &str,
-    is_admin: bool,
-) -> String {
-    let now = Utc::now();
-    let user_id: i64 = sqlx::query_scalar(
-        "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
-         VALUES (?1, ?2, ?3, ?4) RETURNING id",
-    )
-    .bind(email)
-    .bind(format!("account-{email}"))
-    .bind(if is_admin { 1_i64 } else { 0_i64 })
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .expect("insert user");
-
-    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
-    let session_id = format!("{:064x}", user_id);
-    sqlx::query(
-        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(&token_enc)
-    .bind(Some("test-ua"))
-    .bind(now + Duration::days(30))
-    .bind(now)
-    .execute(&state.db)
-    .await
-    .expect("insert session");
-    session_id
-}
 
 fn app(state: AppState, management: Arc<FakeManagement>) -> Router {
     let protected = hail_api::routes::admin_domains::router_with_management(management).layer(
@@ -182,11 +104,6 @@ async fn request(
         .unwrap()
 }
 
-async fn json_body(resp: axum::response::Response) -> serde_json::Value {
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
 #[tokio::test]
 async fn auth_required_for_list() {
     let (state, _key) = fixture_state().await;
@@ -209,7 +126,7 @@ async fn auth_required_for_list() {
 #[tokio::test]
 async fn non_admin_returns_403() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org", false).await;
+    let (_user_id, sid) = seed_session_with_admin(&state, &key, "alice@example.org", false).await;
     let management = Arc::new(FakeManagement::with_domains(&["example.org"]));
 
     let resp = request(
@@ -230,7 +147,7 @@ async fn non_admin_returns_403() {
 #[tokio::test]
 async fn list_uses_fake_management() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "admin@example.org", true).await;
+    let (_user_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
     let management = Arc::new(FakeManagement::with_domains(&["z.example", "a.example"]));
 
     let resp = request(
@@ -256,7 +173,7 @@ async fn list_uses_fake_management() {
 #[tokio::test]
 async fn add_uses_fake_management_and_normalizes_domain() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "admin@example.org", true).await;
+    let (_user_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
     let management = Arc::new(FakeManagement::default());
 
     let resp = request(
@@ -291,7 +208,7 @@ async fn add_uses_fake_management_and_normalizes_domain() {
 #[tokio::test]
 async fn delete_uses_fake_management_and_normalizes_domain() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "admin@example.org", true).await;
+    let (_user_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
     let management = Arc::new(FakeManagement::with_domains(&["example.org"]));
 
     let resp = request(
@@ -312,7 +229,7 @@ async fn delete_uses_fake_management_and_normalizes_domain() {
 #[tokio::test]
 async fn invalid_domain_returns_400_and_does_not_call_management() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "admin@example.org", true).await;
+    let (_user_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
     let management = Arc::new(FakeManagement::default());
 
     let resp = request(
