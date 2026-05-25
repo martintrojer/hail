@@ -23,6 +23,8 @@ import { ScreenerPage } from './ScreenerPage';
 class ScreenerPageTestClient extends TestHailApiClient {
   readonly decideScreenerCalls: ScreenerDecisionRequest[] = [];
   readonly undoDenyCalls: string[] = [];
+  undoDenyFailure: Error | null = null;
+  deniedFailure: Error | null = null;
   private viewPromise: Promise<ScreenerView>;
   private deniedPromise: Promise<DeniedSendersResponse>;
   private decisionHandler: (
@@ -74,6 +76,9 @@ class ScreenerPageTestClient extends TestHailApiClient {
   }
 
   override async getDeniedSenders(): Promise<DeniedSendersResponse> {
+    if (this.deniedFailure) {
+      throw this.deniedFailure;
+    }
     return this.deniedPromise;
   }
 
@@ -86,6 +91,9 @@ class ScreenerPageTestClient extends TestHailApiClient {
 
   override async undoDeny(address: string) {
     this.undoDenyCalls.push(address);
+    if (this.undoDenyFailure) {
+      throw this.undoDenyFailure;
+    }
     return { status: 'undone' as const };
   }
 }
@@ -281,6 +289,68 @@ describe('ScreenerPage', () => {
     expect(
       await screen.findByText('Restored blocked@example.com to the Screener.'),
     ).toBeInTheDocument();
+  });
+
+  it('loads denied senders only after expanding the section', async () => {
+    const client = renderScreener(
+      new ScreenerPageTestClient({ denied: sampleDeniedSenders({ denied: [] }) }),
+    );
+
+    await screen.findByText('Newsletter dispatch');
+    expect(client.undoDenyCalls).toEqual([]);
+    expect(screen.queryByLabelText('Loading denied senders')).not.toBeInTheDocument();
+    expect(screen.queryByText('No denied senders yet.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Previously denied/i }));
+
+    expect(await screen.findByText('No denied senders yet.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Previously denied/i })).toHaveTextContent(
+      'Hide',
+    );
+  });
+
+  it('shows denied sender loading and error states inside the expanded section', async () => {
+    renderScreener(
+      new ScreenerPageTestClient({
+        deniedPromise: new Promise<DeniedSendersResponse>(() => undefined),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Previously denied/i }));
+
+    expect(screen.getByLabelText('Loading denied senders')).toBeInTheDocument();
+    cleanup();
+    restoreRoute();
+
+    const errorClient = new ScreenerPageTestClient();
+    errorClient.deniedFailure = new HailApiError(503, undefined, response(503));
+    renderScreener(errorClient);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Previously denied/i }));
+
+    expect(await screen.findByText('Something went wrong.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Screener failed with HTTP 503.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows an inline error and keeps the denied row when undo fails', async () => {
+    const client = new ScreenerPageTestClient();
+    client.undoDenyFailure = new HailApiError(422, undefined, response(422));
+    renderScreener(client);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Previously denied/i }));
+    expect(await screen.findByText('blocked@example.com')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+    await waitFor(() =>
+      expect(client.undoDenyCalls).toEqual(['blocked@example.com']),
+    );
+    expect(
+      await screen.findByText('The server rejected this decision. Refresh and try again.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('blocked@example.com')).toBeInTheDocument();
   });
 
   it('shows initial pending, error, and empty states', async () => {
