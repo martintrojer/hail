@@ -333,6 +333,10 @@ fn app_event_for_route_outcome(outcome: &RouteOutcome) -> Option<WorkerAppEvent>
 }
 
 fn route_envelope_from_change(env: &EmailEnvelope) -> Option<screener::EmailEnvelope> {
+    // Skip drafts — they are user-created, not incoming mail.
+    if env.keywords.iter().any(|kw| kw == "$draft") {
+        return None;
+    }
     let from = env
         .from
         .first()
