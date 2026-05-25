@@ -10,10 +10,9 @@ import { Trash2, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ListView } from '../components/ListView';
+import { MailRow } from '../components/MailRow';
 import { AppShell } from '../layout/AppShell';
-import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
-import { senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 
 interface DraftsPageProps {
   client?: HailApiClient;
@@ -35,7 +34,7 @@ function DeleteDraftButton({ draftId, client }: { draftId: string; client: HailA
         deleteDraft.mutate(draftId);
       }}
       disabled={deleteDraft.isPending}
-      className="rounded-full p-2 text-ink-tertiary outline-none hover:bg-bg-hover hover:text-accent-red focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
+      className="rounded-full p-2 text-ink-tertiary focus-ring outline-none hover:bg-bg-hover hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-60"
       aria-label="Delete draft"
       title={deleteDraft.error ? actionErrorMessage(deleteDraft.error) : 'Delete draft'}
     >
@@ -50,21 +49,17 @@ function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient 
       <Link
         to="/compose"
         search={{ draftId: item.email_id }}
-        className="min-w-0 flex-1 outline-none focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+        className="min-w-0 flex-1 focus-ring outline-none focus-visible:rounded-md"
         data-hail-mail-list-item="true"
         aria-label={`Resume draft ${item.subject || '(no subject)'}`}
       >
-        <div className="flex items-baseline justify-between gap-4">
-          <p className={senderNameClass}>
-            {item.subject || '(no subject)'}
-          </p>
-          <time className={timeClass}>
-            {formatDateTime(item.received_at, 'Not saved yet')}
-          </time>
-        </div>
-        <p className={`mt-1 ${subjectClass}`}>
-          {recipientSummary(item)}
-        </p>
+        <MailRow
+          from={item.subject || '(no subject)'}
+          subject={recipientSummary(item)}
+          preview=""
+          receivedAt={item.received_at}
+          receivedAtFallback="Not saved yet"
+        />
       </Link>
       <DeleteDraftButton draftId={item.email_id} client={client} />
     </div>

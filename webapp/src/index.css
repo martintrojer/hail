@@ -74,6 +74,10 @@
     line-height: 1.4;
   }
 
+  .focus-ring {
+    @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue;
+  }
+
   .hail-badge {
     font-size: 0.7rem;
     font-weight: 600;

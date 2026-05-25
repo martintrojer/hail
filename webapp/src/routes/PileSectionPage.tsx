@@ -1,18 +1,18 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { type ComponentType, type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, useState } from 'react';
 import type { HailApiClient, PileItem, PileViewResponse } from '../api/client';
 import { useClassifyThreadMutation, useReplyLaterView, useSetAsideView } from '../api/query';
 import { defaultApiClient } from '../api/query';
 import { queryKeys } from '../api/queryKeys';
 import { ErrorState } from '../components/ErrorState';
-import { Bookmark, Clock, Send, iconSizeProps } from '../components/icons';
+import { Send, iconSizeProps } from '../components/icons';
+import { MailRow } from '../components/MailRow';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
-import { formatPileDate, pilePreview } from '../lib/pilePreview';
-import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
+import { pilePreview } from '../lib/pilePreview';
 
 interface PileSectionPageProps {
   kind: 'set-aside' | 'reply-later';
@@ -24,9 +24,7 @@ interface SectionConfig {
   emptyTitle: string;
   emptyBody: string;
   actionLabel: string;
-  Icon: ComponentType<{ className?: string; size?: number; strokeWidth?: number }>;
   useView: () => ReturnType<typeof useSetAsideView> | ReturnType<typeof useReplyLaterView>;
-  meta: (item: PileItem) => ReactNode;
 }
 
 const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
@@ -36,9 +34,7 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     emptyTitle: 'Nothing set aside.',
     emptyBody: 'Set threads aside when you want to come back to them.',
     actionLabel: 'Move back to Imbox',
-    Icon: Bookmark,
     useView: useSetAsideView,
-    meta: (item) => <span>Set aside {formatPileDate(item.added_at)}</span>,
   },
   'reply-later': {
     title: 'Reply Later',
@@ -46,9 +42,7 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     emptyTitle: 'Nothing to reply to later.',
     emptyBody: 'Mark threads for reply when you are ready.',
     actionLabel: 'Move back to Imbox',
-    Icon: Clock,
     useView: useReplyLaterView,
-    meta: (item) => <time dateTime={item.added_at}>Deferred {formatPileDate(item.added_at)}</time>,
   },
 };
 
@@ -120,7 +114,7 @@ function ReplyPanel({
               <button
                 type="submit"
                 disabled={!body.trim() || sending}
-                className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:opacity-60"
+                className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover disabled:opacity-60"
               >
                 <Send {...iconSizeProps.sm} aria-hidden="true" />
                 {sending ? 'Sending…' : 'Reply'}
@@ -164,25 +158,12 @@ function PileRow({
   });
 
   const rowContent = (
-    <>
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className={senderNameClass}>
-            {preview.sender}
-          </p>
-          <config.Icon className="shrink-0 text-ink-tertiary" {...iconSizeProps.sm} />
-        </div>
-        <span className={timeClass}>
-          {config.meta(item)}
-        </span>
-      </div>
-      <p className={`mt-1 ${subjectClass}`}>
-        {preview.subject}
-      </p>
-      <p className={`mt-1 ${previewClass}`}>
-        {preview.snippet || 'No preview available.'}
-      </p>
-    </>
+    <MailRow
+      from={preview.sender}
+      subject={preview.subject}
+      preview={preview.snippet || 'No preview available.'}
+      receivedAt={item.added_at}
+    />
   );
 
   return (
@@ -216,7 +197,7 @@ function PileRow({
       <div className="flex shrink-0 items-center pr-1 sm:pr-0">
         <button
           type="button"
-          className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary opacity-90 outline-none hover:bg-bg-selected hover:text-accent-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary opacity-90 focus-ring outline-none hover:bg-bg-selected hover:text-accent-blue sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
           onClick={() => moveBack.mutate({ threadId: item.thread_id, to: 'imbox' })}
           disabled={moveBack.isPending}
         >

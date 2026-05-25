@@ -11,6 +11,7 @@ import type {
 import { HailApiClient, HailApiError } from '../api/client';
 import { queryKeys } from '../api/queryKeys';
 import { AuthProvider } from '../auth/AuthProvider';
+import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
 import { MailViewPage } from './MailViewPage';
 
@@ -115,12 +116,14 @@ function renderMailView(
 
   currentTestBody = (
     <AuthProvider>
-      <MailViewPage
-        view={view}
-        title={viewTitles[view]}
-        description={`${viewTitles[view]} description`}
-        client={client}
-      />
+      <UndoToastProvider>
+        <MailViewPage
+          view={view}
+          title={viewTitles[view]}
+          description={`${viewTitles[view]} description`}
+          client={client}
+        />
+      </UndoToastProvider>
     </AuthProvider>
   );
   installTestRouteComponent(view);

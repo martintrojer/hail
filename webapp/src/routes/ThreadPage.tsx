@@ -239,7 +239,7 @@ function MessageCard({
                 aria-expanded={popupOpen}
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={togglePopup}
-                className="rounded-full p-1 text-ink-tertiary outline-none hover:bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                className="rounded-full p-1 text-ink-tertiary focus-ring outline-none hover:bg-hover hover:text-ink-primary"
               >
                 <MoreHorizontal {...iconSizeProps.sm} aria-hidden="true" />
               </button>
@@ -327,14 +327,14 @@ function MiniReplyComposer({ senderName }: { senderName: string }) {
           <button
             type="button"
             aria-label="Attach file"
-            className="rounded-full p-2 outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+            className="rounded-full p-2 focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
           >
             <Paperclip {...iconSizeProps.md} aria-hidden="true" />
           </button>
           <button
             type="button"
             aria-label="Send later"
-            className="rounded-full p-2 outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+            className="rounded-full p-2 focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
           >
             <Clock {...iconSizeProps.md} aria-hidden="true" />
           </button>
@@ -525,7 +525,7 @@ function ThreadDocument({
       <button
         type="button"
         onClick={goBack}
-        className="inline-flex items-center gap-2 rounded-md text-sm font-medium text-ink-secondary outline-none hover:text-accent-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+        className="inline-flex items-center gap-2 rounded-md text-sm font-medium text-ink-secondary focus-ring outline-none hover:text-accent-blue"
       >
         <ArrowLeft {...iconSizeProps.sm} aria-hidden="true" />
         Back

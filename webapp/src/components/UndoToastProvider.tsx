@@ -197,10 +197,6 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useOptionalUndoToast() {
-  return useContext(UndoToastContext);
-}
-
 export function useUndoToast() {
   const context = useContext(UndoToastContext);
   if (!context) {

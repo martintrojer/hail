@@ -397,7 +397,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
           <button
             type="button"
             onClick={closeComposer}
-            className="mb-8 inline-flex w-fit items-center gap-2 hail-chrome text-ink-secondary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+            className="mb-8 inline-flex w-fit items-center gap-2 hail-chrome text-ink-secondary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md"
           >
             <ArrowLeft {...iconSizeProps.sm} />
             <span>Cancel</span>
@@ -429,7 +429,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                 <button
                   type="button"
                   onClick={() => setShowCarbonCopyFields((shown) => !shown)}
-                  className="shrink-0 hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                  className="shrink-0 hail-chrome text-ink-tertiary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md"
                   aria-expanded={showCarbonCopyFields}
                   aria-controls="compose-carbon-copy-fields"
                 >
@@ -490,7 +490,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
             <div className="mt-3 flex min-h-6 items-center justify-between gap-4">
               <div className="flex items-center gap-3 text-ink-tertiary">
-                <label htmlFor="compose-attachments" className="inline-flex cursor-pointer items-center gap-2 hail-chrome outline-none hover:text-accent-blue">
+                <label htmlFor="compose-attachments" className="inline-flex cursor-pointer items-center gap-2 hail-chrome focus-ring outline-none hover:text-accent-blue">
                   <Paperclip {...iconSizeProps.sm} />
                   <span>Attachments</span>
                 </label>
@@ -514,9 +514,9 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
             <div className="mt-8 flex items-center gap-4 border-t border-border-hairline pt-5">
               <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className={pillButtonClass('primary', 'md')}>{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
-              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="hail-chrome text-ink-secondary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-50">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
-              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="hail-chrome text-ink-tertiary outline-none hover:text-accent-blue focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-50">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
-              <button type="button" onClick={closeComposer} className="ml-auto hail-chrome text-ink-tertiary outline-none hover:text-accent-red focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue">Discard</button>
+              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="hail-chrome text-ink-secondary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md disabled:cursor-not-allowed disabled:opacity-50">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
+              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="hail-chrome text-ink-tertiary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md disabled:cursor-not-allowed disabled:opacity-50">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
+              <button type="button" onClick={closeComposer} className="ml-auto hail-chrome text-ink-tertiary focus-ring outline-none hover:text-accent-red focus-visible:rounded-md">Discard</button>
             </div>
 
             <div className="mt-4 space-y-2">

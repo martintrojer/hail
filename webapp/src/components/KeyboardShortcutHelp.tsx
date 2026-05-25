@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 interface ShortcutGroup {
   title: string;
@@ -56,17 +57,12 @@ export function KeyboardShortcutHelp({
     }
 
     closeButtonRef.current?.focus();
+  }, [open]);
 
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, open]);
+  useKeyboardShortcuts(
+    { onEscape: onClose },
+    { enabled: open },
+  );
 
   if (!open) {
     return null;
@@ -92,7 +88,7 @@ export function KeyboardShortcutHelp({
             ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+            className="rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
           >
             Close
           </button>

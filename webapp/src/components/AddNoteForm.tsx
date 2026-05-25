@@ -31,14 +31,14 @@ export function AddNoteForm({ onSave, onCancel }: AddNoteFormProps) {
         <button
           type="submit"
           disabled={!trimmedText}
-          className="rounded-lg bg-accent-blue px-3 py-1.5 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-lg bg-accent-blue px-3 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           Save
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="text-sm font-medium text-ink-tertiary outline-none hover:text-ink-primary focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="text-sm font-medium text-ink-tertiary focus-ring outline-none hover:text-ink-primary focus-visible:rounded-md"
         >
           Cancel
         </button>

@@ -151,6 +151,12 @@ export function AppShell({
     onGoPaperTrail: () => void navigate({ to: '/papertrail' }),
     onGoScreener: () => void navigate({ to: '/screener' }),
     onShowHelp: () => setShortcutHelpOpen(true),
+    onEscape: () => {
+      if (menuOpen) {
+        setMenuOpen(false);
+        logoButtonRef.current?.focus();
+      }
+    },
   });
 
   useEffect(() => {
@@ -169,19 +175,10 @@ export function AppShell({
       setMenuOpen(false);
     }
 
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setMenuOpen(false);
-        logoButtonRef.current?.focus();
-      }
-    }
-
     document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
 
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, [menuOpen]);
 
@@ -214,7 +211,7 @@ export function AppShell({
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((open) => !open)}
-              className="rounded-md px-1 py-1 text-xl font-bold lowercase tracking-tight text-ink-primary outline-none hover:text-accent-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+              className="rounded-md px-1 py-1 text-xl font-bold lowercase tracking-tight text-ink-primary focus-ring outline-none hover:text-accent-blue"
             >
               hail
             </button>
@@ -233,7 +230,7 @@ export function AppShell({
                       to={to}
                       role="menuitem"
                       onClick={closeMenu}
-                      className="flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                      className="flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
                       activeProps={{
                         className: 'bg-bg-selected font-semibold text-ink-primary',
                       }}
@@ -249,7 +246,7 @@ export function AppShell({
                     to="/admin"
                     role="menuitem"
                     onClick={closeMenu}
-                    className="mt-2 flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                    className="mt-2 flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
                     activeProps={{
                       className: 'bg-bg-selected font-semibold text-ink-primary',
                     }}
@@ -271,7 +268,7 @@ export function AppShell({
                       logout();
                     }}
                     disabled={logoutLoading}
-                    className="mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left hail-chrome text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
+                    className="mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <LogOut className="shrink-0" {...iconSizeProps.sm} />
                     <span>{logoutLoading ? 'Signing out…' : 'Sign Out'}</span>
@@ -289,7 +286,7 @@ export function AppShell({
             <Link
               to="/compose"
               search={{}}
-              className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+              className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover"
             >
               <PenSquare {...iconSizeProps.sm} aria-hidden="true" />
               <span className="hidden sm:inline">Compose</span>
@@ -297,7 +294,7 @@ export function AppShell({
             <Link
               to="/search"
               aria-label="Search"
-              className="rounded-full p-2 text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+              className="rounded-full p-2 text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
             >
               <Search {...iconSizeProps.lg} />
             </Link>

@@ -5,6 +5,7 @@ import type { PileItem } from '../api/client';
 import { useClassifyThreadMutation, useReplyLaterView, useSetAsideView } from '../api/query';
 import { queryKeys } from '../api/queryKeys';
 import { Bookmark, Clock, X, iconSizeProps } from '../components/icons';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { formatPileDate, pilePreview } from '../lib/pilePreview';
 
 type PileStackKind = 'reply-later' | 'set-aside';
@@ -57,7 +58,7 @@ function PileItemRow({ item, stack }: { item: PileItem; stack: StackConfig }) {
       to="/thread/$threadId"
       params={{ threadId: item.thread_id }}
       search={{ from: stack.kind }}
-      className="group flex items-start gap-2 rounded-md px-2 py-2 outline-none hover:bg-bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+      className="group flex items-start gap-2 rounded-md px-2 py-2 focus-ring outline-none hover:bg-bg-hover"
       aria-label={`Open ${preview.subject} from ${preview.sender}`}
     >
       <span className="min-w-0 flex-1">
@@ -75,7 +76,7 @@ function PileItemRow({ item, stack }: { item: PileItem; stack: StackConfig }) {
       </span>
       <button
         type="button"
-        className="shrink-0 rounded-full p-1 text-ink-tertiary opacity-80 outline-none hover:bg-bg-selected hover:text-ink-primary focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-accent-blue sm:opacity-0 sm:group-hover:opacity-100"
+        className="shrink-0 rounded-full p-1 text-ink-tertiary opacity-80 focus-ring outline-none hover:bg-bg-selected hover:text-ink-primary focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
         onClick={removeFromPile}
         disabled={release.isPending}
         aria-label={`Move ${preview.subject} back to Imbox`}
@@ -93,7 +94,7 @@ function ExpandedStack({ stack }: { stack: StackConfig }) {
       <div className="mb-1 flex items-center justify-between gap-3 px-2">
         <Link
           to={stack.to}
-          className="flex items-center gap-2 text-sm font-semibold text-ink-primary outline-none hover:text-accent-blue focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="flex items-center gap-2 text-sm font-semibold text-ink-primary focus-ring outline-none hover:text-accent-blue"
         >
           <stack.Icon className="text-ink-secondary" {...iconSizeProps.sm} />
           {stack.title}
@@ -118,6 +119,11 @@ export function Pile() {
   const setAside = useSetAsideView();
   const replyLater = useReplyLaterView();
 
+  useKeyboardShortcuts(
+    { onEscape: () => setExpanded(false) },
+    { enabled: expanded },
+  );
+
   useEffect(() => {
     if (!expanded) {
       return undefined;
@@ -130,18 +136,10 @@ export function Pile() {
       }
     }
 
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setExpanded(false);
-      }
-    }
-
     document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
 
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, [expanded]);
 
@@ -173,7 +171,7 @@ export function Pile() {
         <div>
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-3 rounded-t-lg px-3 py-2.5 text-left outline-none hover:bg-bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+            className="flex w-full items-center justify-between gap-3 rounded-t-lg px-3 py-2.5 text-left focus-ring outline-none hover:bg-bg-hover"
             onClick={() => setExpanded(false)}
             aria-expanded="true"
           >
@@ -189,7 +187,7 @@ export function Pile() {
       ) : (
         <button
           type="button"
-          className="block w-full rounded-lg p-1 text-left outline-none hover:bg-bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="block w-full rounded-lg p-1 text-left focus-ring outline-none hover:bg-bg-hover"
           onClick={() => setExpanded(true)}
           aria-expanded="false"
         >
