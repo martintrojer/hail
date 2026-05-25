@@ -154,6 +154,17 @@ pub fn normalize_sender(addr: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
+/// System senders whose mail should bypass the screener and go straight to Imbox.
+/// Covers bounce notifications (mailer-daemon), postmaster, and null-sender bounces.
+fn is_system_sender(from: &str) -> bool {
+    let lower = from.to_ascii_lowercase();
+    let local = lower.split('@').next().unwrap_or(&lower);
+    matches!(
+        local,
+        "mailer-daemon" | "postmaster" | "noreply" | "no-reply"
+    ) || lower.is_empty()
+}
+
 pub async fn route_email(
     conn: &mut SqliteConnection,
     jmap: &dyn JmapOps,
@@ -162,6 +173,15 @@ pub async fn route_email(
 ) -> Result<RouteOutcome, RouteError> {
     if env.keywords.iter().any(|kw| kw.starts_with("$hail_")) {
         return Ok(RouteOutcome::AlreadyScreened);
+    }
+
+    // System senders (bounce notifications, postmaster) bypass the screener entirely.
+    if is_system_sender(&env.from) {
+        jmap.apply_keyword(&env.id, Classification::Imbox.keyword())
+            .await?;
+        return Ok(RouteOutcome::Classified {
+            classification: Classification::Imbox,
+        });
     }
 
     let row: Option<(String, Option<String>)> = sqlx::query_as(
@@ -244,5 +264,30 @@ fn parse_mailbox_role(role: &str) -> Result<Role, RouteError> {
         "sent" => Ok(Role::Sent),
         "trash" => Ok(Role::Trash),
         other => Err(RouteError::MissingMailbox(other.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_senders_detected() {
+        assert!(is_system_sender("mailer-daemon@localhost.local"));
+        assert!(is_system_sender("MAILER-DAEMON@example.com"));
+        assert!(is_system_sender("Mailer-Daemon@mx.example.com"));
+        assert!(is_system_sender("postmaster@example.com"));
+        assert!(is_system_sender("POSTMASTER@example.com"));
+        assert!(is_system_sender("noreply@example.com"));
+        assert!(is_system_sender("no-reply@example.com"));
+        assert!(is_system_sender("")); // null sender bounce
+    }
+
+    #[test]
+    fn normal_senders_not_system() {
+        assert!(!is_system_sender("alice@example.com"));
+        assert!(!is_system_sender("newsletter@company.com"));
+        assert!(!is_system_sender("daemon@example.com"));
+        assert!(!is_system_sender("reply@example.com"));
     }
 }
