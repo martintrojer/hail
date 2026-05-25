@@ -705,39 +705,19 @@ fn envelope_from(em: jmap_client::email::Email) -> EmailEnvelope {
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll};
 
     use ahash::AHashMap;
     use futures_util::stream;
     use hail_jmap::jmap_client::CalendarAlert;
+    use hail_test::{TempDb, fresh_db_url};
     use tokio::sync::oneshot;
 
     use crate::screener::RouteError;
 
-    static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    struct TempDb(std::path::PathBuf);
-
-    impl Drop for TempDb {
-        fn drop(&mut self) {
-            let _ = &self.0;
-        }
-    }
-
     async fn setup_db() -> (SqlitePool, TempDb, i64) {
-        let mut path = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock before unix epoch")
-            .as_nanos();
-        let pid = std::process::id();
-        let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-        path.push(format!(
-            "hail-worker-user-test-{pid}-{nanos}-{counter}.sqlite"
-        ));
-        let url = format!("sqlite://{}", path.display());
-        let guard = TempDb(path);
+        let (url, guard) = fresh_db_url("hail-worker-user-test");
         let pool = hail_db::connect(&url).await.expect("connect");
         hail_db::migrate(&pool).await.expect("migrate");
 

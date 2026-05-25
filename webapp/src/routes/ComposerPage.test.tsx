@@ -1,6 +1,11 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -10,20 +15,25 @@ import type {
   DraftResponse,
   ReplyRequest,
   ThreadViewResponse,
-  UserEnvelope,
 } from '../api/client';
-import { HailApiClient, HailApiError } from '../api/client';
-import { queryKeys } from '../api/queryKeys';
+import { HailApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+  seedMe,
+  TestHailApiClient,
+} from '../test-utils';
 import { ComposerPage } from './ComposerPage';
 
-class ComposerPageTestClient extends HailApiClient {
+class ComposerPageTestClient extends TestHailApiClient {
   readonly sendComposeCalls: ComposeRequest[] = [];
   readonly sendReplyCalls: Array<{ threadId: string; body: ReplyRequest }> = [];
   readonly createDraftCalls: DraftRequest[] = [];
-  readonly updateDraftCalls: Array<{ draftId: string; body: DraftRequest }> = [];
+  readonly updateDraftCalls: Array<{ draftId: string; body: DraftRequest }> =
+    [];
   getDraftCalls: string[] = [];
   getThreadCalls: string[] = [];
   threadResponse: ThreadViewResponse = {
@@ -57,18 +67,14 @@ class ComposerPageTestClient extends HailApiClient {
   };
 
   constructor() {
-    super({ baseUrl: 'http://localhost' });
-  }
-
-  override async me(): Promise<UserEnvelope> {
-    return {
+    super({
       user: {
         id: 1,
         email: 'composer@example.com',
         display_name: 'Composer',
         is_admin: false,
       },
-    };
+    });
   }
 
   override async getThread(threadId: string): Promise<ThreadViewResponse> {
@@ -98,7 +104,10 @@ class ComposerPageTestClient extends HailApiClient {
     };
   }
 
-  override async sendReply(threadId: string, body: ReplyRequest): Promise<ComposeResponse> {
+  override async sendReply(
+    threadId: string,
+    body: ReplyRequest,
+  ): Promise<ComposeResponse> {
     this.sendReplyCalls.push({ threadId, body });
     if (this.sendReplyError) throw this.sendReplyError;
     if (body.send_at) {
@@ -124,7 +133,10 @@ class ComposerPageTestClient extends HailApiClient {
     };
   }
 
-  override async updateDraft(draftId: string, body: DraftRequest): Promise<DraftResponse> {
+  override async updateDraft(
+    draftId: string,
+    body: DraftRequest,
+  ): Promise<DraftResponse> {
     this.updateDraftCalls.push({ draftId, body });
     if (this.updateDraftError) throw this.updateDraftError;
     return {
@@ -178,21 +190,9 @@ function renderComposer({
   replyAll,
   draftId,
 }: RenderComposerOptions = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
+  const queryClient = createTestQueryClient();
 
-  queryClient.setQueryData(queryKeys.me(), {
-    user: {
-      id: 1,
-      email: 'composer@example.com',
-      display_name: 'Composer',
-      is_admin: false,
-    },
-  } satisfies UserEnvelope);
+  seedMe(queryClient, client.testUser);
 
   currentTestBody = (
     <AuthProvider>
@@ -211,11 +211,7 @@ function renderComposer({
   installTestRouteComponent();
   window.history.pushState({}, '', '/compose');
 
-  render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
+  renderWithQueryClient(<RouterProvider router={router} />, queryClient);
 
   return client;
 }
@@ -257,7 +253,11 @@ function dateTimeLocalValue(date: Date) {
 }
 
 function apiError(status: number, body: unknown) {
-  return new HailApiError(status, body, new Response(JSON.stringify(body), { status }));
+  return new HailApiError(
+    status,
+    body,
+    new Response(JSON.stringify(body), { status }),
+  );
 }
 
 describe('ComposerPage', () => {
@@ -267,11 +267,19 @@ describe('ComposerPage', () => {
     selectAttachment();
 
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
-    expect(screen.getByText(/Attachments are not supported for sending or saving yet\./)).toBeInTheDocument();
-    fireEvent.submit(screen.getByRole('button', { name: 'Send now' }).closest('form')!);
+    expect(
+      screen.getByText(
+        /Attachments are not supported for sending or saving yet\./,
+      ),
+    ).toBeInTheDocument();
+    fireEvent.submit(
+      screen.getByRole('button', { name: 'Send now' }).closest('form')!,
+    );
 
     expect(
-      await screen.findByText(/Attachments are selected, but sending and saving attachments is not supported yet\./),
+      await screen.findByText(
+        /Attachments are selected, but sending and saving attachments is not supported yet\./,
+      ),
     ).toBeInTheDocument();
     expect(client.sendComposeCalls).toEqual([]);
   });
@@ -280,12 +288,18 @@ describe('ComposerPage', () => {
     const client = renderComposer();
     await fillSendableFields();
     fireEvent.change(screen.getByLabelText('Send later'), {
-      target: { value: dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)) },
+      target: {
+        value: dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)),
+      },
     });
     selectAttachment();
 
     expect(screen.getByRole('button', { name: 'Send later' })).toBeDisabled();
-    expect(screen.getByText(/Attachments are not supported for sending or saving yet\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Attachments are not supported for sending or saving yet\./,
+      ),
+    ).toBeInTheDocument();
     expect(client.sendComposeCalls).toEqual([]);
   });
 
@@ -295,7 +309,11 @@ describe('ComposerPage', () => {
     selectAttachment();
 
     expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
-    expect(screen.getByText(/Attachments are not supported for sending or saving yet\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Attachments are not supported for sending or saving yet\./,
+      ),
+    ).toBeInTheDocument();
     expect(client.createDraftCalls).toEqual([]);
   });
 
@@ -303,7 +321,9 @@ describe('ComposerPage', () => {
     const client = renderComposer();
     await fillSendableFields();
 
-    fireEvent.submit(screen.getByRole('button', { name: 'Send now' }).closest('form')!);
+    fireEvent.submit(
+      screen.getByRole('button', { name: 'Send now' }).closest('form')!,
+    );
 
     await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
     expect(client.sendComposeCalls[0]).toMatchObject({
@@ -326,12 +346,16 @@ describe('ComposerPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Send later' }));
 
-    expect(await screen.findByText('Choose a future send-later time.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Choose a future send-later time.'),
+    ).toBeInTheDocument();
     expect(client.sendComposeCalls).toHaveLength(0);
   });
 
   it('sends an ISO send_at when the datetime is future', async () => {
-    const sendAtValue = dateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000));
+    const sendAtValue = dateTimeLocalValue(
+      new Date(Date.now() + 60 * 60 * 1000),
+    );
     const client = renderComposer();
     await fillSendableFields();
     fireEvent.change(screen.getByLabelText('Send later'), {
@@ -344,14 +368,18 @@ describe('ComposerPage', () => {
     expect(client.sendComposeCalls[0]?.send_at).toBe(
       new Date(sendAtValue).toISOString(),
     );
-    expect(await screen.findByText('Scheduled for later. Draft draft-1 is queued.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Scheduled for later. Draft draft-1 is queued.'),
+    ).toBeInTheDocument();
   });
 
   it('loads an existing draft and updates it instead of creating another draft', async () => {
     const client = new ComposerPageTestClient();
     renderComposer({ client, draftId: 'draft-existing' });
 
-    expect(await screen.findByLabelText('To')).toHaveValue('alice@example.com, bob@example.com');
+    expect(await screen.findByLabelText('To')).toHaveValue(
+      'alice@example.com, bob@example.com',
+    );
     expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
     expect(screen.getByLabelText('Bcc')).toHaveValue('dave@example.com');
     expect(screen.getByLabelText('Subject')).toHaveValue('Saved draft subject');
@@ -385,7 +413,9 @@ describe('ComposerPage', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Save draft' }),
+    ).not.toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.createDraftCalls).toHaveLength(1));
@@ -408,7 +438,9 @@ describe('ComposerPage', () => {
 
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send later' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Save draft' }),
+    ).not.toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.createDraftCalls).toHaveLength(1));
@@ -467,7 +499,9 @@ describe('ComposerPage', () => {
 
     expect(await screen.findByLabelText('To')).toHaveValue('alice@example.com');
     expect(screen.getByLabelText('Subject')).toHaveValue('Re: Launch plan');
-    expect(screen.queryByRole('button', { name: 'Save draft' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Save draft' }),
+    ).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Cc'), {
       target: { value: 'ignored-cc@example.com' },
@@ -518,9 +552,13 @@ describe('ComposerPage', () => {
 
     renderComposer({ client, replyToThreadId: 'thread-456', replyAll: true });
 
-    expect(await screen.findByLabelText('To')).toHaveValue('bob@example.com, team@example.com');
+    expect(await screen.findByLabelText('To')).toHaveValue(
+      'bob@example.com, team@example.com',
+    );
     expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
-    expect(screen.getByLabelText('Subject')).toHaveValue('Re: Existing subject');
+    expect(screen.getByLabelText('Subject')).toHaveValue(
+      'Re: Existing subject',
+    );
     const body = screen.getByLabelText('Body') as HTMLTextAreaElement;
     expect(body.value).toContain('Bob Sender wrote:');
     expect(body.value).toContain('> Line one\n> Line two');
@@ -531,7 +569,9 @@ describe('ComposerPage', () => {
     renderComposer({ replyToThreadId: 'thread-123' });
 
     expect(screen.getByText('Loading reply details…')).toBeInTheDocument();
-    expect(((await screen.findByLabelText('Body')) as HTMLTextAreaElement).value).toContain('> Can you review this?');
+    expect(
+      ((await screen.findByLabelText('Body')) as HTMLTextAreaElement).value,
+    ).toContain('> Can you review this?');
   });
 
   it('shows send mutation error messages from API failures', async () => {
@@ -543,7 +583,9 @@ describe('ComposerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
 
     await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
-    expect(await screen.findByText('Check recipient addresses and try again.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Check recipient addresses and try again.'),
+    ).toBeInTheDocument();
   });
 
   it('shows draft mutation error messages from API failures', async () => {
@@ -555,7 +597,9 @@ describe('ComposerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.createDraftCalls).toHaveLength(1));
-    expect(await screen.findByText('Check the subject and try again.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Check the subject and try again.'),
+    ).toBeInTheDocument();
   });
 
   it('keeps attachment details visible and blocks all mutations while files are selected', async () => {
@@ -563,9 +607,15 @@ describe('ComposerPage', () => {
     await fillSendableFields();
     selectAttachment();
 
-    const attachmentNotice = screen.getByText(/Attachments are not supported for sending or saving yet\./).closest('div');
+    const attachmentNotice = screen
+      .getByText(/Attachments are not supported for sending or saving yet\./)
+      .closest('div');
     expect(attachmentNotice).not.toBeNull();
-    expect(within(attachmentNotice!).getByText(/report\.pdf · 5 B · application\/pdf/)).toBeInTheDocument();
+    expect(
+      within(attachmentNotice!).getByText(
+        /report\.pdf · 5 B · application\/pdf/,
+      ),
+    ).toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send later' })).toBeDisabled();

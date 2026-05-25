@@ -69,6 +69,17 @@ where
     }
 }
 
+pub trait ProviderError {
+    fn provider(message: String) -> Self;
+}
+
+pub fn provider_error<E>(err: impl std::fmt::Display) -> E
+where
+    E: ProviderError,
+{
+    E::provider(err.to_string())
+}
+
 pub async fn jmap_session(
     state: &AppState,
     token: SecretString,

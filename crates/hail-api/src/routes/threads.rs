@@ -24,8 +24,8 @@ use utoipa_axum::routes;
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{
     clear_thread_state, email_ids_in_thread as shared_email_ids_in_thread, jmap_session,
-    move_thread_to_role as shared_move_thread_to_role, set_thread_keyword, set_thread_keywords,
-    set_thread_mailboxes, thread_action_response, validate_thread_id,
+    move_thread_to_role as shared_move_thread_to_role, provider_error, set_thread_keyword,
+    set_thread_keywords, set_thread_mailboxes, thread_action_response, validate_thread_id,
 };
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::routes::undo::{NewUndoAction, ThreadStackUndoTarget, UndoToken, create_undo_action};
@@ -158,7 +158,7 @@ impl ThreadActions for JmapThreadActions {
     ) -> Pin<Box<dyn Future<Output = Result<Option<Classification>, ThreadActionError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let email_ids = email_ids_in_thread(&session, thread_id).await?;
             let mut request = session.client().build();
             request
@@ -185,7 +185,7 @@ impl ThreadActions for JmapThreadActions {
         classification: Classification,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let inbox_id = hail_jmap::mailbox_id_by_role(
                 &session,
                 hail_jmap::jmap_client::mailbox::Role::Inbox,
@@ -218,7 +218,7 @@ impl ThreadActions for JmapThreadActions {
         enabled: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             set_thread_keyword(&session, thread_id, keyword, enabled)
                 .await
                 .map_err(provider_error)
@@ -271,7 +271,7 @@ impl ThreadActions for JmapThreadActions {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             let email_ids = email_ids_in_thread(&session, thread_id).await?;
             let mut request = session.client().build();
             request
@@ -293,7 +293,7 @@ impl ThreadActions for JmapThreadActions {
         read: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = login(state, token).await?;
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
             set_thread_keyword(&session, thread_id, "$seen", read)
                 .await
                 .map_err(provider_error)
@@ -314,6 +314,12 @@ impl ThreadVerifyError {
 pub enum ThreadActionError {
     NotFound,
     Provider(String),
+}
+
+impl crate::routes::jmap_helpers::ProviderError for ThreadActionError {
+    fn provider(message: String) -> Self {
+        Self::Provider(message)
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -1059,13 +1065,6 @@ async fn select_stack_position(
     .await
 }
 
-async fn login(
-    state: &AppState,
-    token: SecretString,
-) -> Result<hail_jmap::Session, ThreadActionError> {
-    jmap_session(state, token).await.map_err(provider_error)
-}
-
 async fn email_ids_in_thread(
     session: &hail_jmap::Session,
     thread_id: &str,
@@ -1102,10 +1101,6 @@ impl MailboxRole {
             Self::Trash => "trash",
         }
     }
-}
-
-fn provider_error(err: impl std::fmt::Display) -> ThreadActionError {
-    ThreadActionError::Provider(err.to_string())
 }
 
 fn action_internal(user_id: i64, thread_id: &str, err: String) -> Response {

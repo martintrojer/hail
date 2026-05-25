@@ -1,6 +1,5 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -10,34 +9,33 @@ import type {
   ContactResponse,
   ThreadVerbResponse,
   ThreadViewResponse,
-  UserEnvelope,
 } from '../api/client';
-import { HailApiClient } from '../api/client';
 import { queryKeys } from '../api/queryKeys';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+  seedMe,
+  TestHailApiClient,
+} from '../test-utils';
 import { ThreadPage } from './ThreadPage';
 
-class ThreadPageTestClient extends HailApiClient {
+class ThreadPageTestClient extends TestHailApiClient {
   readonly setAsideCalls: string[] = [];
   readonly replyLaterCalls: string[] = [];
-  readonly createdNotes: Array<{ threadId: string; request: CreateThreadNoteRequest }> = [];
-  readonly bubbleUpCalls: Array<{ threadId: string; request: BubbleUpRequest }> = [];
+  readonly createdNotes: Array<{
+    threadId: string;
+    request: CreateThreadNoteRequest;
+  }> = [];
+  readonly bubbleUpCalls: Array<{
+    threadId: string;
+    request: BubbleUpRequest;
+  }> = [];
 
   constructor(private readonly thread: ThreadViewResponse) {
-    super({ baseUrl: 'http://localhost' });
-  }
-
-  override async me(): Promise<UserEnvelope> {
-    return {
-      user: {
-        id: 1,
-        email: 'reader@example.com',
-        display_name: 'Reader',
-        is_admin: false,
-      },
-    };
+    super();
   }
 
   override async getThread(): Promise<ThreadViewResponse> {
@@ -76,7 +74,9 @@ class ThreadPageTestClient extends HailApiClient {
     };
   }
 
-  override async replyLaterThread(threadId: string): Promise<ThreadVerbResponse> {
+  override async replyLaterThread(
+    threadId: string,
+  ): Promise<ThreadVerbResponse> {
     this.replyLaterCalls.push(threadId);
     return {
       undo: {
@@ -127,22 +127,10 @@ function installTestRouteComponent() {
 }
 
 function renderThread(thread: ThreadViewResponse) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
+  const queryClient = createTestQueryClient();
   const client = new ThreadPageTestClient(thread);
 
-  queryClient.setQueryData(queryKeys.me(), {
-    user: {
-      id: 1,
-      email: 'reader@example.com',
-      display_name: 'Reader',
-      is_admin: false,
-    },
-  } satisfies UserEnvelope);
+  seedMe(queryClient);
   queryClient.setQueryData(queryKeys.thread(thread.thread_id), thread);
 
   currentTestBody = (
@@ -156,11 +144,7 @@ function renderThread(thread: ThreadViewResponse) {
   window.history.pushState({}, '', `/thread/${thread.thread_id}`);
 
   return {
-    ...render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    ),
+    ...renderWithQueryClient(<RouterProvider router={router} />, queryClient),
     client,
     queryClient,
   };
@@ -207,7 +191,9 @@ describe('ThreadPage', () => {
   it('renders sanitized HTML at the trust boundary and shows blocked trackers', async () => {
     const { container } = renderThread(sampleThread());
 
-    expect(await screen.findByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'Receipt' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('1 tracker blocked')).toHaveAttribute(
       'title',
       '1x1 tracking pixel removed',
@@ -223,8 +209,12 @@ describe('ThreadPage', () => {
   it('renders plaintext fallback content when no sanitized HTML is available', async () => {
     renderThread(sampleThread());
 
-    expect(await screen.findByText(/Plaintext fallback line one\./)).toBeInTheDocument();
-    expect(screen.getByText(/Plaintext fallback line two\./)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Plaintext fallback line one\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Plaintext fallback line two\./),
+    ).toBeInTheDocument();
   });
 
   it('opens only one per-message action popup from the subtle dots buttons', async () => {
@@ -236,10 +226,14 @@ describe('ThreadPage', () => {
     expect(actionButtons).toHaveLength(2);
 
     fireEvent.click(actionButtons[0]);
-    expect(screen.getAllByRole('menu', { name: 'Message actions' })).toHaveLength(1);
+    expect(
+      screen.getAllByRole('menu', { name: 'Message actions' }),
+    ).toHaveLength(1);
 
     fireEvent.click(actionButtons[1]);
-    expect(screen.getAllByRole('menu', { name: 'Message actions' })).toHaveLength(1);
+    expect(
+      screen.getAllByRole('menu', { name: 'Message actions' }),
+    ).toHaveLength(1);
 
     fireEvent.click(actionButtons[1]);
     expect(
@@ -261,7 +255,9 @@ describe('ThreadPage', () => {
       }),
     );
 
-    expect(await screen.findByText('Check expense category.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Check expense category.'),
+    ).toBeInTheDocument();
 
     const actionButtons = await screen.findAllByRole('button', {
       name: 'Message actions',
@@ -284,13 +280,17 @@ describe('ThreadPage', () => {
         },
       ]);
     });
-    expect(await screen.findByText('Follow up on plain message.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Follow up on plain message.'),
+    ).toBeInTheDocument();
   });
 
   it('does not crash on empty participants or messages', async () => {
     renderThread(sampleThread({ participants: [], messages: [] }));
 
-    expect(await screen.findByText('0 messages with Unknown')).toBeInTheDocument();
+    expect(
+      await screen.findByText('0 messages with Unknown'),
+    ).toBeInTheDocument();
     expect(screen.getByText('No messages in this thread')).toBeInTheDocument();
   });
 
