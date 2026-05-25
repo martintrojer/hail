@@ -16,9 +16,9 @@ import {
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
-import { AppShell as MailAppShell } from './layout/AppShell';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
+import { BubbleUpPage } from './routes/BubbleUpPage';
 import { ComposerPage } from './routes/ComposerPage';
 import { DraftsPage } from './routes/DraftsPage';
 import { MailViewPage } from './routes/MailViewPage';
@@ -380,23 +380,6 @@ function DraftsRoutePage() {
 
 function ComposePage() {
   return <ComposerPage />;
-}
-
-function BubbleUpPage() {
-  return (
-    <MailAppShell
-      title="Bubble Up"
-      description="Threads scheduled to return to your attention."
-      list={(
-        <div className="flex min-h-64 flex-col items-center justify-center border-y border-border-hairline p-8 text-center">
-          <p className="text-base font-semibold text-ink-primary">No bubble-ups scheduled.</p>
-          <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">
-            Bubble up a thread and its return time will show here.
-          </p>
-        </div>
-      )}
-    />
-  );
 }
 
 function ThreadReplyPage({ threadId }: { threadId: string }) {

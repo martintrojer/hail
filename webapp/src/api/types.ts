@@ -171,7 +171,7 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["bubble_up"];
-        delete?: never;
+        delete: operations["cancel_bubble_up"];
         options?: never;
         head?: never;
         patch?: never;
@@ -315,6 +315,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["post_undo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/views/bubble-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_bubble_up"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -535,6 +551,21 @@ export interface components {
             /** Format: date-time */
             surface_at: string;
         };
+        BubbleUpViewItem: {
+            /** Format: int64 */
+            bubble_id: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            surface_at: string;
+            thread_id: string;
+        };
+        BubbleUpViewResponse: {
+            items: components["schemas"]["BubbleUpViewItem"][];
+        };
+        CancelBubbleUpResponse: {
+            status: string;
+        };
         /** @enum {string} */
         Classification: "imbox" | "feed" | "papertrail";
         ClassifyRequest: {
@@ -662,6 +693,13 @@ export interface components {
             /** Format: date-time */
             send_at?: string | null;
         };
+        ScreenerEmail: {
+            email_id: string;
+            preview: string;
+            /** Format: date-time */
+            received_at?: string | null;
+            subject: string;
+        };
         ScreenerLatestPreview: {
             from: string;
             preview: string;
@@ -670,13 +708,13 @@ export interface components {
             subject: string;
         };
         ScreenerSender: {
+            emails: components["schemas"]["ScreenerEmail"][];
             /** Format: date-time */
             first_seen_at: string;
             latest_preview?: null | components["schemas"]["ScreenerLatestPreview"];
             /** Format: int64 */
             message_count: number;
             sender: string;
-            emails: components["schemas"]["ScreenerEmail"][];
         };
         ScreenerViewResponse: {
             senders: components["schemas"]["ScreenerSender"][];
@@ -749,13 +787,6 @@ export interface components {
             blob_id: string;
             size: number;
             type: string;
-        };
-        ScreenerEmail: {
-            email_id: string;
-            preview: string;
-            /** Format: date-time */
-            received_at?: string | null;
-            subject: string;
         };
     };
     responses: never;
@@ -1373,6 +1404,50 @@ export interface operations {
             };
         };
     };
+    cancel_bubble_up: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thread bubble-up cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelBubbleUpResponse"];
+                };
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bubble-up cancellation failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     classify_thread: {
         parameters: {
             query?: never;
@@ -1892,6 +1967,40 @@ export interface operations {
             };
             /** @description Undo action is not implemented. */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_bubble_up: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scheduled future Bubble Up entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BubbleUpViewResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bubble Up view lookup failed. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

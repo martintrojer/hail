@@ -48,7 +48,7 @@ fn uuid_like() -> String {
     format!("{}_{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed))
 }
 
-async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> String {
+async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i64, String) {
     let now = Utc::now();
     let user_id: i64 = sqlx::query_scalar(
         "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
@@ -76,7 +76,7 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> Str
     .execute(&state.db)
     .await
     .expect("insert session");
-    session_id
+    (user_id, session_id)
 }
 
 fn app(state: AppState, verifier: Arc<FakeVerifier>) -> Router {
@@ -104,7 +104,7 @@ impl ThreadVerifier for FakeVerifier {
 #[tokio::test]
 async fn valid_request_inserts_bubble_up() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let db = state.db.clone();
     let surface_at = Utc::now() + Duration::minutes(10);
 
@@ -139,7 +139,7 @@ async fn valid_request_inserts_bubble_up() {
 #[tokio::test]
 async fn at_in_past_returns_400() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "bob@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "bob@example.org").await;
     let past = Utc::now() - Duration::minutes(1);
     let req = Request::builder()
         .method(Method::POST)
@@ -160,7 +160,7 @@ async fn at_in_past_returns_400() {
 #[tokio::test]
 async fn missing_csrf_header_returns_403() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "carol@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "carol@example.org").await;
     let future = Utc::now() + Duration::minutes(10);
     let req = Request::builder()
         .method(Method::POST)
@@ -175,6 +175,65 @@ async fn missing_csrf_header_returns_403() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn cancel_bubble_up_deletes_only_current_users_pending_row() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice-cancel@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "bob-cancel@example.org").await;
+    let db = state.db.clone();
+    let now = Utc::now();
+    let surface_at = now + Duration::minutes(10);
+
+    for (user_id, thread_id) in [
+        (alice_id, "thread-cancel"),
+        (bob_id, "thread-cancel"),
+        (alice_id, "other-thread"),
+    ] {
+        sqlx::query(
+            "INSERT INTO bubble_ups (user_id, thread_id, surface_at, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(user_id)
+        .bind(thread_id)
+        .bind(surface_at)
+        .bind(now)
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+
+    let req = Request::builder()
+        .method(Method::DELETE)
+        .uri("/api/threads/thread-cancel/bubble-up")
+        .header(header::COOKIE, format!("hail_session={alice_sid}"))
+        .header(CSRF_HEADER, "1")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app(state, Arc::new(FakeVerifier { exists: true }))
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "cancelled");
+
+    let remaining: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT user_id, thread_id FROM bubble_ups ORDER BY user_id, thread_id",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        remaining,
+        vec![
+            (alice_id, "other-thread".to_string()),
+            (bob_id, "thread-cancel".to_string()),
+        ]
+    );
 }
 
 #[tokio::test]

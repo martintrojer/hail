@@ -13,6 +13,8 @@ import {
   type AdminUsersResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
+  type BubbleUpViewResponse,
+  type CancelBubbleUpResponse,
   type ContactNote,
   type ContactResponse,
   type ComposeRequest,
@@ -318,6 +320,17 @@ export function useReplyLaterView(
   });
 }
 
+export function useBubbleUpView(
+  client = defaultApiClient,
+  options?: QueryConfig<BubbleUpViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.view('bubble-up'),
+    queryFn: () => client.getBubbleUps(),
+    ...options,
+  });
+}
+
 export function useContact(
   address: string,
   client = defaultApiClient,
@@ -547,6 +560,29 @@ export function useBubbleUpMutation(
         queryKey: queryKeys.thread(variables.threadId),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface CancelBubbleUpMutationVariables {
+  threadId: string;
+}
+
+export function useCancelBubbleUpMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<CancelBubbleUpMutationVariables, CancelBubbleUpResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.cancelBubbleUp(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.view('bubble-up') });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
