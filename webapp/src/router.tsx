@@ -505,9 +505,13 @@ const threadRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/thread/$threadId',
   beforeLoad: requireAuth,
+  validateSearch: (search: Record<string, unknown>) => ({
+    from: (search.from as string) || undefined,
+  }),
   component: () => {
     const { threadId } = threadRoute.useParams();
-    return <ThreadPage threadId={threadId} />;
+    const { from } = threadRoute.useSearch();
+    return <ThreadPage threadId={threadId} sourceView={from} />;
   },
 });
 

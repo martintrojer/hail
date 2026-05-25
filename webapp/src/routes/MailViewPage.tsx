@@ -407,7 +407,7 @@ function ThreadLink({
   return (
     <Link
       to="/thread/$threadId"
-      params={{ threadId: item.thread_id }}
+      search={{ from: undefined }} params={{ threadId: item.thread_id }}
       className={className}
       data-hail-mail-list-item="true"
       data-hail-thread-id={item.thread_id}

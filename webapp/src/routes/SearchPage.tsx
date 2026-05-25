@@ -92,7 +92,7 @@ function MailResultCard({ item }: { item: MailSearchResult }) {
   return (
     <Link
       to="/thread/$threadId"
-      params={{ threadId: item.thread_id }}
+      search={{ from: undefined }} params={{ threadId: item.thread_id }}
       className="group block rounded-lg border border-hairline bg-surface p-4 transition hover:border-accent-blue hover:bg-hover focus:outline-none focus:ring-2 focus:ring-accent-blue"
       aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >

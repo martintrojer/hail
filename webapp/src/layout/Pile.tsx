@@ -56,6 +56,7 @@ function PileItemRow({ item, stack }: { item: PileItem; stack: StackConfig }) {
     <Link
       to="/thread/$threadId"
       params={{ threadId: item.thread_id }}
+      search={{ from: stack.kind }}
       className="group flex items-start gap-2 rounded-md px-2 py-2 outline-none hover:bg-bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
       aria-label={`Open ${preview.subject} from ${preview.sender}`}
     >
