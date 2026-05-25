@@ -184,11 +184,12 @@ pub async fn route_email(
         });
     }
 
+    let sender = normalize_sender(&env.from);
     let row: Option<(String, Option<String>)> = sqlx::query_as(
         "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
     )
     .bind(user_id)
-    .bind(&env.from)
+    .bind(&sender)
     .fetch_optional(&mut *conn)
     .await?;
 
@@ -214,7 +215,7 @@ pub async fn route_email(
         Some((decision, _)) if decision == "pending" => {
             move_to_screener_if_needed(jmap, env).await?;
             Ok(RouteOutcome::ScreenerPending {
-                sender: env.from.clone(),
+                sender: sender.clone(),
             })
         }
         Some((decision, _)) => Err(RouteError::InvalidDecision(decision)),
@@ -228,13 +229,11 @@ pub async fn route_email(
                  ON CONFLICT(user_id, sender_address) DO NOTHING",
             )
             .bind(user_id)
-            .bind(&env.from)
+            .bind(&sender)
             .bind(first_seen_at)
             .execute(&mut *conn)
             .await?;
-            Ok(RouteOutcome::ScreenerPending {
-                sender: env.from.clone(),
-            })
+            Ok(RouteOutcome::ScreenerPending { sender })
         }
     }
 }

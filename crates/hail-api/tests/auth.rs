@@ -325,10 +325,7 @@ async fn successful_login_sets_cookie_and_creates_session() {
         .expect("set-cookie")
         .to_str()
         .expect("cookie header");
-    assert!(
-        cookie.contains("HttpOnly"),
-        "cookie missing HttpOnly: {cookie}"
-    );
+    assert_login_cookie_flags(cookie);
 
     let (session_count, encrypted_token): (i64, Vec<u8>) =
         sqlx::query_as("SELECT COUNT(*), MAX(jmap_token_enc) FROM sessions")
@@ -344,6 +341,27 @@ async fn successful_login_sets_cookie_and_creates_session() {
             &base64::engine::general_purpose::STANDARD,
             b"alice@example.org:correct horse battery staple"
         )
+    );
+}
+
+fn assert_login_cookie_flags(cookie: &str) {
+    assert!(
+        cookie.starts_with("hail_session="),
+        "cookie name/value missing: {cookie}"
+    );
+    assert!(
+        cookie.contains("HttpOnly"),
+        "cookie missing HttpOnly: {cookie}"
+    );
+    assert!(cookie.contains("Secure"), "cookie missing Secure: {cookie}");
+    assert!(
+        cookie.contains("SameSite=Lax"),
+        "cookie missing SameSite=Lax: {cookie}"
+    );
+    assert!(cookie.contains("Path=/"), "cookie missing Path=/: {cookie}");
+    assert!(
+        cookie.contains("Max-Age=2592000"),
+        "cookie missing 30-day Max-Age: {cookie}"
     );
 }
 
