@@ -211,6 +211,26 @@ describe('ThreadPage', () => {
     expect(screen.getByText(/Plaintext fallback line two\./)).toBeInTheDocument();
   });
 
+  it('opens only one per-message action popup from the subtle dots buttons', async () => {
+    renderThread(sampleThread());
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+    expect(actionButtons).toHaveLength(2);
+
+    fireEvent.click(actionButtons[0]);
+    expect(screen.getAllByRole('menu', { name: 'Message actions' })).toHaveLength(1);
+
+    fireEvent.click(actionButtons[1]);
+    expect(screen.getAllByRole('menu', { name: 'Message actions' })).toHaveLength(1);
+
+    fireEvent.click(actionButtons[1]);
+    expect(
+      screen.queryByRole('menu', { name: 'Message actions' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('does not crash on empty participants or messages', async () => {
     renderThread(sampleThread({ participants: [], messages: [] }));
 
