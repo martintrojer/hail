@@ -11,6 +11,7 @@ import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
+import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 
 interface TrashPageProps {
   client?: HailApiClient;
@@ -46,17 +47,17 @@ function TrashRow({
           ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
         >
           <div className="flex items-baseline justify-between gap-4">
-            <p className="truncate text-base font-semibold leading-snug text-ink-primary">
+            <p className={senderNameClass}>
               {item.from || 'Unknown sender'}
             </p>
-            <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
+            <time className={timeClass}>
               {formatDateTime(item.received_at)}
             </time>
           </div>
-          <p className="mt-1 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary">
+          <p className={`mt-1 ${subjectClass}`}>
             {item.subject || '(no subject)'}
           </p>
-          <p className="mt-1 truncate text-sm font-normal leading-snug text-ink-tertiary">
+          <p className={`mt-1 ${previewClass}`}>
             {item.preview || 'No preview available.'}
           </p>
         </ThreadLink>

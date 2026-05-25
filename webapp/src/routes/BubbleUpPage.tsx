@@ -6,6 +6,7 @@ import { ListView } from '../components/ListView';
 import { LoadingState } from '../components/LoadingState';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
+import { senderNameClass } from '../lib/mailRowStyles';
 
 function formatBubbleTime(value: string) {
   const date = new Date(value);
@@ -52,7 +53,7 @@ function BubbleUpRow({ item }: { item: BubbleUpViewItem }) {
         className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none"
         aria-label={`Open thread ${item.thread_id}`}
       >
-        <p className="truncate text-base font-semibold leading-snug text-ink-primary">
+        <p className={senderNameClass}>
           {item.thread_id}
         </p>
         <p className="mt-1 text-sm leading-snug text-ink-secondary">

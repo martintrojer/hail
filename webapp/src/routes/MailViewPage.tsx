@@ -29,6 +29,7 @@ import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
+import { previewClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 
 interface MailViewPageProps {
   view: MailViewKind;
@@ -279,15 +280,15 @@ function ImboxThreadRow({ item }: { item: MailViewItem }) {
           </p>
           {item.unread ? <NewPill /> : null}
         </div>
-        <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
+        <time className={timeClass}>
           {formatDateTime(item.received_at)}
         </time>
       </div>
       <SubjectWithNoteIcon
         item={item}
-        className="mt-1 flex items-center truncate text-[0.95rem] font-normal leading-snug text-ink-secondary"
+        className={`mt-1 flex items-center ${subjectClass}`}
       />
-      <p className="mt-1 truncate text-sm font-normal leading-snug text-ink-tertiary">
+      <p className={`mt-1 ${previewClass}`}>
         {item.preview || 'No preview available.'}
       </p>
     </ThreadLink>
@@ -314,7 +315,7 @@ function FeedThreadRow({ item }: { item: MailViewItem }) {
           </p>
           {item.unread ? <NewPill /> : null}
         </div>
-        <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
+        <time className={timeClass}>
           {formatDateTime(item.received_at)}
         </time>
       </div>
@@ -345,7 +346,7 @@ function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
           </p>
           <SubjectWithNoteIcon
             item={item}
-            className="mt-0.5 flex min-w-0 items-center truncate text-[0.95rem] font-normal leading-snug text-ink-secondary sm:mt-0"
+            className={`mt-0.5 flex min-w-0 items-center ${subjectClass} sm:mt-0`}
           />
         </div>
         <time className="shrink-0 text-[0.8rem] leading-snug text-ink-tertiary">
