@@ -226,9 +226,19 @@ function ThreadActions({
   thread: ThreadViewResponse;
   client?: Parameters<typeof useThread>[1];
 }) {
+  const navigate = useNavigate();
   const { showToast } = useUndoToast();
   const [classification, setClassification] =
     useState<MailClassification>('imbox');
+  function returnToPreviousList() {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    void navigate({ to: '/imbox' });
+  }
+
   const classify = useClassifyThreadMutation(client, {
     onSuccess: (data, variables) => {
       const label =
@@ -239,6 +249,7 @@ function ThreadActions({
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Thread classification undone.',
       });
+      returnToPreviousList();
     },
   });
   const archive = useArchiveThreadMutation(client, {
@@ -248,6 +259,7 @@ function ThreadActions({
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Archive undone.',
       });
+      returnToPreviousList();
     },
   });
   const trash = useTrashThreadMutation(client, {
@@ -257,6 +269,7 @@ function ThreadActions({
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Trash undone.',
       });
+      returnToPreviousList();
     },
   });
   const setAside = useSetAsideThreadMutation(client, {
