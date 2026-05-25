@@ -13,6 +13,7 @@ import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
+import { senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 
 interface DraftsPageProps {
   client?: HailApiClient;
@@ -54,14 +55,14 @@ function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient 
         aria-label={`Resume draft ${item.subject || '(no subject)'}`}
       >
         <div className="flex items-baseline justify-between gap-4">
-          <p className="truncate text-base font-semibold leading-snug text-ink-primary">
+          <p className={senderNameClass}>
             {item.subject || '(no subject)'}
           </p>
-          <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
+          <time className={timeClass}>
             {formatDateTime(item.received_at, 'Not saved yet')}
           </time>
         </div>
-        <p className="mt-1 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary">
+        <p className={`mt-1 ${subjectClass}`}>
           {recipientSummary(item)}
         </p>
       </Link>
