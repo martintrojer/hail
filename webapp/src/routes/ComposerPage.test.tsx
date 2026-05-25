@@ -24,6 +24,7 @@ class ComposerPageTestClient extends HailApiClient {
   readonly sendReplyCalls: Array<{ threadId: string; body: ReplyRequest }> = [];
   readonly createDraftCalls: DraftRequest[] = [];
   readonly updateDraftCalls: Array<{ draftId: string; body: DraftRequest }> = [];
+  getDraftCalls: string[] = [];
   getThreadCalls: string[] = [];
   threadResponse: ThreadViewResponse = {
     thread_id: 'thread-123',
@@ -46,6 +47,14 @@ class ComposerPageTestClient extends HailApiClient {
   sendReplyError: unknown;
   createDraftError: unknown;
   updateDraftError: unknown;
+  draftResponse = {
+    draft_id: 'draft-existing',
+    to: ['alice@example.com', 'bob@example.com'],
+    cc: ['carol@example.com'],
+    bcc: ['dave@example.com'],
+    subject: 'Saved draft subject',
+    body_markdown: 'Saved draft body.',
+  };
 
   constructor() {
     super({ baseUrl: 'http://localhost' });
@@ -65,6 +74,11 @@ class ComposerPageTestClient extends HailApiClient {
   override async getThread(threadId: string): Promise<ThreadViewResponse> {
     this.getThreadCalls.push(threadId);
     return this.threadResponse;
+  }
+
+  override async getDraft(draftId: string) {
+    this.getDraftCalls.push(draftId);
+    return this.draftResponse;
   }
 
   override async sendCompose(body: ComposeRequest): Promise<ComposeResponse> {
@@ -153,6 +167,7 @@ interface RenderComposerOptions {
   initialTo?: string[];
   initialSubject?: string;
   replyAll?: boolean;
+  draftId?: string;
 }
 
 function renderComposer({
@@ -161,6 +176,7 @@ function renderComposer({
   initialTo,
   initialSubject,
   replyAll,
+  draftId,
 }: RenderComposerOptions = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -185,6 +201,7 @@ function renderComposer({
           client={client}
           replyToThreadId={replyToThreadId}
           replyAll={replyAll}
+          draftId={draftId}
           initialTo={initialTo}
           initialSubject={initialSubject}
         />
@@ -328,6 +345,37 @@ describe('ComposerPage', () => {
       new Date(sendAtValue).toISOString(),
     );
     expect(await screen.findByText('Scheduled for later. Draft draft-1 is queued.')).toBeInTheDocument();
+  });
+
+  it('loads an existing draft and updates it instead of creating another draft', async () => {
+    const client = new ComposerPageTestClient();
+    renderComposer({ client, draftId: 'draft-existing' });
+
+    expect(await screen.findByLabelText('To')).toHaveValue('alice@example.com, bob@example.com');
+    expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
+    expect(screen.getByLabelText('Bcc')).toHaveValue('dave@example.com');
+    expect(screen.getByLabelText('Subject')).toHaveValue('Saved draft subject');
+    expect(screen.getByLabelText('Body')).toHaveValue('Saved draft body.');
+    expect(client.getDraftCalls).toEqual(['draft-existing']);
+
+    fireEvent.change(screen.getByLabelText('Body'), {
+      target: { value: 'Updated resumed draft body.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
+    expect(client.createDraftCalls).toEqual([]);
+    expect(client.updateDraftCalls[0]).toEqual({
+      draftId: 'draft-existing',
+      body: {
+        to: ['alice@example.com', 'bob@example.com'],
+        cc: ['carol@example.com'],
+        bcc: ['dave@example.com'],
+        subject: 'Saved draft subject',
+        body_markdown: 'Updated resumed draft body.',
+        attachments: [],
+      },
+    });
   });
 
   it('creates a partial draft without send-required fields', async () => {

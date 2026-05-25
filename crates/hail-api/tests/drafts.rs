@@ -8,7 +8,9 @@ use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
 use hail_api::middleware::rate_limit::IpRateLimiter;
-use hail_api::routes::drafts::{DraftCreate, DraftStore, DraftStoreError, DraftUpdate};
+use hail_api::routes::drafts::{
+    DraftCreate, DraftDetails, DraftStore, DraftStoreError, DraftUpdate,
+};
 use hail_api::state::AppState;
 use hail_core::{Config, KEY_LEN};
 use hail_db::connect;
@@ -136,6 +138,9 @@ enum Call {
         subject: String,
         body_markdown: String,
     },
+    Get {
+        draft_id: String,
+    },
     Update {
         draft_id: String,
         to: Option<Vec<String>>,
@@ -193,6 +198,31 @@ impl DraftStore for FakeDraftStore {
                 body_markdown: draft.body_markdown,
             });
             Ok("draft-1".to_string())
+        })
+    }
+
+    fn get<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            if self.should_fail() {
+                return Err(DraftStoreError::Provider("boom".to_string()));
+            }
+            self.calls.lock().expect("calls mutex").push(Call::Get {
+                draft_id: draft_id.to_string(),
+            });
+            Ok(Some(DraftDetails {
+                draft_id: draft_id.to_string(),
+                to: vec!["bob@example.org".to_string()],
+                cc: vec!["carol@example.org".to_string()],
+                bcc: vec!["dana@example.org".to_string()],
+                subject: "Saved draft".to_string(),
+                body_markdown: "Saved body".to_string(),
+            }))
         })
     }
 
@@ -414,6 +444,39 @@ async fn create_draft_accepts_empty_send_fields() {
             bcc: vec![],
             subject: String::new(),
             body_markdown: String::new(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn get_draft_returns_saved_composer_fields() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::GET,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["draft_id"], "draft-1");
+    assert_eq!(body["to"], serde_json::json!(["bob@example.org"]));
+    assert_eq!(body["cc"], serde_json::json!(["carol@example.org"]));
+    assert_eq!(body["bcc"], serde_json::json!(["dana@example.org"]));
+    assert_eq!(body["subject"], "Saved draft");
+    assert_eq!(body["body_markdown"], "Saved body");
+    assert_eq!(
+        store.calls(),
+        vec![Call::Get {
+            draft_id: "draft-1".to_string(),
         }]
     );
 }

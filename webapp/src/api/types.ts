@@ -104,7 +104,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["get_draft"];
         put?: never;
         post?: never;
         delete: operations["delete_draft"];
@@ -712,6 +712,14 @@ export interface components {
         DestroyThreadResponse: {
             status: string;
         };
+        DraftDetails: {
+            bcc: string[];
+            body_markdown: string;
+            cc: string[];
+            draft_id: string;
+            subject: string;
+            to: string[];
+        };
         DraftPayload: {
             attachments?: unknown[] | null;
             bcc?: string[] | null;
@@ -1170,6 +1178,57 @@ export interface operations {
             };
             /** @description Missing or invalid session. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP draft store failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP draft email id to fetch. */
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft details for composer resume. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftDetails"];
+                };
+            };
+            /** @description Invalid draft id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Draft not found or no longer a draft. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -19,6 +19,7 @@ import {
 import {
   defaultApiClient,
   useCreateDraftMutation,
+  useDraft,
   useSendComposeMutation,
   useUpdateDraftMutation,
 } from '../api/query';
@@ -29,6 +30,7 @@ import { AppShell } from '../layout/AppShell';
 interface ComposerPageProps {
   replyToThreadId?: string;
   replyAll?: boolean;
+  draftId?: string;
   initialTo?: string[];
   initialSubject?: string;
   client?: HailApiClient;
@@ -190,7 +192,7 @@ function placeCaretAtStart(element: HTMLTextAreaElement | null) {
   });
 }
 
-export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
+export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initialDraftId, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [form, setForm] = useState<ComposerForm>({
@@ -202,7 +204,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = []
     sendAt: '',
   });
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
-  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftId, setDraftId] = useState<string | null>(initialDraftId ?? null);
   const [dirty, setDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -214,6 +216,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = []
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
   const createDraft = useCreateDraftMutation(client);
+  const draftQuery = useDraft(initialDraftId, client, { enabled: Boolean(initialDraftId) && !replyToThreadId });
   const updateDraft = useUpdateDraftMutation(client);
   const hasUnsupportedAttachments = attachments.length > 0;
   const sendCompose = useSendComposeMutation(client, {
@@ -235,7 +238,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = []
   }), [form]);
 
   const canSaveDraft = !replyToThreadId;
-  const canSubmit = !replyPrefillLoading
+  const prefillLoading = replyPrefillLoading || draftQuery.isLoading;
+  const canSubmit = !prefillLoading
     && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
     && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
     && form.body.trim().length > 0;
@@ -288,6 +292,39 @@ export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = []
       createDraft.mutate(draftPayload, { onSuccess });
     }
   }
+
+  useEffect(() => {
+    if (!initialDraftId || replyToThreadId || !draftQuery.data) return;
+
+    const nextForm = {
+      to: draftQuery.data.to.join(', '),
+      cc: draftQuery.data.cc.join(', '),
+      bcc: draftQuery.data.bcc.join(', '),
+      subject: draftQuery.data.subject,
+      body: draftQuery.data.body_markdown,
+      sendAt: '',
+    };
+    setForm(nextForm);
+    setDraftId(draftQuery.data.draft_id);
+    setShowCarbonCopyFields(nextForm.cc.length > 0 || nextForm.bcc.length > 0);
+    snapshotRef.current = JSON.stringify({
+      to: draftQuery.data.to,
+      cc: draftQuery.data.cc,
+      bcc: draftQuery.data.bcc,
+      subject: draftQuery.data.subject,
+      body_markdown: draftQuery.data.body_markdown,
+      attachments: [],
+    });
+    setDirty(false);
+    setLastSavedAt(null);
+    setSendError(null);
+  }, [draftQuery.data, initialDraftId, replyToThreadId]);
+
+  useEffect(() => {
+    if (draftQuery.isError && initialDraftId && !replyToThreadId) {
+      setSendError(apiErrorMessage(draftQuery.error, 'Draft could not be loaded.'));
+    }
+  }, [draftQuery.error, draftQuery.isError, initialDraftId, replyToThreadId]);
 
   useEffect(() => {
     if (!replyToThreadId) {
@@ -402,9 +439,9 @@ export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = []
             <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : 'Compose message'}</h2>
           </div>
 
-          {replyPrefillLoading ? (
+          {prefillLoading ? (
             <div className="flex min-h-[22rem] flex-1 items-center justify-center hail-chrome text-ink-secondary">
-              Loading reply details…
+              {draftQuery.isLoading ? 'Loading draft…' : 'Loading reply details…'}
             </div>
           ) : (
           <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
@@ -419,7 +456,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, initialTo = []
                   placeholder="alice@example.com, bob@example.com"
                   className={lineInputClass}
                   autoComplete="email"
-                  autoFocus={!replyToThreadId}
+                  autoFocus={!replyToThreadId && !initialDraftId}
                 />
                 <button
                   type="button"

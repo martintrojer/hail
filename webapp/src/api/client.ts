@@ -17,6 +17,9 @@ type ReadyzUnavailable = ResponseBody<
 type ThreadGetSuccess = ResponseBody<
   paths['/api/threads/{thread_id}']['get']['responses']['200']
 >;
+type DraftGetSuccess = ResponseBody<
+  paths['/api/drafts/{draft_id}']['get']['responses']['200']
+>;
 type BlobUploadSuccess = ResponseBody<
   paths['/api/blobs']['post']['responses']['201']
 >;
@@ -183,6 +186,7 @@ export type ReplyRequest = components['schemas']['ReplyPayload'];
 export type ComposeResponse = components['schemas']['ComposeResponse'];
 export type DraftRequest = components['schemas']['DraftPayload'];
 export type DraftResponse = components['schemas']['DraftResponse'];
+export type DraftDetails = DraftGetSuccess;
 
 export type BlobUploadResponse = BlobUploadSuccess;
 
@@ -727,6 +731,13 @@ export class HailApiClient {
         mutating: true,
       }),
       201,
+    );
+  }
+
+  async getDraft(draftId: string): Promise<DraftDetails> {
+    return this.#json<DraftDetails>(
+      await this.#request(`/api/drafts/${encodeURIComponent(draftId)}`),
+      200,
     );
   }
 

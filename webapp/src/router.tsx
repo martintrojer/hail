@@ -380,8 +380,8 @@ function DraftsRoutePage() {
 }
 
 function ComposePage() {
-  const { replyTo, replyAll } = composeRoute.useSearch();
-  return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} />;
+  const { replyTo, replyAll, draftId } = composeRoute.useSearch();
+  return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} draftId={draftId} />;
 }
 
 function ThreadReplyPage({ threadId }: { threadId: string }) {
@@ -538,6 +538,7 @@ const trashRoute = createRoute({
 interface ComposeSearch {
   replyTo?: string;
   replyAll?: boolean;
+  draftId?: string;
   draft?: string;
   forward?: string;
 }
@@ -551,6 +552,11 @@ const composeRoute = createRoute({
       ? search.replyTo
       : undefined,
     replyAll: search.replyAll === '1' || search.replyAll === 'true' || search.replyAll === true,
+    draftId: typeof search.draftId === 'string' && search.draftId.length > 0
+      ? search.draftId
+      : typeof search.draft === 'string' && search.draft.length > 0
+        ? search.draft
+        : undefined,
     draft: typeof search.draft === 'string' && search.draft.length > 0
       ? search.draft
       : undefined,
