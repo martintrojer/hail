@@ -1,7 +1,6 @@
-import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from '@tanstack/react-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  HailApiError,
   type HailApiClient,
 
   type MailViewItem,
@@ -21,10 +20,15 @@ import {
 import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle, StickyNote, X, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { StateCard } from '../components/StateCard';
+import { ThreadLink } from '../components/ThreadLink';
 import { ListView } from '../components/ListView';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useOptionalUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
+import { pillButtonClass } from '../lib/buttonStyles';
+import { formatDateTime } from '../lib/dates';
+import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
 interface MailViewPageProps {
   view: MailViewKind;
@@ -65,57 +69,8 @@ function useMailView(view: MailViewKind, client?: HailApiClient) {
   }
 }
 
-function errorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again to refresh this view.';
-    }
-    return `Mail view failed with HTTP ${error.status}.`;
-  }
-
-  return 'Mail view failed to load. Refresh and try again.';
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) {
-    return 'No date';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-
-  const now = new Date();
-  const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' }),
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
-}
-
 function classificationLabel(classification: string) {
   return (viewLabels as Record<string, string>)[classification] ?? classification;
-}
-
-function StateCard({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex min-h-[300px] flex-col items-center justify-center p-8 text-center">
-      <p className="text-lg font-semibold text-ink-primary">{title}</p>
-      <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
-    </div>
-  );
-}
-
-function threadActionErrorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    return `Thread action failed with HTTP ${error.status}.`;
-  }
-
-  return 'Thread action failed. Try again.';
 }
 
 function ShortcutActionButton({
@@ -229,7 +184,7 @@ function ThreadShortcutActions({
       />
       {error ? (
         <span role="alert" className="sr-only">
-          {threadActionErrorMessage(error)}
+          {actionErrorMessage(error, 'Thread action')}
         </span>
       ) : null}
     </>
@@ -307,8 +262,10 @@ function SubjectWithNoteIcon({
 function ImboxThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
-      item={item}
+      threadId={item.thread_id}
+      mailListItem
       className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-4 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-5"
+      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
       <div className="flex items-baseline justify-between gap-4">
@@ -323,7 +280,7 @@ function ImboxThreadRow({ item }: { item: MailViewItem }) {
           {item.unread ? <NewPill /> : null}
         </div>
         <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
-          {formatDate(item.received_at)}
+          {formatDateTime(item.received_at)}
         </time>
       </div>
       <SubjectWithNoteIcon
@@ -340,8 +297,10 @@ function ImboxThreadRow({ item }: { item: MailViewItem }) {
 function FeedThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
-      item={item}
+      threadId={item.thread_id}
+      mailListItem
       className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-6 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-7"
+      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
       <div className="flex items-baseline justify-between gap-4">
@@ -356,7 +315,7 @@ function FeedThreadRow({ item }: { item: MailViewItem }) {
           {item.unread ? <NewPill /> : null}
         </div>
         <time className="shrink-0 text-sm leading-snug text-ink-tertiary">
-          {formatDate(item.received_at)}
+          {formatDateTime(item.received_at)}
         </time>
       </div>
       <SubjectWithNoteIcon
@@ -373,8 +332,10 @@ function FeedThreadRow({ item }: { item: MailViewItem }) {
 function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
-      item={item}
+      threadId={item.thread_id}
+      mailListItem
       className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-2.5 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-3"
+      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
       <div className="flex items-baseline justify-between gap-4">
@@ -388,42 +349,11 @@ function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
           />
         </div>
         <time className="shrink-0 text-[0.8rem] leading-snug text-ink-tertiary">
-          {formatDate(item.received_at)}
+          {formatDateTime(item.received_at)}
         </time>
       </div>
     </ThreadLink>
   );
-}
-
-function ThreadLink({
-  item,
-  className,
-  children,
-}: {
-  item: MailViewItem;
-  className: string;
-  children: ReactNode;
-}) {
-  return (
-    <Link
-      to="/thread/$threadId"
-      search={{ from: undefined }} params={{ threadId: item.thread_id }}
-      className={className}
-      data-hail-mail-list-item="true"
-      data-hail-thread-id={item.thread_id}
-      aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
-    >
-      {children}
-    </Link>
-  );
-}
-
-function outlinePowerButtonClassName() {
-  return 'rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
-}
-
-function primaryPowerButtonClassName() {
-  return 'rounded-full bg-accent-blue px-3 py-1 text-xs font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
 }
 
 function PowerThroughMode({
@@ -550,7 +480,7 @@ function PowerThroughMode({
             </h2>
           </div>
           <time className="shrink-0 text-sm text-ink-tertiary">
-            {formatDate(currentItem.received_at)}
+            {formatDateTime(currentItem.received_at)}
           </time>
         </div>
         <p className="mt-4 text-base leading-7 text-ink-secondary">
@@ -562,7 +492,7 @@ function PowerThroughMode({
             type="button"
             disabled={busy}
             onClick={() => classifyCurrent('imbox')}
-            className={primaryPowerButtonClassName()}
+            className={pillButtonClass('primary')}
           >
             Keep in Imbox
           </button>
@@ -570,7 +500,7 @@ function PowerThroughMode({
             type="button"
             disabled={busy}
             onClick={() => classifyCurrent('feed')}
-            className={outlinePowerButtonClassName()}
+            className={pillButtonClass('outline')}
           >
             Move to Feed
           </button>
@@ -578,7 +508,7 @@ function PowerThroughMode({
             type="button"
             disabled={busy}
             onClick={() => classifyCurrent('papertrail')}
-            className={outlinePowerButtonClassName()}
+            className={pillButtonClass('outline')}
           >
             Move to Paper Trail
           </button>
@@ -586,7 +516,7 @@ function PowerThroughMode({
             type="button"
             disabled={busy}
             onClick={setCurrentAside}
-            className={outlinePowerButtonClassName()}
+            className={pillButtonClass('outline')}
           >
             Set Aside
           </button>
@@ -594,7 +524,7 @@ function PowerThroughMode({
             type="button"
             disabled={busy}
             onClick={setCurrentReplyLater}
-            className={outlinePowerButtonClassName()}
+            className={pillButtonClass('outline')}
           >
             Reply Later
           </button>
@@ -602,7 +532,7 @@ function PowerThroughMode({
             type="button"
             disabled={busy}
             onClick={replyCurrent}
-            className={outlinePowerButtonClassName()}
+            className={pillButtonClass('outline')}
           >
             Reply
           </button>
@@ -610,7 +540,7 @@ function PowerThroughMode({
 
         {error ? (
           <p role="alert" className="mt-4 text-sm text-accent-red">
-            {threadActionErrorMessage(error)}
+            {actionErrorMessage(error, 'Thread action')}
           </p>
         ) : null}
       </article>
@@ -692,7 +622,7 @@ export function MailViewPage({
   } else if (query.isError) {
     list = (
       <ErrorState
-        message={errorMessage(query.error)}
+        message={viewErrorMessage(query.error, 'Mail view')}
         onRetry={() => void query.refetch()}
       />
     );

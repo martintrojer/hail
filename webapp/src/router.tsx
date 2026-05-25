@@ -8,7 +8,6 @@ import {
   redirect,
   useNavigate,
 } from '@tanstack/react-router';
-import { HailApiError } from './api/client';
 import {
   defaultApiClient,
   useLoginMutation,
@@ -16,6 +15,7 @@ import {
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
+import { formErrorMessage } from './lib/errorMessages';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
 import { BubbleUpPage } from './routes/BubbleUpPage';
@@ -103,22 +103,6 @@ function ErrorMessage({ message }: { message: string | null }) {
   );
 }
 
-function apiErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof HailApiError) {
-    if (error.status === 401) {
-      return 'Email or password was not accepted.';
-    }
-    if (error.status === 409) {
-      return 'Setup is no longer active. Try signing in instead.';
-    }
-    if (error.status === 422 || error.status === 400) {
-      return 'Check the form values and try again.';
-    }
-  }
-
-  return fallback;
-}
-
 function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
@@ -164,7 +148,7 @@ function LoginPage() {
           <ErrorMessage
             message={
               login.error
-                ? apiErrorMessage(login.error, 'Sign in failed. Try again.')
+                ? formErrorMessage(login.error, 'Sign in failed. Try again.')
                 : null
             }
           />
@@ -325,7 +309,7 @@ function SetupPage() {
           <ErrorMessage
             message={
               setupAdmin.error
-                ? apiErrorMessage(
+                ? formErrorMessage(
                     setupAdmin.error,
                     'Setup failed. Check the values and try again.',
                   )

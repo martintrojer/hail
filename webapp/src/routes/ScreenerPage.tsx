@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import type { HailApiClient } from '../api/client';
 import {
-  HailApiError,
   type DeniedSender,
   type ScreenerClassification,
   type ScreenerPendingSender,
@@ -22,31 +21,9 @@ import {
 } from '../components/ScreenerRoutingDropdown';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
-
-function errorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again to refresh the Screener.';
-    }
-    return `Screener failed with HTTP ${error.status}.`;
-  }
-
-  return 'Screener failed to load. Refresh and try again.';
-}
-
-function decisionErrorMessage(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 400 || error.status === 422) {
-      return 'The server rejected this decision. Refresh and try again.';
-    }
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again before deciding.';
-    }
-    return `Decision failed with HTTP ${error.status}.`;
-  }
-
-  return 'Decision failed. Try again.';
-}
+import { pillButtonClass } from '../lib/buttonStyles';
+import { formatDate } from '../lib/dates';
+import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
 function previewRecord(preview: unknown) {
   if (!preview || typeof preview !== 'object') {
@@ -87,23 +64,6 @@ function previewText(preview: unknown) {
     'snippet',
     'summary',
   ]);
-}
-
-function formatPendingEmailDate(value?: string | null) {
-  if (!value) {
-    return 'Date unavailable';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(date);
 }
 
 function parseSender(sender: string) {
@@ -263,7 +223,7 @@ function PendingSenderCard({
                       dateTime={email.received_at ?? undefined}
                       className="shrink-0 text-xs text-ink-tertiary"
                     >
-                      {formatPendingEmailDate(email.received_at)}
+                      {formatDate(email.received_at)}
                     </time>
                   </div>
                   <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-tertiary">
@@ -285,7 +245,7 @@ function PendingSenderCard({
           aria-expanded={routingOpen}
           onClick={showRoutingDropdown}
           disabled={isPending}
-          className="rounded-full bg-accent-blue px-4 py-1.5 text-xs font-semibold text-white hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
+          className={pillButtonClass('primary', 'md')}
         >
           {isPending ? 'Saving…' : 'Yes'}
         </button>
@@ -294,7 +254,7 @@ function PendingSenderCard({
           aria-label="Deny"
           onClick={deny}
           disabled={isPending}
-          className="rounded-full border border-border-menu px-4 py-1.5 text-xs font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
+          className={pillButtonClass('outline', 'md')}
         >
           No
         </button>
@@ -309,24 +269,11 @@ function PendingSenderCard({
 
       {decision.isError ? (
         <p role="alert" className="mt-4 text-sm text-accent-red">
-          {decisionErrorMessage(decision.error)}
+          {actionErrorMessage(decision.error, 'Decision')}
         </p>
       ) : null}
     </article>
   );
-}
-
-function formatDeniedDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(date);
 }
 
 function DeniedSenderRow({
@@ -350,11 +297,11 @@ function DeniedSenderRow({
           {sender.sender_address}
         </p>
         <p className="mt-1 text-xs text-ink-tertiary">
-          Denied {formatDeniedDate(sender.denied_at)}
+          Denied {formatDate(sender.denied_at)}
         </p>
         {undo.isError ? (
           <p role="alert" className="mt-2 text-xs text-accent-red">
-            {decisionErrorMessage(undo.error)}
+            {actionErrorMessage(undo.error, 'Decision')}
           </p>
         ) : null}
       </div>
@@ -362,7 +309,7 @@ function DeniedSenderRow({
         type="button"
         onClick={() => undo.mutate(sender.sender_address)}
         disabled={undo.isPending}
-        className="self-start rounded-full border border-border-menu px-4 py-1.5 text-xs font-semibold text-ink-secondary hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto"
+        className={`${pillButtonClass('outline', 'md')} self-start sm:self-auto`}
       >
         {undo.isPending ? 'Undoing…' : 'Undo'}
       </button>
@@ -425,7 +372,7 @@ function PreviouslyDeniedSection({ client }: { client?: HailApiClient }) {
             <LoadingState label="Loading denied senders" />
           ) : query.isError ? (
             <ErrorState
-              message={errorMessage(query.error)}
+              message={viewErrorMessage(query.error, 'Screener')}
               onRetry={() => void query.refetch()}
             />
           ) : query.data.denied.length === 0 ? (
@@ -449,7 +396,7 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
   } else if (query.isError) {
     list = (
       <ErrorState
-        message={errorMessage(query.error)}
+        message={viewErrorMessage(query.error, 'Screener')}
         onRetry={() => void query.refetch()}
       />
     );

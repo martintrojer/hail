@@ -24,9 +24,13 @@ import {
   iconSizeProps,
 } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { StateCard } from '../components/StateCard';
 import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
+import { pillButtonClass } from '../lib/buttonStyles';
+import { formatFullDateTime } from '../lib/dates';
+import { formatParticipantEmail, formatParticipantList, formatParticipantName } from '../lib/participants';
 
 interface ThreadPageProps {
   threadId: string;
@@ -38,43 +42,6 @@ interface ThreadPageProps {
 interface LocalNote extends InlineNoteProps {
   id: number;
   messageId: string;
-}
-
-function formatParticipantName(participant: {
-  name?: string | null;
-  email: string;
-}) {
-  return participant.name?.trim() || participant.email || 'Unknown';
-}
-
-function formatParticipantEmail(participant: { email: string } | null) {
-  return participant?.email.trim() || 'unknown sender';
-}
-
-function formatParticipantList(
-  participants: Array<{ name?: string | null; email: string }>,
-) {
-  if (participants.length === 0) {
-    return 'Unknown';
-  }
-
-  return participants.map(formatParticipantName).join(', ');
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) {
-    return 'No date';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
 }
 
 function errorCopy(error: Error) {
@@ -94,15 +61,6 @@ function errorCopy(error: Error) {
   return 'Thread failed to load. Refresh and try again.';
 }
 
-
-function StateCard({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex min-h-[300px] flex-col items-center justify-center p-8 text-center">
-      <p className="text-lg font-semibold text-ink-primary">{title}</p>
-      <p className="mt-2 max-w-md text-sm leading-6 text-ink-secondary">{body}</p>
-    </div>
-  );
-}
 
 function TrackerBadge({ message }: { message: ThreadMessage }) {
   const count = message.blocked_trackers.length;
@@ -286,7 +244,7 @@ function MessageCard({
               </p>
               <p className="mt-0.5 truncate text-sm text-ink-tertiary">
                 To {formatParticipantList(message.to)} ·{' '}
-                <time>{formatDate(message.received_at)}</time>
+                <time>{formatFullDateTime(message.received_at)}</time>
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -378,7 +336,7 @@ function MiniReplyComposer({ senderName }: { senderName: string }) {
       <div className="mt-3 flex items-center justify-between gap-3">
         <button
           type="button"
-          className="rounded-full bg-accent-blue px-4 py-1.5 text-xs font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className={pillButtonClass('primary', 'md')}
         >
           Send
         </button>
@@ -423,7 +381,7 @@ function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
           <>
             <span className="text-ink-tertiary"> · </span>
             <time className="text-ink-tertiary">
-              {formatDate(firstMessage.received_at)}
+              {formatFullDateTime(firstMessage.received_at)}
             </time>
           </>
         ) : null}
@@ -501,7 +459,7 @@ function ThreadDocument({
   async function handleBubbleUpSelect(option: string) {
     const isoDate = bubbleUpOptionToIso(option);
     await client.bubbleUpThread(thread.thread_id, { at: isoDate });
-    showToast({ message: `Thread will bubble up at ${formatDate(isoDate)}` });
+    showToast({ message: `Thread will bubble up at ${formatFullDateTime(isoDate)}` });
     goBack();
   }
 

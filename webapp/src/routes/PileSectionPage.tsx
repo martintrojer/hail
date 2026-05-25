@@ -8,6 +8,7 @@ import { queryKeys } from '../api/queryKeys';
 import { ErrorState } from '../components/ErrorState';
 import { Bookmark, Clock, Send, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { StateCard } from '../components/StateCard';
 import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
 import { formatPileDate, pilePreview } from '../lib/pilePreview';
@@ -49,15 +50,6 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     meta: (item) => <time dateTime={item.added_at}>Deferred {formatPileDate(item.added_at)}</time>,
   },
 };
-
-function StateCard({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex min-h-[300px] flex-col items-center justify-center p-8 text-center">
-      <p className="text-lg font-semibold text-ink-primary">{title}</p>
-      <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">{body}</p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Reply panel (right column in Reply Later view)

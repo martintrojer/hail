@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent } from 'react';
-import { HailApiError, type UserView } from '../api/client';
+import type { UserView } from '../api/client';
 import {
   useAddAdminDomainMutation,
   useAdminDomains,
@@ -11,42 +11,9 @@ import {
   useResetAdminUserPasswordMutation,
 } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
+import { StateCard } from '../components/StateCard';
 import { AppShell } from '../layout/AppShell';
-
-function adminErrorMessage(error: Error, action: string) {
-  if (error instanceof HailApiError) {
-    if (error.status === 400 || error.status === 422) {
-      return `Check the ${action} values and try again.`;
-    }
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again.';
-    }
-    if (error.status === 403) {
-      return 'Admin access is required.';
-    }
-    if (error.status === 404) {
-      return 'That item no longer exists. Refresh and try again.';
-    }
-    if (error.status === 501) {
-      return 'Stalwart management is not configured for this instance.';
-    }
-    if (error.status === 502) {
-      return 'Stalwart management failed. Try again or check the server logs.';
-    }
-    return `${action} failed with HTTP ${error.status}.`;
-  }
-
-  return `${action} failed. Try again.`;
-}
-
-function StateCard({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="rounded-lg border border-dashed border-hairline bg-surface p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">{title}</p>
-      <p className="mt-2 text-sm text-ink-secondary">{body}</p>
-    </div>
-  );
-}
+import { adminErrorMessage } from '../lib/errorMessages';
 
 function formatCount(value: number) {
   return new Intl.NumberFormat().format(value);
