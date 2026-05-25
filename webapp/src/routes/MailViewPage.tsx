@@ -394,11 +394,11 @@ function ThreadLink({
 }
 
 function outlinePowerButtonClassName() {
-  return 'rounded-lg border border-border-menu px-3 py-2 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
+  return 'rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
 }
 
 function primaryPowerButtonClassName() {
-  return 'rounded-lg bg-accent-blue px-3 py-2 text-sm font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
+  return 'rounded-full bg-accent-blue px-3 py-1 text-xs font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60';
 }
 
 function PowerThroughMode({
