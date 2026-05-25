@@ -18,18 +18,18 @@ import {
   useTrashThreadMutation,
 } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
-import { ArrowUpCircle, StickyNote, X, iconSizeProps } from '../components/icons';
+import { ArrowUpCircle, X, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
 import { ListView } from '../components/ListView';
+import { MailRow as SharedMailRow } from '../components/MailRow';
 import { ScreenerBanner } from '../components/ScreenerBanner';
-import { useOptionalUndoToast } from '../components/UndoToastProvider';
+import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
-import { previewClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 
 interface MailViewPageProps {
   view: MailViewKind;
@@ -112,10 +112,10 @@ function ThreadShortcutActions({
   client?: HailApiClient;
   onHandled?: () => void;
 }) {
-  const undoToast = useOptionalUndoToast();
+  const undoToast = useUndoToast();
   const archive = useArchiveThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread archived.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Archive undone.',
@@ -125,7 +125,7 @@ function ThreadShortcutActions({
   });
   const trash = useTrashThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread moved to trash.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Trash undone.',
@@ -135,7 +135,7 @@ function ThreadShortcutActions({
   });
   const setAside = useSetAsideThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread added to Set Aside.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Set Aside undone.',
@@ -145,7 +145,7 @@ function ThreadShortcutActions({
   });
   const replyLater = useReplyLaterThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread added to Reply Later.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Reply Later undone.',
@@ -192,7 +192,7 @@ function ThreadShortcutActions({
   );
 }
 
-function MailRow({
+function MailListRow({
   item,
   view,
   client,
@@ -219,14 +219,6 @@ function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
   );
 }
 
-function NewPill() {
-  return (
-    <span className="shrink-0 rounded-full bg-accent-yellow px-2 py-0.5 text-[0.7rem] font-semibold uppercase leading-tight tracking-wider text-ink-primary">
-      New
-    </span>
-  );
-}
-
 function MailThreadRow({ item, view }: { item: MailViewItem; view: MailViewKind }) {
   if (view === 'feed') {
     return <FeedThreadRow item={item} />;
@@ -239,27 +231,6 @@ function MailThreadRow({ item, view }: { item: MailViewItem; view: MailViewKind 
   return <ImboxThreadRow item={item} />;
 }
 
-function SubjectWithNoteIcon({
-  item,
-  className,
-}: {
-  item: MailViewItem;
-  className: string;
-}) {
-  return (
-    <p className={className}>
-      <span className="truncate">{item.subject || '(no subject)'}</span>
-      {item.has_notes ? (
-        <StickyNote
-          {...iconSizeProps.sm}
-          className="ml-1.5 inline-block shrink-0 align-[-0.125em] text-ink-tertiary"
-          aria-label="Thread has notes"
-        />
-      ) : null}
-    </p>
-  );
-}
-
 function ImboxThreadRow({ item }: { item: MailViewItem }) {
   return (
     <ThreadLink
@@ -269,28 +240,14 @@ function ImboxThreadRow({ item }: { item: MailViewItem }) {
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <p
-            className={`truncate text-base leading-snug text-ink-primary ${
-              item.unread ? 'font-bold' : 'font-semibold'
-            }`}
-          >
-            {item.from || 'Unknown sender'}
-          </p>
-          {item.unread ? <NewPill /> : null}
-        </div>
-        <time className={timeClass}>
-          {formatDateTime(item.received_at)}
-        </time>
-      </div>
-      <SubjectWithNoteIcon
-        item={item}
-        className={`mt-1 flex items-center ${subjectClass}`}
+      <SharedMailRow
+        from={item.from || 'Unknown sender'}
+        subject={item.subject || '(no subject)'}
+        preview={item.preview || 'No preview available.'}
+        receivedAt={item.received_at}
+        unread={item.unread}
+        hasNotes={item.has_notes}
       />
-      <p className={`mt-1 ${previewClass}`}>
-        {item.preview || 'No preview available.'}
-      </p>
     </ThreadLink>
   );
 }
@@ -304,28 +261,14 @@ function FeedThreadRow({ item }: { item: MailViewItem }) {
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <p
-            className={`truncate text-[1.05rem] leading-snug text-ink-primary ${
-              item.unread ? 'font-bold' : 'font-semibold'
-            }`}
-          >
-            {item.from || 'Unknown sender'}
-          </p>
-          {item.unread ? <NewPill /> : null}
-        </div>
-        <time className={timeClass}>
-          {formatDateTime(item.received_at)}
-        </time>
-      </div>
-      <SubjectWithNoteIcon
-        item={item}
-        className="mt-1 flex items-center text-base font-normal leading-snug text-ink-primary"
+      <SharedMailRow
+        from={item.from || 'Unknown sender'}
+        subject={item.subject || '(no subject)'}
+        preview={item.preview || 'No preview available.'}
+        receivedAt={item.received_at}
+        unread={item.unread}
+        hasNotes={item.has_notes}
       />
-      <p className="mt-2 line-clamp-3 text-sm font-normal leading-6 text-ink-secondary">
-        {item.preview || 'No preview available.'}
-      </p>
     </ThreadLink>
   );
 }
@@ -339,20 +282,13 @@ function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="min-w-0 sm:flex sm:items-baseline sm:gap-2">
-          <p className="truncate text-[0.95rem] font-semibold leading-snug text-ink-primary">
-            {item.from || 'Unknown sender'}
-          </p>
-          <SubjectWithNoteIcon
-            item={item}
-            className={`mt-0.5 flex min-w-0 items-center ${subjectClass} sm:mt-0`}
-          />
-        </div>
-        <time className="shrink-0 text-[0.8rem] leading-snug text-ink-tertiary">
-          {formatDateTime(item.received_at)}
-        </time>
-      </div>
+      <SharedMailRow
+        from={item.from || 'Unknown sender'}
+        subject={item.subject || '(no subject)'}
+        preview=""
+        receivedAt={item.received_at}
+        hasNotes={item.has_notes}
+      />
     </ThreadLink>
   );
 }
@@ -366,7 +302,7 @@ function PowerThroughMode({
   client?: HailApiClient;
   onDone: () => void;
 }) {
-  const undoToast = useOptionalUndoToast();
+  const undoToast = useUndoToast();
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentItem = items[currentIndex];
   const remainingCount = Math.max(items.length - currentIndex - 1, 0);
@@ -378,7 +314,7 @@ function PowerThroughMode({
   const classify = useClassifyThreadMutation(client, {
     onSuccess: (data, variables) => {
       const label = viewLabels[variables.to];
-      undoToast?.showToast({
+      undoToast.showToast({
         message: `Moved thread to ${label}.`,
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Thread classification undone.',
@@ -388,7 +324,7 @@ function PowerThroughMode({
   });
   const setAside = useSetAsideThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread added to Set Aside.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Set Aside undone.',
@@ -398,7 +334,7 @@ function PowerThroughMode({
   });
   const replyLater = useReplyLaterThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread added to Reply Later.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Reply Later undone.',
@@ -463,7 +399,7 @@ function PowerThroughMode({
         <button
           type="button"
           onClick={onDone}
-          className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
         >
           <X {...iconSizeProps.sm} aria-hidden="true" />
           Done
@@ -554,7 +490,7 @@ function PowerThroughButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+      className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
     >
       <ArrowUpCircle {...iconSizeProps.sm} aria-hidden="true" />
       Power through
@@ -642,7 +578,7 @@ export function MailViewPage({
         {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
         <ListView
           items={query.data.items}
-          renderItem={(item) => <MailRow item={item} view={view} client={client} />}
+          renderItem={(item) => <MailListRow item={item} view={view} client={client} />}
           keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
           hasMore={false}
           isLoadingMore={false}

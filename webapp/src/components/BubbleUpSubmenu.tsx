@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 export interface BubbleUpSubmenuProps {
   open: boolean;
@@ -42,6 +43,11 @@ export function BubbleUpSubmenu({
 }: BubbleUpSubmenuProps) {
   const submenuRef = useRef<HTMLDivElement | null>(null);
 
+  useKeyboardShortcuts(
+    { onEscape: onClose },
+    { enabled: open },
+  );
+
   useEffect(() => {
     if (!open) {
       return undefined;
@@ -58,18 +64,10 @@ export function BubbleUpSubmenu({
       }
     }
 
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    }
-
     document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
 
     return () => {
       document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose, open]);
 

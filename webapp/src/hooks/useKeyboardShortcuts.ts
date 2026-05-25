@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
 export interface KeyboardShortcutHandlers {
+  onEscape?: () => void;
   onNextThread?: () => void;
   onPreviousThread?: () => void;
   onArchive?: () => void;
@@ -32,8 +33,19 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
-export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers) {
+interface KeyboardShortcutOptions {
+  enabled?: boolean;
+}
+
+export function useKeyboardShortcuts(
+  handlers: KeyboardShortcutHandlers,
+  { enabled = true }: KeyboardShortcutOptions = {},
+) {
   useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
     let pendingPrefix: 'g' | null = null;
     let prefixTimer: number | null = null;
 
@@ -63,7 +75,17 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers) {
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || isEditableTarget(event.target)) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (run(event, handlers.onEscape)) {
+          return;
+        }
+      }
+
+      if (isEditableTarget(event.target)) {
         return;
       }
 
@@ -118,5 +140,5 @@ export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers) {
       clearPendingPrefix();
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handlers]);
+  }, [enabled, handlers]);
 }

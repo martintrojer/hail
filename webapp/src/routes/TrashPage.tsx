@@ -6,12 +6,11 @@ import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
 import { ListView } from '../components/ListView';
-import { useOptionalUndoToast } from '../components/UndoToastProvider';
+import { MailRow } from '../components/MailRow';
+import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
-import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
-import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 
 interface TrashPageProps {
   client?: HailApiClient;
@@ -24,10 +23,10 @@ function TrashRow({
   item: MailViewItem;
   client?: HailApiClient;
 }) {
-  const undoToast = useOptionalUndoToast();
+  const undoToast = useUndoToast();
   const restore = useRestoreThreadMutation(client, {
     onSuccess: (data) => {
-      undoToast?.showToast({
+      undoToast.showToast({
         message: 'Thread restored to Imbox.',
         undo: data.undo ? { id: data.undo.id } : null,
         undoSuccessMessage: 'Restore undone.',
@@ -43,23 +42,15 @@ function TrashRow({
         <ThreadLink
           threadId={item.thread_id}
           mailListItem
-          className="min-w-0 flex-1 rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="min-w-0 flex-1 rounded-sm focus-ring outline-none"
           ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
         >
-          <div className="flex items-baseline justify-between gap-4">
-            <p className={senderNameClass}>
-              {item.from || 'Unknown sender'}
-            </p>
-            <time className={timeClass}>
-              {formatDateTime(item.received_at)}
-            </time>
-          </div>
-          <p className={`mt-1 ${subjectClass}`}>
-            {item.subject || '(no subject)'}
-          </p>
-          <p className={`mt-1 ${previewClass}`}>
-            {item.preview || 'No preview available.'}
-          </p>
+          <MailRow
+            from={item.from || 'Unknown sender'}
+            subject={item.subject || '(no subject)'}
+            preview={item.preview || 'No preview available.'}
+            receivedAt={item.received_at}
+          />
         </ThreadLink>
 
         <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">

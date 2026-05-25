@@ -14,6 +14,7 @@ import {
   iconSizeProps,
   type LucideIcon,
 } from './icons';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 export interface MessageActionPopupProps {
   open: boolean;
@@ -112,6 +113,11 @@ export function MessageActionPopup({
   const popupRef = useRef<HTMLDivElement | null>(null);
   const [moveOpen, setMoveOpen] = useState(true);
 
+  useKeyboardShortcuts(
+    { onEscape: onClose },
+    { enabled: open },
+  );
+
   useEffect(() => {
     if (!open) {
       return undefined;
@@ -128,18 +134,10 @@ export function MessageActionPopup({
       }
     }
 
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    }
-
     document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
 
     return () => {
       document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose, open]);
 

@@ -1,4 +1,4 @@
-const focusRing = 'outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue';
+const focusRing = 'focus-ring outline-none';
 const disabled = 'disabled:cursor-not-allowed disabled:opacity-60';
 
 export const primaryPillButtonClass = `rounded-full bg-accent-blue px-3 py-1 text-xs font-semibold text-white ${focusRing} hover:bg-accent-blue-hover ${disabled}`;

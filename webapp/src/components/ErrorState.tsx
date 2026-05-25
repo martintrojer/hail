@@ -19,7 +19,7 @@ export function ErrorState({ onRetry, message }: ErrorStateProps) {
         <button
           type="button"
           onClick={onRetry}
-          className="mt-2 text-sm font-semibold text-accent-blue outline-none hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+          className="mt-2 text-sm font-semibold text-accent-blue focus-ring outline-none hover:underline focus-visible:rounded-sm"
         >
           Retry
         </button>
