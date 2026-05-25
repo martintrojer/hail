@@ -437,6 +437,17 @@ export class HailApiClient {
     );
   }
 
+  async markThread(threadId: string, read: boolean): Promise<void> {
+    const resp = await this.#request(`/api/threads/${encodeURIComponent(threadId)}/mark`, {
+      method: 'POST',
+      body: { read },
+      mutating: true,
+    });
+    if (!resp.ok) {
+      throw new HailApiError(resp.status as never, await readResponseBody(resp) as never, resp);
+    }
+  }
+
   async undo(id: string): Promise<UndoResponse> {
     return this.#json<UndoResponse>(
       await this.#request(`/api/undo/${encodeURIComponent(id)}`, {
