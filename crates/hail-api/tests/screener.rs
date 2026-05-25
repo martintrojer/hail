@@ -670,7 +670,7 @@ async fn decision_response_undo_payload_marks_new_sender_for_delete() {
 }
 
 #[tokio::test]
-async fn backfill_failure_returns_500_after_persisting_decision_without_audit_or_undo() {
+async fn backfill_failure_returns_500_without_persisting_decision_audit_or_undo() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "backfill-fail@example.org").await;
     let backfill = Arc::new(FakeBackfill::failing());
@@ -687,15 +687,14 @@ async fn backfill_failure_returns_500_after_persisting_decision_without_audit_or
     .await;
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let row: (String, Option<String>) = sqlx::query_as(
-        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
+    let row_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
     )
     .bind(user_id)
     .fetch_one(&state.db)
     .await
     .unwrap();
-    assert_eq!(row.0, "allow");
-    assert_eq!(row.1.as_deref(), Some("papertrail"));
+    assert_eq!(row_count, 0);
     assert_eq!(backfill.calls.lock().unwrap().len(), 1);
 
     let audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
@@ -708,6 +707,50 @@ async fn backfill_failure_returns_500_after_persisting_decision_without_audit_or
         .await
         .unwrap();
     assert_eq!(undo_count, 0);
+}
+
+#[tokio::test]
+async fn backfill_failure_preserves_previous_screener_rule() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "backfill-existing@example.org").await;
+    let first_seen_at = Utc::now() - Duration::days(2);
+    seed_rule(
+        &state,
+        user_id,
+        "sender@example.org",
+        "pending",
+        None,
+        first_seen_at,
+    )
+    .await;
+    let backfill = Arc::new(FakeBackfill::failing());
+
+    let resp = request_with_backfill(
+        state.clone(),
+        backfill.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"sender@example.org","decision":"approve","classify_as":"papertrail","apply_to_history":true}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let row: (String, Option<String>, Option<chrono::DateTime<Utc>>, chrono::DateTime<Utc>) =
+        sqlx::query_as(
+            "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
+             WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
+        )
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(row.0, "pending");
+    assert_eq!(row.1, None);
+    assert_eq!(row.2, None);
+    assert_eq!(row.3, first_seen_at);
+    assert_eq!(backfill.calls.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

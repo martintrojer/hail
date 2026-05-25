@@ -678,6 +678,15 @@ async fn post_decision(
         }
     };
 
+    if body.apply_to_history
+        && let Err(err) = backfill
+            .apply(&state, &user, &sender, decision, response_classify_as)
+            .await
+    {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener history backfill failed");
+        return internal();
+    }
+
     let now = Utc::now();
     let classify_as_db = response_classify_as.map(Classification::db_value);
     if let Err(err) = sqlx::query(
@@ -698,15 +707,6 @@ async fn post_decision(
     .await
     {
         tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener decision upsert failed");
-        return internal();
-    }
-
-    if body.apply_to_history
-        && let Err(err) = backfill
-            .apply(&state, &user, &sender, decision, response_classify_as)
-            .await
-    {
-        tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener history backfill failed");
         return internal();
     }
 
