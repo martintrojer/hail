@@ -606,9 +606,10 @@ pub(crate) mod live {
     /// Implementation detail: JMAP has no direct "Thread/set" resurface verb.
     /// To return a thread to Imbox, query `Email/query` with Stalwart's
     /// `inThread` filter, then call `Email/set` for each returned Email to clear
-    /// `$seen`, set `$hail_imbox`, and remove other hail-owned classification or
-    /// pile keywords. If Stalwart later exposes a first-class thread operation,
-    /// this adapter is the only place that needs to change.
+    /// `$seen`, move it to the Inbox JMAP mailbox, set `$hail_imbox`, and remove
+    /// other hail-owned classification or pile keywords. If Stalwart later exposes
+    /// a first-class thread operation, this adapter is the only place that needs to
+    /// change.
     pub struct LiveBubbleJmapOps {
         db: SqlitePool,
         jmap_url: String,
@@ -673,12 +674,25 @@ pub(crate) mod live {
                 .with_context(|| format!("Email/query inThread={thread_id}"))?;
             let email_ids = query.take_ids();
 
+            let inbox_id = hail_jmap::mailbox_id_by_role(
+                &session,
+                hail_jmap::jmap_client::mailbox::Role::Inbox,
+            )
+            .await
+            .context("Mailbox/get role=inbox")?
+            .ok_or_else(|| anyhow!("inbox mailbox not found"))?;
+
             for email_id in email_ids {
                 session
                     .client()
                     .email_set_keyword(&email_id, "$seen", false)
                     .await
                     .with_context(|| format!("Email/set clear $seen for {email_id}"))?;
+                session
+                    .client()
+                    .email_set_mailboxes(&email_id, [inbox_id.clone()])
+                    .await
+                    .with_context(|| format!("Email/set move {email_id} to Inbox"))?;
                 session
                     .client()
                     .email_set_keyword(&email_id, "$hail_imbox", true)
