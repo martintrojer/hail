@@ -2,7 +2,6 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   HailApiClient,
-  HailApiError,
   type ThreadMessage,
   type ThreadNote,
   type ThreadVerbResponse,
@@ -30,6 +29,7 @@ import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatFullDateTime } from '../lib/dates';
+import { threadErrorMessage } from '../lib/errorMessages';
 import { formatParticipantEmail, formatParticipantList, formatParticipantName } from '../lib/participants';
 
 interface ThreadPageProps {
@@ -43,24 +43,6 @@ interface LocalNote extends InlineNoteProps {
   id: number;
   messageId: string;
 }
-
-function errorCopy(error: Error) {
-  if (error instanceof HailApiError) {
-    if (error.status === 401) {
-      return 'Your session expired. Sign in again to open this thread.';
-    }
-    if (error.status === 404) {
-      return 'This thread was not found. It may have moved or been deleted.';
-    }
-    if (error.status === 400) {
-      return 'This thread link is invalid.';
-    }
-    return `Thread failed with HTTP ${error.status}.`;
-  }
-
-  return 'Thread failed to load. Refresh and try again.';
-}
-
 
 function TrackerBadge({ message }: { message: ThreadMessage }) {
   const count = message.blocked_trackers.length;
@@ -628,7 +610,7 @@ export function ThreadPage({ threadId, client, sourceView }: ThreadPageProps) {
   } else if (query.isError) {
     reading = (
       <ErrorState
-        message={errorCopy(query.error)}
+        message={threadErrorMessage(query.error)}
         onRetry={() => void query.refetch()}
       />
     );

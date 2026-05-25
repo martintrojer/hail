@@ -94,6 +94,54 @@ export function composeErrorMessage(error: unknown, fallback: string): string {
   return 'Check the compose fields and try again.';
 }
 
+export function threadErrorMessage(error: Error): string {
+  if (error instanceof HailApiError) {
+    if (error.status === 401) {
+      return 'Your session expired. Sign in again to open this thread.';
+    }
+    if (error.status === 404) {
+      return 'This thread was not found. It may have moved or been deleted.';
+    }
+    if (error.status === 400 || error.status === 422) {
+      return 'This thread link is invalid.';
+    }
+    return `Thread failed with HTTP ${error.status}.`;
+  }
+
+  return 'Thread failed to load. Refresh and try again.';
+}
+
+export function contactErrorMessage(error: Error): string {
+  if (error instanceof HailApiError) {
+    if (error.status === 401) {
+      return 'Your session expired. Sign in again to view this note.';
+    }
+    if (error.status === 404) {
+      return 'This contact was not found yet.';
+    }
+    if (error.status === 400 || error.status === 422) {
+      return 'Contact note validation failed. Refresh and try again.';
+    }
+    return `Contact note failed with HTTP ${error.status}.`;
+  }
+
+  return 'Contact note failed to load. Refresh and try again.';
+}
+
+export function contactNoteMutationErrorMessage(error: Error): string {
+  if (error instanceof HailApiError) {
+    if (error.status === 400 || error.status === 422) {
+      return 'The server rejected this note. Check the markdown and try again.';
+    }
+    if (error.status === 401) {
+      return 'Your session expired. Sign in again before changing this note.';
+    }
+    return `Contact note update failed with HTTP ${error.status}.`;
+  }
+
+  return 'Contact note update failed. Try again.';
+}
+
 export function adminErrorMessage(error: Error, action: string): string {
   if (error instanceof HailApiError) {
     if (error.status === 400 || error.status === 422) {
