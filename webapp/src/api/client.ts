@@ -47,8 +47,14 @@ type MailViewGetSuccess = ResponseBody<
 type SearchGetSuccess = ResponseBody<
   paths['/api/views/search']['get']['responses']['200']
 >;
+type BubbleUpGetSuccess = ResponseBody<
+  paths['/api/views/bubble-up']['get']['responses']['200']
+>;
 type BubbleUpPostSuccess = ResponseBody<
   paths['/api/threads/{thread_id}/bubble-up']['post']['responses']['201']
+>;
+type BubbleUpDeleteSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/bubble-up']['delete']['responses']['200']
 >;
 type ThreadVerbPostSuccess = ResponseBody<
   paths['/api/threads/{thread_id}/classify']['post']['responses']['200']
@@ -150,6 +156,9 @@ export type ContactResponse = ContactGetSuccess;
 export type PutContactNoteRequest = components['schemas']['PutNoteRequest'];
 export type BubbleUpRequest = components['schemas']['BubbleUpRequest'];
 export type BubbleUpResponse = BubbleUpPostSuccess;
+export type BubbleUpViewItem = components['schemas']['BubbleUpViewItem'];
+export type BubbleUpViewResponse = BubbleUpGetSuccess;
+export type CancelBubbleUpResponse = BubbleUpDeleteSuccess;
 export type UploadedBlob = components['schemas']['UploadedBlob'];
 
 export type ComposeRequest = components['schemas']['ComposePayload'];
@@ -453,6 +462,13 @@ export class HailApiClient {
     );
   }
 
+  async getBubbleUps(): Promise<BubbleUpViewResponse> {
+    return this.#json<BubbleUpViewResponse>(
+      await this.#request('/api/views/bubble-up'),
+      200,
+    );
+  }
+
   async decideScreener(
     body: ScreenerDecisionRequest,
   ): Promise<ScreenerDecisionResponse> {
@@ -609,6 +625,19 @@ export class HailApiClient {
         },
       ),
       201,
+    );
+  }
+
+  async cancelBubbleUp(threadId: string): Promise<CancelBubbleUpResponse> {
+    return this.#json<CancelBubbleUpResponse>(
+      await this.#request(
+        `/api/threads/${encodeURIComponent(threadId)}/bubble-up`,
+        {
+          method: 'DELETE',
+          mutating: true,
+        },
+      ),
+      200,
     );
   }
 

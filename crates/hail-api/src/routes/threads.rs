@@ -318,6 +318,7 @@ where
     let actions: Arc<dyn ThreadActions> = actions;
     OpenApiRouter::new()
         .routes(routes!(bubble_up).layer(Extension(verifier)))
+        .routes(routes!(cancel_bubble_up))
         .routes(routes!(classify_thread).layer(Extension(actions.clone())))
         .routes(routes!(set_aside).layer(Extension(actions.clone())))
         .routes(routes!(reply_later).layer(Extension(actions.clone())))
@@ -337,6 +338,11 @@ struct BubbleUpResponse {
     bubble_id: i64,
     #[schema(value_type = String, format = DateTime)]
     surface_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct CancelBubbleUpResponse {
+    status: &'static str,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -455,6 +461,47 @@ async fn bubble_up(
         }),
     )
         .into_response()
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/threads/{thread_id}/bubble-up",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread bubble-up cancelled.", body = CancelBubbleUpResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Bubble-up cancellation failed."),
+    ),
+)]
+async fn cancel_bubble_up(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    if !looks_like_jmap_id(&thread_id) {
+        return bad_request("invalid_thread_id");
+    }
+
+    if let Err(err) = sqlx::query(
+        "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2",
+    )
+    .bind(user.id)
+    .bind(&thread_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "bubble-up cancel failed");
+        return internal();
+    }
+
+    Json(CancelBubbleUpResponse {
+        status: "cancelled",
+    })
+    .into_response()
 }
 
 #[utoipa::path(

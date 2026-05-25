@@ -55,7 +55,7 @@ fn uuid_like() -> String {
     )
 }
 
-async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> String {
+async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> (i64, String) {
     let now = Utc::now();
     let user_id: i64 = sqlx::query_scalar(
         "INSERT INTO users (email, jmap_account_id, is_admin, created_at) \
@@ -83,7 +83,7 @@ async fn seed_session(state: &AppState, key: &[u8; KEY_LEN], email: &str) -> Str
     .execute(&state.db)
     .await
     .expect("insert session");
-    session_id
+    (user_id, session_id)
 }
 
 fn app(state: AppState, provider: Arc<FakeProvider>) -> Router {
@@ -191,7 +191,7 @@ async fn auth_required_returns_401() {
 #[tokio::test]
 async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "alice@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
 
     let cases = [
         (
@@ -240,7 +240,7 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
 #[tokio::test]
 async fn limit_defaults_to_50_and_caps_at_100() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "bob@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "bob@example.org").await;
     let provider = Arc::new(FakeProvider::default());
 
     let resp = get_view(
@@ -270,7 +270,7 @@ async fn limit_defaults_to_50_and_caps_at_100() {
 #[tokio::test]
 async fn response_preserves_provider_order() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "carol@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "carol@example.org").await;
     let provider = Arc::new(FakeProvider::new(vec![
         item(30, MailClassification::Imbox),
         item(10, MailClassification::Imbox),
@@ -293,10 +293,8 @@ async fn response_preserves_provider_order() {
 #[tokio::test]
 async fn response_sets_has_notes_for_current_users_thread_notes() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "notes-owner@example.org").await;
-    let other_sid = seed_session(&state, &key, "other-notes@example.org").await;
-    let user_id: i64 = i64::from_str_radix(&sid, 16).expect("session id encodes test user id");
-    let other_user_id: i64 = i64::from_str_radix(&other_sid, 16).expect("session id encodes test user id");
+    let (user_id, sid) = seed_session(&state, &key, "notes-owner@example.org").await;
+    let (other_user_id, _other_sid) = seed_session(&state, &key, "other-notes@example.org").await;
     sqlx::query(
         "INSERT INTO thread_notes (user_id, thread_id, email_id, body) VALUES (?1, ?2, ?3, ?4)",
     )
@@ -337,9 +335,59 @@ async fn response_sets_has_notes_for_current_users_thread_notes() {
 }
 
 #[tokio::test]
+async fn bubble_up_view_returns_current_users_future_pending_rows_ordered_by_surface_time() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice-bubbles@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "bob-bubbles@example.org").await;
+    let provider = Arc::new(FakeProvider::default());
+    let now = Utc::now();
+    let first_at = now + Duration::minutes(5);
+    let second_at = now + Duration::minutes(10);
+
+    for (user_id, thread_id, surface_at, fired_at) in [
+        (alice_id, "thread-second", second_at, None),
+        (alice_id, "thread-first", first_at, None),
+        (alice_id, "thread-past", now - Duration::minutes(5), None),
+        (alice_id, "thread-fired", now + Duration::minutes(15), Some(now)),
+        (bob_id, "thread-other-user", now + Duration::minutes(1), None),
+    ] {
+        sqlx::query(
+            "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(user_id)
+        .bind(thread_id)
+        .bind(surface_at)
+        .bind(fired_at)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&alice_sid),
+        "/api/views/bubble-up",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(provider.calls(), Vec::<(MailView, usize)>::new());
+    let json = response_json(resp).await;
+    assert_eq!(json["items"].as_array().unwrap().len(), 2);
+    assert_eq!(json["items"][0]["thread_id"], "thread-first");
+    assert_eq!(json["items"][1]["thread_id"], "thread-second");
+    assert!(json["items"][0]["bubble_id"].as_i64().is_some());
+    assert_eq!(json["items"][0]["surface_at"], first_at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(json["items"][0]["created_at"], now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+}
+
+#[tokio::test]
 async fn provider_error_returns_stable_internal_json() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "erin@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "erin@example.org").await;
     let provider = Arc::new(FakeProvider::failing("upstream query failed"));
 
     let resp = get_view(state, provider.clone(), Some(&sid), "/api/views/imbox").await;
@@ -355,7 +403,7 @@ async fn provider_error_returns_stable_internal_json() {
 #[tokio::test]
 async fn required_identifier_provider_error_returns_stable_internal_json() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "frank@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "frank@example.org").await;
     let provider = Arc::new(FakeProvider::failing("JMAP Email missing required id"));
 
     let resp = get_view(
@@ -377,7 +425,7 @@ async fn required_identifier_provider_error_returns_stable_internal_json() {
 #[tokio::test]
 async fn empty_list_returns_empty_items_and_null_cursor() {
     let (state, key) = fixture_state().await;
-    let sid = seed_session(&state, &key, "dana@example.org").await;
+    let (_user_id, sid) = seed_session(&state, &key, "dana@example.org").await;
     let provider = Arc::new(FakeProvider::default());
 
     let resp = get_view(state, provider, Some(&sid), "/api/views/papertrail").await;

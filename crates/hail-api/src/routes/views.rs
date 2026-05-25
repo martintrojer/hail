@@ -344,6 +344,7 @@ where
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_drafts).layer(Extension(mail_provider)))
+        .routes(routes!(get_bubble_up))
         .routes(routes!(get_search).layer(Extension(search_provider)))
 }
 
@@ -424,6 +425,16 @@ pub struct MailSearchResult {
     pub preview: String,
     #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BubbleUpViewItem {
+    pub bubble_id: i64,
+    pub thread_id: String,
+    #[schema(value_type = String, format = DateTime)]
+    pub surface_at: DateTime<Utc>,
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -510,6 +521,11 @@ struct MailViewResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+struct BubbleUpViewResponse {
+    items: Vec<BubbleUpViewItem>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 struct SearchResponse {
     results: Vec<SearchResult>,
 }
@@ -592,6 +608,29 @@ async fn get_drafts(
     Query(query): Query<ViewQuery>,
 ) -> Response {
     get_view(state, user, provider, query, MailView::Drafts).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/bubble-up",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Scheduled future Bubble Up entries.", body = BubbleUpViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Bubble Up view lookup failed."),
+    ),
+)]
+async fn get_bubble_up(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    match list_bubble_ups(&state, user.id).await {
+        Ok(items) => Json(BubbleUpViewResponse { items }).into_response(),
+        Err(err) => {
+            tracing::error!(user_id = user.id, error = %err, "bubble-up view lookup failed");
+            internal()
+        }
+    }
 }
 
 #[utoipa::path(
@@ -683,6 +722,31 @@ async fn search_notes(
             },
         )
         .collect())
+}
+
+async fn list_bubble_ups(
+    state: &AppState,
+    user_id: i64,
+) -> Result<Vec<BubbleUpViewItem>, sqlx::Error> {
+    sqlx::query_as::<_, (i64, String, DateTime<Utc>, DateTime<Utc>)>(
+        "SELECT id, thread_id, surface_at, created_at \
+         FROM bubble_ups \
+         WHERE user_id = ?1 AND datetime(surface_at) > datetime('now') AND fired_at IS NULL \
+         ORDER BY surface_at ASC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|(bubble_id, thread_id, surface_at, created_at)| BubbleUpViewItem {
+                bubble_id,
+                thread_id,
+                surface_at,
+                created_at,
+            })
+            .collect()
+    })
 }
 
 fn escape_like(value: &str) -> String {

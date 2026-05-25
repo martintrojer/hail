@@ -124,6 +124,18 @@ describe('HailApiClient GET request contract', () => {
     );
     expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
   });
+  it('sends credentials for Bubble Up view lookups', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await client.getBubbleUps();
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/views/bubble-up'),
+    );
+    expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
+  });
 });
 
 describe('HailApiClient blob upload contract', () => {
@@ -425,6 +437,19 @@ describe('HailApiClient non-composer mutating requests', () => {
       new URL('http://localhost/api/threads/thread%2Fwith%20spaces/bubble-up'),
     );
     expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', body);
+  });
+
+  it('sends CSRF header without JSON content type for bubble up cancellation', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'cancelled' }));
+
+    await client.cancelBubbleUp('thread/with spaces');
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/threads/thread%2Fwith%20spaces/bubble-up'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'DELETE');
   });
 });
 
