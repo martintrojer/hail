@@ -436,6 +436,10 @@ function MessageCard({
   message,
   notes,
   addingNote,
+  popupOpen,
+  popupAnchor,
+  onTogglePopup,
+  onClosePopup,
   onStartAddNote,
   onCancelAddNote,
   onSaveNote,
@@ -443,23 +447,25 @@ function MessageCard({
   message: ThreadMessage;
   notes: LocalNote[];
   addingNote: boolean;
+  popupOpen: boolean;
+  popupAnchor: DOMRect | null;
+  onTogglePopup: (messageId: string, anchorRect: DOMRect) => void;
+  onClosePopup: () => void;
   onStartAddNote: (messageId: string) => void;
   onCancelAddNote: () => void;
   onSaveNote: (messageId: string, text: string) => void;
 }) {
-  const [popupAnchor, setPopupAnchor] = useState<DOMRect | null>(null);
-  const popupOpen = popupAnchor !== null;
   const sender = firstSender(message);
 
-  function openPopup(event: MouseEvent<HTMLButtonElement>) {
-    setPopupAnchor(event.currentTarget.getBoundingClientRect());
+  function togglePopup(event: MouseEvent<HTMLButtonElement>) {
+    onTogglePopup(message.email_id, event.currentTarget.getBoundingClientRect());
   }
 
   function handlePopupAction(action: string) {
     if (action === 'add-note') {
       onStartAddNote(message.email_id);
     }
-    setPopupAnchor(null);
+    onClosePopup();
   }
 
   return (
@@ -486,15 +492,16 @@ function MessageCard({
                 aria-label="Message actions"
                 aria-haspopup="menu"
                 aria-expanded={popupOpen}
-                onClick={openPopup}
-                className="rounded-full p-1.5 text-ink-tertiary outline-none hover:bg-bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={togglePopup}
+                className="rounded-full p-1 text-ink-tertiary outline-none hover:bg-hover hover:text-ink-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
               >
                 <MoreHorizontal {...iconSizeProps.sm} aria-hidden="true" />
               </button>
               <MessageActionPopup
                 open={popupOpen}
                 anchorRect={popupAnchor}
-                onClose={() => setPopupAnchor(null)}
+                onClose={onClosePopup}
                 onAction={handlePopupAction}
               />
             </div>
@@ -637,6 +644,10 @@ function ThreadDocument({
   );
   const sender = primarySender(thread);
   const [addingNoteFor, setAddingNoteFor] = useState<string | null>(null);
+  const [messagePopup, setMessagePopup] = useState<{
+    messageId: string;
+    anchorRect: DOMRect;
+  } | null>(null);
   const [notes, setNotes] = useState<LocalNote[]>([]);
 
   function goBack() {
@@ -646,6 +657,16 @@ function ThreadDocument({
     }
 
     void navigate({ to: '/imbox' });
+  }
+
+  function toggleMessagePopup(messageId: string, anchorRect: DOMRect) {
+    setMessagePopup((current) =>
+      current?.messageId === messageId ? null : { messageId, anchorRect },
+    );
+  }
+
+  function closeMessagePopup() {
+    setMessagePopup(null);
   }
 
   function saveNote(messageId: string, text: string) {
@@ -691,6 +712,14 @@ function ThreadDocument({
                 (note) => note.messageId === message.email_id,
               )}
               addingNote={addingNoteFor === message.email_id}
+              popupOpen={messagePopup?.messageId === message.email_id}
+              popupAnchor={
+                messagePopup?.messageId === message.email_id
+                  ? messagePopup.anchorRect
+                  : null
+              }
+              onTogglePopup={toggleMessagePopup}
+              onClosePopup={closeMessagePopup}
               onStartAddNote={setAddingNoteFor}
               onCancelAddNote={() => setAddingNoteFor(null)}
               onSaveNote={saveNote}
