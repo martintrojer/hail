@@ -6,7 +6,6 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import {
   type ComposeRequest,
   type ComposeResponse,
@@ -24,6 +23,7 @@ import {
 } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
+import { useGoBack } from '../hooks/useGoBack';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatFullDateTime } from '../lib/dates';
@@ -166,7 +166,7 @@ function placeCaretAtStart(element: HTMLTextAreaElement | null) {
 }
 
 export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initialDraftId, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
-  const navigate = useNavigate();
+  const closeComposer = useGoBack();
   const { user } = useAuth();
   const [form, setForm] = useState<ComposerForm>({
     to: initialTo.join(', '),
@@ -374,11 +374,6 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       return;
     }
     send(buildComposeRequest(sendAt));
-  }
-
-  function closeComposer() {
-    if (window.history.length > 1) window.history.back();
-    else void navigate({ to: '/imbox' });
   }
 
   const autosaveError = createDraft.error ?? updateDraft.error;
