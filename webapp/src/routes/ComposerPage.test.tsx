@@ -7,7 +7,7 @@ import {
   within,
 } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   ComposeRequest,
   ComposeResponse,
@@ -36,6 +36,7 @@ class ComposerPageTestClient extends TestHailApiClient {
     [];
   getDraftCalls: string[] = [];
   getThreadCalls: string[] = [];
+  getDraftError: unknown;
   threadResponse: ThreadViewResponse = {
     thread_id: 'thread-123',
     subject: 'Launch plan',
@@ -84,6 +85,7 @@ class ComposerPageTestClient extends TestHailApiClient {
 
   override async getDraft(draftId: string) {
     this.getDraftCalls.push(draftId);
+    if (this.getDraftError) throw this.getDraftError;
     return this.draftResponse;
   }
 
@@ -150,6 +152,7 @@ let currentTestBody: ReactNode = null;
 let restoreComposeRoute: (() => void) | null = null;
 
 afterEach(() => {
+  vi.useRealTimers();
   currentTestBody = null;
   restoreComposeRoute?.();
   restoreComposeRoute = null;
@@ -487,6 +490,61 @@ describe('ComposerPage', () => {
         attachments: [],
       },
     });
+  });
+
+  it('autosaves dirty compose fields and then updates the created draft on the next interval', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = renderComposer();
+    await fillSendableFields();
+
+    expect(screen.getByText('Draft not saved yet')).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await waitFor(() => expect(client.createDraftCalls).toHaveLength(1));
+    expect(client.createDraftCalls[0]).toEqual({
+      to: ['alice@example.com', 'bob@example.com'],
+      cc: ['carol@example.com'],
+      bcc: ['dave@example.com', 'erin@example.com'],
+      subject: 'Quarterly report',
+      body_markdown: 'Report attached.',
+      attachments: [],
+    });
+    expect(await screen.findByText('Draft saved')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Body'), {
+      target: { value: 'Autosaved update.' },
+    });
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
+    expect(client.createDraftCalls).toHaveLength(1);
+    expect(client.updateDraftCalls[0]).toEqual({
+      draftId: 'draft-1',
+      body: {
+        to: ['alice@example.com', 'bob@example.com'],
+        cc: ['carol@example.com'],
+        bcc: ['dave@example.com', 'erin@example.com'],
+        subject: 'Quarterly report',
+        body_markdown: 'Autosaved update.',
+        attachments: [],
+      },
+    });
+  });
+
+  it('shows draft load errors and keeps compose fields available', async () => {
+    const client = new ComposerPageTestClient();
+    client.getDraftError = apiError(404, { error: 'not_found' });
+    renderComposer({ client, draftId: 'missing-draft' });
+
+    expect(await screen.findByLabelText('To')).toHaveValue('');
+    expect(screen.getByLabelText('Subject')).toHaveValue('');
+    expect(screen.getByLabelText('Body')).toHaveValue('');
+    expect(client.getDraftCalls).toEqual(['missing-draft']);
+    expect(
+      await screen.findByText('Draft could not be loaded. HTTP 404.'),
+    ).toBeInTheDocument();
   });
 
   it('uses reply mode controls and sends through the reply API', async () => {
