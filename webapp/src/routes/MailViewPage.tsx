@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   HailApiError,
@@ -440,9 +440,20 @@ function PowerThroughMode({
       advance();
     },
   });
+  const replyLater = useReplyLaterThreadMutation(client, {
+    onSuccess: (data) => {
+      undoToast?.showToast({
+        message: 'Thread added to Reply Later.',
+        undo: data.undo ? { id: data.undo.id } : null,
+        undoSuccessMessage: 'Reply Later undone.',
+      });
+      advance();
+    },
+  });
+  const navigate = useNavigate();
 
-  const busy = classify.isPending || setAside.isPending;
-  const error = classify.error ?? setAside.error;
+  const busy = classify.isPending || setAside.isPending || replyLater.isPending;
+  const error = classify.error ?? setAside.error ?? replyLater.error;
 
   function classifyCurrent(to: MailViewKind) {
     if (!currentItem) {
@@ -456,6 +467,20 @@ function PowerThroughMode({
       return;
     }
     setAside.mutate({ threadId: currentItem.thread_id });
+  }
+
+  function setCurrentReplyLater() {
+    if (!currentItem) {
+      return;
+    }
+    replyLater.mutate({ threadId: currentItem.thread_id });
+  }
+
+  function replyCurrent() {
+    if (!currentItem) {
+      return;
+    }
+    void navigate({ to: '/compose', search: { replyTo: currentItem.thread_id } });
   }
 
   if (!currentItem) {
@@ -539,6 +564,22 @@ function PowerThroughMode({
             className={outlinePowerButtonClassName()}
           >
             Set Aside
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={setCurrentReplyLater}
+            className={outlinePowerButtonClassName()}
+          >
+            Reply Later
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={replyCurrent}
+            className={outlinePowerButtonClassName()}
+          >
+            Reply
           </button>
         </div>
 
