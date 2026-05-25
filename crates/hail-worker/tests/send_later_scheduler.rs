@@ -391,6 +391,41 @@ async fn scheduled_send_missing_auth_session_marks_auth_required() {
             .is_some_and(|message| message.contains("auth_required")),
         "unexpected state: {state:?}"
     );
+    let audit: (String, String) = sqlx::query_as(
+        "SELECT action, payload_json FROM audit_log WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("audit row");
+    assert_eq!(audit.0, "compose.send_later.auth_required");
+    let audit_payload: serde_json::Value = serde_json::from_str(&audit.1).expect("audit payload");
+    assert_eq!(audit_payload["scheduled_send_id"], id);
+    assert_eq!(audit_payload["draft_email_id"], "draft-no-auth");
+    assert!(
+        audit_payload["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("auth_required")),
+        "unexpected audit payload: {audit_payload:?}"
+    );
+
+    let event: (String, String) = sqlx::query_as(
+        "SELECT event_type, payload_json FROM app_events WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("app event");
+    assert_eq!(event.0, "send.failed");
+    let event_payload: serde_json::Value = serde_json::from_str(&event.1).expect("event payload");
+    assert_eq!(event_payload["scheduled_send_id"], id);
+    assert_eq!(event_payload["draft_email_id"], "draft-no-auth");
+    assert!(
+        event_payload["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("auth_required")),
+        "unexpected event payload: {event_payload:?}"
+    );
 }
 
 #[tokio::test]

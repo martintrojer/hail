@@ -224,8 +224,25 @@ pub async fn process_due_scheduled_sends(
                 .await
                 .with_context(|| format!("mark scheduled_send {} auth_required", row.id))?;
                 if result.rows_affected() > 0 {
-                    if let Err(err) =
-                        publish_app_event(db, row.user_id, WorkerAppEvent::SendFailed).await
+                    let event_payload = json!({
+                        "scheduled_send_id": row.id,
+                        "draft_email_id": row.draft_email_id,
+                        "error": message,
+                    });
+                    record_scheduled_send_audit(
+                        db,
+                        row.user_id,
+                        "compose.send_later.auth_required",
+                        event_payload.clone(),
+                    )
+                    .await;
+                    if let Err(err) = publish_app_event_payload(
+                        db,
+                        row.user_id,
+                        WorkerAppEvent::SendFailed,
+                        event_payload,
+                    )
+                    .await
                     {
                         warn!(
                             scheduled_send_id = row.id,
