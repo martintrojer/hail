@@ -46,6 +46,7 @@ use crate::middleware::session::{
     SESSION_TTL_DAYS, basic_bearer, build_session_cookie, clear_session_cookie, new_session_id,
     session_cookie_value,
 };
+use crate::routes::response::internal;
 use crate::state::AppState;
 
 /// Public JSON representation of a user. Mirrors the v1 schema in
@@ -424,15 +425,6 @@ fn invalid_credentials() -> Response {
         StatusCode::UNAUTHORIZED,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"invalid_credentials"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
     )
         .into_response()
 }

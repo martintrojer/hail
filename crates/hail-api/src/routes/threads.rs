@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
@@ -22,6 +22,12 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::{
+    clear_thread_state, email_ids_in_thread as shared_email_ids_in_thread, jmap_session,
+    move_thread_to_role as shared_move_thread_to_role, set_thread_keyword, set_thread_keywords,
+    set_thread_mailboxes, validate_thread_id,
+};
+use crate::routes::response::{bad_request, internal, not_found};
 use crate::routes::undo::{NewUndoAction, ThreadStackUndoTarget, UndoToken, create_undo_action};
 use crate::state::AppState;
 
@@ -59,20 +65,13 @@ pub trait ThreadActions: Send + Sync + 'static {
         classification: Classification,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
 
-    fn add_keyword<'a>(
+    fn set_keyword<'a>(
         &'a self,
         state: &'a AppState,
         token: SecretString,
         thread_id: &'a str,
         keyword: &'static str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
-
-    fn remove_keyword<'a>(
-        &'a self,
-        state: &'a AppState,
-        token: SecretString,
-        thread_id: &'a str,
-        keyword: &'static str,
+        enabled: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
 
     fn archive<'a>(
@@ -122,9 +121,9 @@ impl ThreadVerifier for JmapThreadVerifier {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, ThreadVerifyError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
+            let session = jmap_session(state, token)
                 .await
-                .map_err(|err| ThreadVerifyError(err.to_string()))?;
+                .map_err(ThreadVerifyError)?;
 
             use hail_jmap::jmap_client::core::query::Filter;
             use hail_jmap::jmap_client::email::query as email_query;
@@ -133,7 +132,13 @@ impl ThreadVerifier for JmapThreadVerifier {
                 .client()
                 .email_query(
                     Some(Filter::from(email_query::Filter::in_thread(thread_id))),
-                    None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
+                    None::<
+                        Vec<
+                            hail_jmap::jmap_client::core::query::Comparator<
+                                email_query::Comparator,
+                            >,
+                        >,
+                    >,
                 )
                 .await
                 .map_err(|err| ThreadVerifyError(err.to_string()))?;
@@ -181,7 +186,6 @@ impl ThreadActions for JmapThreadActions {
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            let email_ids = email_ids_in_thread(&session, thread_id).await?;
             let inbox_id = hail_jmap::mailbox_id_by_role(
                 &session,
                 hail_jmap::jmap_client::mailbox::Role::Inbox,
@@ -190,65 +194,34 @@ impl ThreadActions for JmapThreadActions {
             .map_err(provider_error)?
             .ok_or_else(|| ThreadActionError::Provider("inbox mailbox not found".to_string()))?;
 
-            for email_id in email_ids {
-                for candidate in Classification::ALL {
-                    session
-                        .client()
-                        .email_set_keyword(
-                            &email_id,
-                            candidate.keyword(),
-                            candidate == classification,
-                        )
-                        .await
-                        .map_err(provider_error)?;
-                }
-                session
-                    .client()
-                    .email_set_mailboxes(&email_id, [inbox_id.clone()])
-                    .await
-                    .map_err(provider_error)?;
-            }
+            set_thread_keywords(
+                &session,
+                thread_id,
+                Classification::ALL
+                    .map(|candidate| (candidate.keyword(), candidate == classification)),
+            )
+            .await
+            .map_err(provider_error)?;
+            set_thread_mailboxes(&session, thread_id, [inbox_id])
+                .await
+                .map_err(provider_error)?;
             Ok(())
         })
     }
 
-    fn add_keyword<'a>(
+    fn set_keyword<'a>(
         &'a self,
         state: &'a AppState,
         token: SecretString,
         thread_id: &'a str,
         keyword: &'static str,
+        enabled: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            for email_id in email_ids_in_thread(&session, thread_id).await? {
-                session
-                    .client()
-                    .email_set_keyword(&email_id, keyword, true)
-                    .await
-                    .map_err(provider_error)?;
-            }
-            Ok(())
-        })
-    }
-
-    fn remove_keyword<'a>(
-        &'a self,
-        state: &'a AppState,
-        token: SecretString,
-        thread_id: &'a str,
-        keyword: &'static str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
-        Box::pin(async move {
-            let session = login(state, token).await?;
-            for email_id in email_ids_in_thread(&session, thread_id).await? {
-                session
-                    .client()
-                    .email_set_keyword(&email_id, keyword, false)
-                    .await
-                    .map_err(provider_error)?;
-            }
-            Ok(())
+            set_thread_keyword(&session, thread_id, keyword, enabled)
+                .await
+                .map_err(provider_error)
         })
     }
 
@@ -258,9 +231,11 @@ impl ThreadActions for JmapThreadActions {
         token: SecretString,
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
-        Box::pin(
-            async move { move_thread_to_role(state, token, thread_id, MailboxRole::Archive).await },
-        )
+        Box::pin(async move {
+            shared_move_thread_to_role(state, token, thread_id, MailboxRole::Archive)
+                .await
+                .map_err(provider_error)
+        })
     }
 
     fn trash<'a>(
@@ -269,9 +244,11 @@ impl ThreadActions for JmapThreadActions {
         token: SecretString,
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
-        Box::pin(
-            async move { move_thread_to_role(state, token, thread_id, MailboxRole::Trash).await },
-        )
+        Box::pin(async move {
+            shared_move_thread_to_role(state, token, thread_id, MailboxRole::Trash)
+                .await
+                .map_err(provider_error)
+        })
     }
 
     fn restore<'a>(
@@ -280,9 +257,11 @@ impl ThreadActions for JmapThreadActions {
         token: SecretString,
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
-        Box::pin(
-            async move { move_thread_to_role(state, token, thread_id, MailboxRole::Inbox).await },
-        )
+        Box::pin(async move {
+            shared_move_thread_to_role(state, token, thread_id, MailboxRole::Inbox)
+                .await
+                .map_err(provider_error)
+        })
     }
 
     fn destroy<'a>(
@@ -295,7 +274,9 @@ impl ThreadActions for JmapThreadActions {
             let session = login(state, token).await?;
             let email_ids = email_ids_in_thread(&session, thread_id).await?;
             let mut request = session.client().build();
-            request.set_email().destroy(email_ids.iter().map(String::as_str));
+            request
+                .set_email()
+                .destroy(email_ids.iter().map(String::as_str));
             let mut response = request.send_set_email().await.map_err(provider_error)?;
             for email_id in &email_ids {
                 response.destroyed(email_id).map_err(provider_error)?;
@@ -313,14 +294,9 @@ impl ThreadActions for JmapThreadActions {
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            for email_id in email_ids_in_thread(&session, thread_id).await? {
-                session
-                    .client()
-                    .email_set_keyword(&email_id, "$seen", read)
-                    .await
-                    .map_err(provider_error)?;
-            }
-            Ok(())
+            set_thread_keyword(&session, thread_id, "$seen", read)
+                .await
+                .map_err(provider_error)
         })
     }
 }
@@ -426,7 +402,7 @@ pub enum Classification {
 }
 
 impl Classification {
-    const ALL: [Self; 3] = [Self::Imbox, Self::Feed, Self::Papertrail];
+    pub const ALL: [Self; 3] = [Self::Imbox, Self::Feed, Self::Papertrail];
 
     pub const fn keyword(self) -> &'static str {
         match self {
@@ -484,8 +460,8 @@ async fn bubble_up(
     Path(thread_id): Path<String>,
     Json(body): Json<BubbleUpRequest>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
 
     if body.at < Utc::now() + Duration::seconds(60) {
@@ -526,28 +502,21 @@ async fn bubble_up(
     };
 
     for classification in Classification::ALL {
-        if let Err(err) = actions
-            .remove_keyword(
+        let _ = actions
+            .set_keyword(
                 &state,
                 user.jmap_token.clone(),
                 &thread_id,
                 classification.keyword(),
+                false,
             )
-            .await
-        {
-            tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during bubble-up");
-        }
+            .await;
     }
-
-    for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
-        if let Err(err) = actions
-            .remove_keyword(&state, user.jmap_token.clone(), &thread_id, pile_keyword)
-            .await
-        {
-            tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during bubble-up");
-        }
+    for keyword in ["$hail_setaside", "$hail_replylater"] {
+        let _ = actions
+            .set_keyword(&state, user.jmap_token.clone(), &thread_id, keyword, false)
+            .await;
     }
-
     let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
         .bind(user.id)
         .bind(&thread_id)
@@ -583,8 +552,8 @@ async fn cancel_bubble_up(
     Extension(user): Extension<AuthUser>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
 
     if let Err(err) = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2")
@@ -626,8 +595,8 @@ async fn classify_thread(
     Path(thread_id): Path<String>,
     body: Result<Json<ClassifyRequest>, JsonRejection>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     let Ok(Json(body)) = body else {
         return bad_request("invalid_classification");
@@ -649,16 +618,20 @@ async fn classify_thread(
         .await
     {
         Ok(()) => {
-            // Remove pile keywords + stack rows so thread leaves Set Aside / Reply Later.
             for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
                 if let Err(err) = actions
-                    .remove_keyword(&state, user.jmap_token.clone(), &thread_id, pile_keyword)
+                    .set_keyword(
+                        &state,
+                        user.jmap_token.clone(),
+                        &thread_id,
+                        pile_keyword,
+                        false,
+                    )
                     .await
                 {
                     tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during classify");
                 }
             }
-            // Clean up sidecar stack rows.
             let _ =
                 sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
                     .bind(user.id)
@@ -749,14 +722,14 @@ async fn add_to_stack(
     thread_id: String,
     target: ThreadStackUndoTarget,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     let stack = target.stack();
     let keyword = target.keyword();
 
     match actions
-        .add_keyword(&state, user.jmap_token.clone(), &thread_id, keyword)
+        .set_keyword(&state, user.jmap_token.clone(), &thread_id, keyword, true)
         .await
     {
         Ok(()) => {}
@@ -767,11 +740,12 @@ async fn add_to_stack(
     // Remove classification keywords so the thread leaves Imbox/Feed/Paper Trail.
     for classification in Classification::ALL {
         if let Err(err) = actions
-            .remove_keyword(
+            .set_keyword(
                 &state,
                 user.jmap_token.clone(),
                 &thread_id,
                 classification.keyword(),
+                false,
             )
             .await
         {
@@ -837,8 +811,8 @@ async fn archive_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     match actions
         .archive(&state, user.jmap_token.clone(), &thread_id)
@@ -874,50 +848,21 @@ async fn trash_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     match actions
         .trash(&state, user.jmap_token.clone(), &thread_id)
         .await
     {
         Ok(()) => {
-            // Remove classification keywords so thread leaves Imbox/Feed/Paper Trail.
-            for classification in Classification::ALL {
-                if let Err(err) = actions
-                    .remove_keyword(
-                        &state,
-                        user.jmap_token.clone(),
-                        &thread_id,
-                        classification.keyword(),
-                    )
-                    .await
-                {
-                    tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during trash");
-                }
-            }
-            // Remove pile keywords.
-            for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
-                if let Err(err) = actions
-                    .remove_keyword(&state, user.jmap_token.clone(), &thread_id, pile_keyword)
-                    .await
-                {
-                    tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during trash");
-                }
-            }
-            // Clean up sidecar state.
-            let _ =
-                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                    .bind(user.id)
-                    .bind(&thread_id)
-                    .execute(&state.db)
-                    .await;
-            let _ = sqlx::query(
-                "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
+            clear_thread_state(
+                &state,
+                actions.as_ref(),
+                user.jmap_token.clone(),
+                user.id,
+                &thread_id,
             )
-            .bind(user.id)
-            .bind(&thread_id)
-            .execute(&state.db)
             .await;
 
             tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
@@ -949,8 +894,8 @@ async fn restore_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     match actions
         .restore(&state, user.jmap_token.clone(), &thread_id)
@@ -958,7 +903,12 @@ async fn restore_thread(
     {
         Ok(()) => {
             match actions
-                .classify(&state, user.jmap_token.clone(), &thread_id, Classification::Imbox)
+                .classify(
+                    &state,
+                    user.jmap_token.clone(),
+                    &thread_id,
+                    Classification::Imbox,
+                )
                 .await
             {
                 Ok(()) => {}
@@ -967,16 +917,19 @@ async fn restore_thread(
                     return action_internal(user.id, &thread_id, err);
                 }
             }
-            let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await;
-            let _ = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await;
+            let _ =
+                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                    .bind(user.id)
+                    .bind(&thread_id)
+                    .execute(&state.db)
+                    .await;
+            let _ = sqlx::query(
+                "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
+            )
+            .bind(user.id)
+            .bind(&thread_id)
+            .execute(&state.db)
+            .await;
 
             tracing::debug!(user_id = user.id, thread_id = %thread_id, "restore undo unavailable: previous mailbox snapshot not captured");
             Json(ThreadVerbResponse { undo: None }).into_response()
@@ -1007,37 +960,40 @@ async fn destroy_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     match actions
         .destroy(&state, user.jmap_token.clone(), &thread_id)
         .await
     {
         Ok(()) => {
-            if let Err(err) = sqlx::query("DELETE FROM thread_notes WHERE user_id = ?1 AND thread_id = ?2")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await
+            if let Err(err) =
+                sqlx::query("DELETE FROM thread_notes WHERE user_id = ?1 AND thread_id = ?2")
+                    .bind(user.id)
+                    .bind(&thread_id)
+                    .execute(&state.db)
+                    .await
             {
                 tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread note cleanup failed after destroy");
                 return internal();
             }
-            if let Err(err) = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await
+            if let Err(err) =
+                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                    .bind(user.id)
+                    .bind(&thread_id)
+                    .execute(&state.db)
+                    .await
             {
                 tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "stack cleanup failed after destroy");
                 return internal();
             }
-            if let Err(err) = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2")
-                .bind(user.id)
-                .bind(&thread_id)
-                .execute(&state.db)
-                .await
+            if let Err(err) =
+                sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2")
+                    .bind(user.id)
+                    .bind(&thread_id)
+                    .execute(&state.db)
+                    .await
             {
                 tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "bubble-up cleanup failed after destroy");
                 return internal();
@@ -1076,8 +1032,8 @@ async fn mark_thread(
     Path(thread_id): Path<String>,
     body: Result<Json<MarkRequest>, JsonRejection>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
     }
     let Ok(Json(body)) = body else {
         return bad_request("invalid_mark");
@@ -1164,27 +1120,16 @@ async fn login(
     state: &AppState,
     token: SecretString,
 ) -> Result<hail_jmap::Session, ThreadActionError> {
-    hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
-        .await
-        .map_err(provider_error)
+    jmap_session(state, token).await.map_err(provider_error)
 }
 
 async fn email_ids_in_thread(
     session: &hail_jmap::Session,
     thread_id: &str,
 ) -> Result<Vec<String>, ThreadActionError> {
-    use hail_jmap::jmap_client::core::query::Filter;
-    use hail_jmap::jmap_client::email::query as email_query;
-
-    let mut query = session
-        .client()
-        .email_query(
-            Some(Filter::from(email_query::Filter::in_thread(thread_id))),
-            None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
-        )
+    let ids = shared_email_ids_in_thread(session, thread_id)
         .await
         .map_err(provider_error)?;
-    let ids = query.take_ids();
     if ids.is_empty() {
         return Err(ThreadActionError::NotFound);
     }
@@ -1192,14 +1137,14 @@ async fn email_ids_in_thread(
 }
 
 #[derive(Clone, Copy)]
-enum MailboxRole {
+pub enum MailboxRole {
     Archive,
     Inbox,
     Trash,
 }
 
 impl MailboxRole {
-    const fn jmap(self) -> hail_jmap::jmap_client::mailbox::Role {
+    pub const fn jmap(self) -> hail_jmap::jmap_client::mailbox::Role {
         match self {
             Self::Archive => hail_jmap::jmap_client::mailbox::Role::Archive,
             Self::Inbox => hail_jmap::jmap_client::mailbox::Role::Inbox,
@@ -1207,7 +1152,7 @@ impl MailboxRole {
         }
     }
 
-    const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Archive => "archive",
             Self::Inbox => "inbox",
@@ -1216,71 +1161,11 @@ impl MailboxRole {
     }
 }
 
-async fn move_thread_to_role(
-    state: &AppState,
-    token: SecretString,
-    thread_id: &str,
-    role: MailboxRole,
-) -> Result<(), ThreadActionError> {
-    use hail_jmap::jmap_client::mailbox::query::Filter;
-
-    let session = login(state, token).await?;
-    let mut mailbox_query = session
-        .client()
-        .mailbox_query(Some(Filter::role(role.jmap())), None::<Vec<_>>)
-        .await
-        .map_err(provider_error)?;
-    let mailbox_id =
-        mailbox_query.take_ids().into_iter().next().ok_or_else(|| {
-            ThreadActionError::Provider(format!("{} mailbox not found", role.name()))
-        })?;
-
-    for email_id in email_ids_in_thread(&session, thread_id).await? {
-        session
-            .client()
-            .email_set_mailboxes(&email_id, [mailbox_id.clone()])
-            .await
-            .map_err(provider_error)?;
-    }
-    Ok(())
-}
-
 fn provider_error(err: impl std::fmt::Display) -> ThreadActionError {
     ThreadActionError::Provider(err.to_string())
-}
-
-fn looks_like_jmap_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"not_found"}"#,
-    )
-        .into_response()
 }
 
 fn action_internal(user_id: i64, thread_id: &str, err: String) -> Response {
     tracing::warn!(user_id, thread_id, error = %err, "thread action failed");
     internal()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }

@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::extract::{Extension, Path, State, rejection::JsonRejection};
-use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
@@ -29,6 +28,8 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::jmap_session;
+use crate::routes::response::{bad_request, internal};
 use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
 
@@ -398,9 +399,7 @@ async fn enrich_screener_senders(
     use hail_jmap::jmap_client::email::Property;
     use hail_jmap::jmap_client::mailbox::query as mailbox_query;
 
-    let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
-        .await
-        .map_err(|err| err.to_string())?;
+    let session = jmap_session(state, user.jmap_token.clone()).await?;
 
     let mut mailbox_query = session
         .client()
@@ -492,7 +491,7 @@ async fn apply_jmap_backfill(
 ) -> Result<(), ScreenerBackfillError> {
     use hail_jmap::jmap_client::mailbox::Role;
 
-    let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
+    let session = jmap_session(state, user.jmap_token.clone())
         .await
         .map_err(backfill_error)?;
 
@@ -806,22 +805,4 @@ fn looks_like_sender(sender: &str) -> bool {
         && !domain.starts_with('.')
         && !domain.ends_with('.')
         && !domain.contains("..")
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }

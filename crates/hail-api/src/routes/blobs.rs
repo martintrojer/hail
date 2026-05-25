@@ -20,6 +20,8 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::jmap_session;
+use crate::routes::response::{bad_request, internal};
 use crate::state::AppState;
 
 const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
@@ -52,9 +54,9 @@ impl BlobUploader for JmapBlobUploader {
         content_type: Option<String>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadedBlob, BlobUploadError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
+            let session = jmap_session(state, token)
                 .await
-                .map_err(|err| BlobUploadError::new(err.to_string()))?;
+                .map_err(BlobUploadError::new)?;
             let response = session
                 .client()
                 .upload(Some(session.account_id()), bytes, content_type.as_deref())
@@ -139,11 +141,10 @@ async fn upload_blobs(
     Extension(user): Extension<AuthUser>,
     Extension(uploader): Extension<Arc<dyn BlobUploader>>,
     multipart: Result<Multipart, MultipartRejection>,
-) -> Response
-{
+) -> Response {
     let mut blobs = Vec::new();
     let Ok(mut multipart) = multipart else {
-        return bad_request();
+        return bad_request("invalid_multipart");
     };
 
     loop {
@@ -196,7 +197,7 @@ fn multipart_error(err: MultipartError) -> Response {
     if err.status() == StatusCode::PAYLOAD_TOO_LARGE {
         payload_too_large()
     } else {
-        bad_request()
+        bad_request("invalid_multipart")
     }
 }
 
@@ -205,24 +206,6 @@ fn payload_too_large() -> Response {
         StatusCode::PAYLOAD_TOO_LARGE,
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"error":"payload_too_large"}"#,
-    )
-        .into_response()
-}
-
-fn bad_request() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"invalid_multipart"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
     )
         .into_response()
 }

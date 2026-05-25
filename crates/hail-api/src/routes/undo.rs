@@ -22,6 +22,8 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id};
+use crate::routes::response::{internal, not_found};
 use crate::state::AppState;
 
 const UNDO_TTL_SECONDS: i64 = 10;
@@ -283,10 +285,9 @@ impl ThreadUndoRestorer for JmapThreadUndoRestorer {
     ) -> Result<(), UndoError> {
         let previous = ClassificationKeyword::parse(previous_classification)
             .ok_or_else(|| UndoError::bad_request("invalid_previous_classification"))?;
-        let session =
-            hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
-                .await
-                .map_err(|err| UndoError::internal(err.to_string()))?;
+        let session = jmap_session(state, user.jmap_token.clone())
+            .await
+            .map_err(UndoError::internal)?;
         for email_id in email_ids_in_thread(&session, thread_id).await? {
             for candidate in ClassificationKeyword::ALL {
                 session
@@ -305,10 +306,9 @@ impl ThreadUndoRestorer for JmapThreadUndoRestorer {
         user: &AuthUser,
         snapshots: Vec<EmailMailboxSnapshot>,
     ) -> Result<(), UndoError> {
-        let session =
-            hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
-                .await
-                .map_err(|err| UndoError::internal(err.to_string()))?;
+        let session = jmap_session(state, user.jmap_token.clone())
+            .await
+            .map_err(UndoError::internal)?;
         for snapshot in snapshots {
             if snapshot.email_id.is_empty() || snapshot.mailbox_ids.is_empty() {
                 return Err(UndoError::bad_request("invalid_mailbox_snapshot"));
@@ -330,10 +330,9 @@ impl ThreadUndoRestorer for JmapThreadUndoRestorer {
         keyword: &str,
         enabled: bool,
     ) -> Result<(), UndoError> {
-        let session =
-            hail_jmap::login_bearer(&state.config.stalwart.jmap_url, user.jmap_token.clone())
-                .await
-                .map_err(|err| UndoError::internal(err.to_string()))?;
+        let session = jmap_session(state, user.jmap_token.clone())
+            .await
+            .map_err(UndoError::internal)?;
         for email_id in email_ids_in_thread(&session, thread_id).await? {
             session
                 .client()
@@ -603,10 +602,6 @@ fn validate_thread_stack_payload(payload: &ThreadStackUndoPayload) -> Result<(),
     Ok(())
 }
 
-fn looks_like_jmap_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
 fn validate_screener_rule(rule: &ScreenerRuleSnapshot) -> Result<(), UndoError> {
     match rule.decision.as_str() {
         "pending" | "deny" => {
@@ -749,8 +744,7 @@ async fn post_undo(
     Extension(user): Extension<AuthUser>,
     Extension(executor): Extension<Arc<dyn UndoExecutor>>,
     Path(id): Path<String>,
-) -> Response
-{
+) -> Response {
     if !looks_like_undo_id(&id) {
         return not_found();
     }
@@ -863,15 +857,6 @@ fn looks_like_undo_id(id: &str) -> bool {
     id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"not_found"}"#,
-    )
-        .into_response()
-}
-
 fn gone(error: &'static str) -> Response {
     (
         StatusCode::GONE,
@@ -897,13 +882,4 @@ fn undo_error_response(status: UndoErrorStatus) -> Response {
             .into_response(),
         UndoErrorStatus::Internal => internal(),
     }
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }

@@ -20,6 +20,8 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::{AuthSession, AuthUser};
+use crate::routes::jmap_helpers::{jmap_session, required_drafts_mailbox_id};
+use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
 const MAX_SUBJECT_CHARS: usize = 998;
@@ -66,7 +68,9 @@ impl Composer for JmapComposer {
     ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            let drafts_mailbox_id = drafts_mailbox_id(&session).await?;
+            let drafts_mailbox_id = required_drafts_mailbox_id(&session)
+                .await
+                .map_err(provider_error)?;
             let mut request = session.client().build();
             let create_id = {
                 let email = request.set_email().create();
@@ -398,8 +402,8 @@ async fn reply(
     Path(thread_id): Path<String>,
     body: Result<Json<ReplyPayload>, JsonRejection>,
 ) -> Response {
-    if !looks_like_jmap_id(&thread_id) {
-        return bad_request("invalid_thread_id");
+    if let Err(response) = crate::routes::jmap_helpers::validate_thread_id(&thread_id) {
+        return response;
     }
     let Ok(Json(payload)) = body else {
         return bad_request("invalid_json");
@@ -813,10 +817,6 @@ fn looks_like_email(address: &str) -> bool {
         && !domain.contains("..")
 }
 
-fn looks_like_jmap_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
 fn reply_subject(subject: &str) -> String {
     if subject
         .trim_start()
@@ -907,18 +907,7 @@ fn scheduled_send_response_from_row(
 }
 
 async fn login(state: &AppState, token: SecretString) -> Result<hail_jmap::Session, ComposeError> {
-    hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
-        .await
-        .map_err(provider_error)
-}
-
-async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<String, ComposeError> {
-    use hail_jmap::jmap_client::mailbox::Role;
-
-    hail_jmap::mailbox_id_by_role(session, Role::Drafts)
-        .await
-        .map_err(provider_error)?
-        .ok_or_else(|| ComposeError::Provider("drafts mailbox not found".to_string()))
+    jmap_session(state, token).await.map_err(provider_error)
 }
 
 async fn identity_id_for(session: &hail_jmap::Session, from: &str) -> Result<String, ComposeError> {
@@ -973,38 +962,11 @@ fn provider_failed(user_id: i64, err: String) -> Response {
     internal()
 }
 
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"not_found"}"#,
-    )
-        .into_response()
-}
-
 fn conflict(error: &'static str) -> Response {
     (
         StatusCode::CONFLICT,
         [(header::CONTENT_TYPE, "application/json")],
         format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
     )
         .into_response()
 }

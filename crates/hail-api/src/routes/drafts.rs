@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
@@ -24,6 +24,8 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id, required_drafts_mailbox_id};
+use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
 const MAX_SUBJECT_CHARS: usize = 998;
@@ -77,7 +79,9 @@ impl DraftStore for JmapDraftStore {
     ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
             let session = login(state, token).await?;
-            let drafts_mailbox_id = drafts_mailbox_id(&session).await?;
+            let drafts_mailbox_id = required_drafts_mailbox_id(&session)
+                .await
+                .map_err(provider_error)?;
 
             let mut request = session.client().build();
             let create_id = {
@@ -568,26 +572,11 @@ fn looks_like_email(address: &str) -> bool {
         && !domain.contains("..")
 }
 
-fn looks_like_jmap_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
 async fn login(
     state: &AppState,
     token: SecretString,
 ) -> Result<hail_jmap::Session, DraftStoreError> {
-    hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
-        .await
-        .map_err(provider_error)
-}
-
-async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<String, DraftStoreError> {
-    use hail_jmap::jmap_client::mailbox::Role;
-
-    hail_jmap::mailbox_id_by_role(session, Role::Drafts)
-        .await
-        .map_err(provider_error)?
-        .ok_or_else(|| DraftStoreError::Provider("drafts mailbox not found".to_string()))
+    jmap_session(state, token).await.map_err(provider_error)
 }
 
 fn set_text_body(
@@ -641,31 +630,4 @@ fn provider_error(err: impl std::fmt::Display) -> DraftStoreError {
 fn provider_failed(user_id: i64, err: String) -> Response {
     tracing::warn!(user_id, error = %err, "draft store failed");
     internal()
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"not_found"}"#,
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }

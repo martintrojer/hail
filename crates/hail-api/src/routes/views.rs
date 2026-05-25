@@ -15,7 +15,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Query, State};
-use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
@@ -26,6 +25,10 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::{
+    drafts_mailbox_id, hydrate_thread_previews, jmap_session, trash_mailbox_id,
+};
+use crate::routes::response::{bad_request, internal};
 use crate::state::AppState;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -70,18 +73,24 @@ impl MailViewProvider for JmapMailViewProvider {
             use hail_jmap::jmap_client::email::Property;
             use hail_jmap::jmap_client::email::query as email_query;
 
-            let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
+            let session = jmap_session(state, token)
                 .await
-                .map_err(|err| MailViewError::provider(err.to_string()))?;
+                .map_err(MailViewError::provider)?;
 
             let mut request = session.client().build();
             let mut filter = Filter::from(email_query::Filter::has_keyword(view.keyword()));
             if view == MailView::Drafts {
-                if let Some(drafts_mailbox_id) = drafts_mailbox_id(&session).await? {
+                if let Some(drafts_mailbox_id) = drafts_mailbox_id(&session)
+                    .await
+                    .map_err(MailViewError::provider)?
+                {
                     filter = Filter::from(email_query::Filter::in_mailbox(drafts_mailbox_id));
                 }
             } else if view == MailView::Trash {
-                let Some(trash_mailbox_id) = trash_mailbox_id(&session).await? else {
+                let Some(trash_mailbox_id) = trash_mailbox_id(&session)
+                    .await
+                    .map_err(MailViewError::provider)?
+                else {
                     return Ok(Vec::new());
                 };
                 filter = Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id));
@@ -239,9 +248,9 @@ impl SearchProvider for JmapSearchProvider {
             use hail_jmap::jmap_client::email::Property;
             use hail_jmap::jmap_client::email::query as email_query;
 
-            let session = hail_jmap::login_bearer(&state.config.stalwart.jmap_url, token)
+            let session = jmap_session(state, token)
                 .await
-                .map_err(|err| SearchError::provider(err.to_string()))?;
+                .map_err(SearchError::provider)?;
 
             let mut request = session.client().build();
             request
@@ -445,6 +454,9 @@ pub struct BubbleUpViewItem {
     pub surface_at: DateTime<Utc>,
     #[schema(value_type = String, format = DateTime)]
     pub created_at: DateTime<Utc>,
+    pub from: String,
+    pub subject: String,
+    pub preview: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -655,7 +667,24 @@ async fn get_bubble_up(
     Extension(user): Extension<AuthUser>,
 ) -> Response {
     match list_bubble_ups(&state, user.id).await {
-        Ok(items) => Json(BubbleUpViewResponse { items }).into_response(),
+        Ok(mut items) => {
+            let previews = hydrate_thread_previews(
+                &state,
+                user.id,
+                user.jmap_token.clone(),
+                "bubble_up",
+                items.iter().map(|item| item.thread_id.clone()),
+            )
+            .await;
+            for item in &mut items {
+                if let Some(preview) = previews.get(&item.thread_id) {
+                    item.from = preview.from.clone();
+                    item.subject = preview.subject.clone();
+                    item.preview = preview.preview.clone();
+                }
+            }
+            Json(BubbleUpViewResponse { items }).into_response()
+        }
         Err(err) => {
             tracing::error!(user_id = user.id, error = %err, "bubble-up view lookup failed");
             internal()
@@ -769,12 +798,17 @@ async fn list_bubble_ups(
     .await
     .map(|rows| {
         rows.into_iter()
-            .map(|(bubble_id, thread_id, surface_at, created_at)| BubbleUpViewItem {
-                bubble_id,
-                thread_id,
-                surface_at,
-                created_at,
-            })
+            .map(
+                |(bubble_id, thread_id, surface_at, created_at)| BubbleUpViewItem {
+                    bubble_id,
+                    thread_id,
+                    surface_at,
+                    created_at,
+                    from: String::new(),
+                    subject: String::new(),
+                    preview: String::new(),
+                },
+            )
             .collect()
     })
 }
@@ -889,38 +923,4 @@ fn format_address(address: &hail_jmap::jmap_client::email::EmailAddress) -> Stri
         Some(name) if !name.is_empty() => format!("{} <{}>", name, address.email()),
         _ => address.email().to_string(),
     }
-}
-
-async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String>, MailViewError> {
-    use hail_jmap::jmap_client::mailbox::Role;
-
-    hail_jmap::mailbox_id_by_role(session, Role::Drafts)
-        .await
-        .map_err(|err| MailViewError::provider(err.to_string()))
-}
-
-async fn trash_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String>, MailViewError> {
-    use hail_jmap::jmap_client::mailbox::Role;
-
-    hail_jmap::mailbox_id_by_role(session, Role::Trash)
-        .await
-        .map_err(|err| MailViewError::provider(err.to_string()))
-}
-
-fn bad_request(error: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
-}
-
-fn internal() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"internal"}"#,
-    )
-        .into_response()
 }
