@@ -3,6 +3,7 @@ import { HailApiError, type UserView } from '../api/client';
 import {
   useAddAdminDomainMutation,
   useAdminDomains,
+  useAdminStats,
   useAdminUsers,
   useCreateAdminUserMutation,
   useDeleteAdminDomainMutation,
@@ -44,6 +45,90 @@ function StateCard({ title, body }: { title: string; body: string }) {
       <p className="text-base font-semibold text-ink-primary">{title}</p>
       <p className="mt-2 text-sm text-ink-secondary">{body}</p>
     </div>
+  );
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat().format(value);
+}
+
+function formatBytes(value: number | null | undefined) {
+  if (value == null) {
+    return 'Size unavailable';
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = value / 1024;
+  let unit = units[0];
+  for (let i = 1; amount >= 1024 && i < units.length; i += 1) {
+    amount /= 1024;
+    unit = units[i];
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${unit}`;
+}
+
+function SystemStatusSection() {
+  const stats = useAdminStats();
+  const connected = stats.data?.stalwart_status === 'connected';
+  const totalEmails = stats.data?.users.reduce((sum, user) => sum + user.total_emails, 0) ?? 0;
+  const totalSize = stats.data?.users.reduce<number | null>((sum, user) => {
+    if (sum == null || user.total_size_bytes == null) {
+      return null;
+    }
+    return sum + user.total_size_bytes;
+  }, 0);
+
+  return (
+    <section className="rounded-lg border border-hairline bg-surface p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-ink-primary">System Status</h2>
+          <div className="mt-3 flex items-center gap-2 text-sm font-medium text-ink-primary">
+            <span
+              aria-hidden="true"
+              className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-accent-green' : 'bg-accent-red'}`}
+            />
+            Stalwart connection: {connected ? 'Connected' : 'Unreachable'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void stats.refetch()}
+          disabled={stats.isFetching}
+          className="rounded-full border border-hairline px-3 py-1.5 text-xs font-semibold text-ink-primary transition hover:border-accent-blue hover:text-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {stats.isFetching ? 'Refreshing…' : 'Refresh stats'}
+        </button>
+      </div>
+      {stats.isError ? (
+        <p role="alert" className="mt-4 text-sm text-accent-red">
+          {adminErrorMessage(stats.error, 'Load stats')}
+        </p>
+      ) : (
+        <dl className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-hairline bg-page p-3">
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Total emails</dt>
+            <dd className="mt-1 text-2xl font-semibold text-ink-primary">
+              {stats.isPending ? '…' : formatCount(totalEmails)}
+            </dd>
+          </div>
+          <div className="rounded-lg border border-hairline bg-page p-3">
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Total users</dt>
+            <dd className="mt-1 text-2xl font-semibold text-ink-primary">
+              {stats.isPending ? '…' : formatCount(stats.data?.users.length ?? 0)}
+            </dd>
+          </div>
+          <div className="rounded-lg border border-hairline bg-page p-3">
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Storage used</dt>
+            <dd className="mt-1 text-2xl font-semibold text-ink-primary">
+              {stats.isPending ? '…' : formatBytes(totalSize)}
+            </dd>
+          </div>
+        </dl>
+      )}
+    </section>
   );
 }
 
@@ -209,7 +294,15 @@ function ResetPasswordForm({ user }: { user: UserView }) {
   );
 }
 
-function UserCard({ user, currentUserId }: { user: UserView; currentUserId: number | null }) {
+function UserCard({
+  user,
+  currentUserId,
+  totalEmails,
+}: {
+  user: UserView;
+  currentUserId: number | null;
+  totalEmails: number | null;
+}) {
   const deleteUser = useDeleteAdminUserMutation();
   const isSelf = currentUserId === user.id;
 
@@ -219,6 +312,9 @@ function UserCard({ user, currentUserId }: { user: UserView; currentUserId: numb
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold text-ink-primary">{user.email}</h2>
           <p className="mt-1 text-sm text-ink-secondary">{user.display_name || 'No display name'}</p>
+          <p className="mt-2 text-xs font-medium text-ink-primary0">
+            {totalEmails == null ? 'Email count unavailable' : `${formatCount(totalEmails)} emails`}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {user.is_admin ? (
@@ -244,7 +340,11 @@ function UserCard({ user, currentUserId }: { user: UserView; currentUserId: numb
   );
 }
 
-function UsersSection() {
+function UsersSection({
+  statsByEmail,
+}: {
+  statsByEmail: ReadonlyMap<string, number>;
+}) {
   const users = useAdminUsers();
   const { user: currentUser } = useAuth();
 
@@ -262,7 +362,12 @@ function UsersSection() {
         <StateCard title="No users" body="Create the first mailbox user with the form below." />
       ) : (
         users.data.users.map((user) => (
-          <UserCard key={user.id} user={user} currentUserId={currentUser?.id ?? null} />
+          <UserCard
+            key={user.id}
+            user={user}
+            currentUserId={currentUser?.id ?? null}
+            totalEmails={statsByEmail.get(user.email.toLowerCase()) ?? null}
+          />
         ))
       )}
       <CreateUserForm />
@@ -347,6 +452,20 @@ function DomainsSection() {
   );
 }
 
+function AdminList() {
+  const stats = useAdminStats();
+  const statsByEmail = new Map(
+    stats.data?.users.map((userStats) => [userStats.email.toLowerCase(), userStats.total_emails]) ?? [],
+  );
+
+  return (
+    <div className="space-y-4">
+      <SystemStatusSection />
+      <UsersSection statsByEmail={statsByEmail} />
+    </div>
+  );
+}
+
 function ForbiddenAdmin() {
   return (
     <AppShell
@@ -385,7 +504,7 @@ export function AdminPage() {
     <AppShell
       title="Admin"
       description="Manage mailbox users and accepted mail domains."
-      list={<UsersSection />}
+      list={<AdminList />}
       reading={
         <div className="space-y-4">
           <section className="rounded-lg border border-hairline bg-surface p-5">

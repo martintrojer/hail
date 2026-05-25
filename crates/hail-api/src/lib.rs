@@ -64,6 +64,10 @@ fn build_api_router(
         OpenApiRouter::with_openapi(ApiDoc::openapi()).merge(routes::health::router());
     let (open_router, mut api) = api_router.with_state(state.clone()).split_for_parts();
     for protected_api in [
+        routes::admin_stats::router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::blobs::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
@@ -134,6 +138,7 @@ fn build_api_router(
     // release builds the binding is never reassigned.
     #[cfg_attr(not(feature = "__test-stubs"), allow(unused_mut))]
     let mut protected: Router<AppState> = routes::auth::protected_router()
+        .merge(Router::from(routes::admin_stats::router()))
         .merge(routes::admin_domains::router())
         .merge(routes::admin_users::router())
         .merge(routes::blobs::router())

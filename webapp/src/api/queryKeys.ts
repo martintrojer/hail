@@ -6,6 +6,7 @@ export const queryKeys = {
   setupState: () => [...queryKeys.setup(), 'state'] as const,
   admin: () => [...queryKeys.all, 'admin'] as const,
   adminUsers: () => [...queryKeys.admin(), 'users'] as const,
+  adminStats: () => [...queryKeys.admin(), 'stats'] as const,
   adminDomains: () => [...queryKeys.admin(), 'domains'] as const,
   views: () => [...queryKeys.all, 'views'] as const,
   view: (view: 'imbox' | 'feed' | 'papertrail' | 'drafts' | 'set-aside' | 'reply-later' | 'bubble-up') =>

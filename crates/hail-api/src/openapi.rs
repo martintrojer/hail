@@ -30,6 +30,7 @@ use crate::routes::health;
     ),
     tags(
         (name = health::TAG, description = "Liveness, readiness, and operational probes."),
+        (name = crate::routes::admin_stats::TAG, description = "Administrator-only user, domain, and system status endpoints."),
         (name = crate::routes::blobs::TAG, description = "JMAP blob upload endpoints."),
         (name = crate::routes::compose::TAG, description = "Compose, reply, and scheduled-send creation."),
         (name = crate::routes::contacts::TAG, description = "Contact notes and contact detail views."),

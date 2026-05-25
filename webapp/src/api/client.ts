@@ -62,6 +62,9 @@ type ThreadVerbPostSuccess = ResponseBody<
 type UndoPostSuccess = ResponseBody<
   paths['/api/undo/{id}']['post']['responses']['200']
 >;
+type AdminStatsGetSuccess = ResponseBody<
+  paths['/api/admin/stats']['get']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -103,6 +106,9 @@ export interface AdminDomainResponse {
 export interface AddAdminDomainRequest {
   domain: string;
 }
+
+export type AdminStatsResponse = AdminStatsGetSuccess;
+export type AdminUserStats = components['schemas']['AdminUserStats'];
 
 export interface LoginRequest {
   email: string;
@@ -326,6 +332,13 @@ export class HailApiClient {
   async listAdminDomains(): Promise<AdminDomainsResponse> {
     return this.#json<AdminDomainsResponse>(
       await this.#request('/api/admin/domains'),
+      200,
+    );
+  }
+
+  async getAdminStats(): Promise<AdminStatsResponse> {
+    return this.#json<AdminStatsResponse>(
+      await this.#request('/api/admin/stats'),
       200,
     );
   }
