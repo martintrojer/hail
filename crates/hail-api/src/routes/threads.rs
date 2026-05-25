@@ -814,6 +814,36 @@ async fn trash_thread(
         .await
     {
         Ok(()) => {
+            // Remove classification keywords so thread leaves Imbox/Feed/Paper Trail.
+            for classification in Classification::ALL {
+                if let Err(err) = actions
+                    .remove_keyword(&state, user.jmap_token.clone(), &thread_id, classification.keyword())
+                    .await
+                {
+                    tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during trash");
+                }
+            }
+            // Remove pile keywords.
+            for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
+                if let Err(err) = actions
+                    .remove_keyword(&state, user.jmap_token.clone(), &thread_id, pile_keyword)
+                    .await
+                {
+                    tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during trash");
+                }
+            }
+            // Clean up sidecar state.
+            let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await;
+            let _ = sqlx::query("DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL")
+                .bind(user.id)
+                .bind(&thread_id)
+                .execute(&state.db)
+                .await;
+
             tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
             Json(ThreadVerbResponse { undo: None }).into_response()
         }

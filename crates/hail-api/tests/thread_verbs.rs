@@ -1026,8 +1026,33 @@ async fn reply_later_inserts_stack_row() {
 #[tokio::test]
 async fn archive_trash_and_mark_call_actions() {
     let (state, key) = fixture_state().await;
-    let (_user_id, sid) = seed_session(&state, &key, "verbs@example.org").await;
+    let (user_id, sid) = seed_session(&state, &key, "verbs@example.org").await;
     let actions = Arc::new(FakeActions::default());
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) VALUES (?1, 'set_aside', 'thread-3', 1, ?2)",
+    )
+    .bind(user_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, created_at) VALUES (?1, 'thread-3', ?2, ?2)",
+    )
+    .bind(user_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) VALUES (?1, 'thread-3', ?2, ?2, ?2)",
+    )
+    .bind(user_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
 
     for (path, body, expected) in [
         ("/api/threads/thread-3/archive", None, StatusCode::OK),
@@ -1056,6 +1081,26 @@ async fn archive_trash_and_mark_call_actions() {
             Call::Trash {
                 thread_id: "thread-3".to_string()
             },
+            Call::RemoveKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_imbox".to_string()
+            },
+            Call::RemoveKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_feed".to_string()
+            },
+            Call::RemoveKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_papertrail".to_string()
+            },
+            Call::RemoveKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_setaside".to_string()
+            },
+            Call::RemoveKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_replylater".to_string()
+            },
             Call::Mark {
                 thread_id: "thread-3".to_string(),
                 read: true
@@ -1066,6 +1111,31 @@ async fn archive_trash_and_mark_call_actions() {
             },
         ]
     );
+
+    let stack_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM stack_positions WHERE user_id = ?1 AND thread_id = 'thread-3'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(stack_count, 0);
+    let pending_bubble_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND thread_id = 'thread-3' AND fired_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(pending_bubble_count, 0);
+    let fired_bubble_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND thread_id = 'thread-3' AND fired_at IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(fired_bubble_count, 1);
 }
 
 #[tokio::test]
