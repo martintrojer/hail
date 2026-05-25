@@ -100,7 +100,8 @@ fn app_with_verifier(
     Router::new().merge(protected).with_state(state)
 }
 
-async fn post(
+async fn request(
+    method: Method,
     state: AppState,
     actions: Arc<FakeActions>,
     sid: Option<&str>,
@@ -108,7 +109,7 @@ async fn post(
     path: &str,
     body: Option<&str>,
 ) -> axum::response::Response {
-    let mut builder = Request::builder().method(Method::POST).uri(path);
+    let mut builder = Request::builder().method(method).uri(path);
     if let Some(sid) = sid {
         builder = builder.header(header::COOKIE, format!("hail_session={sid}"));
     }
@@ -122,6 +123,27 @@ async fn post(
         .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
         .unwrap();
     app(state, actions).oneshot(req).await.unwrap()
+}
+
+async fn post(
+    state: AppState,
+    actions: Arc<FakeActions>,
+    sid: Option<&str>,
+    csrf: bool,
+    path: &str,
+    body: Option<&str>,
+) -> axum::response::Response {
+    request(Method::POST, state, actions, sid, csrf, path, body).await
+}
+
+async fn delete(
+    state: AppState,
+    actions: Arc<FakeActions>,
+    sid: Option<&str>,
+    csrf: bool,
+    path: &str,
+) -> axum::response::Response {
+    request(Method::DELETE, state, actions, sid, csrf, path, None).await
 }
 
 async fn post_with_verifier(
@@ -224,6 +246,12 @@ enum Call {
     Trash {
         thread_id: String,
     },
+    Restore {
+        thread_id: String,
+    },
+    Destroy {
+        thread_id: String,
+    },
     Mark {
         thread_id: String,
         read: bool,
@@ -238,6 +266,8 @@ enum ActionKind {
     RemoveKeyword,
     Archive,
     Trash,
+    Restore,
+    Destroy,
     Mark,
 }
 
@@ -417,6 +447,38 @@ impl ThreadActions for FakeActions {
         })
     }
 
+    fn restore<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.maybe_fail(ActionKind::Restore)?;
+            self.maybe_missing(thread_id)?;
+            self.calls.lock().expect("calls mutex").push(Call::Restore {
+                thread_id: thread_id.to_string(),
+            });
+            Ok(())
+        })
+    }
+
+    fn destroy<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.maybe_fail(ActionKind::Destroy)?;
+            self.maybe_missing(thread_id)?;
+            self.calls.lock().expect("calls mutex").push(Call::Destroy {
+                thread_id: thread_id.to_string(),
+            });
+            Ok(())
+        })
+    }
+
     fn mark<'a>(
         &'a self,
         _state: &'a AppState,
@@ -492,39 +554,59 @@ async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "action-errors@example.org").await;
 
-    for (kind, path, body, stack) in [
+    for (kind, method, path, body, stack) in [
         (
             ActionKind::AddKeyword,
+            Method::POST,
             "/api/threads/thread-set-aside/set-aside",
             None,
             Some("set_aside"),
         ),
         (
             ActionKind::AddKeyword,
+            Method::POST,
             "/api/threads/thread-reply-later/reply-later",
             None,
             Some("reply_later"),
         ),
         (
             ActionKind::Archive,
+            Method::POST,
             "/api/threads/thread-archive/archive",
             None,
             None,
         ),
         (
             ActionKind::Trash,
+            Method::POST,
             "/api/threads/thread-trash/trash",
             None,
             None,
         ),
         (
+            ActionKind::Restore,
+            Method::POST,
+            "/api/threads/thread-restore/restore",
+            None,
+            None,
+        ),
+        (
+            ActionKind::Destroy,
+            Method::DELETE,
+            "/api/threads/thread-destroy/destroy",
+            None,
+            None,
+        ),
+        (
             ActionKind::Mark,
+            Method::POST,
             "/api/threads/thread-mark/mark",
             Some(r#"{"read":true}"#),
             None,
         ),
         (
             ActionKind::Classify,
+            Method::POST,
             "/api/threads/thread-classify/classify",
             Some(r#"{"to":"feed"}"#),
             None,
@@ -537,7 +619,7 @@ async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
             .lock()
             .expect("current classification mutex") = Some(Classification::Imbox);
 
-        let resp = post(state.clone(), actions.clone(), Some(&sid), true, path, body).await;
+        let resp = request(method, state.clone(), actions.clone(), Some(&sid), true, path, body).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR, "{path}");
         let json = json_body(resp).await;
         assert_eq!(json["error"], "internal", "{path}");
@@ -625,8 +707,9 @@ async fn malformed_mark_json_returns_400_without_calling_provider() {
 async fn auth_required_for_each_thread_verb_endpoint() {
     let (state, _key) = fixture_state().await;
 
-    for (path, body) in verb_requests() {
-        let resp = post(
+    for (method, path, body) in verb_requests() {
+        let resp = request(
+            method,
             state.clone(),
             Arc::new(FakeActions::default()),
             None,
@@ -644,8 +727,9 @@ async fn csrf_required_for_each_thread_verb_endpoint() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "csrf@example.org").await;
 
-    for (path, body) in verb_requests() {
-        let resp = post(
+    for (method, path, body) in verb_requests() {
+        let resp = request(
+            method,
             state.clone(),
             Arc::new(FakeActions::default()),
             Some(&sid),
@@ -658,14 +742,24 @@ async fn csrf_required_for_each_thread_verb_endpoint() {
     }
 }
 
-fn verb_requests() -> [(&'static str, Option<&'static str>); 6] {
+fn verb_requests() -> [(Method, &'static str, Option<&'static str>); 8] {
     [
-        ("/api/threads/thread-1/classify", Some(r#"{"to":"imbox"}"#)),
-        ("/api/threads/thread-1/set-aside", None),
-        ("/api/threads/thread-1/reply-later", None),
-        ("/api/threads/thread-1/archive", None),
-        ("/api/threads/thread-1/trash", None),
-        ("/api/threads/thread-1/mark", Some(r#"{"read":true}"#)),
+        (
+            Method::POST,
+            "/api/threads/thread-1/classify",
+            Some(r#"{"to":"imbox"}"#),
+        ),
+        (Method::POST, "/api/threads/thread-1/set-aside", None),
+        (Method::POST, "/api/threads/thread-1/reply-later", None),
+        (Method::POST, "/api/threads/thread-1/archive", None),
+        (Method::POST, "/api/threads/thread-1/trash", None),
+        (Method::POST, "/api/threads/thread-1/restore", None),
+        (Method::DELETE, "/api/threads/thread-1/destroy", None),
+        (
+            Method::POST,
+            "/api/threads/thread-1/mark",
+            Some(r#"{"read":true}"#),
+        ),
     ]
 }
 
@@ -1024,7 +1118,7 @@ async fn reply_later_inserts_stack_row() {
 }
 
 #[tokio::test]
-async fn archive_trash_and_mark_call_actions() {
+async fn archive_trash_restore_destroy_and_mark_call_actions() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "verbs@example.org").await;
     let actions = Arc::new(FakeActions::default());
@@ -1053,10 +1147,18 @@ async fn archive_trash_and_mark_call_actions() {
     .execute(&state.db)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO thread_notes (user_id, thread_id, email_id, body) VALUES (?1, 'thread-3', 'email-1', 'note')",
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .unwrap();
 
     for (path, body, expected) in [
         ("/api/threads/thread-3/archive", None, StatusCode::OK),
         ("/api/threads/thread-3/trash", None, StatusCode::OK),
+        ("/api/threads/thread-3/restore", None, StatusCode::OK),
         (
             "/api/threads/thread-3/mark",
             Some(r#"{"read":true}"#),
@@ -1101,6 +1203,13 @@ async fn archive_trash_and_mark_call_actions() {
                 thread_id: "thread-3".to_string(),
                 keyword: "$hail_replylater".to_string()
             },
+            Call::Restore {
+                thread_id: "thread-3".to_string()
+            },
+            Call::Classify {
+                thread_id: "thread-3".to_string(),
+                classification: Classification::Imbox
+            },
             Call::Mark {
                 thread_id: "thread-3".to_string(),
                 read: true
@@ -1136,6 +1245,38 @@ async fn archive_trash_and_mark_call_actions() {
     .await
     .unwrap();
     assert_eq!(fired_bubble_count, 1);
+
+    let destroy_resp = delete(
+        state.clone(),
+        actions.clone(),
+        Some(&sid),
+        true,
+        "/api/threads/thread-3/destroy",
+    )
+    .await;
+    assert_eq!(destroy_resp.status(), StatusCode::OK);
+    let destroy_json = json_body(destroy_resp).await;
+    assert_eq!(destroy_json["status"], "destroyed");
+    assert!(actions.calls().contains(&Call::Destroy {
+        thread_id: "thread-3".to_string()
+    }));
+
+    let note_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM thread_notes WHERE user_id = ?1 AND thread_id = 'thread-3'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(note_count, 0);
+    let bubble_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND thread_id = 'thread-3'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(bubble_count, 0);
 }
 
 #[tokio::test]

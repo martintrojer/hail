@@ -62,6 +62,12 @@ type BubbleUpDeleteSuccess = ResponseBody<
 type ThreadVerbPostSuccess = ResponseBody<
   paths['/api/threads/{thread_id}/classify']['post']['responses']['200']
 >;
+type RestoreThreadPostSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/restore']['post']['responses']['200']
+>;
+type DestroyThreadDeleteSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/destroy']['delete']['responses']['200']
+>;
 type UndoPostSuccess = ResponseBody<
   paths['/api/undo/{id}']['post']['responses']['200']
 >;
@@ -202,6 +208,8 @@ export type UndoableResponse = {
 };
 export type ScreenerDecisionResponse = ScreenerDecisionPostSuccess;
 export type ThreadVerbResponse = ThreadVerbPostSuccess;
+export type RestoreThreadResponse = RestoreThreadPostSuccess;
+export type DestroyThreadResponse = DestroyThreadDeleteSuccess;
 
 export class HailApiError<Status extends number = number> extends Error {
   readonly name = 'HailApiError';
@@ -555,6 +563,26 @@ export class HailApiClient {
     return this.#json<ThreadVerbResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}/trash`, {
         method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async restoreThread(threadId: string): Promise<RestoreThreadResponse> {
+    return this.#json<RestoreThreadResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/restore`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async destroyThread(threadId: string): Promise<DestroyThreadResponse> {
+    return this.#json<DestroyThreadResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/destroy`, {
+        method: 'DELETE',
         mutating: true,
       }),
       200,

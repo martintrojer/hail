@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo } from 'react';
 import { HailApiError, type HailApiClient, type MailViewItem } from '../api/client';
-import { useClassifyThreadMutation, useTrashView } from '../api/query';
+import { useDestroyThreadMutation, useRestoreThreadMutation, useTrashView } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { ListView } from '../components/ListView';
@@ -68,7 +68,7 @@ function TrashRow({
   client?: HailApiClient;
 }) {
   const undoToast = useOptionalUndoToast();
-  const restore = useClassifyThreadMutation(client, {
+  const restore = useRestoreThreadMutation(client, {
     onSuccess: (data) => {
       undoToast?.showToast({
         message: 'Thread restored to Imbox.',
@@ -77,6 +77,8 @@ function TrashRow({
       });
     },
   });
+  const destroy = useDestroyThreadMutation(client);
+  const isMutating = restore.isPending || destroy.isPending;
 
   return (
     <div className="border-b border-border-hairline py-4 pl-3 pr-0 hover:bg-bg-hover sm:py-5">
@@ -108,26 +110,26 @@ function TrashRow({
         <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
           <button
             type="button"
-            disabled={restore.isPending}
-            onClick={() => restore.mutate({ threadId: item.thread_id, to: 'imbox' })}
+            disabled={isMutating}
+            onClick={() => restore.mutate({ threadId: item.thread_id })}
             className="rounded-full bg-accent-blue px-3 py-1 text-xs font-semibold text-white outline-none hover:bg-accent-blue-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
           >
             Restore
           </button>
           <button
             type="button"
-            disabled
-            title="Permanent delete is not available yet."
-            className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-tertiary opacity-60"
+            disabled={isMutating}
+            onClick={() => destroy.mutate({ threadId: item.thread_id })}
+            className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-tertiary outline-none hover:bg-bg-hover hover:text-accent-red focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue disabled:cursor-not-allowed disabled:opacity-60"
           >
             Delete forever
           </button>
         </div>
       </div>
 
-      {restore.error ? (
+      {restore.error || destroy.error ? (
         <p role="alert" className="mt-2 text-sm text-accent-red">
-          {threadActionErrorMessage(restore.error)}
+          {threadActionErrorMessage(restore.error ?? destroy.error!)}
         </p>
       ) : null}
     </div>
