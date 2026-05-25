@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
+use crate::routes::management_http;
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::routes::validation::valid_email;
 use crate::state::AppState;
@@ -64,7 +65,7 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
     {
         Box::pin(async move {
             let base = management_base(state)?;
-            let response = reqwest::Client::new()
+            let response = management_http::client()
                 .get(format!("{}/api/principal", base))
                 .send()
                 .await
@@ -107,7 +108,7 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
             let base = management_base(state)?;
-            let response = reqwest::Client::new()
+            let response = management_http::client()
                 .delete(management_path(&base, &["api", "principal", email]))
                 .send()
                 .await
@@ -494,7 +495,7 @@ async fn create_or_update_principal(
         emails: [email],
         description: display_name,
     };
-    let response = reqwest::Client::new()
+    let response = management_http::client()
         .post(format!("{}/api/principal", base))
         .json(&payload)
         .send()

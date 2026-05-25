@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::validation::valid_domain;
+use crate::routes::management_http;
 use crate::state::AppState;
 
 /// Dependency-injection seam for Stalwart domain administration.
@@ -56,7 +57,7 @@ impl StalwartManagement for HttpStalwartManagement {
         Box::pin(async move {
             let base = management_base(state)?;
             let url = format!("{}/api/domain", base);
-            let response = reqwest::Client::new()
+            let response = management_http::client()
                 .get(&url)
                 .send()
                 .await
@@ -79,7 +80,7 @@ impl StalwartManagement for HttpStalwartManagement {
         Box::pin(async move {
             let base = management_base(state)?;
             let url = management_path(&base, &["api", "domain", domain]);
-            let response = reqwest::Client::new()
+            let response = management_http::client()
                 .post(&url)
                 .json(&serde_json::json!({ "domain": domain }))
                 .send()
@@ -104,7 +105,7 @@ impl StalwartManagement for HttpStalwartManagement {
         Box::pin(async move {
             let base = management_base(state)?;
             let url = management_path(&base, &["api", "domain", domain]);
-            let response = reqwest::Client::new()
+            let response = management_http::client()
                 .delete(&url)
                 .send()
                 .await

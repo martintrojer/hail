@@ -1,8 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { type FormEvent, useState } from 'react';
-import type { HailApiClient, PileItem, PileViewResponse } from '../api/client';
-import { useClassifyThreadMutation, useReplyLaterView, useSetAsideView } from '../api/query';
+import type { ComposeRequest, HailApiClient, PileItem, PileViewResponse } from '../api/client';
+import {
+  useClassifyThreadMutation,
+  useReplyLaterView,
+  useSendComposeMutation,
+  useSetAsideView,
+} from '../api/query';
 import { defaultApiClient } from '../api/query';
 import { queryKeys } from '../api/queryKeys';
 import { ErrorState } from '../components/ErrorState';
@@ -61,28 +66,41 @@ function ReplyPanel({
 }) {
   const preview = pilePreview(item);
   const [body, setBody] = useState('');
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const sendReply = useSendComposeMutation(client);
+  const moveBack = useClassifyThreadMutation(client);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!body.trim() || sending) return;
-    setSending(true);
     setError(null);
+    const request: ComposeRequest = {
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: '',
+      body_markdown: body.trim(),
+      attachments: [],
+    };
     try {
-      await client.sendReply(item.thread_id, { body_markdown: body.trim() });
-      // Move thread back to Imbox after replying (removes from Reply Later pile)
-      await client.classifyThread(item.thread_id, 'imbox').catch(() => {});
+      await sendReply.mutateAsync({ threadId: item.thread_id, request });
+      try {
+        await moveBack.mutateAsync({ threadId: item.thread_id, to: 'imbox' });
+      } catch {
+        setError('Reply sent, but moving it back to Imbox failed. Try moving it manually.');
+        onSent();
+        return;
+      }
       setBody('');
       setSent(true);
       onSent();
     } catch {
       setError('Reply failed. Try again.');
-    } finally {
-      setSending(false);
     }
   }
+
+  const sending = sendReply.isPending || moveBack.isPending;
 
   return (
     <div className="flex h-full flex-col">
@@ -104,6 +122,7 @@ function ReplyPanel({
         ) : (
           <>
             <textarea
+              data-hail-reply-box="true"
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder="Write your reply…"
@@ -117,7 +136,7 @@ function ReplyPanel({
                 className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover disabled:opacity-60"
               >
                 <Send {...iconSizeProps.sm} aria-hidden="true" />
-                {sending ? 'Sending…' : 'Reply'}
+                {sending ? (moveBack.isPending ? 'Moving…' : 'Sending…') : 'Reply'}
               </button>
               {error ? <p className="text-xs text-accent-red">{error}</p> : null}
             </div>

@@ -19,6 +19,7 @@ import {
   useCreateDraftMutation,
   useDraft,
   useSendComposeMutation,
+  useThread,
   useUpdateDraftMutation,
 } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
@@ -132,7 +133,15 @@ function prefillFromThread(
   replyAll: boolean,
   currentUserEmail: string | undefined,
 ): ComposerForm | null {
-  const lastMessage = thread.messages.at(-1);
+  const messages = [...thread.messages].sort((left, right) => {
+    const leftTime = Date.parse(left.received_at ?? '');
+    const rightTime = Date.parse(right.received_at ?? '');
+    if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
+    if (Number.isNaN(leftTime)) return -1;
+    if (Number.isNaN(rightTime)) return 1;
+    return leftTime - rightTime;
+  });
+  const lastMessage = messages.at(-1);
   if (!lastMessage) return null;
 
   const senderEmail = lastMessage.from[0]?.email ?? '';
@@ -183,13 +192,14 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [showCarbonCopyFields, setShowCarbonCopyFields] = useState(false);
-  const [replyPrefillLoading, setReplyPrefillLoading] = useState(Boolean(replyToThreadId));
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
   const snapshotRef = useRef('');
+  const replyPrefillKeyRef = useRef<string | null>(null);
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
   const createDraft = useCreateDraftMutation(client);
   const draftQuery = useDraft(initialDraftId, client, { enabled: Boolean(initialDraftId) && !replyToThreadId });
+  const replyThreadQuery = useThread(replyToThreadId ?? '', client, { enabled: Boolean(replyToThreadId) });
   const updateDraft = useUpdateDraftMutation(client);
   const hasUnsupportedAttachments = attachments.length > 0;
   const sendCompose = useSendComposeMutation(client, {
@@ -211,6 +221,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   }), [form]);
 
   const canSaveDraft = !replyToThreadId;
+  const replyPrefillLoading = Boolean(replyToThreadId) && replyThreadQuery.isLoading;
   const prefillLoading = replyPrefillLoading || draftQuery.isLoading;
   const canSubmit = !prefillLoading
     && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
@@ -301,36 +312,29 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
   useEffect(() => {
     if (!replyToThreadId) {
-      setReplyPrefillLoading(false);
+      replyPrefillKeyRef.current = null;
       return;
     }
+    if (!replyThreadQuery.data) return;
 
-    let cancelled = false;
-    setReplyPrefillLoading(true);
+    const prefillKey = `${replyToThreadId}:${replyAll}:${user?.email ?? ''}`;
+    if (replyPrefillKeyRef.current === prefillKey) return;
+
     setSendError(null);
+    const nextForm = prefillFromThread(replyThreadQuery.data, replyAll, user?.email);
+    if (nextForm) {
+      setForm(nextForm);
+      setShowCarbonCopyFields(nextForm.cc.length > 0);
+      setDirty(false);
+    }
+    replyPrefillKeyRef.current = prefillKey;
+  }, [replyAll, replyThreadQuery.data, replyToThreadId, user?.email]);
 
-    client.getThread(replyToThreadId)
-      .then((thread) => {
-        if (cancelled) return;
-        const nextForm = prefillFromThread(thread, replyAll, user?.email);
-        if (nextForm) {
-          setForm(nextForm);
-          setShowCarbonCopyFields(nextForm.cc.length > 0);
-          setDirty(false);
-        }
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setSendError(composeErrorMessage(error, 'Reply details could not be loaded.'));
-      })
-      .finally(() => {
-        if (!cancelled) setReplyPrefillLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [client, replyAll, replyToThreadId, user?.email]);
+  useEffect(() => {
+    if (replyThreadQuery.isError && replyToThreadId) {
+      setSendError(composeErrorMessage(replyThreadQuery.error, 'Reply details could not be loaded.'));
+    }
+  }, [replyThreadQuery.error, replyThreadQuery.isError, replyToThreadId]);
 
   useEffect(() => {
     if (replyToThreadId && !replyPrefillLoading) {

@@ -21,6 +21,7 @@ use crate::middleware::session::{
     SESSION_TTL_DAYS, basic_bearer, build_session_cookie, new_session_id,
 };
 use crate::routes::auth::UserView;
+use crate::routes::management_http;
 use crate::routes::response::internal;
 use crate::routes::validation::{valid_domain, valid_email};
 use crate::state::AppState;
@@ -414,8 +415,7 @@ async fn create_stalwart_principal(
         emails: [email],
         description: display_name,
     };
-    let client = reqwest::Client::new();
-    let response = client
+    let response = management_http::client()
         .post(&url)
         .json(&payload)
         .send()

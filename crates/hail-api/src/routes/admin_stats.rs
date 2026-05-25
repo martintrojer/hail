@@ -17,6 +17,7 @@ use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::jmap_session;
+use crate::routes::management_http;
 use crate::routes::response::internal;
 use crate::state::AppState;
 
@@ -203,7 +204,7 @@ async fn stalwart_status(state: &AppState) -> StalwartStatus {
 }
 
 async fn management_health_connected(base: &str) -> bool {
-    let client = reqwest::Client::new();
+    let client = management_http::client();
     for path in ["/api/healthz", "/healthz", "/healthz/live"] {
         let Ok(response) = client.get(format!("{base}{path}")).send().await else {
             continue;
@@ -222,7 +223,7 @@ async fn stalwart_quota_size(
     let Some(base) = management_base(state) else {
         return Ok(None);
     };
-    let response = reqwest::Client::new()
+    let response = management_http::client()
         .get(management_path(&base, &["api", "store", "quota", email]))
         .send()
         .await?;

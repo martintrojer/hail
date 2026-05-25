@@ -20,6 +20,22 @@ export interface KeyboardShortcutHandlers {
 
 const sequenceTimeoutMs = 1200;
 
+const escapeHandlers: symbol[] = [];
+
+function registerEscapeHandler(token: symbol) {
+  escapeHandlers.push(token);
+  return () => {
+    const index = escapeHandlers.lastIndexOf(token);
+    if (index !== -1) {
+      escapeHandlers.splice(index, 1);
+    }
+  };
+}
+
+function isTopEscapeHandler(token: symbol) {
+  return escapeHandlers.at(-1) === token;
+}
+
 function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -45,6 +61,11 @@ export function useKeyboardShortcuts(
     if (!enabled) {
       return undefined;
     }
+
+    const escapeToken = Symbol('hail-keyboard-escape');
+    const unregisterEscapeHandler = handlers.onEscape
+      ? registerEscapeHandler(escapeToken)
+      : undefined;
 
     let pendingPrefix: 'g' | null = null;
     let prefixTimer: number | null = null;
@@ -80,6 +101,9 @@ export function useKeyboardShortcuts(
       }
 
       if (event.key === 'Escape') {
+        if (handlers.onEscape && !isTopEscapeHandler(escapeToken)) {
+          return;
+        }
         if (run(event, handlers.onEscape)) {
           return;
         }
@@ -137,6 +161,7 @@ export function useKeyboardShortcuts(
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
+      unregisterEscapeHandler?.();
       clearPendingPrefix();
       window.removeEventListener('keydown', handleKeyDown);
     };
