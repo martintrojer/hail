@@ -85,7 +85,7 @@ function TrashRow({
       <div className="flex items-start justify-between gap-4">
         <Link
           to="/thread/$threadId"
-          params={{ threadId: item.thread_id }}
+          search={{ from: undefined }} params={{ threadId: item.thread_id }}
           className="min-w-0 flex-1 rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue"
           data-hail-mail-list-item="true"
           data-hail-thread-id={item.thread_id}

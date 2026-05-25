@@ -148,11 +148,13 @@ function ReplyPanel({
 function PileRow({
   item,
   config,
+  kind,
   selected,
   onSelect,
 }: {
   item: PileItem;
   config: SectionConfig;
+  kind: string;
   selected?: boolean;
   onSelect?: () => void;
 }) {
@@ -210,6 +212,7 @@ function PileRow({
         <Link
           to="/thread/$threadId"
           params={{ threadId: item.thread_id }}
+          search={{ from: kind }}
           className="block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5"
           aria-label={`Open ${preview.subject} from ${preview.sender}`}
           data-hail-mail-list-item="true"
@@ -277,6 +280,7 @@ function ReplyLaterList({
             <PileRow
               item={item}
               config={config}
+              kind="reply-later"
               selected={item.thread_id === selectedId}
               onSelect={() => setSelectedId(item.thread_id === selectedId ? null : item.thread_id)}
             />
@@ -313,9 +317,11 @@ function ReplyLaterList({
 function PileList({
   query,
   config,
+  kind,
 }: {
   query: ReturnType<SectionConfig['useView']>;
   config: SectionConfig;
+  kind: PileSectionPageProps['kind'];
 }) {
   if (query.isPending) {
     return <LoadingState />;
@@ -338,7 +344,7 @@ function PileList({
   return (
     <ListView
       items={data.items}
-      renderItem={(item) => <PileRow item={item} config={config} />}
+      renderItem={(item) => <PileRow item={item} config={config} kind={kind} />}
       keyExtractor={(item) => item.thread_id}
       hasMore={false}
       isLoadingMore={false}
@@ -361,7 +367,7 @@ export function PileSectionPage({ kind }: PileSectionPageProps) {
     kind === 'reply-later' ? (
       <ReplyLaterList query={query} config={config} client={client} />
     ) : (
-      <PileList query={query} config={config} />
+      <PileList query={query} config={config} kind={kind} />
     );
 
   return (

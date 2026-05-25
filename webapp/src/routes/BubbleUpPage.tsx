@@ -48,7 +48,7 @@ function BubbleUpRow({ item }: { item: BubbleUpViewItem }) {
     <div className="group flex items-center gap-3 border-b border-border-hairline py-4 pl-3 pr-1 hover:bg-bg-hover focus-within:bg-bg-selected sm:py-5 sm:pr-0">
       <Link
         to="/thread/$threadId"
-        params={{ threadId: item.thread_id }}
+        search={{ from: undefined }} params={{ threadId: item.thread_id }}
         className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none"
         aria-label={`Open thread ${item.thread_id}`}
       >

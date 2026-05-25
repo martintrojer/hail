@@ -31,6 +31,8 @@ import { AppShell } from '../layout/AppShell';
 interface ThreadPageProps {
   threadId: string;
   client?: Parameters<typeof useThread>[1];
+  /** Source view the thread was opened from (e.g. 'set-aside', 'reply-later'). */
+  sourceView?: string;
 }
 
 interface LocalNote extends InlineNoteProps {
@@ -246,6 +248,7 @@ function MessageCard({
   onPopupAction,
   onCancelAddNote,
   onSaveNote,
+  hiddenActions,
 }: {
   message: ThreadMessage;
   notes: LocalNote[];
@@ -257,6 +260,7 @@ function MessageCard({
   onPopupAction: (message: ThreadMessage, action: string, payload?: unknown) => void;
   onCancelAddNote: () => void;
   onSaveNote: (messageId: string, text: string) => void;
+  hiddenActions?: string[];
 }) {
   const sender = firstSender(message);
 
@@ -303,6 +307,7 @@ function MessageCard({
                 anchorRect={popupAnchor}
                 onClose={onClosePopup}
                 onAction={handlePopupAction}
+                hiddenActions={hiddenActions}
               />
             </div>
           </div>
@@ -433,9 +438,11 @@ function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
 function ThreadDocument({
   thread,
   client,
+  sourceView,
 }: {
   thread: ThreadViewResponse;
   client: HailApiClient;
+  sourceView?: string;
 }) {
   const navigate = useNavigate();
   const { showToast } = useUndoToast();
@@ -444,6 +451,9 @@ function ThreadDocument({
     [thread.messages],
   );
   const sender = primarySender(thread);
+  const hiddenPopupActions = sourceView === 'set-aside' || sourceView === 'reply-later'
+    ? ['bubble-up', 'set-aside', 'reply-later']
+    : [];
   const [addingNoteFor, setAddingNoteFor] = useState<string | null>(null);
   const [messagePopup, setMessagePopup] = useState<{
     messageId: string;
@@ -620,6 +630,7 @@ function ThreadDocument({
               onSaveNote={(messageId, text) => {
                 void saveNote(messageId, text);
               }}
+              hiddenActions={hiddenPopupActions}
             />
           ))}
         </div>
@@ -640,7 +651,7 @@ function ThreadDocument({
   );
 }
 
-export function ThreadPage({ threadId, client }: ThreadPageProps) {
+export function ThreadPage({ threadId, client, sourceView }: ThreadPageProps) {
   const query = useThread(threadId, client);
   const apiClient = client ?? defaultApiClient;
 
@@ -664,7 +675,7 @@ export function ThreadPage({ threadId, client }: ThreadPageProps) {
       />
     );
   } else {
-    reading = <ThreadDocument thread={query.data} client={apiClient} />;
+    reading = <ThreadDocument thread={query.data} client={apiClient} sourceView={sourceView} />;
   }
 
   return <AppShell title="Thread" description={undefined} reading={reading} />;

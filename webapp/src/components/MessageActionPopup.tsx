@@ -20,6 +20,8 @@ export interface MessageActionPopupProps {
   onClose: () => void;
   onAction: (action: string, payload?: unknown) => void;
   anchorRect?: DOMRect | null;
+  /** Actions to hide based on context (e.g. hide bubble-up in pile views). */
+  hiddenActions?: string[];
 }
 
 interface ActionItem {
@@ -105,6 +107,7 @@ export function MessageActionPopup({
   onClose,
   onAction,
   anchorRect,
+  hiddenActions = [],
 }: MessageActionPopupProps) {
   const popupRef = useRef<HTMLDivElement | null>(null);
   const [moveOpen, setMoveOpen] = useState(true);
@@ -151,6 +154,11 @@ export function MessageActionPopup({
     onClose();
   }
 
+  const hidden = new Set(hiddenActions);
+  const filteredGroups = actionGroups.map((group) =>
+    group.filter((item) => !hidden.has(item.action)),
+  );
+
   const popup = (
     <div
       ref={popupRef}
@@ -159,7 +167,7 @@ export function MessageActionPopup({
       className="absolute z-50 w-60 rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
       style={{ top: position.top, left: position.left }}
     >
-      {actionGroups[0].map((item) => (
+      {filteredGroups[0].map((item) => (
         <MenuButton
           key={item.action}
           icon={item.icon}
@@ -170,7 +178,7 @@ export function MessageActionPopup({
 
       <Divider />
 
-      {actionGroups[1].map((item) => (
+      {filteredGroups[1].map((item) => (
         <MenuButton
           key={item.action}
           icon={item.icon}
@@ -207,7 +215,7 @@ export function MessageActionPopup({
 
       <Divider />
 
-      {actionGroups[2].map((item) => (
+      {filteredGroups[2].map((item) => (
         <MenuButton
           key={item.action}
           icon={item.icon}
@@ -218,7 +226,7 @@ export function MessageActionPopup({
 
       <Divider />
 
-      {actionGroups[3].map((item) => (
+      {filteredGroups[3].map((item) => (
         <MenuButton
           key={item.action}
           icon={item.icon}
