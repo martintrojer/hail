@@ -8,7 +8,13 @@ import {
   type ThreadViewResponse,
 } from '../api/client';
 import {
+  useArchiveThreadMutation,
+  useBubbleUpMutation,
+  useClassifyThreadMutation,
+  useReplyLaterThreadMutation,
+  useSetAsideThreadMutation,
   useThread,
+  useTrashThreadMutation,
   defaultApiClient,
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
@@ -30,7 +36,7 @@ import { useGoBack } from '../hooks/useGoBack';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatFullDateTime } from '../lib/dates';
-import { threadErrorMessage } from '../lib/errorMessages';
+import { actionErrorMessage, threadErrorMessage } from '../lib/errorMessages';
 import { formatParticipantEmail, formatParticipantList, formatParticipantName } from '../lib/participants';
 
 interface ThreadPageProps {
@@ -190,12 +196,14 @@ function MessageCard({
   onCancelAddNote,
   onSaveNote,
   hiddenActions,
+  actionBusy,
 }: {
   message: ThreadMessage;
   notes: LocalNote[];
   addingNote: boolean;
   popupOpen: boolean;
   popupAnchor: DOMRect | null;
+  actionBusy: boolean;
   onTogglePopup: (messageId: string, anchorRect: DOMRect) => void;
   onClosePopup: () => void;
   onPopupAction: (message: ThreadMessage, action: string, payload?: unknown) => void;
@@ -237,6 +245,7 @@ function MessageCard({
                 aria-label="Message actions"
                 aria-haspopup="menu"
                 aria-expanded={popupOpen}
+                disabled={actionBusy}
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={togglePopup}
                 className="rounded-full p-1 text-ink-tertiary focus-ring outline-none hover:bg-hover hover:text-ink-primary"
@@ -404,6 +413,21 @@ function ThreadDocument({
   const [bubbleUpOpen, setBubbleUpOpen] = useState(false);
   const [bubbleUpAnchor, setBubbleUpAnchor] = useState<DOMRect | null>(null);
   const [notes, setNotes] = useState<LocalNote[]>(() => thread.notes.map(toLocalNote));
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const setAside = useSetAsideThreadMutation(client);
+  const replyLater = useReplyLaterThreadMutation(client);
+  const trash = useTrashThreadMutation(client);
+  const archive = useArchiveThreadMutation(client);
+  const classify = useClassifyThreadMutation(client);
+  const bubbleUp = useBubbleUpMutation(client);
+  const actionBusy =
+    setAside.isPending ||
+    replyLater.isPending ||
+    trash.isPending ||
+    archive.isPending ||
+    classify.isPending ||
+    bubbleUp.isPending;
 
   useEffect(() => {
     setNotes(thread.notes.map(toLocalNote));
@@ -431,9 +455,25 @@ function ThreadDocument({
     });
   }
 
+  async function runThreadAction<T>(operation: () => Promise<T>) {
+    setActionError(null);
+    try {
+      return await operation();
+    } catch (error) {
+      const normalizedError = error instanceof Error ? error : new Error('Thread action failed');
+      setActionError(actionErrorMessage(normalizedError, 'Thread action'));
+      return null;
+    }
+  }
+
   async function handleBubbleUpSelect(option: string) {
     const isoDate = bubbleUpOptionToIso(option);
-    await client.bubbleUpThread(thread.thread_id, { at: isoDate });
+    const response = await runThreadAction(() =>
+      bubbleUp.mutateAsync({ threadId: thread.thread_id, request: { at: isoDate } }),
+    );
+    if (!response) {
+      return;
+    }
     showToast({ message: `Thread will bubble up at ${formatFullDateTime(isoDate)}` });
     goBack();
   }
@@ -447,37 +487,62 @@ function ThreadDocument({
 
     switch (action) {
       case 'add-note':
+        setActionError(null);
         setAddingNoteFor(message.email_id);
         return;
       case 'set-aside': {
-        const response = await client.setAsideThread(thread.thread_id);
+        const response = await runThreadAction(() =>
+          setAside.mutateAsync({ threadId: thread.thread_id }),
+        );
+        if (!response) {
+          return;
+        }
         showUndoToast('Thread added to Set Aside.', response, 'Set Aside undone.');
         goBack();
         return;
       }
       case 'reply-later': {
-        const response = await client.replyLaterThread(thread.thread_id);
+        const response = await runThreadAction(() =>
+          replyLater.mutateAsync({ threadId: thread.thread_id }),
+        );
+        if (!response) {
+          return;
+        }
         showUndoToast('Thread added to Reply Later.', response, 'Reply Later undone.');
         goBack();
         return;
       }
       case 'trash': {
-        const response = await client.trashThread(thread.thread_id);
+        const response = await runThreadAction(() =>
+          trash.mutateAsync({ threadId: thread.thread_id }),
+        );
+        if (!response) {
+          return;
+        }
         showUndoToast('Thread moved to trash.', response, 'Trash undone.');
         goBack();
         return;
       }
-      case 'archive':
-        await client.archiveThread(thread.thread_id);
+      case 'archive': {
+        const response = await runThreadAction(() =>
+          archive.mutateAsync({ threadId: thread.thread_id }),
+        );
+        if (!response) {
+          return;
+        }
         goBack();
         return;
+      }
       case 'reply':
+        setActionError(null);
         void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: false } });
         return;
       case 'reply-all':
+        setActionError(null);
         void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: true } });
         return;
       case 'forward':
+        setActionError(null);
         void navigate({ to: '/compose', search: { forward: message.email_id } });
         return;
       case 'move-to': {
@@ -485,7 +550,12 @@ function ThreadDocument({
           showToast({ message: 'Move target not supported.' });
           return;
         }
-        const response = await client.moveThread(thread.thread_id, payload);
+        const response = await runThreadAction(() =>
+          classify.mutateAsync({ threadId: thread.thread_id, to: payload }),
+        );
+        if (!response) {
+          return;
+        }
         const labels = {
           imbox: 'Imbox',
           feed: 'Feed',
@@ -500,6 +570,7 @@ function ThreadDocument({
         return;
       }
       case 'bubble-up':
+        setActionError(null);
         setBubbleUpAnchor(messagePopup?.anchorRect ?? null);
         setBubbleUpOpen(true);
         return;
@@ -533,6 +604,12 @@ function ThreadDocument({
 
       <ThreadHeader thread={thread} />
 
+      {actionError ? (
+        <p role="alert" className="rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">
+          {actionError}
+        </p>
+      ) : null}
+
       {messages.length === 0 ? (
         <StateCard
           title="No messages in this thread"
@@ -554,6 +631,7 @@ function ThreadDocument({
                   ? messagePopup.anchorRect
                   : null
               }
+              actionBusy={actionBusy}
               onTogglePopup={toggleMessagePopup}
               onClosePopup={closeMessagePopup}
               onPopupAction={(message, action, payload) => {
