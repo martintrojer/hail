@@ -1,9 +1,23 @@
 use std::collections::HashMap;
 
+use hail_jmap::jmap_client::email::Property;
 use secrecy::SecretString;
 use serde::Serialize;
 
 use crate::state::AppState;
+
+pub const MAIL_VIEW_PROPERTIES: &[Property] = &[
+    Property::Id,
+    Property::ThreadId,
+    Property::From,
+    Property::To,
+    Property::Cc,
+    Property::Bcc,
+    Property::Subject,
+    Property::Preview,
+    Property::ReceivedAt,
+    Property::Keywords,
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ThreadPreview {
@@ -109,15 +123,10 @@ pub async fn set_thread_mailboxes(
     Ok(())
 }
 
-pub async fn drafts_mailbox_id(session: &hail_jmap::Session) -> Result<Option<String>, String> {
+pub async fn required_drafts_mailbox_id(session: &hail_jmap::Session) -> Result<String, String> {
     hail_jmap::mailbox_id_by_role(session, hail_jmap::jmap_client::mailbox::Role::Drafts)
         .await
-        .map_err(|err| err.to_string())
-}
-
-pub async fn required_drafts_mailbox_id(session: &hail_jmap::Session) -> Result<String, String> {
-    drafts_mailbox_id(session)
-        .await?
+        .map_err(|err| err.to_string())?
         .ok_or_else(|| "drafts mailbox not found".to_string())
 }
 
@@ -192,7 +201,6 @@ pub async fn latest_thread_preview(
     thread_id: &str,
 ) -> Result<Option<ThreadPreview>, String> {
     use hail_jmap::jmap_client::core::query::Filter;
-    use hail_jmap::jmap_client::email::Property;
     use hail_jmap::jmap_client::email::query as email_query;
 
     let mut request = session.client().build();

@@ -17,6 +17,9 @@ mod app_events;
 #[allow(dead_code)]
 mod crypto;
 
+#[path = "../src/jmap_helpers.rs"]
+mod jmap_helpers;
+
 #[path = "../src/scheduler.rs"]
 mod scheduler;
 

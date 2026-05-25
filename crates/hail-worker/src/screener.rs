@@ -243,7 +243,9 @@ async fn move_to_screener_if_needed(
     jmap: &dyn JmapOps,
     env: &EmailEnvelope,
 ) -> Result<(), RouteError> {
-    let screener_id = jmap.get_or_create_mailbox("Screener").await?;
+    let screener_id = jmap
+        .get_or_create_mailbox(hail_jmap::SCREENER_MAILBOX_NAME)
+        .await?;
     if env
         .mailbox_ids
         .iter()

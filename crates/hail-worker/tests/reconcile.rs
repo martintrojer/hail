@@ -13,6 +13,9 @@ use sqlx::SqlitePool;
 #[allow(dead_code)]
 mod crypto;
 
+#[path = "../src/jmap_helpers.rs"]
+mod jmap_helpers;
+
 #[path = "../src/reconcile.rs"]
 mod reconcile;
 
@@ -26,10 +29,8 @@ struct FakeThreadVerifier {
 
 impl FakeThreadVerifier {
     fn with_existing(mut self, user_id: i64, ids: &[&str]) -> Self {
-        self.existing_by_user.insert(
-            user_id,
-            ids.iter().map(|id| (*id).to_string()).collect(),
-        );
+        self.existing_by_user
+            .insert(user_id, ids.iter().map(|id| (*id).to_string()).collect());
         self
     }
 
@@ -65,7 +66,9 @@ fn fresh_db_url() -> (String, PathBuf) {
         .as_nanos();
     let pid = std::process::id();
     let counter = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-    path.push(format!("hail-worker-reconcile-test-{pid}-{nanos}-{counter}.sqlite"));
+    path.push(format!(
+        "hail-worker-reconcile-test-{pid}-{nanos}-{counter}.sqlite"
+    ));
     let url = format!("sqlite://{}", path.display());
     (url, path)
 }
@@ -104,7 +107,13 @@ async fn insert_user(pool: &SqlitePool, email: &str) -> i64 {
         .expect("fetch user id")
 }
 
-async fn insert_stack(pool: &SqlitePool, user_id: i64, stack: &str, thread_id: &str, position: i64) {
+async fn insert_stack(
+    pool: &SqlitePool,
+    user_id: i64,
+    stack: &str,
+    thread_id: &str,
+    position: i64,
+) {
     sqlx::query(
         "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
          VALUES (?, ?, ?, ?, ?)",
@@ -135,13 +144,11 @@ async fn insert_bubble(pool: &SqlitePool, user_id: i64, thread_id: &str, fired_a
 }
 
 async fn stack_threads(pool: &SqlitePool, user_id: i64) -> Vec<String> {
-    sqlx::query_scalar(
-        "SELECT thread_id FROM stack_positions WHERE user_id = ? ORDER BY thread_id",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .expect("select stack threads")
+    sqlx::query_scalar("SELECT thread_id FROM stack_positions WHERE user_id = ? ORDER BY thread_id")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .expect("select stack threads")
 }
 
 async fn pending_bubble_threads(pool: &SqlitePool, user_id: i64) -> Vec<String> {
@@ -193,14 +200,23 @@ async fn pending_bubble_up_orphan_removed_existing_kept() {
     let (pool, _guard, alice, _bob) = setup_db().await;
     insert_bubble(&pool, alice, "thread-existing", None).await;
     insert_bubble(&pool, alice, "thread-missing", None).await;
-    insert_bubble(&pool, alice, "thread-fired-missing", Some("2026-01-03T00:00:00Z")).await;
+    insert_bubble(
+        &pool,
+        alice,
+        "thread-fired-missing",
+        Some("2026-01-03T00:00:00Z"),
+    )
+    .await;
     let verifier = FakeThreadVerifier::default().with_existing(alice, &["thread-existing"]);
 
     let report = process_reconciliation(&pool, &verifier, Utc::now())
         .await
         .expect("reconcile");
 
-    assert_eq!(pending_bubble_threads(&pool, alice).await, vec!["thread-existing"]);
+    assert_eq!(
+        pending_bubble_threads(&pool, alice).await,
+        vec!["thread-existing"]
+    );
     assert_eq!(
         all_bubble_threads(&pool, alice).await,
         vec!["thread-existing", "thread-fired-missing"]
@@ -216,8 +232,8 @@ async fn wrong_user_isolation() {
     insert_stack(&pool, bob, "reply_later", "shared-thread-id", 1).await;
     insert_bubble(&pool, alice, "bubble-shared", None).await;
     insert_bubble(&pool, bob, "bubble-shared", None).await;
-    let verifier = FakeThreadVerifier::default()
-        .with_existing(alice, &["shared-thread-id", "bubble-shared"]);
+    let verifier =
+        FakeThreadVerifier::default().with_existing(alice, &["shared-thread-id", "bubble-shared"]);
 
     let report = process_reconciliation(&pool, &verifier, Utc::now())
         .await
@@ -225,7 +241,10 @@ async fn wrong_user_isolation() {
 
     assert_eq!(stack_threads(&pool, alice).await, vec!["shared-thread-id"]);
     assert!(stack_threads(&pool, bob).await.is_empty());
-    assert_eq!(pending_bubble_threads(&pool, alice).await, vec!["bubble-shared"]);
+    assert_eq!(
+        pending_bubble_threads(&pool, alice).await,
+        vec!["bubble-shared"]
+    );
     assert!(pending_bubble_threads(&pool, bob).await.is_empty());
     assert_eq!(report.users_checked, 2);
     assert_eq!(report.stack_positions_deleted, 1);
@@ -259,7 +278,10 @@ async fn verifier_error_leaves_all_sidecar_refs_untouched() {
         err.contains("synthetic JMAP verifier failure"),
         "error should preserve verifier source, got: {err}"
     );
-    assert_eq!(stack_threads(&pool, alice).await, vec!["alice-stack-missing"]);
+    assert_eq!(
+        stack_threads(&pool, alice).await,
+        vec!["alice-stack-missing"]
+    );
     assert_eq!(
         pending_bubble_threads(&pool, alice).await,
         vec!["alice-bubble-missing"]

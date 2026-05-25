@@ -19,16 +19,16 @@ use axum::extract::{Extension, Path, State, rejection::JsonRejection};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
+use hail_jmap::{SCREENER_MAILBOX_NAME, mailbox_id_by_name};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-const SCREENER_MAILBOX_NAME: &str = "Screener";
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::jmap_session;
+use crate::routes::jmap_helpers::{MAIL_VIEW_PROPERTIES, jmap_session};
 use crate::routes::response::{bad_request, internal};
 use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
@@ -396,23 +396,11 @@ async fn enrich_screener_senders(
         return Ok(());
     }
 
-    use hail_jmap::jmap_client::email::Property;
-    use hail_jmap::jmap_client::mailbox::query as mailbox_query;
-
     let session = jmap_session(state, user.jmap_token.clone()).await?;
 
-    let mut mailbox_query = session
-        .client()
-        .mailbox_query(
-            Some(mailbox_query::Filter::name(SCREENER_MAILBOX_NAME)),
-            None::<Vec<_>>,
-        )
+    let screener_mailbox_id = mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
         .await
-        .map_err(|err| err.to_string())?;
-    let screener_mailbox_id = mailbox_query
-        .take_ids()
-        .into_iter()
-        .next()
+        .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("{SCREENER_MAILBOX_NAME} mailbox not found"))?;
 
     for sender in senders {
@@ -429,15 +417,11 @@ async fn enrich_screener_senders(
             continue;
         }
 
-        let props = [
-            Property::Id,
-            Property::Subject,
-            Property::Preview,
-            Property::From,
-            Property::ReceivedAt,
-        ];
         let mut request = session.client().build();
-        request.get_email().ids(ids).properties(props);
+        request
+            .get_email()
+            .ids(ids)
+            .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
         let mut response = request
             .send_get_email()
             .await
@@ -495,8 +479,9 @@ async fn apply_jmap_backfill(
         .await
         .map_err(backfill_error)?;
 
-    let screener_mailbox_id = jmap_mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
-        .await?
+    let screener_mailbox_id = mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
+        .await
+        .map_err(backfill_error)?
         .ok_or_else(|| {
             ScreenerBackfillError(format!("{SCREENER_MAILBOX_NAME} mailbox not found"))
         })?;
@@ -562,20 +547,6 @@ async fn apply_jmap_backfill(
         "screener history backfill applied"
     );
     Ok(())
-}
-
-async fn jmap_mailbox_id_by_name(
-    session: &hail_jmap::Session,
-    name: &str,
-) -> Result<Option<String>, ScreenerBackfillError> {
-    use hail_jmap::jmap_client::mailbox::query as mailbox_query;
-
-    let mut query = session
-        .client()
-        .mailbox_query(Some(mailbox_query::Filter::name(name)), None::<Vec<_>>)
-        .await
-        .map_err(backfill_error)?;
-    Ok(query.take_ids().into_iter().next())
 }
 
 async fn jmap_mailbox_id_by_role(

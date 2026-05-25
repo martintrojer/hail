@@ -97,7 +97,10 @@ pub async fn process_reconciliation(
         return Ok(report);
     }
 
-    let mut tx = db.begin().await.context("begin reconciliation transaction")?;
+    let mut tx = db
+        .begin()
+        .await
+        .context("begin reconciliation transaction")?;
     for (user_id, missing_ids) in missing_by_user {
         for thread_id in missing_ids {
             report.stack_positions_deleted += delete_stack_positions(&mut tx, user_id, &thread_id)
@@ -189,7 +192,7 @@ mod live {
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    use anyhow::{Context, Result, anyhow};
+    use anyhow::{Context, Result};
     use async_trait::async_trait;
     use hail_jmap::jmap_client::core::query::Filter;
     use hail_jmap::jmap_client::email::query as email_query;
@@ -221,22 +224,7 @@ mod live {
         }
 
         async fn latest_active_token(&self, user_id: i64) -> Result<SecretString> {
-            let now = chrono::Utc::now().to_rfc3339();
-            let enc: Vec<u8> = sqlx::query_scalar(
-                "SELECT jmap_token_enc FROM sessions \
-                 WHERE user_id = ? AND expires_at > ? \
-                 ORDER BY last_used_at DESC LIMIT 1",
-            )
-            .bind(user_id)
-            .bind(now)
-            .fetch_optional(&self.db)
-            .await
-            .with_context(|| format!("select active JMAP token for user {user_id}"))?
-            .ok_or_else(|| anyhow!("no active JMAP session for user {user_id}"))?;
-
-            self.token_decryptor
-                .decrypt(&enc)
-                .with_context(|| format!("decrypt JMAP token for user {user_id}"))
+            crate::jmap_helpers::latest_active_token(&self.db, &self.token_decryptor, user_id).await
         }
     }
 
@@ -258,7 +246,13 @@ mod live {
                     .client()
                     .email_query(
                         Some(Filter::from(email_query::Filter::in_thread(id))),
-                        None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
+                        None::<
+                            Vec<
+                                hail_jmap::jmap_client::core::query::Comparator<
+                                    email_query::Comparator,
+                                >,
+                            >,
+                        >,
                     )
                     .await
                     .with_context(|| format!("Email/query inThread={id} for user {user_id}"))?;
