@@ -36,6 +36,39 @@ pub fn validate_thread_id(thread_id: &str) -> Result<(), axum::response::Respons
         .ok_or_else(|| crate::routes::response::bad_request("invalid_thread_id"))
 }
 
+pub async fn thread_action_response<F, Fut>(
+    user: &crate::middleware::auth::AuthUser,
+    thread_id: &str,
+    action: F,
+) -> axum::response::Response
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<
+            Output = Result<
+                Option<crate::routes::undo::UndoToken>,
+                crate::routes::threads::ThreadActionError,
+            >,
+        >,
+{
+    use axum::Json;
+    use axum::response::IntoResponse;
+
+    if let Err(response) = validate_thread_id(thread_id) {
+        return response;
+    }
+
+    match action().await {
+        Ok(undo) => Json(crate::routes::threads::ThreadVerbResponse { undo }).into_response(),
+        Err(crate::routes::threads::ThreadActionError::NotFound) => {
+            crate::routes::response::not_found()
+        }
+        Err(crate::routes::threads::ThreadActionError::Provider(err)) => {
+            tracing::warn!(user_id = user.id, thread_id, error = %err, "thread action failed");
+            crate::routes::response::internal()
+        }
+    }
+}
+
 pub async fn jmap_session(
     state: &AppState,
     token: SecretString,

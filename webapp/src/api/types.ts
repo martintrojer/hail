@@ -633,8 +633,11 @@ export interface components {
             bubble_id: number;
             /** Format: date-time */
             created_at: string;
+            from: string;
+            preview: string;
             /** Format: date-time */
             surface_at: string;
+            subject: string;
             thread_id: string;
         };
         BubbleUpViewResponse: {

@@ -25,7 +25,7 @@ use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{
     clear_thread_state, email_ids_in_thread as shared_email_ids_in_thread, jmap_session,
     move_thread_to_role as shared_move_thread_to_role, set_thread_keyword, set_thread_keywords,
-    set_thread_mailboxes, validate_thread_id,
+    set_thread_mailboxes, thread_action_response, validate_thread_id,
 };
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::routes::undo::{NewUndoAction, ThreadStackUndoTarget, UndoToken, create_undo_action};
@@ -422,8 +422,8 @@ impl Classification {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-struct ThreadVerbResponse {
-    undo: Option<UndoToken>,
+pub struct ThreadVerbResponse {
+    pub undo: Option<UndoToken>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -601,56 +601,46 @@ async fn classify_thread(
     let Ok(Json(body)) = body else {
         return bad_request("invalid_classification");
     };
-    let previous_classification = match actions
-        .current_classification(&state, user.jmap_token.clone(), &thread_id)
-        .await
-    {
-        Ok(Some(classification)) => Some(classification),
-        Ok(None) => {
-            tracing::debug!(user_id = user.id, thread_id = %thread_id, "thread classify undo unavailable: previous classification keyword missing");
-            None
-        }
-        Err(ThreadActionError::NotFound) => return not_found(),
-        Err(ThreadActionError::Provider(err)) => return action_internal(user.id, &thread_id, err),
-    };
-    match actions
-        .classify(&state, user.jmap_token.clone(), &thread_id, body.to)
-        .await
-    {
-        Ok(()) => {
-            for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
-                if let Err(err) = actions
-                    .set_keyword(
-                        &state,
-                        user.jmap_token.clone(),
-                        &thread_id,
-                        pile_keyword,
-                        false,
-                    )
-                    .await
-                {
-                    tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during classify");
-                }
-            }
-            let _ =
-                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                    .bind(user.id)
-                    .bind(&thread_id)
-                    .execute(&state.db)
-                    .await;
 
-            let undo = match previous_classification {
-                Some(previous) if previous != body.to => {
-                    create_thread_classify_undo(&state, user.id, &thread_id, previous, body.to)
-                        .await
-                }
-                _ => None,
-            };
-            Json(ThreadVerbResponse { undo }).into_response()
+    thread_action_response(&user, &thread_id, || async {
+        let previous_classification = actions
+            .current_classification(&state, user.jmap_token.clone(), &thread_id)
+            .await?;
+        if previous_classification.is_none() {
+            tracing::debug!(user_id = user.id, thread_id = %thread_id, "thread classify undo unavailable: previous classification keyword missing");
         }
-        Err(ThreadActionError::NotFound) => not_found(),
-        Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
-    }
+
+        actions
+            .classify(&state, user.jmap_token.clone(), &thread_id, body.to)
+            .await?;
+        for pile_keyword in ["$hail_setaside", "$hail_replylater"] {
+            if let Err(err) = actions
+                .set_keyword(
+                    &state,
+                    user.jmap_token.clone(),
+                    &thread_id,
+                    pile_keyword,
+                    false,
+                )
+                .await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during classify");
+            }
+        }
+        let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
+            .bind(user.id)
+            .bind(&thread_id)
+            .execute(&state.db)
+            .await;
+
+        Ok(match previous_classification {
+            Some(previous) if previous != body.to => {
+                create_thread_classify_undo(&state, user.id, &thread_id, previous, body.to).await
+            }
+            _ => None,
+        })
+    })
+    .await
 }
 
 #[utoipa::path(
@@ -722,72 +712,53 @@ async fn add_to_stack(
     thread_id: String,
     target: ThreadStackUndoTarget,
 ) -> Response {
-    if let Err(response) = validate_thread_id(&thread_id) {
-        return response;
-    }
-    let stack = target.stack();
-    let keyword = target.keyword();
+    thread_action_response(&user, &thread_id, || async {
+        let stack = target.stack();
+        let keyword = target.keyword();
 
-    match actions
-        .set_keyword(&state, user.jmap_token.clone(), &thread_id, keyword, true)
-        .await
-    {
-        Ok(()) => {}
-        Err(ThreadActionError::NotFound) => return not_found(),
-        Err(ThreadActionError::Provider(err)) => return action_internal(user.id, &thread_id, err),
-    }
+        actions
+            .set_keyword(&state, user.jmap_token.clone(), &thread_id, keyword, true)
+            .await?;
 
-    // Remove classification keywords so the thread leaves Imbox/Feed/Paper Trail.
-    for classification in Classification::ALL {
-        if let Err(err) = actions
-            .set_keyword(
-                &state,
-                user.jmap_token.clone(),
-                &thread_id,
-                classification.keyword(),
-                false,
-            )
+        // Remove classification keywords so the thread leaves Imbox/Feed/Paper Trail.
+        for classification in Classification::ALL {
+            if let Err(err) = actions
+                .set_keyword(
+                    &state,
+                    user.jmap_token.clone(),
+                    &thread_id,
+                    classification.keyword(),
+                    false,
+                )
+                .await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during stack add");
+            }
+        }
+
+        let previous_position = select_stack_position(&state, user.id, stack, &thread_id)
             .await
-        {
-            tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = classification.keyword(), error = ?err, "failed to remove classification keyword during stack add");
-        }
-    }
+            .map_err(provider_error)?;
 
-    let previous_position = match select_stack_position(&state, user.id, stack, &thread_id).await {
-        Ok(previous) => previous,
-        Err(err) => {
-            tracing::error!(user_id = user.id, thread_id = %thread_id, stack, error = %err, "stack position snapshot failed");
-            return internal();
-        }
-    };
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+             VALUES (?1, ?2, ?3, COALESCE((SELECT MAX(position) + 1 FROM stack_positions WHERE user_id = ?1 AND stack = ?2), 1), ?4) \
+             ON CONFLICT(user_id, stack, thread_id) DO UPDATE SET \
+               position = COALESCE((SELECT MAX(position) + 1 FROM stack_positions WHERE user_id = excluded.user_id AND stack = excluded.stack AND thread_id <> excluded.thread_id), 1), \
+               added_at = excluded.added_at",
+        )
+        .bind(user.id)
+        .bind(stack)
+        .bind(&thread_id)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .map_err(provider_error)?;
 
-    let now = Utc::now();
-    let result = sqlx::query(
-        "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
-         VALUES (?1, ?2, ?3, COALESCE((SELECT MAX(position) + 1 FROM stack_positions WHERE user_id = ?1 AND stack = ?2), 1), ?4) \
-         ON CONFLICT(user_id, stack, thread_id) DO UPDATE SET \
-           position = COALESCE((SELECT MAX(position) + 1 FROM stack_positions WHERE user_id = excluded.user_id AND stack = excluded.stack AND thread_id <> excluded.thread_id), 1), \
-           added_at = excluded.added_at",
-    )
-    .bind(user.id)
-    .bind(stack)
-    .bind(&thread_id)
-    .bind(now)
-    .execute(&state.db)
-    .await;
-
-    match result {
-        Ok(_) => {
-            let undo =
-                create_thread_stack_undo(&state, user.id, &thread_id, target, previous_position)
-                    .await;
-            Json(ThreadVerbResponse { undo }).into_response()
-        }
-        Err(err) => {
-            tracing::error!(user_id = user.id, thread_id = %thread_id, stack, error = %err, "stack position upsert failed");
-            internal()
-        }
-    }
+        Ok(create_thread_stack_undo(&state, user.id, &thread_id, target, previous_position).await)
+    })
+    .await
 }
 
 #[utoipa::path(
@@ -811,20 +782,14 @@ async fn archive_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if let Err(response) = validate_thread_id(&thread_id) {
-        return response;
-    }
-    match actions
-        .archive(&state, user.jmap_token.clone(), &thread_id)
-        .await
-    {
-        Ok(()) => {
-            tracing::debug!(user_id = user.id, thread_id = %thread_id, "archive undo unavailable: previous mailbox snapshot not captured");
-            Json(ThreadVerbResponse { undo: None }).into_response()
-        }
-        Err(ThreadActionError::NotFound) => not_found(),
-        Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
-    }
+    thread_action_response(&user, &thread_id, || async {
+        actions
+            .archive(&state, user.jmap_token.clone(), &thread_id)
+            .await?;
+        tracing::debug!(user_id = user.id, thread_id = %thread_id, "archive undo unavailable: previous mailbox snapshot not captured");
+        Ok(None)
+    })
+    .await
 }
 
 #[utoipa::path(
@@ -848,29 +813,21 @@ async fn trash_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if let Err(response) = validate_thread_id(&thread_id) {
-        return response;
-    }
-    match actions
-        .trash(&state, user.jmap_token.clone(), &thread_id)
-        .await
-    {
-        Ok(()) => {
-            clear_thread_state(
-                &state,
-                actions.as_ref(),
-                user.jmap_token.clone(),
-                user.id,
-                &thread_id,
-            )
-            .await;
+    thread_action_response(&user, &thread_id, || async {
+        actions.trash(&state, user.jmap_token.clone(), &thread_id).await?;
+        clear_thread_state(
+            &state,
+            actions.as_ref(),
+            user.jmap_token.clone(),
+            user.id,
+            &thread_id,
+        )
+        .await;
 
-            tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
-            Json(ThreadVerbResponse { undo: None }).into_response()
-        }
-        Err(ThreadActionError::NotFound) => not_found(),
-        Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
-    }
+        tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
+        Ok(None)
+    })
+    .await
 }
 
 #[utoipa::path(
@@ -894,49 +851,35 @@ async fn restore_thread(
     Extension(actions): Extension<Arc<dyn ThreadActions>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    if let Err(response) = validate_thread_id(&thread_id) {
-        return response;
-    }
-    match actions
-        .restore(&state, user.jmap_token.clone(), &thread_id)
-        .await
-    {
-        Ok(()) => {
-            match actions
-                .classify(
-                    &state,
-                    user.jmap_token.clone(),
-                    &thread_id,
-                    Classification::Imbox,
-                )
-                .await
-            {
-                Ok(()) => {}
-                Err(ThreadActionError::NotFound) => return not_found(),
-                Err(ThreadActionError::Provider(err)) => {
-                    return action_internal(user.id, &thread_id, err);
-                }
-            }
-            let _ =
-                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                    .bind(user.id)
-                    .bind(&thread_id)
-                    .execute(&state.db)
-                    .await;
-            let _ = sqlx::query(
-                "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
+    thread_action_response(&user, &thread_id, || async {
+        actions
+            .restore(&state, user.jmap_token.clone(), &thread_id)
+            .await?;
+        actions
+            .classify(
+                &state,
+                user.jmap_token.clone(),
+                &thread_id,
+                Classification::Imbox,
             )
+            .await?;
+        let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
             .bind(user.id)
             .bind(&thread_id)
             .execute(&state.db)
             .await;
+        let _ = sqlx::query(
+            "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
+        )
+        .bind(user.id)
+        .bind(&thread_id)
+        .execute(&state.db)
+        .await;
 
-            tracing::debug!(user_id = user.id, thread_id = %thread_id, "restore undo unavailable: previous mailbox snapshot not captured");
-            Json(ThreadVerbResponse { undo: None }).into_response()
-        }
-        Err(ThreadActionError::NotFound) => not_found(),
-        Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
-    }
+        tracing::debug!(user_id = user.id, thread_id = %thread_id, "restore undo unavailable: previous mailbox snapshot not captured");
+        Ok(None)
+    })
+    .await
 }
 
 #[utoipa::path(
