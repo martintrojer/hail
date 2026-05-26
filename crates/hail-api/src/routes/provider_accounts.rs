@@ -593,16 +593,15 @@ async fn upsert_provider_account(
     let row_id: i64 = sqlx::query_scalar(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, consented_at, \
-          refresh_token_enc, refresh_token_key_id, cached_access_token_expires_at, access_token_refreshed_at, last_profile_history_id, profile_synced_at, \
+          cached_access_token_expires_at, access_token_refreshed_at, last_profile_history_id, profile_synced_at, \
           sync_status, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, x'', ?9, ?10, ?8, ?11, ?8, 'active', ?8, ?8) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?8, ?10, ?8, 'disabled', ?8, ?8) \
          ON CONFLICT(user_id, provider_kind, provider_account_id) DO UPDATE SET \
           jmap_account_id = excluded.jmap_account_id, provider_email = excluded.provider_email, display_email = excluded.display_email, \
-          granted_scopes_json = excluded.granted_scopes_json, consented_at = excluded.consented_at, refresh_token_enc = excluded.refresh_token_enc, \
-          refresh_token_key_id = excluded.refresh_token_key_id, \
+          granted_scopes_json = excluded.granted_scopes_json, consented_at = excluded.consented_at, \
           cached_access_token_expires_at = excluded.cached_access_token_expires_at, access_token_refreshed_at = excluded.access_token_refreshed_at, \
-          last_profile_history_id = excluded.last_profile_history_id, profile_synced_at = excluded.profile_synced_at, sync_status = 'active', \
-          disconnected_at = NULL, revoked_at = NULL, last_error_class = NULL, last_error_message = NULL, updated_at = excluded.updated_at \
+          last_profile_history_id = excluded.last_profile_history_id, profile_synced_at = excluded.profile_synced_at, \
+          updated_at = excluded.updated_at \
          RETURNING id",
     )
     .bind(user.id)
@@ -613,7 +612,6 @@ async fn upsert_provider_account(
     .bind(&profile_email)
     .bind(&scopes_json)
     .bind(now)
-    .bind(PROVIDER_REFRESH_TOKEN_KEY_ID)
     .bind(exchange.expires_at)
     .bind(exchange.profile.history_id.as_deref())
     .fetch_one(&mut *tx)
@@ -635,9 +633,14 @@ async fn upsert_provider_account(
     .into_bytes();
 
     sqlx::query(
-        "UPDATE provider_accounts SET refresh_token_enc = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE provider_accounts \
+         SET refresh_token_enc = ?1, refresh_token_ref = NULL, refresh_token_key_id = ?2, \
+             sync_status = 'active', disconnected_at = NULL, revoked_at = NULL, \
+             last_error_class = NULL, last_error_message = NULL, updated_at = ?3 \
+         WHERE id = ?4",
     )
     .bind(encrypted)
+    .bind(PROVIDER_REFRESH_TOKEN_KEY_ID)
     .bind(now)
     .bind(row_id)
     .execute(&mut *tx)

@@ -16,8 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailTokenSource,
-    provider_worker_http_client,
+    GmailApiErrorKind, GmailClient, GmailClientError, GmailTokenSource, provider_worker_http_client,
 };
 use crate::gmail_incremental_sync::{
     GmailIncrementalSyncError, GmailIncrementalSyncOptions, run_gmail_incremental_sync,
@@ -292,7 +291,9 @@ async fn select_due_gmail_provider_accounts(
          FROM provider_accounts \
          WHERE provider_kind = 'gmail' \
            AND sync_status IN ('initial_sync', 'active', 'error') \
-           AND (refresh_token_enc IS NOT NULL OR refresh_token_ref IS NOT NULL) \
+           AND refresh_token_enc IS NOT NULL \
+           AND length(refresh_token_enc) >= 29 \
+           AND refresh_token_ref IS NULL \
            AND (next_sync_after IS NULL OR next_sync_after <= ?1) \
            AND (last_sync_attempted_at IS NULL OR last_sync_attempted_at <= ?2 \
                 OR sync_status IN ('initial_sync', 'error')) \
