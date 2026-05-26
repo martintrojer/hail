@@ -342,19 +342,25 @@ describe('HailApiClient non-composer mutating requests', () => {
     expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', body);
   });
 
-  it('sends CSRF header for undoing denied screener senders', async () => {
+  it('sends CSRF header and JSON body for undoing denied screener senders', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(jsonResponse(200, { status: 'undone' }));
+      .mockResolvedValueOnce(
+        jsonResponse(200, { status: 'approved', classify_as: 'papertrail' }),
+      );
 
-    await client.undoDeny('blocked+tag@example.org / team');
+    await client.undoDeny('blocked+tag@example.org / team', {
+      classify_as: 'papertrail',
+    });
 
     expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
       new URL(
         'http://localhost/api/screener/blocked%2Btag%40example.org%20%2F%20team/undo-deny',
       ),
     );
-    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
+    expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', {
+      classify_as: 'papertrail',
+    });
   });
 
   it('sends CSRF header and JSON body for admin mutating requests', async () => {

@@ -51,6 +51,23 @@ pub trait ScreenerBackfill: Send + Sync + 'static {
         decision: ScreenerDecision,
         classify_as: Option<Classification>,
     ) -> Result<(), ScreenerBackfillError>;
+
+    async fn apply_undo_deny(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        sender: &str,
+        classify_as: Classification,
+    ) -> Result<(), ScreenerBackfillError> {
+        self.apply(
+            state,
+            user,
+            sender,
+            ScreenerDecision::Approve,
+            Some(classify_as),
+        )
+        .await
+    }
 }
 
 /// Production backfill implementation that applies a screener decision to
@@ -69,6 +86,16 @@ impl ScreenerBackfill for JmapScreenerBackfill {
         classify_as: Option<Classification>,
     ) -> Result<(), ScreenerBackfillError> {
         apply_jmap_backfill(state, user, sender, decision, classify_as).await
+    }
+
+    async fn apply_undo_deny(
+        &self,
+        state: &AppState,
+        user: &AuthUser,
+        sender: &str,
+        classify_as: Classification,
+    ) -> Result<(), ScreenerBackfillError> {
+        apply_jmap_undo_deny_backfill(state, user, sender, classify_as).await
     }
 }
 
@@ -102,7 +129,7 @@ where
     OpenApiRouter::new()
         .routes(routes!(get_screener))
         .routes(routes!(get_denied_senders))
-        .routes(routes!(post_undo_deny))
+        .routes(routes!(post_undo_deny).layer(Extension(backfill.clone())))
         .routes(routes!(post_decision).layer(Extension(backfill)))
 }
 
@@ -159,9 +186,15 @@ struct DeniedSender {
     denied_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+struct UndoDenyRequest {
+    classify_as: Option<String>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 struct UndoDenyResponse {
     status: &'static str,
+    classify_as: Classification,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -343,10 +376,11 @@ async fn get_denied_senders(
     path = "/api/screener/{address}/undo-deny",
     tag = TAG,
     params(
-        ("address" = String, Path, description = "Normalized sender address to return to pending screener."),
+        ("address" = String, Path, description = "Normalized sender address to approve and route out of screened-out mail."),
     ),
+    request_body(content = UndoDenyRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "Denied sender restored to pending screener.", body = UndoDenyResponse),
+        (status = 200, description = "Denied sender approved and routed.", body = UndoDenyResponse),
         (status = 400, description = "Invalid sender address."),
         (status = 401, description = "Missing or invalid session."),
         (status = 500, description = "Undo deny failed."),
@@ -355,19 +389,49 @@ async fn get_denied_senders(
 async fn post_undo_deny(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
+    Extension(backfill): Extension<Arc<dyn ScreenerBackfill>>,
     Path(address): Path<String>,
+    body: Result<Option<Json<UndoDenyRequest>>, JsonRejection>,
 ) -> Response {
+    let body = match body {
+        Ok(body) => body.map(|Json(body)| body),
+        Err(_) => return bad_request("invalid_undo_deny_body"),
+    };
     let sender = normalize_sender(&address);
     if !looks_like_sender(&sender) {
         return bad_request("invalid_sender");
     }
 
+    let classify_as = match body.and_then(|body| body.classify_as) {
+        Some(raw) => match Classification::parse(&raw) {
+            Some(classification) => classification,
+            None => return bad_request("invalid_classify_as"),
+        },
+        None => DEFAULT_APPROVAL_CLASSIFICATION,
+    };
+
+    let now = Utc::now();
+    if let Err(err) = backfill
+        .apply_undo_deny(&state, &user, &sender, classify_as)
+        .await
+    {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err.0, "screener undo deny backfill failed");
+        return internal();
+    }
+
     if let Err(err) = sqlx::query(
-        "DELETE FROM screener_rules \
-         WHERE user_id = ?1 AND sender_address = ?2 AND decision = 'deny'",
+        "INSERT INTO screener_rules \
+         (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+         VALUES (?1, ?2, 'allow', ?3, ?4, ?4) \
+         ON CONFLICT(user_id, sender_address) DO UPDATE SET \
+           decision = 'allow', \
+           classify_as = excluded.classify_as, \
+           decided_at = excluded.decided_at",
     )
     .bind(user.id)
     .bind(&sender)
+    .bind(classify_as.db_value())
+    .bind(now)
     .execute(&state.db)
     .await
     {
@@ -379,14 +443,18 @@ async fn post_undo_deny(
         &state.db,
         user.id,
         "screener.undo_deny",
-        &serde_json::json!({ "sender": &sender }),
+        &serde_json::json!({ "sender": &sender, "classify_as": classify_as }),
     )
     .await
     {
         tracing::warn!(user_id = user.id, sender = %sender, error = %err, "audit log write failed");
     }
 
-    Json(UndoDenyResponse { status: "undone" }).into_response()
+    Json(UndoDenyResponse {
+        status: "approved",
+        classify_as,
+    })
+    .into_response()
 }
 
 async fn enrich_screener_senders(
@@ -549,6 +617,94 @@ async fn apply_jmap_backfill(
         "screener history backfill applied"
     );
     Ok(())
+}
+
+async fn apply_jmap_undo_deny_backfill(
+    state: &AppState,
+    user: &AuthUser,
+    sender: &str,
+    classify_as: Classification,
+) -> Result<(), ScreenerBackfillError> {
+    use hail_jmap::jmap_client::mailbox::Role;
+
+    let session = jmap_session(state, user.jmap_token.clone())
+        .await
+        .map_err(backfill_error)?;
+
+    let inbox_mailbox_id = jmap_mailbox_id_by_role(&session, Role::Inbox)
+        .await?
+        .ok_or_else(|| ScreenerBackfillError("inbox mailbox not found".to_string()))?;
+    let trash_mailbox_id = jmap_mailbox_id_by_role(&session, Role::Trash)
+        .await?
+        .ok_or_else(|| ScreenerBackfillError("trash mailbox not found".to_string()))?;
+    let screener_mailbox_id = mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
+        .await
+        .map_err(backfill_error)?;
+
+    let mut email_ids =
+        jmap_email_ids_from_sender_in_mailbox(&session, sender, &trash_mailbox_id).await?;
+    if let Some(screener_mailbox_id) = &screener_mailbox_id {
+        let mut screener_ids =
+            jmap_email_ids_from_sender_in_mailbox(&session, sender, screener_mailbox_id).await?;
+        email_ids.append(&mut screener_ids);
+    }
+    email_ids.sort();
+    email_ids.dedup();
+
+    if email_ids.is_empty() {
+        tracing::debug!(
+            user_id = user.id,
+            sender = %sender,
+            "screener undo deny found no matching messages"
+        );
+        return Ok(());
+    }
+
+    let mut request = session.client().build();
+    {
+        let set = request.set_email();
+        for email_id in &email_ids {
+            let update = set.update(email_id.clone());
+            update
+                .mailbox_id(&trash_mailbox_id, false)
+                .mailbox_id(&inbox_mailbox_id, true)
+                .keyword("$hail_screened", true)
+                .keyword(classify_as.keyword(), true);
+            if let Some(screener_mailbox_id) = &screener_mailbox_id {
+                update.mailbox_id(screener_mailbox_id, false);
+            }
+            for stale_keyword in stale_classification_keywords(classify_as) {
+                update.keyword(stale_keyword, false);
+            }
+        }
+    }
+
+    let mut response = request.send_set_email().await.map_err(backfill_error)?;
+    for email_id in &email_ids {
+        response.updated(email_id).map_err(backfill_error)?;
+    }
+
+    tracing::info!(
+        user_id = user.id,
+        sender = %sender,
+        classify_as = classify_as.db_value(),
+        moved = email_ids.len(),
+        "screener undo deny backfill applied"
+    );
+    Ok(())
+}
+
+fn stale_classification_keywords(
+    classify_as: Classification,
+) -> impl Iterator<Item = &'static str> {
+    [
+        Classification::Imbox,
+        Classification::Feed,
+        Classification::Papertrail,
+    ]
+    .into_iter()
+    .filter(move |candidate| *candidate != classify_as)
+    .map(Classification::keyword)
 }
 
 async fn jmap_mailbox_id_by_role(

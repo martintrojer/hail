@@ -127,6 +127,25 @@ impl ScreenerBackfill for FakeBackfill {
         }
         Ok(())
     }
+
+    async fn apply_undo_deny(
+        &self,
+        _state: &AppState,
+        user: &hail_api::middleware::auth::AuthUser,
+        sender: &str,
+        classify_as: Classification,
+    ) -> Result<(), ScreenerBackfillError> {
+        self.calls.lock().unwrap().push(BackfillCall {
+            user_id: user.id,
+            sender: sender.to_string(),
+            decision: ScreenerDecision::Approve,
+            classify_as: Some(classify_as),
+        });
+        if self.fail {
+            return Err(ScreenerBackfillError("forced backfill failure".to_string()));
+        }
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -319,7 +338,7 @@ async fn denied_senders_view_returns_current_user_denied_rows() {
 }
 
 #[tokio::test]
-async fn undo_deny_deletes_current_user_denied_rule() {
+async fn undo_deny_approves_current_user_denied_rule_with_default_classification() {
     let (state, key) = fixture_state().await;
     let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
     let (bob_id, _) = seed_session(&state, &key, "bob@example.org").await;
@@ -347,25 +366,28 @@ async fn undo_deny_deletes_current_user_denied_rule() {
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let json = json_body(resp).await;
-    assert_eq!(json["status"], "undone");
+    assert_eq!(json["status"], "approved");
+    assert_eq!(json["classify_as"], "imbox");
 
-    let alice_spam_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    let alice_spam: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
     )
     .bind(alice_id)
     .fetch_one(&state.db)
     .await
     .unwrap();
-    assert_eq!(alice_spam_count, 0);
+    assert_eq!(alice_spam.0, "allow");
+    assert_eq!(alice_spam.1.as_deref(), Some("imbox"));
 
-    let bob_spam_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    let bob_spam: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
     )
     .bind(bob_id)
     .fetch_one(&state.db)
     .await
     .unwrap();
-    assert_eq!(bob_spam_count, 1);
+    assert_eq!(bob_spam.0, "deny");
+    assert!(bob_spam.1.is_none());
 
     let allowed_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND sender_address = 'allowed@example.org'",
@@ -375,6 +397,86 @@ async fn undo_deny_deletes_current_user_denied_rule() {
     .await
     .unwrap();
     assert_eq!(allowed_count, 1);
+}
+
+#[tokio::test]
+async fn undo_deny_accepts_classify_as_and_backfills_history() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let now = Utc::now();
+    seed_rule(&state, user_id, "spam@example.org", "deny", None, now).await;
+    let backfill = Arc::new(FakeBackfill::default());
+
+    let resp = request_with_backfill(
+        state.clone(),
+        backfill.clone(),
+        Method::POST,
+        "/api/screener/spam%40example.org/undo-deny",
+        Some(&sid),
+        true,
+        Some(r#"{"classify_as":"papertrail"}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "approved");
+    assert_eq!(json["classify_as"], "papertrail");
+
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "allow");
+    assert_eq!(row.1.as_deref(), Some("papertrail"));
+
+    let calls = backfill.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0],
+        BackfillCall {
+            user_id,
+            sender: "spam@example.org".to_string(),
+            decision: ScreenerDecision::Approve,
+            classify_as: Some(Classification::Papertrail),
+        }
+    );
+}
+
+#[tokio::test]
+async fn undo_deny_rejects_invalid_classify_as() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let now = Utc::now();
+    seed_rule(&state, user_id, "spam@example.org", "deny", None, now).await;
+    let backfill = Arc::new(FakeBackfill::default());
+
+    let resp = request_with_backfill(
+        state.clone(),
+        backfill.clone(),
+        Method::POST,
+        "/api/screener/spam%40example.org/undo-deny",
+        Some(&sid),
+        true,
+        Some(r#"{"classify_as":"other"}"#),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_classify_as");
+    assert!(backfill.calls.lock().unwrap().is_empty());
+
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ?1 AND sender_address = 'spam@example.org'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "deny");
+    assert!(row.1.is_none());
 }
 
 #[tokio::test]
@@ -737,15 +839,19 @@ async fn backfill_failure_preserves_previous_screener_rule() {
     .await;
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-    let row: (String, Option<String>, Option<chrono::DateTime<Utc>>, chrono::DateTime<Utc>) =
-        sqlx::query_as(
-            "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
+    let row: (
+        String,
+        Option<String>,
+        Option<chrono::DateTime<Utc>>,
+        chrono::DateTime<Utc>,
+    ) = sqlx::query_as(
+        "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
              WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
-        )
-        .bind(user_id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap();
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
     assert_eq!(row.0, "pending");
     assert_eq!(row.1, None);
     assert_eq!(row.2, None);
@@ -782,15 +888,19 @@ async fn backfill_failure_rolls_back_decision_audit_and_undo_together() {
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(backfill.calls.lock().unwrap().len(), 1);
 
-    let row: (String, Option<String>, Option<chrono::DateTime<Utc>>, chrono::DateTime<Utc>) =
-        sqlx::query_as(
-            "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
+    let row: (
+        String,
+        Option<String>,
+        Option<chrono::DateTime<Utc>>,
+        chrono::DateTime<Utc>,
+    ) = sqlx::query_as(
+        "SELECT decision, classify_as, decided_at, first_seen_at FROM screener_rules \
              WHERE user_id = ?1 AND sender_address = 'sender@example.org'",
-        )
-        .bind(user_id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap();
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
     assert_eq!(row.0, "pending");
     assert_eq!(row.1, None);
     assert_eq!(row.2, None);

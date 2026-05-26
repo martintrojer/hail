@@ -202,6 +202,9 @@ export type ScreenerClassification = components['schemas']['Classification'];
 export type ScreenerPendingSender = components['schemas']['ScreenerSender'];
 export type DeniedSender = components['schemas']['DeniedSender'];
 export type DeniedSendersResponse = DeniedSendersGetSuccess;
+export interface UndoDenyRequest {
+  classify_as?: ScreenerClassification | null;
+}
 export type UndoDenyResponse = UndoDenyPostSuccess;
 export type ScreenerView = ScreenerGetSuccess;
 export type ScreenerDecisionRequest = components['schemas']['DecisionRequest'];
@@ -519,12 +522,17 @@ export class HailApiClient {
     );
   }
 
-  async undoDeny(address: string): Promise<UndoDenyResponse> {
+  async undoDeny(
+    address: string,
+    body?: UndoDenyRequest,
+  ): Promise<UndoDenyResponse> {
+    const requestBody = body ?? { classify_as: null };
     return this.#json<UndoDenyResponse>(
       await this.#request(
         `/api/screener/${encodeURIComponent(address)}/undo-deny`,
         {
           method: 'POST',
+          body: requestBody,
           mutating: true,
         },
       ),
