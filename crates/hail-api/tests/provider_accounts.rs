@@ -12,6 +12,10 @@ use hail_api::routes::provider_accounts::{
 };
 use hail_api::state::AppState;
 use hail_core::{ProviderOAuthTokenKind, ProviderTokenContext};
+use hail_db::provider_sync_audit::{
+    NewProviderSyncAuditLog, ProviderSyncEventType, ProviderSyncOperationKind,
+    ProviderSyncResultStatus, insert_provider_sync_audit_log,
+};
 use hail_test::{fixture_state, json_body, seed_session};
 use secrecy::{ExposeSecret, SecretString};
 use tower::ServiceExt;
@@ -83,12 +87,12 @@ async fn app_state() -> (AppState, [u8; hail_core::KEY_LEN]) {
 }
 
 fn app(state: AppState, client: Arc<FakeGmailOAuthClient>) -> Router {
-    let protected = hail_api::routes::provider_accounts::router_with_client(client).layer(
-        axum::middleware::from_fn_with_state(
+    let protected = hail_api::routes::provider_accounts::router_with_client(client)
+        .merge(hail_api::routes::provider_sync::router())
+        .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             hail_api::middleware::auth::require_auth,
-        ),
-    );
+        ));
     Router::new().merge(protected).with_state(state)
 }
 
@@ -209,6 +213,193 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
         .await
         .unwrap();
     assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let (other_user_id, _other_session) = seed_session(&state, &key, "bob@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let next_sync = now + chrono::Duration::minutes(10);
+
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
+          granted_scopes_json, refresh_token_ref, last_profile_history_id, profile_synced_at, sync_status, \
+          last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, sync_backoff_secs, \
+          last_error_class, last_error_message, created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', 'Alice Gmail', '[]', \
+                 'kms://token/alice', 'history-9', ?2, 'error', ?2, ?2, ?3, 120, \
+                 'gmail_rate_limit', 'rate limited', ?2, ?2) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(now)
+    .bind(next_sync)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_ref, sync_status, created_at, updated_at) \
+         VALUES (?1, 'acct-b', 'gmail', 'gmail-bob', 'bob@gmail.example', '[]', \
+                 'kms://token/bob', 'active', ?2, ?2)",
+    )
+    .bind(other_user_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    insert_provider_sync_audit_log(
+        &state.db,
+        NewProviderSyncAuditLog {
+            user_id,
+            provider_account_id: account_id,
+            operation_kind: ProviderSyncOperationKind::Failure,
+            event_type: ProviderSyncEventType::SyncFailed,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Failed,
+            safe_error_code: None,
+            safe_error_class: Some("gmail_rate_limit"),
+            safe_error_message: Some("provider asked us to retry later"),
+            metadata_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/provider-accounts/sync-status",
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    let accounts = body["accounts"].as_array().expect("accounts array");
+    assert_eq!(accounts.len(), 1);
+    let account = &accounts[0];
+    assert_eq!(account["id"], account_id);
+    assert_eq!(account["provider_kind"], "gmail");
+    assert_eq!(account["provider_email"], "alice@gmail.example");
+    assert_eq!(account["sync_status"], "error");
+    assert!(account["last_sync_succeeded_at"].as_str().is_some());
+    assert!(account["next_sync_after"].as_str().is_some());
+    assert_eq!(account["sync_backoff_secs"], 120);
+    assert_eq!(account["last_error_class"], "gmail_rate_limit");
+    assert_eq!(account["last_error_message"], "rate limited");
+    assert_eq!(account["last_profile_history_id"], "history-9");
+    assert_eq!(
+        account["last_error_event"]["safe_error_message"],
+        "provider asked us to retry later"
+    );
+}
+
+#[tokio::test]
+async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let (other_user_id, _other_session) = seed_session(&state, &key, "bob@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let next_sync = now + chrono::Duration::hours(1);
+
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_ref, sync_status, next_sync_after, sync_backoff_secs, \
+          last_error_class, last_error_message, created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
+                 'kms://token/alice', 'error', ?2, 300, 'network', 'timeout', ?3, ?3) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(next_sync)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    let other_account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_ref, sync_status, next_sync_after, created_at, updated_at) \
+         VALUES (?1, 'acct-b', 'gmail', 'gmail-bob', 'bob@gmail.example', '[]', \
+                 'kms://token/bob', 'active', ?2, ?3, ?3) \
+         RETURNING id",
+    )
+    .bind(other_user_id)
+    .bind(next_sync)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/sync"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["account"]["id"], account_id);
+    assert_eq!(body["account"]["sync_status"], "error");
+    assert!(body["account"]["next_sync_after"].is_null());
+    assert!(body["account"]["sync_backoff_secs"].is_null());
+    assert_eq!(
+        client.exchange_codes.lock().expect("exchange codes").len(),
+        0
+    );
+
+    let row: (String, Option<String>, Option<i64>, Option<String>) = sqlx::query_as(
+        "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class \
+         FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        row,
+        ("error".to_owned(), None, None, Some("network".to_owned()))
+    );
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{other_account_id}/sync"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn manual_sync_trigger_requires_csrf() {
+    let (state, key) = app_state().await;
+    let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+
+    let resp = app(state, client)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/provider-accounts/123/sync")
+                .header(header::COOKIE, format!("{SESSION_COOKIE}={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

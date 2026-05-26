@@ -209,6 +209,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-accounts/sync-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_provider_sync_statuses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-accounts/{id}/disconnect": {
         parameters: {
             query?: never;
@@ -219,6 +235,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["disconnect_provider_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-accounts/{id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["trigger_provider_sync"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1120,6 +1152,44 @@ export interface components {
             provider_kind: string;
             sync_status: string;
         };
+        ProviderSyncEventSummary: {
+            /** Format: date-time */
+            created_at: string;
+            event_type: string;
+            result_status: string;
+            safe_error_class?: string | null;
+            safe_error_message?: string | null;
+        };
+        ProviderSyncStatusListResponse: {
+            accounts: components["schemas"]["ProviderSyncStatusResponse"][];
+        };
+        ProviderSyncStatusResponse: {
+            display_email?: string | null;
+            /** Format: int64 */
+            id: number;
+            last_error_class?: string | null;
+            last_error_event?: null | components["schemas"]["ProviderSyncEventSummary"];
+            last_error_message?: string | null;
+            last_profile_history_id?: string | null;
+            /** Format: date-time */
+            last_sync_attempted_at?: string | null;
+            last_sync_event?: null | components["schemas"]["ProviderSyncEventSummary"];
+            /** Format: date-time */
+            last_sync_succeeded_at?: string | null;
+            /** Format: date-time */
+            next_sync_after?: string | null;
+            /** Format: date-time */
+            profile_synced_at?: string | null;
+            provider_account_id: string;
+            provider_email: string;
+            provider_kind: string;
+            /** Format: int64 */
+            sync_backoff_secs?: number | null;
+            sync_status: string;
+        };
+        ProviderSyncTriggerResponse: {
+            account: components["schemas"]["ProviderSyncStatusResponse"];
+        };
         PutNoteRequest: {
             markdown: string;
         };
@@ -1986,6 +2056,26 @@ export interface operations {
             };
         };
     };
+    list_provider_sync_statuses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connected Gmail provider account sync statuses. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSyncStatusListResponse"];
+                };
+            };
+        };
+    };
     disconnect_provider_account: {
         parameters: {
             query?: never;
@@ -2004,6 +2094,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderAccountResponse"];
+                };
+            };
+        };
+    };
+    trigger_provider_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider account marked due for safe background sync. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSyncTriggerResponse"];
                 };
             };
         };
