@@ -50,6 +50,7 @@ function TrashRow({
             subject={item.subject || '(no subject)'}
             preview={item.preview || 'No preview available.'}
             receivedAt={item.received_at}
+            hasNotes={item.has_notes}
           />
         </ThreadLink>
 

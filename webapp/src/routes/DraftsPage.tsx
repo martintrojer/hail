@@ -59,6 +59,7 @@ function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient 
           preview=""
           receivedAt={item.received_at}
           receivedAtFallback="Not saved yet"
+          hasNotes={item.has_notes}
         />
       </Link>
       <DeleteDraftButton draftId={item.email_id} client={client} />
