@@ -31,6 +31,7 @@ import { StateCard } from '../components/StateCard';
 import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { useGoBack } from '../hooks/useGoBack';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { AppShell } from '../layout/AppShell';
 import { formatFullDateTime } from '../lib/dates';
 import { actionErrorMessage, threadErrorMessage } from '../lib/errorMessages';
@@ -527,6 +528,63 @@ function ThreadDocument({
         return;
     }
   }
+
+
+  function firstMessageForShortcut() {
+    return messages[0] ?? null;
+  }
+
+  function handleReplyShortcut() {
+    setActionError(null);
+    void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: false } });
+  }
+
+  function handleReplyAllShortcut() {
+    setActionError(null);
+    void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: true } });
+  }
+
+  function handleForwardShortcut() {
+    const message = firstMessageForShortcut();
+    if (!message) {
+      return;
+    }
+
+    setActionError(null);
+    void navigate({ to: '/compose', search: { forward: message.email_id } });
+  }
+
+  function handleAddNoteShortcut() {
+    const message = firstMessageForShortcut();
+    if (!message) {
+      return;
+    }
+
+    setActionError(null);
+    setAddingNoteFor(message.email_id);
+  }
+
+  function handleThreadShortcut(action: 'archive' | 'trash' | 'set-aside' | 'reply-later') {
+    const message = firstMessageForShortcut();
+    if (!message || actionBusy) {
+      return;
+    }
+
+    void handlePopupAction(message, action);
+  }
+
+  useKeyboardShortcuts({
+    onReply: handleReplyShortcut,
+    onReplyAll: handleReplyAllShortcut,
+    onForward: handleForwardShortcut,
+    onAddNote: handleAddNoteShortcut,
+    onArchive: () => handleThreadShortcut('archive'),
+    onTrash: () => handleThreadShortcut('trash'),
+    onSetAside: () => handleThreadShortcut('set-aside'),
+    onReplyLater: () => handleThreadShortcut('reply-later'),
+    onGoBack: goBack,
+    onEscape: goBack,
+  });
 
   async function saveNote(messageId: string, text: string) {
     const note = await client.createThreadNote(thread.thread_id, {

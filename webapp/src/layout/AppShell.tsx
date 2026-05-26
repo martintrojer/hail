@@ -186,6 +186,11 @@ export function AppShell({
     onGoFeed: () => void navigate({ to: '/feed' }),
     onGoPaperTrail: () => void navigate({ to: '/papertrail' }),
     onGoScreener: () => void navigate({ to: '/screener' }),
+    onGoDrafts: () => void navigate({ to: '/drafts' }),
+    onGoTrash: () => void navigate({ to: '/trash' }),
+    onGoSetAside: () => void navigate({ to: '/set-aside' }),
+    onGoReplyLater: () => void navigate({ to: '/reply-later' }),
+    onGoBubbleUp: () => void navigate({ to: '/bubble-up' }),
     onShowHelp: () => setShortcutHelpOpen(true),
     onEscape: () => {
       if (menuOpen) {
