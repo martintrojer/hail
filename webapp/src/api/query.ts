@@ -287,10 +287,11 @@ export function useSearch(
 ) {
   const normalizedQuery = params.q.trim();
   const scope = params.scope ?? 'all';
+  const mailbox = params.mailbox ?? 'all';
 
   return useQuery({
-    queryKey: queryKeys.search(normalizedQuery, scope),
-    queryFn: () => client.search({ q: normalizedQuery, scope }),
+    queryKey: queryKeys.search(normalizedQuery, scope, mailbox),
+    queryFn: () => client.search({ q: normalizedQuery, scope, mailbox }),
     ...options,
     enabled: normalizedQuery.length >= 2 && (options?.enabled ?? true),
   });

@@ -10,6 +10,7 @@ import {
 import type {
   ContactNoteSearchResult,
   MailSearchResult,
+  SearchMailbox,
   SearchScope,
 } from '../api/client';
 import { useSearch } from '../api/query';
@@ -24,6 +25,16 @@ const scopeOptions: Array<{ value: SearchScope; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'mail', label: 'Mail' },
   { value: 'notes', label: 'Notes' },
+];
+
+const mailboxOptions: Array<{ value: SearchMailbox; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'imbox', label: 'Imbox' },
+  { value: 'feed', label: 'Feed' },
+  { value: 'papertrail', label: 'Paper Trail' },
+  { value: 'archive', label: 'Archive' },
+  { value: 'trash', label: 'Trash' },
+  { value: 'drafts', label: 'Drafts' },
 ];
 
 function SearchSkeleton() {
@@ -165,10 +176,12 @@ function SearchReading({ submittedQuery }: { submittedQuery: string }) {
 export function SearchPage() {
   const inputId = useId();
   const scopeId = useId();
+  const mailboxId = useId();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [draftQuery, setDraftQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [scope, setScope] = useState<SearchScope>('all');
+  const [mailbox, setMailbox] = useState<SearchMailbox>('all');
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -178,7 +191,7 @@ export function SearchPage() {
     return () => window.clearTimeout(timeout);
   }, [draftQuery]);
 
-  const query = useSearch({ q: submittedQuery, scope });
+  const query = useSearch({ q: submittedQuery, scope, mailbox });
   const grouped = useMemo(() => {
     const results = query.data?.results ?? [];
     return {
@@ -255,7 +268,7 @@ export function SearchPage() {
           className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition focus:border-accent-blue focus:ring-2"
         />
       </label>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
         <label htmlFor={scopeId} className="block text-sm font-medium text-ink-primary">
           Scope
           <select
@@ -265,6 +278,21 @@ export function SearchPage() {
             className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition focus:border-accent-blue focus:ring-2"
           >
             {scopeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label htmlFor={mailboxId} className="block text-sm font-medium text-ink-primary">
+          Mailbox
+          <select
+            id={mailboxId}
+            value={mailbox}
+            onChange={(event) => setMailbox(event.target.value as SearchMailbox)}
+            className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition focus:border-accent-blue focus:ring-2"
+          >
+            {mailboxOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>

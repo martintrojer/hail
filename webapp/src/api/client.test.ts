@@ -84,11 +84,12 @@ describe('HailApiClient GET request contract', () => {
     await client.search({
       q: 'from:alice+bob@example.org / tag?',
       scope: 'clips',
+      mailbox: 'papertrail',
     });
 
     expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
       new URL(
-        'http://localhost/api/views/search?q=from%3Aalice%2Bbob%40example.org+%2F+tag%3F&scope=clips',
+        'http://localhost/api/views/search?q=from%3Aalice%2Bbob%40example.org+%2F+tag%3F&scope=clips&mailbox=papertrail',
       ),
     );
     expectGetRequest(fetchSpy.mock.calls[0]?.[1]);

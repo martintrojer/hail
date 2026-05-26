@@ -89,5 +89,11 @@ describe('SearchPage', () => {
     expect(
       screen.getByPlaceholderText('Search mail and notes'),
     ).toBeInTheDocument();
+
+    const mailbox = screen.getByLabelText('Mailbox');
+    expect(mailbox).toHaveValue('all');
+    for (const label of ['All', 'Imbox', 'Feed', 'Paper Trail', 'Archive', 'Trash', 'Drafts']) {
+      expect(within(mailbox).getByRole('option', { name: label })).toBeInTheDocument();
+    }
   });
 });
