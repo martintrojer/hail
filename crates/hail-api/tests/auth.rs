@@ -615,13 +615,11 @@ async fn logout_deletes_session_row_and_clears_cookie() {
     let db = state.db.clone();
 
     let app = hail_api::build_router(state, true);
-    // Logout is public (no CSRF middleware) — we still send the header
-    // because in production the SPA always sends it on mutations, and
-    // we want to make sure we don't accidentally reject it.
     let req = Request::builder()
         .method(Method::POST)
         .uri("/api/auth/logout")
         .header(header::COOKIE, format!("hail_session={sid}"))
+        .header("X-Hail-Request", "1")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -646,12 +644,36 @@ async fn logout_deletes_session_row_and_clears_cookie() {
 }
 
 #[tokio::test]
+async fn logout_without_csrf_header_is_forbidden() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "logout-csrf@example.org", Duration::days(30)).await;
+    let db = state.db.clone();
+    let app = hail_api::build_router(state, true);
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/logout")
+        .header(header::COOKIE, format!("hail_session={sid}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE id = ?1")
+        .bind(&sid)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "CSRF failure must not delete the session row");
+}
+
+#[tokio::test]
 async fn logout_with_no_cookie_still_returns_204() {
     let (state, _key) = fixture_state().await;
     let app = hail_api::build_router(state, true);
     let req = Request::builder()
         .method(Method::POST)
         .uri("/api/auth/logout")
+        .header("X-Hail-Request", "1")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -718,6 +740,7 @@ async fn login_cookie_carries_all_security_flags() {
     let req = Request::builder()
         .method(Method::POST)
         .uri("/api/auth/logout")
+        .header("X-Hail-Request", "1")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
