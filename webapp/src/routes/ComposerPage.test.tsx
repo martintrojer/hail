@@ -623,6 +623,36 @@ describe('ComposerPage', () => {
     expect(client.getThreadCalls).toEqual(['thread-456']);
   });
 
+  it('renders thread notes when replying', async () => {
+    const client = new ComposerPageTestClient();
+    client.threadResponse = {
+      ...client.threadResponse,
+      notes: [
+        {
+          id: 7,
+          email_id: 'email-1',
+          body: 'Mention the signed contract before sending.',
+          created_at: '2026-05-20T10:15:00Z',
+        },
+      ],
+    };
+
+    renderComposer({ client, replyToThreadId: 'thread-123' });
+
+    expect(await screen.findByText('Notes on this thread')).toBeInTheDocument();
+    expect(
+      screen.getByText('Mention the signed contract before sending.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/You ·/)).toBeInTheDocument();
+  });
+
+  it('does not render thread notes for new compositions', async () => {
+    renderComposer();
+
+    expect(await screen.findByLabelText('Body')).toBeInTheDocument();
+    expect(screen.queryByText('Notes on this thread')).not.toBeInTheDocument();
+  });
+
   it('shows a loading state while fetching reply prefill data', async () => {
     renderComposer({ replyToThreadId: 'thread-123' });
 

@@ -24,10 +24,11 @@ import {
 } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
+import { InlineNote } from '../components/InlineNote';
 import { useGoBack } from '../hooks/useGoBack';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
-import { formatFullDateTime } from '../lib/dates';
+import { formatDate, formatFullDateTime } from '../lib/dates';
 import { composeErrorMessage } from '../lib/errorMessages';
 
 interface ComposerPageProps {
@@ -227,6 +228,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
     && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
     && form.body.trim().length > 0;
+  const threadNotes = replyToThreadId && replyThreadQuery.data ? replyThreadQuery.data.notes : [];
 
   function updateField(field: keyof ComposerForm, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -480,6 +482,14 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
             </div>
 
             <div className="mt-8 flex min-h-[22rem] flex-1 flex-col">
+              {threadNotes.length > 0 && (
+                <div className="mb-4 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-ink-tertiary">Notes on this thread</p>
+                  {threadNotes.map((note) => (
+                    <InlineNote key={note.id} text={note.body} author="You" timestamp={formatDate(note.created_at)} />
+                  ))}
+                </div>
+              )}
               <label htmlFor="compose-body" className="sr-only">Body</label>
               <textarea
                 ref={bodyRef}
