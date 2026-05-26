@@ -365,3 +365,72 @@ async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
     }));
     assert!(audit.iter().any(|log| log.event_type == "sync_completed"));
 }
+
+#[tokio::test]
+async fn rerunning_same_incremental_history_page_does_not_duplicate_stalwart_mail() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let importer = FakeRfc822Importer::default();
+    let options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::new(
+        vec![Ok(history_page(
+            vec![("101", vec![("gmail-incremental-idem", "thread-idem")])],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        vec![raw_message(
+            "gmail-incremental-idem",
+            "thread-idem",
+            "101",
+            "incremental-idem@example.com",
+        )],
+    );
+    let first = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first incremental sync");
+    assert_eq!(first.messages_seen, 1);
+    assert_eq!(first.imported, 1);
+    assert_eq!(importer.imports().len(), 1);
+
+    let rerun_gmail = FakeGmail::new(
+        vec![Ok(history_page(
+            vec![("101", vec![("gmail-incremental-idem", "thread-idem")])],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        Vec::new(),
+    );
+    let rerun = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &rerun_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("rerun incremental sync");
+
+    assert_eq!(rerun.messages_seen, 1);
+    assert_eq!(rerun.skipped, 1);
+    assert_eq!(rerun.imported, 0);
+    assert!(rerun_gmail.raw_gets().is_empty());
+    assert_eq!(importer.imports().len(), 1);
+}

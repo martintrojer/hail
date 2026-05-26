@@ -198,6 +198,7 @@ impl Rfc822Importer for StalwartJmapRfc822Importer {
 #[derive(Debug, Default)]
 pub struct FakeRfc822Importer {
     state: Mutex<FakeState>,
+    fail_once: Mutex<HashMap<String, Rfc822ImportError>>,
 }
 
 #[derive(Debug, Default)]
@@ -217,6 +218,17 @@ impl FakeRfc822Importer {
             .imports
             .clone()
     }
+
+    pub fn fail_next_for_provider_message_id(
+        &self,
+        provider_message_id: impl Into<String>,
+        error: Rfc822ImportError,
+    ) {
+        self.fail_once
+            .lock()
+            .expect("fake importer fail mutex")
+            .insert(provider_message_id.into(), error);
+    }
 }
 
 #[async_trait]
@@ -226,6 +238,15 @@ impl Rfc822Importer for FakeRfc822Importer {
         request: Rfc822ImportRequest,
     ) -> Result<ImportedRfc822Message, Rfc822ImportError> {
         validate_request(&request)?;
+        if let Some(provider_id) = request.provider_message_id.as_deref()
+            && let Some(error) = self
+                .fail_once
+                .lock()
+                .expect("fake importer fail mutex")
+                .remove(provider_id)
+        {
+            return Err(error);
+        }
         let mut state = self.state.lock().expect("fake importer mutex");
         state.imports.push(request.clone());
 

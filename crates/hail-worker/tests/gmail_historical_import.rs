@@ -14,7 +14,7 @@ use hail_worker::gmail_historical_import::{
     GmailHistoricalImportAccount, GmailHistoricalImportOptions, GmailHistoricalSource,
     import_gmail_history,
 };
-use hail_worker::rfc822_import::FakeRfc822Importer;
+use hail_worker::rfc822_import::{FakeRfc822Importer, Rfc822ImportError};
 use tokio_util::sync::CancellationToken;
 
 fn fresh_db_url() -> (String, TempDb) {
@@ -459,4 +459,171 @@ async fn bounded_import_saves_resume_cursor_and_uses_it_next_run() {
         .expect("mapping lookup")
         .expect("second mapping");
     assert_eq!(second_mapping.import_status, ProviderImportStatus::Imported);
+}
+
+#[tokio::test]
+async fn full_rerun_after_completed_import_does_not_import_or_fetch_again() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let first_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-idempotent".to_owned(),
+                thread_id: Some("thread-idempotent".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-idempotent",
+            "thread-idempotent",
+            "history-idempotent",
+            "idempotent@example.com",
+        )],
+    );
+    let importer = FakeRfc822Importer::default();
+    let mut options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+    options.resume = false;
+
+    let first = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first historical import");
+    assert_eq!(first.imported, 1);
+    assert_eq!(importer.imports().len(), 1);
+
+    let second_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-idempotent".to_owned(),
+                thread_id: Some("thread-idempotent".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        Vec::new(),
+    );
+    let second = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &second_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("rerun historical import");
+
+    assert_eq!(second.listed, 1);
+    assert_eq!(second.skipped, 1);
+    assert_eq!(second.imported, 0);
+    assert_eq!(second.fetched, 0);
+    assert!(second_gmail.raw_gets().is_empty());
+    assert_eq!(importer.imports().len(), 1);
+}
+
+#[tokio::test]
+async fn retries_failed_import_mapping_without_duplicating_stalwart_mail() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let importer = FakeRfc822Importer::default();
+    importer.fail_next_for_provider_message_id(
+        "gmail-retry",
+        Rfc822ImportError::Jmap("transient failure".to_owned()),
+    );
+    let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-retry".to_owned(),
+                thread_id: Some("thread-retry".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-retry",
+            "thread-retry",
+            "history-retry-1",
+            "retry@example.com",
+        )],
+    );
+    let first = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first failed import pass");
+    assert_eq!(first.failed, 1);
+    let failed = get_provider_message_mapping(&pool, provider_account_id, "gmail-retry")
+        .await
+        .expect("failed mapping lookup")
+        .expect("failed mapping");
+    assert_eq!(failed.import_status, ProviderImportStatus::Failed);
+    assert_eq!(
+        failed.content_sha256.as_deref().map(|bytes| bytes.len()),
+        Some(32)
+    );
+
+    let second_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-retry".to_owned(),
+                thread_id: Some("thread-retry".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-retry",
+            "thread-retry",
+            "history-retry-2",
+            "retry@example.com",
+        )],
+    );
+    let second = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &second_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("retry import pass");
+
+    assert_eq!(second.imported, 1);
+    assert_eq!(second.failed, 0);
+    assert_eq!(importer.imports().len(), 1);
+    let imported = get_provider_message_mapping(&pool, provider_account_id, "gmail-retry")
+        .await
+        .expect("imported mapping lookup")
+        .expect("imported mapping");
+    assert_eq!(imported.import_status, ProviderImportStatus::Imported);
+    assert_eq!(imported.jmap_email_id.as_deref(), Some("email-1"));
+    assert_eq!(
+        imported.provider_history_id.as_deref(),
+        Some("history-retry-2")
+    );
 }

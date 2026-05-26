@@ -5,10 +5,10 @@ use hail_db::provider_message_mappings::{
     SENT_COPY_REASON_EXISTING_LOCAL_MESSAGE_ID_MATCH, SENT_COPY_REASON_LOCAL_SENT_MESSAGE_ID_MATCH,
     SENT_COPY_REASON_NO_LOCAL_SENT_MATCH, SENT_COPY_REASON_PROVIDER_MESSAGE_ALREADY_MAPPED,
     SkippedProviderMessageMapping, decide_provider_sent_copy_import,
-    find_local_mapping_by_rfc822_message_id, get_provider_message_mapping,
-    list_provider_thread_mappings, mark_provider_message_duplicate, mark_provider_message_failed,
-    mark_provider_message_imported, mark_provider_message_skipped, mark_provider_sent_copy_deduped,
-    record_provider_message_seen,
+    find_local_mapping_by_content_sha256, find_local_mapping_by_rfc822_message_id,
+    get_provider_message_mapping, list_provider_thread_mappings, mark_provider_message_duplicate,
+    mark_provider_message_failed, mark_provider_message_imported, mark_provider_message_skipped,
+    mark_provider_sent_copy_deduped, record_provider_message_seen,
 };
 
 fn fresh_db_url() -> (String, TempDb) {
@@ -277,10 +277,25 @@ async fn rfc822_message_id_finds_existing_local_mapping_within_account_only() {
         .expect("imported hit");
     assert_eq!(found.id, imported.id);
     assert_eq!(found.jmap_email_id.as_deref(), Some("jmap-existing"));
+    let found_by_content = find_local_mapping_by_content_sha256(&pool, account_a, &[3_u8; 32])
+        .await
+        .expect("content lookup imported")
+        .expect("content hit");
+    assert_eq!(found_by_content.id, imported.id);
+    assert_eq!(
+        found_by_content.jmap_email_id.as_deref(),
+        Some("jmap-existing")
+    );
     assert!(
         find_local_mapping_by_rfc822_message_id(&pool, account_b, "<same@example.com>")
             .await
             .expect("lookup other account")
+            .is_none()
+    );
+    assert!(
+        find_local_mapping_by_content_sha256(&pool, account_b, &[3_u8; 32])
+            .await
+            .expect("content lookup other account")
             .is_none()
     );
 }
