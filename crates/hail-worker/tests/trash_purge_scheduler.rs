@@ -28,6 +28,7 @@ use scheduler::{TrashPurgeOps, process_trash_purge};
 struct FakeTrashPurgeOps {
     by_user: Mutex<HashMap<i64, Vec<FakeEmail>>>,
     fail_users: Mutex<HashSet<i64>>,
+    calls: Mutex<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,11 +70,17 @@ impl FakeTrashPurgeOps {
             .map(|email| email.id.clone())
             .collect()
     }
+
+    fn called_user_ids(&self) -> Vec<i64> {
+        self.calls.lock().expect("calls mutex").clone()
+    }
 }
 
 #[async_trait]
 impl TrashPurgeOps for FakeTrashPurgeOps {
     async fn purge_old_trash(&self, user_id: i64, cutoff: chrono::DateTime<Utc>) -> Result<usize> {
+        self.calls.lock().expect("calls mutex").push(user_id);
+
         if self
             .fail_users
             .lock()
@@ -110,6 +117,19 @@ async fn setup_db() -> (SqlitePool, TempDb, i64, i64) {
 
 async fn insert_user_with_session(pool: &SqlitePool, email: &str) -> i64 {
     let now = Utc::now();
+    let user_id = insert_user(pool, email, now).await;
+    insert_session(
+        pool,
+        user_id,
+        &format!("session-{user_id}"),
+        now + Duration::hours(1),
+        now,
+    )
+    .await;
+    user_id
+}
+
+async fn insert_user(pool: &SqlitePool, email: &str, now: chrono::DateTime<Utc>) -> i64 {
     sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
         .bind(email)
         .bind(format!("acct-{email}"))
@@ -117,25 +137,33 @@ async fn insert_user_with_session(pool: &SqlitePool, email: &str) -> i64 {
         .execute(pool)
         .await
         .expect("insert user");
-    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+    sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
         .bind(email)
         .fetch_one(pool)
         .await
-        .expect("fetch user id");
+        .expect("fetch user id")
+}
+
+async fn insert_session(
+    pool: &SqlitePool,
+    user_id: i64,
+    id: &str,
+    expires_at: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) {
     sqlx::query(
         "INSERT INTO sessions (id, user_id, jmap_token_enc, expires_at, created_at, last_used_at) \
          VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .bind(format!("session-{user_id}"))
+    .bind(id)
     .bind(user_id)
     .bind(vec![1_u8, 2, 3])
-    .bind((now + Duration::hours(1)).to_rfc3339())
+    .bind(expires_at.to_rfc3339())
     .bind(now.to_rfc3339())
     .bind(now.to_rfc3339())
     .execute(pool)
     .await
     .expect("insert session");
-    user_id
 }
 
 #[tokio::test]
@@ -166,6 +194,125 @@ async fn recent_emails_are_kept() {
         .expect("process trash purge");
 
     assert_eq!(purged, 0);
+    assert!(jmap.destroyed_ids(user_id).is_empty());
+}
+
+#[tokio::test]
+async fn purge_only_runs_for_users_with_active_sessions() {
+    let (url, _guard) = fresh_db_url("hail-worker-trash-purge-active-session-filter-test");
+    let pool = hail_db::connect(&url).await.expect("connect");
+    hail_db::migrate(&pool).await.expect("migrate");
+
+    let now = Utc::now();
+    let active_user_id = insert_user(&pool, "active@example.com", now).await;
+    insert_session(
+        &pool,
+        active_user_id,
+        "active-session",
+        now + Duration::hours(1),
+        now,
+    )
+    .await;
+
+    let expired_user_id = insert_user(&pool, "expired@example.com", now).await;
+    insert_session(
+        &pool,
+        expired_user_id,
+        "expired-session",
+        now - Duration::seconds(1),
+        now,
+    )
+    .await;
+
+    let no_session_user_id = insert_user(&pool, "no-session@example.com", now).await;
+
+    let jmap = FakeTrashPurgeOps::default();
+    jmap.add_email(active_user_id, "active-old", now - Duration::days(31));
+    jmap.add_email(expired_user_id, "expired-old", now - Duration::days(31));
+    jmap.add_email(
+        no_session_user_id,
+        "no-session-old",
+        now - Duration::days(31),
+    );
+
+    let purged = process_trash_purge(&pool, &jmap, 30, now)
+        .await
+        .expect("process trash purge");
+
+    assert_eq!(purged, 1);
+    assert_eq!(jmap.called_user_ids(), vec![active_user_id]);
+    assert_eq!(
+        jmap.destroyed_ids(active_user_id),
+        vec!["active-old".to_string()]
+    );
+    assert!(jmap.destroyed_ids(expired_user_id).is_empty());
+    assert!(jmap.destroyed_ids(no_session_user_id).is_empty());
+}
+
+#[tokio::test]
+async fn user_with_any_active_session_is_purged_once() {
+    let (url, _guard) = fresh_db_url("hail-worker-trash-purge-mixed-sessions-test");
+    let pool = hail_db::connect(&url).await.expect("connect");
+    hail_db::migrate(&pool).await.expect("migrate");
+
+    let now = Utc::now();
+    let user_id = insert_user(&pool, "mixed@example.com", now).await;
+    insert_session(
+        &pool,
+        user_id,
+        "mixed-expired-session",
+        now - Duration::seconds(1),
+        now,
+    )
+    .await;
+    insert_session(
+        &pool,
+        user_id,
+        "mixed-active-session-one",
+        now + Duration::hours(1),
+        now,
+    )
+    .await;
+    insert_session(
+        &pool,
+        user_id,
+        "mixed-active-session-two",
+        now + Duration::hours(2),
+        now,
+    )
+    .await;
+
+    let jmap = FakeTrashPurgeOps::default();
+    jmap.add_email(user_id, "old", now - Duration::days(31));
+
+    let purged = process_trash_purge(&pool, &jmap, 30, now)
+        .await
+        .expect("process trash purge");
+
+    assert_eq!(purged, 1);
+    assert_eq!(jmap.called_user_ids(), vec![user_id]);
+    assert_eq!(jmap.destroyed_ids(user_id), vec!["old".to_string()]);
+}
+
+#[tokio::test]
+async fn users_expiring_at_the_purge_tick_are_not_active() {
+    let (url, _guard) = fresh_db_url("hail-worker-trash-purge-expiring-now-test");
+    let pool = hail_db::connect(&url).await.expect("connect");
+    hail_db::migrate(&pool).await.expect("migrate");
+
+    let now = Utc::now();
+    let user_id = insert_user(&pool, "boundary@example.com", now).await;
+    insert_session(&pool, user_id, "boundary-session", now, now).await;
+
+    let jmap = FakeTrashPurgeOps::default();
+    jmap.add_email(user_id, "old", now - Duration::days(31));
+
+    let purged = process_trash_purge(&pool, &jmap, 30, now)
+        .await
+        .expect("process trash purge");
+
+    assert_eq!(purged, 0);
+    assert!(jmap.called_user_ids().is_empty());
     assert!(jmap.destroyed_ids(user_id).is_empty());
 }
 
