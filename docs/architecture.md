@@ -399,7 +399,8 @@ API startup; offline tabs catch up by normal REST refetch after reconnect.
   store and hail keeps its current JMAP integration.
 - Cloudflare Email Routing import bridge, where a Worker/import endpoint brings
   raw messages into hail/Stalwart without a public server.
-- Hail-native mail store, where hail owns message/blob/search/thread storage.
+- Hail-native mail store variants: either a provider replica where Gmail/provider
+  remains authoritative, or a fully authoritative hail-owned store.
 
 **Why:** these modes match real no-public-server operators, but they change the
 source-of-truth boundary. The safest incremental path is importer-into-Stalwart;

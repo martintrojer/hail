@@ -160,34 +160,94 @@ A robust bridge needs:
 
 ## Mode P4: Hail-native mail store
 
-Use case: hail becomes the primary local mail database/client, while Gmail,
-Cloudflare Email Routing, or another provider is just a delivery/sync edge.
-Stalwart may be optional or removed from this mode.
+Use case: hail removes Stalwart from this deployment mode and owns mail-shaped
+storage itself. Gmail, Cloudflare Email Routing, or another provider becomes a
+delivery/sync edge instead of the local mailbox database.
+
+We identified two versions of this idea. They look similar on a diagram, but the
+source-of-truth boundary is different.
+
+### Mode P4a: Hail-native provider replica
+
+The provider remains authoritative for the mailbox, but hail stores full local
+copies of messages, bodies, and attachments in a hail-owned store for speed,
+privacy-at-rest, local search, and HEY-style product behavior.
 
 ```text
-Provider / Cloudflare / importer
-  → hail-owned message + blob store
+Gmail/provider mailbox  ← source of truth for delivery/sent/archive/delete
+  ↔ provider API sync
+  ↔ hail-owned message + blob replica
+  ↔ hail UI/API
+```
+
+This is the "local replicated Gmail archive" version. Hail can render and search
+from its own store, but destructive actions and sent/draft state still reconcile
+back to the provider.
+
+#### Pros
+
+- No Stalwart required.
+- Fast local UI and search once synced.
+- Local copy gives some independence from provider outages.
+- Easier than becoming a complete mail server because provider still handles
+  delivery, spam, account security, and outbound reputation.
+
+#### Cons
+
+- Sync correctness becomes central: deletions, archive, labels, sent mail,
+  drafts, and provider-side changes must reconcile cleanly.
+- The provider can still be the legal/practical source of truth and may retain
+  all mail.
+- Hail must own MIME parsing, blobs, search, dedupe, and threading for the local
+  replica.
+- Conflict semantics must be explicit: if Gmail and hail disagree, who wins?
+
+### Mode P4b: Hail-native authoritative store
+
+Hail becomes the authoritative local mailbox/archive. Providers, Cloudflare
+Workers, Gmail importers, or future SMTP components are just ingress/egress
+adapters.
+
+```text
+Provider / Cloudflare / importer / future SMTP edge
+  → hail-owned authoritative message + blob store
   → hail UI/API
 ```
 
-This is the largest architectural change. Hail would own MIME parsing, message
-storage, attachment storage, threading, search indexing, duplicate detection,
-import/export, sent/draft state, and interoperability decisions.
+This is a larger product: hail is no longer just a client or Stalwart product
+layer. It is the mail store. It must provide durable storage, import/export,
+search, threading, attachment handling, sent/draft state, and clear interop
+boundaries.
 
-### Pros
+#### Pros
 
 - Maximum product control.
-- No dependency on Stalwart's data model for HEY-style workflows.
-- Potentially simplest deployment for users who only want a local personal mail
-  client/cache.
+- No dependency on Stalwart's or Gmail's data model for HEY-style workflows.
+- Cleanest long-term foundation if hail becomes a standalone personal mail
+  workspace rather than a Stalwart UI.
 
-### Cons
+#### Cons
 
 - Reimplements a large amount of mail-server/mail-store functionality.
-- Harder to interoperate with standard mail clients.
-- Export, backup, search, attachments, threading, and MIME edge cases become hail
-  responsibilities.
+- Harder to interoperate with standard mail clients unless hail also exposes
+  JMAP/IMAP/export surfaces.
+- Export, backup, search, attachments, threading, MIME edge cases, duplicate
+  detection, and delivery/import semantics become hail responsibilities.
 - This should not be treated as a small extension of v1.
+
+### P4 shared responsibilities
+
+Both P4 variants require hail to own more mail-shaped infrastructure than the
+current architecture:
+
+- MIME parsing and normalized body extraction;
+- raw RFC822 retention policy;
+- attachment/blob storage;
+- threading and duplicate detection;
+- search indexing;
+- import/export formats;
+- sent/draft/reply state;
+- backup/restore of message data, not just hail sidecar state.
 
 ## Recommendation
 
@@ -201,8 +261,11 @@ If we add no-public-server support, the lowest-risk order is:
    users without Gmail-as-inbox, once a secure import queue exists.
 3. **Mode P1: provider-backed client/cache** — attractive for Gmail users, but it
    requires defining which provider state is authoritative.
-4. **Mode P4: hail-native mail store** — powerful but a separate product line or
-   major-version architecture change.
+4. **Mode P4a: hail-native provider replica** — no Stalwart and fast local
+   storage, but the provider remains authoritative and sync conflicts become the
+   core problem.
+5. **Mode P4b: hail-native authoritative store** — powerful but a separate
+   product line or major-version architecture change.
 
 For a single operator who already lives in Gmail and only wants the HEY-style UI,
 Mode P1 may be the simplest user experience. For hail's current codebase, Mode
@@ -219,3 +282,6 @@ P2 is the more incremental implementation path.
 - What is the minimum import API needed for both Gmail importer and Cloudflare
   Worker bridge?
 - What does export look like if hail stores provider-backed state locally?
+- For P4a, which provider actions are mirrored back and which are local-only?
+- For P4b, does hail expose JMAP/IMAP/export so users are not trapped in a
+  hail-only store?
