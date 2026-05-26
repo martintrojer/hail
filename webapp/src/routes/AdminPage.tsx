@@ -177,6 +177,11 @@ function CreateUserForm() {
   return (
     <form onSubmit={onSubmit} className="rounded-lg border border-hairline bg-surface p-4">
       <h2 className="text-lg font-semibold text-ink-primary">Create user</h2>
+      <p className="mt-2 text-sm leading-6 text-ink-secondary">
+        Hail ensures the email domain exists in Stalwart before creating the
+        mailbox user, so a shared domain can be added once here and reused by
+        every mailbox.
+      </p>
       <div className="mt-4 space-y-3">
         <Field
           id={emailId}
@@ -387,6 +392,12 @@ function DomainsSection() {
     <div className="space-y-4">
       <section className="rounded-lg border border-hairline bg-surface p-5">
         <h2 className="text-lg font-semibold text-ink-primary">Domains</h2>
+        <p className="mt-2 text-sm leading-6 text-ink-secondary">
+          Domains are Stalwart-wide: create your shared mail domain once, then
+          create multiple mailbox users under it. Deleting a domain does not
+          restart Stalwart, but will stop Stalwart accepting mail for that
+          domain.
+        </p>
         {domains.isPending ? (
           <p className="mt-4 text-sm text-ink-secondary">Loading domains…</p>
         ) : domains.isError ? (
@@ -477,7 +488,11 @@ export function AdminPage() {
           <section className="rounded-lg border border-hairline bg-surface p-5">
             <h2 className="text-lg font-semibold text-ink-primary">Operator settings</h2>
             <p className="mt-3 text-sm leading-6 text-ink-secondary">
-              User and domain operations call the hail API, which forwards changes to Stalwart management and refreshes these lists after each mutation.
+              User and domain operations call the hail API, which forwards
+              changes to Stalwart management over HTTP. Creating a user also
+              ensures that user's email domain exists first, avoiding a risky
+              Stalwart restart or manual config edit for normal shared-domain
+              provisioning.
             </p>
           </section>
           <DomainsSection />

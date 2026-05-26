@@ -74,6 +74,20 @@ impl StalwartUserManagement for FakeUserManagement {
         })
     }
 
+    fn ensure_domain<'a>(
+        &'a self,
+        _state: &'a AppState,
+        domain: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("ensure_domain:{domain}"));
+            Ok(())
+        })
+    }
+
     fn create_user<'a>(
         &'a self,
         _state: &'a AppState,
@@ -246,7 +260,10 @@ async fn create_uses_fake_management_and_mirrors_local_user() {
     let json = json_body(resp).await;
     assert_eq!(json["user"]["email"], "bob@example.org");
     assert_eq!(json["user"]["display_name"], "Bob");
-    assert_eq!(management.calls(), vec!["create:bob@example.org"]);
+    assert_eq!(
+        management.calls(),
+        vec!["ensure_domain:example.org", "create:bob@example.org"]
+    );
 
     let db_email: String =
         sqlx::query_scalar("SELECT email FROM users WHERE email = 'bob@example.org'")
@@ -367,4 +384,31 @@ async fn invalid_email_or_short_password_return_400_without_management() {
     assert_eq!(short_password.status(), StatusCode::BAD_REQUEST);
     assert_eq!(json_body(short_password).await["detail"], "password");
     assert!(management.calls().is_empty());
+}
+
+#[tokio::test]
+async fn create_ensures_email_domain_before_creating_user() {
+    let (state, key) = fixture_state().await;
+    let (_admin_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
+    let management = Arc::new(FakeUserManagement::default());
+
+    let resp = request(
+        state,
+        management.clone(),
+        Method::POST,
+        "/api/admin/users",
+        Some(&sid),
+        true,
+        Some(r#"{"email":"new.user@Shared.Example","password":"correct horse battery"}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        management.calls(),
+        vec![
+            "ensure_domain:shared.example",
+            "create:new.user@shared.example"
+        ]
+    );
 }

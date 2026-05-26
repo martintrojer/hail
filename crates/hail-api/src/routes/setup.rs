@@ -68,6 +68,7 @@ pub trait UserProvisioner: Send + Sync + 'static {
         email: &'a str,
         password: SecretString,
         display_name: Option<&'a str>,
+        domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>>;
 }
 
@@ -105,9 +106,11 @@ impl UserProvisioner for StalwartProvisioner {
         email: &'a str,
         password: SecretString,
         display_name: Option<&'a str>,
+        domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(management_url) = state.config.stalwart.management_url.as_deref() {
+                create_stalwart_domain(management_url, domain).await?;
                 create_stalwart_principal(management_url, email, &password, display_name).await?;
             } else {
                 tracing::info!(
@@ -177,7 +180,7 @@ where
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let domain = body.domain.trim().to_lowercase();
+    let domain = normalize_domain(&body.domain);
 
     if !valid_email(&email) {
         return invalid_input("email");
@@ -227,7 +230,13 @@ where
     }
 
     let provisioned = match provisioner
-        .provision(&state, &email, body.password, display_name.as_deref())
+        .provision(
+            &state,
+            &email,
+            body.password,
+            display_name.as_deref(),
+            &domain,
+        )
         .await
     {
         Ok(user) => user,
@@ -398,6 +407,31 @@ where
     }
 }
 
+async fn create_stalwart_domain(management_url: &str, domain: &str) -> Result<(), ProvisionError> {
+    let path = format!(
+        "/api/domain/{}",
+        url::form_urlencoded::byte_serialize(domain.as_bytes()).collect::<String>()
+    );
+    let url = format!("{}{}", management_url.trim_end_matches('/'), path);
+    let response = management_http::client()
+        .post(&url)
+        .json(&serde_json::json!({ "domain": domain }))
+        .send()
+        .await
+        .map_err(|err| ProvisionError::Management(err.to_string()))?;
+    let status = response.status();
+    if status.is_success() || status == StatusCode::CONFLICT {
+        return Ok(());
+    }
+    if status.as_u16() == 404 {
+        tracing::error!(%url, "setup: Stalwart management domain path returned 404; API path may differ across Stalwart versions");
+        return Err(ProvisionError::ManagementPathNotFound { path });
+    }
+    Err(ProvisionError::Management(format!(
+        "POST {path} returned HTTP {status}"
+    )))
+}
+
 async fn create_stalwart_principal(
     management_url: &str,
     email: &str,
@@ -443,6 +477,10 @@ async fn create_stalwart_principal(
     Err(ProvisionError::Management(format!(
         "POST {path} returned HTTP {status}"
     )))
+}
+
+fn normalize_domain(domain: &str) -> String {
+    domain.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
 fn setup_bootstrap_authorized(state: &AppState, provided: Option<&SecretString>) -> bool {

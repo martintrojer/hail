@@ -87,7 +87,7 @@ impl StalwartManagement for HttpStalwartManagement {
                 .send()
                 .await
                 .map_err(|err| ManagementError::Upstream(err.to_string()))?;
-            if response.status().is_success() {
+            if response.status().is_success() || response.status() == StatusCode::CONFLICT {
                 Ok(())
             } else {
                 Err(ManagementError::Upstream(format!(

@@ -53,13 +53,15 @@ Edit hail config:
 $EDITOR deploy/hail.toml
 ```
 
-Use the Compose service URL for Stalwart and set your public URL:
+Use the Compose service URL for Stalwart, enable Stalwart management for
+first-run provisioning, and set your public URL:
 
 ```toml
 database_url = "sqlite:///var/lib/hail/hail.db"
 
 [stalwart]
 jmap_url = "http://stalwart:8080"
+management_url = "http://stalwart:8080"
 
 [server]
 bind = "0.0.0.0:8080"
@@ -189,6 +191,22 @@ In the wizard:
 3. Enter a strong password and display name.
 4. Add your mail domain, for example `example.com`.
 5. Submit, then sign in with that admin account.
+
+When `stalwart.management_url` is configured, that single submit does the
+Stalwart provisioning in dependency order: `POST /api/domain/{domain}` to
+ensure the shared domain exists, then `POST /api/principal` to create/update
+the admin mailbox principal, then a JMAP login to discover the account id for
+hail's local user row. The domain value may include a trailing dot in the UI;
+hail normalizes it to lowercase without the dot. The admin email must be under
+that same domain. If `stalwart.management_url` is intentionally unset, the
+wizard does **not** mutate Stalwart; pre-create the domain and account with the
+Stalwart WebUI/CLI first, then use the same credentials in `/setup`.
+
+After setup, signed-in admins can go to **Admin → Domains** to create another
+shared domain and **Admin → Create user** to add more mailboxes. User creation
+also ensures the email's domain exists before creating the Stalwart principal,
+so adding `alice@example.com`, `bob@example.com`, and `team@example.com` under a
+shared domain does not require Stalwart config edits or restarts.
 
 For production, put real TLS in front of hail with Caddy, Traefik, or
 Cloudflare Tunnel before inviting other users.
