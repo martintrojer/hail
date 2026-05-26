@@ -95,6 +95,15 @@ type ScheduledSendsGetSuccess = ResponseBody<
 type ScheduledSendDeleteSuccess = ResponseBody<
   paths['/api/scheduled-sends/{scheduled_send_id}']['delete']['responses']['200']
 >;
+type WorkflowsGetSuccess = ResponseBody<
+  paths['/api/workflows']['get']['responses']['200']
+>;
+type WorkflowPostSuccess = ResponseBody<
+  paths['/api/workflows']['post']['responses']['201']
+>;
+type WorkflowPutSuccess = ResponseBody<
+  paths['/api/workflows/{id}']['put']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -235,6 +244,14 @@ export type ComposeResponse = components['schemas']['ComposeResponse'];
 export type ScheduledSend = components['schemas']['ScheduledSendResponse'];
 export type ScheduledSendsResponse = ScheduledSendsGetSuccess;
 export type CancelScheduledSendResponse = ScheduledSendDeleteSuccess;
+export type WorkflowRule = components['schemas']['WorkflowRule'];
+export type WorkflowCondition = components['schemas']['WorkflowCondition'];
+export type WorkflowConditionField = components['schemas']['WorkflowConditionField'];
+export type WorkflowConditionOp = components['schemas']['WorkflowConditionOp'];
+export type WorkflowAction = components['schemas']['WorkflowAction'];
+export type WorkflowRulePayload = components['schemas']['WorkflowRulePayload'];
+export type WorkflowRuleListResponse = WorkflowsGetSuccess;
+export type WorkflowRuleResponse = WorkflowPostSuccess | WorkflowPutSuccess;
 export type DraftRequest = components['schemas']['DraftPayload'];
 export type DraftResponse = components['schemas']['DraftResponse'];
 export type DraftDetails = DraftGetSuccess;
@@ -902,6 +919,48 @@ export class HailApiClient {
   async deleteDraft(draftId: string): Promise<void> {
     await this.#empty(
       await this.#request(`/api/drafts/${encodeURIComponent(draftId)}`, {
+        method: 'DELETE',
+        mutating: true,
+      }),
+      204,
+    );
+  }
+
+  async listWorkflows(): Promise<WorkflowRuleListResponse> {
+    return this.#json<WorkflowRuleListResponse>(
+      await this.#request('/api/workflows'),
+      200,
+    );
+  }
+
+  async createWorkflow(body: WorkflowRulePayload): Promise<WorkflowRuleResponse> {
+    return this.#json<WorkflowRuleResponse>(
+      await this.#request('/api/workflows', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async updateWorkflow(
+    id: number,
+    body: WorkflowRulePayload,
+  ): Promise<WorkflowRuleResponse> {
+    return this.#json<WorkflowRuleResponse>(
+      await this.#request(`/api/workflows/${encodeURIComponent(String(id))}`, {
+        method: 'PUT',
+        body,
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async deleteWorkflow(id: number): Promise<void> {
+    await this.#empty(
+      await this.#request(`/api/workflows/${encodeURIComponent(String(id))}`, {
         method: 'DELETE',
         mutating: true,
       }),

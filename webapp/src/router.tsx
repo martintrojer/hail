@@ -36,6 +36,7 @@ import { ThreadPage } from './routes/ThreadPage';
 import { TrashPage } from './routes/TrashPage';
 import { SpamPage } from './routes/SpamPage';
 import { ScreenedOutPage } from './routes/ScreenedOutPage';
+import { WorkflowsPage } from './routes/WorkflowsPage';
 
 function AppShell() {
   return (
@@ -626,6 +627,13 @@ const adminRoute = createRoute({
   component: AdminPage,
 });
 
+const workflowsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/workflows',
+  beforeLoad: requireAuth,
+  component: WorkflowsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
@@ -650,6 +658,7 @@ const routeTree = rootRoute.addChildren([
   archiveRoute,
   composeRoute,
   adminRoute,
+  workflowsRoute,
 ]);
 
 export const router = createRouter({

@@ -48,6 +48,9 @@ import {
   type ThreadViewResponse,
   type UserEnvelope,
   type CancelScheduledSendResponse,
+  type WorkflowRuleListResponse,
+  type WorkflowRulePayload,
+  type WorkflowRuleResponse,
 } from './client';
 import { queryKeys } from './queryKeys';
 
@@ -320,6 +323,17 @@ export function useScheduledSends(
   return useQuery({
     queryKey: queryKeys.scheduledSends(),
     queryFn: () => client.listScheduledSends(),
+    ...options,
+  });
+}
+
+export function useWorkflows(
+  client = defaultApiClient,
+  options?: QueryConfig<WorkflowRuleListResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.workflows(),
+    queryFn: () => client.listWorkflows(),
     ...options,
   });
 }
@@ -724,6 +738,65 @@ export function useCancelScheduledSendMutation(
         (current) => current?.map((item) => (item.id === data.id ? data : item)),
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.scheduledSends() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useCreateWorkflowMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<WorkflowRulePayload, WorkflowRuleResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.createWorkflow(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflows() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface UpdateWorkflowMutationVariables {
+  id: number;
+  request: WorkflowRulePayload;
+}
+
+export function useUpdateWorkflowMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<UpdateWorkflowMutationVariables, WorkflowRuleResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, request }) => client.updateWorkflow(id, request),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflows() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useDeleteWorkflowMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id) => client.deleteWorkflow(id),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<WorkflowRuleListResponse | undefined>(
+        queryKeys.workflows(),
+        (current) => current
+          ? { rules: current.rules.filter((rule) => rule.id !== variables) }
+          : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflows() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
