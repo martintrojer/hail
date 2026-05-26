@@ -15,6 +15,7 @@ import {
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
+import { useTheme } from './hooks/useTheme';
 import { formErrorMessage } from './lib/errorMessages';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
@@ -37,11 +38,13 @@ function AppShell() {
 }
 
 function CenteredPage({ children }: { children: ReactNode }) {
+  useTheme();
+
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-12 text-slate-50">
+    <main className="min-h-screen bg-bg-page px-6 py-12 text-ink-primary">
       <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-md flex-col justify-center">
         <div className="mb-8 text-center">
-          <p className="text-sm font-medium uppercase tracking-[0.35em] text-sky-300">
+          <p className="text-sm font-medium uppercase tracking-[0.35em] text-accent-blue">
             hail
           </p>
           <h1 className="mt-3 text-4xl font-semibold tracking-tight">hail</h1>
@@ -74,7 +77,7 @@ function TextInput({
   placeholder?: string;
 }) {
   return (
-    <label className="block text-sm font-medium text-slate-200" htmlFor={id}>
+    <label className="block text-sm font-medium text-ink-secondary" htmlFor={id}>
       {label}
       <input
         id={id}
@@ -85,7 +88,7 @@ function TextInput({
         required={required}
         minLength={minLength}
         placeholder={placeholder}
-        className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-50 outline-none ring-sky-400 transition focus:border-sky-400 focus:ring-2"
+        className="mt-2 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2"
       />
     </label>
   );
@@ -122,10 +125,10 @@ function LoginPage() {
     <CenteredPage>
       <form
         onSubmit={onSubmit}
-        className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 shadow-2xl shadow-slate-950"
+        className="rounded-2xl border border-border-menu bg-bg-surface p-6 shadow-2xl shadow-ink-primary/10"
       >
         <h2 className="text-2xl font-semibold">Sign in</h2>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-ink-secondary">
           Use your hail email and password to continue.
         </p>
         <div className="mt-6 space-y-4">
@@ -155,7 +158,7 @@ function LoginPage() {
           <button
             type="submit"
             disabled={login.isPending}
-            className="w-full rounded-lg bg-sky-400 px-4 py-2 font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             {login.isPending ? 'Signing in…' : 'Sign in'}
           </button>
@@ -210,7 +213,7 @@ function SetupPage() {
   if (setupState.isPending) {
     return (
       <CenteredPage>
-        <p className="text-center text-slate-300">Checking setup state…</p>
+        <p className="text-center text-ink-secondary">Checking setup state…</p>
       </CenteredPage>
     );
   }
@@ -231,14 +234,14 @@ function SetupPage() {
   if (!setupState.data.wizard_active) {
     return (
       <CenteredPage>
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <div className="rounded-2xl border border-border-menu bg-bg-surface p-6">
           <h2 className="text-2xl font-semibold">Setup inactive</h2>
-          <p className="mt-2 text-sm text-slate-300">
+          <p className="mt-2 text-sm text-ink-secondary">
             {setupInactiveMessage(setupState.data.reason)}
           </p>
           <Link
             to="/login"
-            className="mt-6 inline-flex rounded-lg bg-sky-400 px-4 py-2 font-semibold text-slate-950 transition hover:bg-sky-300"
+            className="mt-6 inline-flex rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover"
           >
             Go to login
           </Link>
@@ -251,10 +254,10 @@ function SetupPage() {
     <CenteredPage>
       <form
         onSubmit={onSubmit}
-        className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 shadow-2xl shadow-slate-950"
+        className="rounded-2xl border border-border-menu bg-bg-surface p-6 shadow-2xl shadow-ink-primary/10"
       >
         <h2 className="text-2xl font-semibold">First-run setup</h2>
-        <p className="mt-2 text-sm text-slate-400">
+        <p className="mt-2 text-sm text-ink-secondary">
           Create the first admin account for this hail instance. You need the
           operator bootstrap token from the server environment/config.
         </p>
@@ -302,7 +305,7 @@ function SetupPage() {
             autoComplete="new-password"
             minLength={12}
           />
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-ink-tertiary">
             Password must be at least 12 characters. The email must belong to
             the mail domain.
           </p>
@@ -319,7 +322,7 @@ function SetupPage() {
           <button
             type="submit"
             disabled={setupAdmin.isPending}
-            className="w-full rounded-lg bg-sky-400 px-4 py-2 font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             {setupAdmin.isPending ? 'Creating admin…' : 'Create admin'}
           </button>

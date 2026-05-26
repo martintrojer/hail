@@ -14,14 +14,18 @@ import {
   Clock,
   LogOut,
   Mail,
+  Moon,
+  Monitor,
   PenSquare,
   Search,
   Settings,
+  Sun,
   Trash2,
   UserPlus,
   iconSizeProps,
 } from '../components/icons';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { Pile } from './Pile';
 
 interface AppShellProps {
@@ -118,6 +122,32 @@ function focusReplyBox() {
   replyBox?.focus();
 }
 
+const nextTheme: Record<ThemePreference, ThemePreference> = {
+  system: 'light',
+  light: 'dark',
+  dark: 'system',
+};
+
+const themeLabels: Record<ThemePreference, string> = {
+  system: 'System theme',
+  light: 'Light theme',
+  dark: 'Dark theme',
+};
+
+function ThemeIcon({ theme }: { theme: ThemePreference }) {
+  const props = { ...iconSizeProps.lg, 'aria-hidden': true };
+
+  if (theme === 'light') {
+    return <Sun {...props} />;
+  }
+
+  if (theme === 'dark') {
+    return <Moon {...props} />;
+  }
+
+  return <Monitor {...props} />;
+}
+
 export function AppShell({
   title,
   description,
@@ -129,6 +159,7 @@ export function AppShell({
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+  const { theme, setTheme } = useTheme();
   const menuRef = useRef<HTMLDivElement | null>(null);
   const logoButtonRef = useRef<HTMLButtonElement | null>(null);
   const hasContent = Boolean(list || reading);
@@ -291,6 +322,15 @@ export function AppShell({
               <PenSquare {...iconSizeProps.sm} aria-hidden="true" />
               <span className="hidden sm:inline">Compose</span>
             </Link>
+            <button
+              type="button"
+              aria-label={`${themeLabels[theme]}; switch to ${themeLabels[nextTheme[theme]].toLowerCase()}`}
+              title={themeLabels[theme]}
+              onClick={() => setTheme(nextTheme[theme])}
+              className="rounded-full p-2 text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
+            >
+              <ThemeIcon theme={theme} />
+            </button>
             <Link
               to="/search"
               aria-label="Search"
