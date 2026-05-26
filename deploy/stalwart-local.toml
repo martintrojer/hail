@@ -41,6 +41,12 @@ store = "sqlite"
 user = "admin"
 secret = "changeme123"
 
+# Optional provider-import smarthost snippets live in:
+# - deploy/stalwart-provider-gmail-smarthost.example.toml
+# - deploy/stalwart-provider-generic-smarthost.example.toml
+# Keep this local smoke config relay-free unless a test explicitly mounts a
+# private smarthost config and injects provider SMTP secrets via environment.
+
 [tracer."stdout"]
 type = "stdout"
 level = "info"

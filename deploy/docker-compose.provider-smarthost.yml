@@ -1,0 +1,25 @@
+# Optional Compose overlay for Stalwart provider-import smarthost secrets.
+#
+# Use only with a Stalwart config that references these environment variables,
+# for example deploy/stalwart-provider-gmail-smarthost.example.toml or
+# deploy/stalwart-provider-generic-smarthost.example.toml. The canonical
+# docker-compose.yml does not include this overlay, so normal non-provider
+# deployments remain unchanged.
+#
+# Example:
+#   docker compose -f docker-compose.yml -f docker-compose.provider-smarthost.yml up -d
+#
+# Do not commit deploy/.env with real credentials. Store provider SMTP secrets in
+# your operator secret manager or a local .env file that remains gitignored.
+
+services:
+  stalwart:
+    environment:
+      # Gmail example: full Gmail address or configured Gmail send-as identity.
+      # Generic relay: provider-issued SMTP username.
+      - HAIL_PROVIDER_SMTP_USERNAME=${HAIL_PROVIDER_SMTP_USERNAME:?set HAIL_PROVIDER_SMTP_USERNAME in deploy/.env or your secret manager}
+      # Gmail example: app password or Workspace SMTP relay credential.
+      # Generic relay: provider-issued SMTP password/API key.
+      - HAIL_PROVIDER_SMTP_SECRET=${HAIL_PROVIDER_SMTP_SECRET:?set HAIL_PROVIDER_SMTP_SECRET in deploy/.env or your secret manager}
+      # Only used by the generic relay snippet. Gmail uses smtp.gmail.com.
+      - HAIL_PROVIDER_SMTP_HOST=${HAIL_PROVIDER_SMTP_HOST:-smtp.relay.example}
