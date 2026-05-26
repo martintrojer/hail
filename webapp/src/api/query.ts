@@ -12,6 +12,7 @@ import {
   type AdminDomainsResponse,
   type AdminStatsResponse,
   type AdminUsersResponse,
+  type AttachmentsResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
   type CancelBubbleUpResponse,
@@ -300,6 +301,17 @@ export const useTrashView = createViewHook('trash', (client) => client.getTrash(
 export const useSpamView = createViewHook('spam', (client) =>
   client.getSpamView(),
 );
+
+export function useAttachments(
+  client = defaultApiClient,
+  options?: QueryConfig<AttachmentsResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.attachments(),
+    queryFn: () => client.listAttachments(),
+    ...options,
+  });
+}
 
 export function useScheduledSends(
   client = defaultApiClient,

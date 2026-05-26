@@ -490,7 +490,7 @@ export function AdminPage() {
             <p className="mt-3 text-sm leading-6 text-ink-secondary">
               User and domain operations call the hail API, which forwards
               changes to Stalwart management over HTTP. Creating a user also
-              ensures that user's email domain exists first, avoiding a risky
+              ensures that user&apos;s email domain exists first, avoiding a risky
               Stalwart restart or manual config edit for normal shared-domain
               provisioning.
             </p>

@@ -6,6 +6,7 @@
 pub mod admin_domains;
 pub mod admin_stats;
 pub mod admin_users;
+pub mod attachments;
 pub mod auth;
 pub mod blobs;
 pub mod compose;

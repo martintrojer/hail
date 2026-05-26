@@ -206,6 +206,25 @@ export type BubbleUpViewItem = components['schemas']['BubbleUpViewItem'];
 export type BubbleUpViewResponse = BubbleUpGetSuccess;
 export type CancelBubbleUpResponse = BubbleUpDeleteSuccess;
 export type UploadedBlob = components['schemas']['UploadedBlob'];
+export interface AttachmentContext {
+  thread_id: string;
+  email_id: string;
+  subject: string;
+  from: string;
+  received_at?: string | null;
+  preview: string;
+}
+export interface AttachmentItem {
+  blob_id: string;
+  name: string;
+  type: string;
+  size: number;
+  download_url: string;
+  context: AttachmentContext;
+}
+export interface AttachmentsResponse {
+  items: AttachmentItem[];
+}
 
 export type ComposeRequest = components['schemas']['ComposePayload'];
 export type ReplyRequest = components['schemas']['ReplyPayload'];
@@ -520,6 +539,14 @@ export class HailApiClient {
   async getThread(threadId: string): Promise<ThreadViewResponse> {
     return this.#json<ThreadViewResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}`),
+      200,
+    );
+  }
+
+  async listAttachments(limit = 50): Promise<AttachmentsResponse> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.#json<AttachmentsResponse>(
+      await this.#request(`/api/attachments?${query.toString()}`),
       200,
     );
   }
