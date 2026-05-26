@@ -128,14 +128,14 @@ describe('ScreenedOutPage', () => {
   it('renders blocked senders tab by default and can switch to screened emails', async () => {
     renderScreenedOut();
 
-    // Default tab is Blocked Senders
-    expect(await screen.findByRole('tab', { name: /Blocked Senders/ })).toHaveAttribute('aria-selected', 'true');
+    // Default tab is Screened Emails
+    expect(await screen.findByRole('tab', { name: /Screened Emails/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('blocked@example.com')).toBeInTheDocument();
     expect(screen.getByText('Denied May 22, 2026')).toBeInTheDocument();
 
-    // Switch to Screened Emails tab
-    fireEvent.click(screen.getByRole('tab', { name: /Screened Emails/ }));
-    expect(screen.getByRole('tab', { name: /Screened Emails/ })).toHaveAttribute('aria-selected', 'true');
+    // Switch to Blocked Senders tab
+    fireEvent.click(screen.getByRole('tab', { name: /Blocked Senders/ }));
+    expect(screen.getByRole('tab', { name: /Blocked Senders/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('blocked@example.com')).toBeInTheDocument();
   });
 
@@ -169,7 +169,7 @@ describe('ScreenedOutPage', () => {
     renderScreenedOut(
       new ScreenedOutPageTestClient({ denied: sampleDeniedSenders({ denied: [] }) }),
     );
-    expect(await screen.findByText('No blocked senders.')).toBeInTheDocument();
+    expect(await screen.findByText('No screened-out emails.')).toBeInTheDocument();
     cleanup();
     restoreRoute();
 
