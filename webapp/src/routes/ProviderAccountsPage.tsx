@@ -19,30 +19,39 @@ interface ProviderAccountsPageProps {
 
 const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
-function statusLabel(status: string) {
+type ProviderSyncStatusValue =
+  | 'disabled'
+  | 'initial_sync'
+  | 'active'
+  | 'error'
+  | 'revoked'
+  | 'disconnected'
+  | (string & {});
+
+function statusLabel(status: ProviderSyncStatusValue) {
   switch (status) {
+    case 'disabled': return 'Disabled';
+    case 'initial_sync': return 'Initial import running';
     case 'active': return 'Connected';
-    case 'pending': return 'Pending';
-    case 'syncing': return 'Syncing';
-    case 'failed': return 'Needs attention';
-    case 'paused': return 'Paused';
+    case 'error': return 'Needs attention';
+    case 'revoked': return 'Access revoked';
     case 'disconnected': return 'Disconnected';
-    case 'revoked': return 'Revoked';
     default: return status || 'Unknown';
   }
 }
 
-function healthTone(status: string) {
+function healthTone(status: ProviderSyncStatusValue) {
   switch (status) {
     case 'active':
-    case 'syncing':
+    case 'initial_sync':
       return 'bg-accent-green';
-    case 'failed':
+    case 'error':
     case 'revoked':
       return 'bg-accent-red';
-    case 'pending':
-    case 'paused':
+    case 'disabled':
       return 'bg-accent-yellow';
+    case 'disconnected':
+      return 'bg-ink-tertiary';
     default:
       return 'bg-ink-tertiary';
   }
@@ -163,7 +172,7 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
           <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Gmail account</p>
           <h2 className="mt-1 text-xl font-semibold text-ink-primary">{account.display_email || account.provider_email}</h2>
           <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-hairline bg-page px-3 py-1 text-sm font-medium text-ink-primary">
-            <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-accent-green' : 'bg-ink-tertiary'}`} />
+            <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${healthTone(account.sync_status)}`} />
             {statusLabel(account.sync_status)}
           </div>
         </div>

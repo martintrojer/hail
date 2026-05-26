@@ -39,7 +39,7 @@ const sampleSyncStatus: ProviderSyncStatus = {
   provider_account_id: 'reader@gmail.com',
   provider_email: 'reader@gmail.com',
   display_email: 'Reader <reader@gmail.com>',
-  sync_status: 'failed',
+  sync_status: 'error',
   last_sync_attempted_at: '2026-05-26T17:00:00Z',
   last_sync_succeeded_at: '2026-05-26T16:30:00Z',
   next_sync_after: '2026-05-26T17:15:00Z',
@@ -121,7 +121,7 @@ class ProviderAccountsTestClient extends TestHailApiClient {
     const account = {
       ...(this.syncStatuses.find((status) => status.id === id) ?? sampleSyncStatus),
       id,
-      sync_status: 'active',
+      sync_status: 'active' as const,
       next_sync_after: null,
       sync_backoff_secs: null,
     };
@@ -300,6 +300,26 @@ describe('ProviderAccountsPage', () => {
       expect(client.triggerSyncCalls).toEqual([42]);
       expect(screen.getByText('Connected')).toBeInTheDocument();
     });
+  });
+
+  it('labels real provider sync statuses from the API enum', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      { ...sampleSyncStatus, id: 1, provider_email: 'disabled@gmail.com', display_email: 'Disabled <disabled@gmail.com>', sync_status: 'disabled' },
+      { ...sampleSyncStatus, id: 2, provider_email: 'initial@gmail.com', display_email: 'Initial <initial@gmail.com>', sync_status: 'initial_sync' },
+      { ...sampleSyncStatus, id: 3, provider_email: 'active@gmail.com', display_email: 'Active <active@gmail.com>', sync_status: 'active' },
+      { ...sampleSyncStatus, id: 4, provider_email: 'error@gmail.com', display_email: 'Error <error@gmail.com>', sync_status: 'error' },
+      { ...sampleSyncStatus, id: 5, provider_email: 'revoked@gmail.com', display_email: 'Revoked <revoked@gmail.com>', sync_status: 'revoked' },
+      { ...sampleSyncStatus, id: 6, provider_email: 'unknown@gmail.com', display_email: 'Unknown <unknown@gmail.com>', sync_status: 'future_state' },
+    ];
+    renderPage({ client });
+
+    expect(await screen.findByText('Disabled')).toBeInTheDocument();
+    expect(screen.getByText('Initial import running')).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Needs attention')).toBeInTheDocument();
+    expect(screen.getByText('Access revoked')).toBeInTheDocument();
+    expect(screen.getByText('future_state')).toBeInTheDocument();
   });
 
   it('surfaces sync status and manual sync errors', async () => {
