@@ -15,8 +15,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{Duration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
+use hail_core::{Config, KEY_LEN, SecretsConfig, ServerConfig, SetupConfig, StalwartConfig};
 use hail_db::connect;
+use secrecy::SecretString;
 
 /// Build a fresh in-memory API [`AppState`] for integration tests.
 pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
@@ -26,18 +27,7 @@ pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
     hail_db::migrate(&db).await.expect("migrate");
 
     let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-        std::env::remove_var("HAIL_STALWART__MANAGEMENT_URL");
-        std::env::remove_var("HAIL_ADMIN__EMAIL");
-        std::env::remove_var("HAIL_ADMIN__PASSWORD_HASH");
-        std::env::remove_var("HAIL_ADMIN__DISPLAY_NAME");
-    }
-    let config = Config::load_from(None).expect("load config");
+    let config = fixture_config(&url, &key);
 
     let state = AppState {
         db,
@@ -47,6 +37,28 @@ pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
         events: hail_api::events::AppEventBus::default(),
     };
     (state, key)
+}
+
+/// Build deterministic API config for tests without reading or mutating process env.
+#[must_use]
+pub fn fixture_config(database_url: impl Into<String>, server_key: &[u8; KEY_LEN]) -> Config {
+    Config {
+        database_url: database_url.into(),
+        stalwart: StalwartConfig {
+            jmap_url: "http://127.0.0.1:0".to_owned(),
+            management_url: None,
+        },
+        server: ServerConfig {
+            bind: "127.0.0.1:0".to_owned(),
+            public_url: "http://localhost".to_owned(),
+            webapp_dir: None,
+        },
+        admin: None,
+        setup: SetupConfig::default(),
+        secrets: SecretsConfig {
+            server_key: SecretString::from(hex::encode(server_key)),
+        },
+    }
 }
 
 /// Insert a non-admin user plus authenticated session for API tests.

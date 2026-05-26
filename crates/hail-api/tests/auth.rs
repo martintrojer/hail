@@ -20,7 +20,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN, parse_server_key};
+use hail_core::{AdminConfig, KEY_LEN};
 use hail_test::fixture_state;
 use http_body_util::BodyExt;
 use serde_json::json;
@@ -28,16 +28,11 @@ use tower::ServiceExt;
 
 async fn fixture_state_with_admin(admin_email: Option<&str>) -> (AppState, [u8; KEY_LEN]) {
     let (mut state, key) = fixture_state().await;
-    unsafe {
-        if let Some(email) = admin_email {
-            std::env::set_var("HAIL_ADMIN__EMAIL", email);
-        } else {
-            std::env::remove_var("HAIL_ADMIN__EMAIL");
-        }
-    }
-    state.config = Config::load_from(None).expect("reload config with admin override");
-    state.server_key =
-        Arc::new(parse_server_key(&state.config.secrets.server_key).expect("parse server key"));
+    state.config.admin = admin_email.map(|email| AdminConfig {
+        email: email.to_owned(),
+        password_hash: None,
+        display_name: None,
+    });
     (state, key)
 }
 

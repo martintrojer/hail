@@ -6,13 +6,16 @@ use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode, header};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN, parse_server_key};
+use hail_core::parse_server_key;
 use hail_jmap::jmap_client::{
     email::{EmailBodyPart, Property as EmailProperty},
     email_submission::Property as EmailSubmissionProperty,
     mailbox::{Role, query::Filter as MailboxFilter},
 };
-use hail_test::stalwart::{stalwart_tests_enabled, start_stalwart_fixture};
+use hail_test::{
+    fixture_config,
+    stalwart::{stalwart_tests_enabled, start_stalwart_fixture},
+};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -87,20 +90,13 @@ impl ContractRuntime {
         hail_db::migrate(&db).await?;
         let stalwart = start_stalwart_fixture().await?;
 
-        unsafe {
-            std::env::set_var("HAIL_DATABASE_URL", &db_url);
-            std::env::set_var("HAIL_STALWART__JMAP_URL", stalwart.jmap_url());
-            std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-            std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-            std::env::set_var("HAIL_SECRETS__SERVER_KEY", SERVER_KEY_HEX);
-            std::env::remove_var("HAIL_ADMIN__EMAIL");
-        }
-        let config = Config::load_from(None)?;
-        let key: [u8; KEY_LEN] = parse_server_key(&config.secrets.server_key)?;
+        let server_key = parse_server_key(&secrecy::SecretString::from(SERVER_KEY_HEX))?;
+        let mut config = fixture_config(&db_url, &server_key);
+        config.stalwart.jmap_url = stalwart.jmap_url();
         let state = AppState {
             db,
             config,
-            server_key: Arc::new(key),
+            server_key: Arc::new(server_key),
             auth_rate_limiter: Arc::new(IpRateLimiter::new(100, Duration::from_secs(60))),
             events: hail_api::events::AppEventBus::default(),
         };

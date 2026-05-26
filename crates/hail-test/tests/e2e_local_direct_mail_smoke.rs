@@ -1,6 +1,6 @@
 use hail_test::{
     local_mail_testbed::import_raw_message_via_jmap,
-    stalwart::{StalwartFixture, stalwart_tests_enabled, start_stalwart_fixture},
+    stalwart::{StalwartFixture, start_stalwart_fixture_unchecked},
 };
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
@@ -218,15 +218,11 @@ struct SmokeRuntime {
 
 impl SmokeRuntime {
     async fn start() -> Result<Self, Box<dyn std::error::Error>> {
-        if !stalwart_tests_enabled() {
-            unsafe { std::env::set_var("HAIL_RUN_STALWART_TESTS", "1") };
-        }
-
         let temp = TempDir::new()?;
         let db_path = temp.path().join("hail.db");
         let api_port = allocate_free_port()?;
         let hail_url = format!("http://127.0.0.1:{api_port}");
-        let stalwart = start_stalwart_fixture().await?;
+        let stalwart = start_stalwart_fixture_unchecked().await?;
         let jmap_url = stalwart.jmap_url();
         let db_url = format!("sqlite://{}", db_path.display());
         let target_dir = target_dir()?;

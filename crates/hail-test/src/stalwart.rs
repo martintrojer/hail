@@ -100,6 +100,13 @@ pub async fn start_stalwart_fixture() -> Result<StalwartFixture, StalwartFixture
     StalwartFixtureBuilder::new().start().await
 }
 
+/// Start an ephemeral Stalwart fixture after the caller has performed its own
+/// opt-in gate. This avoids mutating `HAIL_RUN_STALWART_TESTS` in higher-level
+/// smoke tests that already require another explicit env flag.
+pub async fn start_stalwart_fixture_unchecked() -> Result<StalwartFixture, StalwartFixtureError> {
+    StalwartFixtureBuilder::new().start_unchecked().await
+}
+
 /// Builder for [`StalwartFixture`].
 #[derive(Debug, Clone)]
 pub struct StalwartFixtureBuilder {
@@ -180,6 +187,17 @@ impl StalwartFixtureBuilder {
             return Err(StalwartFixtureError::TestsDisabled);
         }
 
+        self.start_inner().await
+    }
+
+    /// Build config/data directories after the caller has performed an explicit
+    /// opt-in gate. Use this instead of setting `HAIL_RUN_STALWART_TESTS` at
+    /// runtime from another test fixture.
+    pub async fn start_unchecked(self) -> Result<StalwartFixture, StalwartFixtureError> {
+        self.start_inner().await
+    }
+
+    async fn start_inner(self) -> Result<StalwartFixture, StalwartFixtureError> {
         ensure_podman_available()?;
         let http_port = allocate_free_port()?;
         let smtp_port = allocate_free_port()?;
