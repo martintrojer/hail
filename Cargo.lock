@@ -998,6 +998,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "async-trait",
+ "base64",
  "chrono",
  "futures-util",
  "hail-core",
@@ -1005,7 +1006,9 @@ dependencies = [
  "hail-jmap",
  "hail-test",
  "rand 0.9.4",
+ "reqwest",
  "secrecy",
+ "serde",
  "serde_json",
  "sqlx",
  "tempfile",
@@ -1014,6 +1017,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
