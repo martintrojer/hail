@@ -227,50 +227,74 @@ pub async fn hydrate_thread_previews(
         }
     };
 
-    let mut previews = HashMap::with_capacity(thread_ids.len());
-    for thread_id in thread_ids {
-        match latest_thread_preview(&session, &thread_id).await {
-            Ok(Some(preview)) => {
-                previews.insert(thread_id, preview);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::warn!(
-                    user_id,
-                    context,
-                    thread_id = %thread_id,
-                    error = %err,
-                    "thread preview JMAP hydration failed; leaving preview empty"
-                );
-            }
+    match latest_thread_previews(&session, thread_ids.clone()).await {
+        Ok(previews) => previews,
+        Err(err) => {
+            tracing::warn!(
+                user_id,
+                context,
+                error = %err,
+                "thread preview JMAP hydration failed; returning empty previews"
+            );
+            HashMap::new()
         }
     }
-    previews
 }
 
 pub async fn latest_thread_preview(
     session: &hail_jmap::Session,
     thread_id: &str,
 ) -> Result<Option<ThreadPreview>, String> {
+    Ok(latest_thread_previews(session, [thread_id.to_string()])
+        .await?
+        .remove(thread_id))
+}
+
+pub async fn latest_thread_previews(
+    session: &hail_jmap::Session,
+    thread_ids: impl IntoIterator<Item = String>,
+) -> Result<HashMap<String, ThreadPreview>, String> {
     use hail_jmap::jmap_client::core::query::Filter;
     use hail_jmap::jmap_client::email::query as email_query;
+
+    let thread_ids = thread_ids.into_iter().collect::<Vec<_>>();
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let filter = if thread_ids.len() == 1 {
+        Filter::from(email_query::Filter::in_thread(thread_ids[0].clone()))
+    } else {
+        Filter::or(
+            thread_ids
+                .iter()
+                .cloned()
+                .map(email_query::Filter::in_thread)
+                .map(Filter::from),
+        )
+    };
 
     let mut request = session.client().build();
     request
         .query_email()
-        .filter(Filter::from(email_query::Filter::in_thread(thread_id)))
+        .filter(filter)
         .sort([email_query::Comparator::received_at().descending()])
-        .limit(1);
+        .limit(thread_ids.len())
+        .arguments()
+        .collapse_threads(true);
     let mut query = request
         .send_query_email()
         .await
         .map_err(|err| err.to_string())?;
-    let Some(email_id) = query.take_ids().into_iter().next() else {
-        return Ok(None);
-    };
+    let preview_email_ids = query.take_ids();
+    if preview_email_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
 
     let mut request = session.client().build();
-    request.get_email().ids([email_id]).properties([
+    request.get_email().ids(preview_email_ids).properties([
+        Property::Id,
+        Property::ThreadId,
         Property::From,
         Property::Subject,
         Property::Preview,
@@ -279,15 +303,23 @@ pub async fn latest_thread_preview(
         .send_get_email()
         .await
         .map_err(|err| err.to_string())?;
-    let Some(email) = response.take_list().into_iter().next() else {
-        return Ok(None);
-    };
 
-    Ok(Some(ThreadPreview {
-        from: format_from(email.from()),
-        subject: email.subject().unwrap_or_default().to_string(),
-        preview: email.preview().unwrap_or_default().to_string(),
-    }))
+    let mut previews = HashMap::with_capacity(thread_ids.len());
+    for email in response.take_list() {
+        let Some(thread_id) = email.thread_id() else {
+            continue;
+        };
+        previews.insert(
+            thread_id.to_string(),
+            ThreadPreview {
+                from: format_from(email.from()),
+                subject: email.subject().unwrap_or_default().to_string(),
+                preview: email.preview().unwrap_or_default().to_string(),
+            },
+        );
+    }
+
+    Ok(previews)
 }
 
 pub async fn clear_thread_state(
