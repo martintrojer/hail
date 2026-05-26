@@ -16,7 +16,9 @@ and the Gmail client choice in
   do in the normal deployment. `hail.db` does not become a mail store.
 - **One-way import for v1.2:** Gmail/provider -> Stalwart is the only mailbox
   synchronization direction for imported mail. Hail-side archive/delete/read
-  state does not mutate Gmail in v1.2.
+  state, Stalwart mailbox moves, and hail/Stalwart keywords do not mutate Gmail
+  labels, Gmail archive state, Gmail read/unread state, Gmail Trash, or Gmail
+  Spam in v1.2.
 - **Outbound is a hook, not sync:** sending may later use provider SMTP/API or a
   Stalwart smarthost, but outbound work must preserve local sent-state semantics
   in Stalwart and avoid turning v1.2 import into bidirectional mailbox sync. The
@@ -30,7 +32,7 @@ and the Gmail client choice in
 
 | State | Source of truth | Provider-import rule |
 | --- | --- | --- |
-| Public inbound delivery, spam filtering, provider labels | Gmail/provider | Provider-owned. Hail may read labels/history as import hints, but v1.2 does not write them. |
+| Public inbound delivery, spam filtering, provider labels | Gmail/provider | Provider-owned. Hail may read labels/history as import hints, but v1.2 does not write them or mirror them into authoritative local state. |
 | Imported messages, threads, bodies, attachments, blobs | Stalwart | Hail imports raw RFC822 into Stalwart, then uses existing JMAP paths. |
 | Hail views and product keywords (`$hail_imbox`, Screener, Feed, Paper Trail, etc.) | Stalwart keywords plus `hail.db` product tables | Routing runs after import via existing worker/JMAP primitives. Provider labels do not become the authoritative hail view model. |
 | Import cursors, provider account metadata, dedupe mappings, sync status, retry state | `hail.db` | Sidecar state only; no duplicate message body/archive store. |
@@ -41,7 +43,11 @@ The invariant is: **once a provider message has crossed the import boundary,
 Stalwart is authoritative for what hail shows**. If Gmail later changes a label,
 archive state, read state, or deletion state, v1.2 may use that as future import
 input only when explicitly implemented; it must not silently override local hail
-state.
+state. Likewise, when a user archives, deletes, restores, marks read/unread,
+marks spam/not-spam, classifies, or labels mail inside hail, v1.2 applies that
+mutation only to Stalwart/hail state. Gmail/provider remains unchanged unless a
+future bidirectional-sync design deliberately adds write scopes and conflict
+rules.
 
 ## Gmail-to-Stalwart flow
 
@@ -197,6 +203,28 @@ The provider message id is the primary idempotency key for Gmail imports. RFC822
 be missing, reused, or differ between provider copies. The mapping lets retries
 resume safely after crashes between fetch, import, route, and status update.
 
+### One-way label/archive/read/delete semantics
+
+Provider import v1.2 treats Gmail/provider state as follows:
+
+- Gmail labels and search queries are **read-only import bounds**. They choose
+  which provider messages are listed/fetched, not which Stalwart keywords or hail
+  views become authoritative.
+- Gmail history is consumed for newly added messages only. Label changes,
+  archive/read/unread changes, and Trash/Spam moves are not replayed into
+  Stalwart/hail in v1.2.
+- Hail actions after import mutate only local Stalwart/JMAP state and `hail.db`
+  product tables. Archive/delete/read/spam/classification actions do not call
+  Gmail label/modify APIs and do not require Gmail mutation scopes.
+- Default inbound import excludes provider Spam, Trash, and Sent: Gmail
+  `includeSpamTrash` stays false and the importer adds a `-in:sent` discovery
+  bound. Sent-copy import/dedupe may explicitly opt out of the Sent exclusion,
+  but that is still a read-only provider scan.
+- Provider-created Sent copies are handled by the outbound sent-copy dedupe
+  policy in [provider-outbound-strategy.md](./provider-outbound-strategy.md),
+  never by mirroring Gmail Sent/label state into hail as a second source of
+  truth.
+
 ### Historical import foundation
 
 This module is cancellation-aware via a caller-supplied `CancellationToken`,
@@ -216,7 +244,10 @@ Production wiring should pass:
 The importer remains one-way: it reads Gmail labels/query filters as import
 bounds only and never mutates Gmail mailbox state. It first skips already-final
 provider mappings, then uses account-scoped RFC822 `Message-ID` mappings as a
-secondary duplicate signal before creating a Stalwart email.
+secondary duplicate signal before creating a Stalwart email. Default inbound
+options exclude Spam/Trash/Sent (`includeSpamTrash=false`, plus a `-in:sent`
+query bound); explicit sent-copy dedupe jobs may disable the Sent exclusion
+without gaining any Gmail write capability.
 
 ### Sync scheduler
 

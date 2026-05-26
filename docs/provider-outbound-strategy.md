@@ -29,7 +29,9 @@ The goals are:
    artifact to dedupe/import or ignore, not a second source of truth.
 4. **Provider outbound does not imply bidirectional mailbox sync.** Sending may
    use SMTP/API egress, but archive/delete/read/label changes in hail still do
-   not mutate Gmail/provider in v1.2.
+   not mutate Gmail/provider in v1.2. Hail must not request `gmail.modify` or
+   broad Gmail scopes merely to keep provider labels/read/delete/archive state in
+   step with local Stalwart state.
 5. **Every outbound operation has an idempotency key.** Retries must converge on
    one local sent object and at most one provider delivery attempt that hail
    considers successful.
@@ -101,11 +103,14 @@ must include stable dedupe headers described below.
 | Provider SMTP/API delivery acceptance | Provider submission service | Provider response proves egress acceptance, not local UI truth. |
 | Outbound retry/idempotency state | `hail.db` | Store operation ids, provider account binding, attempt status, backoff, safe error class, and provider response ids. |
 | Provider-created sent copy | Provider mailbox until imported | If seen by import, dedupe/map to local sent object or skip; do not display as an extra message. |
-| Provider labels/read/archive/delete state | Provider | Not written by hail in v1.2 provider import mode. |
+| Provider labels/read/archive/delete state | Provider | Not written by hail in v1.2 provider import mode; provider labels/history may only bound read-only import scans. |
 
 The invariant is: **a sent message visible in hail is the Stalwart object**. A
 provider copy may exist for the provider's own Sent mailbox and audit trail, but
-it does not replace or override local Stalwart state.
+it does not replace or override local Stalwart state. Provider Sent labels,
+read/unread flags, archive state, Trash, and deletion state remain provider-side
+facts and are not mirrored back into hail except through explicit read-only
+sent-copy dedupe decisions.
 
 ## Sent-copy dedupe policy
 

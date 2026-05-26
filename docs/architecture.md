@@ -406,6 +406,10 @@ should behave as if the mail arrived normally.
 **Boundaries:**
 
 - import is one-way for v1.2: Gmail/provider -> Stalwart;
+- Gmail/provider labels, archive state, read/unread state, Trash, Spam, and Sent
+  are not mirrored from hail in v1.2; provider labels/history are read-only
+  import hints, and after import Stalwart/hail is authoritative for visible mail
+  state;
 - OAuth refresh tokens are encrypted in `hail.db`, and access tokens stay
   server-side;
 - provider cursors, account metadata, dedupe mappings, retry state, and sync
