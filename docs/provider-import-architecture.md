@@ -90,9 +90,14 @@ Stalwart can own them.
   `(provider_account_id, provider_message_id)` constraint is the primary import
   idempotency key; RFC822 `Message-ID`, content hash, local ids, status, and
   timestamps support duplicate detection and restartable retries.
-- `provider_sync_events` stores coarse, UI-safe account/message sync events and
-  errors. It is an audit/status stream only; it must not include tokens, raw
-  RFC822, message bodies, attachment content, or other secrets.
+- `provider_sync_events` is the audit/status stream for imports, skips,
+  retries, failures, token/disconnect events, and coarse sync lifecycle events.
+  Each row is scoped to both `provider_account_id` and `user_id` (with a DB
+  trigger enforcing that the user matches the owning provider account), records
+  operation kind, event type, optional provider message id, result status,
+  redacted error code/class/message, metadata, and creation time. It must not
+  include tokens, raw RFC822, message bodies, attachment content, or other
+  secrets.
 
 Do not store message bodies or raw RFC822 in this table family. Any import queue
 payload that temporarily contains RFC822 must have an explicit retention policy

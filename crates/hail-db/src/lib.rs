@@ -4,6 +4,7 @@
 //! is the sidecar store and what schema the baseline migration establishes.
 
 pub mod app_events;
+pub mod provider_sync_audit;
 
 use std::collections::HashSet;
 use std::str::FromStr;
