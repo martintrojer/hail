@@ -74,6 +74,20 @@ The setup wizard creates your first admin account and provisions your domain in 
 
 See [docs/quickstart.md](docs/quickstart.md) for the full guide including DNS, TLS, and Cloudflare Tunnel options.
 
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [quickstart.md](docs/quickstart.md) | Installation, configuration, first-run setup |
+| [architecture.md](docs/architecture.md) | System map, hard decisions, rejected alternatives |
+| [design.md](docs/design.md) | Product design and v1 feature spec |
+| [roadmap.md](docs/roadmap.md) | Post-v1 backlog, release themes, TUI plans |
+| [cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Cloudflare Tunnel + Email Routing recipes |
+| [reverse-proxy.md](docs/reverse-proxy.md) | Nginx/Caddy reverse proxy setup |
+| [backup.md](docs/backup.md) | Backup and restore procedures |
+| [upgrade.md](docs/upgrade.md) | Upgrade guide between versions |
+| [testing.md](docs/testing.md) | Test strategy and running tests |
+
 ## Features
 
 ### The Screener
