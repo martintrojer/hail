@@ -4,6 +4,11 @@ export interface KeyboardShortcutHandlers {
   onEscape?: () => void;
   onNextThread?: () => void;
   onPreviousThread?: () => void;
+  onFirstThread?: () => void;
+  onLastThread?: () => void;
+  onHalfPageDown?: () => void;
+  onHalfPageUp?: () => void;
+  onOpenThread?: () => void;
   onArchive?: () => void;
   onTrash?: () => void;
   onSetAside?: () => void;
@@ -25,6 +30,9 @@ export interface KeyboardShortcutHandlers {
   onAddNote?: () => void;
   onGoBack?: () => void;
   onSend?: () => void;
+  onToggleSelect?: () => void;
+  onSelectAll?: () => void;
+  onDeselectAll?: () => void;
   onShowHelp?: () => void;
 }
 
@@ -127,6 +135,20 @@ export function useKeyboardShortcuts(
         }
       }
 
+      // Ctrl+d / Ctrl+u — half page scroll (vim)
+      if (event.ctrlKey && !event.altKey && !event.metaKey) {
+        if (key === 'd') {
+          if (run(event, handlers.onHalfPageDown)) {
+            return;
+          }
+        }
+        if (key === 'u') {
+          if (run(event, handlers.onHalfPageUp)) {
+            return;
+          }
+        }
+      }
+
       if (isEditableTarget(event.target)) {
         return;
       }
@@ -139,6 +161,12 @@ export function useKeyboardShortcuts(
       }
 
       if (pendingPrefix === 'g') {
+        // gg = go to first item
+        if (key === 'g') {
+          if (run(event, handlers.onFirstThread)) {
+            return;
+          }
+        }
         const routeHandlers: Record<string, (() => void) | undefined> = {
           i: handlers.onGoImbox,
           f: handlers.onGoFeed,
@@ -161,22 +189,43 @@ export function useKeyboardShortcuts(
         return;
       }
 
+      // G (shift+g) = go to last item
+      if (event.key === 'G' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (run(event, handlers.onLastThread)) {
+          return;
+        }
+      }
+
       const shortcutHandlers: Record<string, (() => void) | undefined> = {
         j: handlers.onNextThread,
         k: handlers.onPreviousThread,
         e: handlers.onArchive,
-        '#': handlers.onTrash,
+        d: handlers.onTrash,   // vim delete
+        '#': handlers.onTrash, // gmail compat
         y: handlers.onSetAside,
         l: handlers.onReplyLater,
         r: handlers.onReply,
         a: handlers.onReplyAll,
         f: handlers.onForward,
         n: handlers.onAddNote,
-        Backspace: handlers.onGoBack,
+        o: handlers.onOpenThread,  // vim open
+        x: handlers.onToggleSelect,
         c: handlers.onCompose,
         '/': handlers.onFocusSearch,
         '?': handlers.onShowHelp,
       };
+
+      // Also handle Enter for open and Backspace for go-back
+      if (event.key === 'Enter') {
+        if (run(event, handlers.onOpenThread)) {
+          return;
+        }
+      }
+      if (event.key === 'Backspace') {
+        if (run(event, handlers.onGoBack)) {
+          return;
+        }
+      }
 
       if (run(event, shortcutHandlers[event.key] ?? shortcutHandlers[key])) {
         return;

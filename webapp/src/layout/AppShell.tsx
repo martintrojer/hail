@@ -115,6 +115,27 @@ function focusMailListItem(direction: 1 | -1) {
   items[nextIndex]?.focus();
 }
 
+function focusFirstMailListItem() {
+  const items = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>('[data-hail-mail-list-item="true"]'),
+  ).filter((item) => item.offsetParent !== null);
+  items[0]?.focus();
+}
+
+function focusLastMailListItem() {
+  const items = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>('[data-hail-mail-list-item="true"]'),
+  ).filter((item) => item.offsetParent !== null);
+  items.at(-1)?.focus();
+}
+
+function openFocusedMailListItem() {
+  const focused = document.activeElement;
+  if (focused instanceof HTMLAnchorElement && focused.dataset.hailMailListItem === 'true') {
+    focused.click();
+  }
+}
+
 function dispatchMailShortcut(action: string) {
   window.dispatchEvent(new CustomEvent('hail:mail-shortcut', { detail: { action } }));
 }
@@ -172,6 +193,11 @@ export function AppShell({
   useKeyboardShortcuts({
     onNextThread: () => focusMailListItem(1),
     onPreviousThread: () => focusMailListItem(-1),
+    onFirstThread: focusFirstMailListItem,
+    onLastThread: focusLastMailListItem,
+    onHalfPageDown: () => { window.scrollBy({ top: window.innerHeight / 2, behavior: 'smooth' }); },
+    onHalfPageUp: () => { window.scrollBy({ top: -window.innerHeight / 2, behavior: 'smooth' }); },
+    onOpenThread: openFocusedMailListItem,
     onArchive: () => dispatchMailShortcut('archive'),
     onTrash: () => dispatchMailShortcut('trash'),
     onSetAside: () => dispatchMailShortcut('set-aside'),
