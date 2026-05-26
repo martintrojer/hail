@@ -18,9 +18,9 @@ use crate::gmail_client::{
 };
 use crate::gmail_historical_import::{
     GmailHistoricalImportAccount, GmailHistoricalImportError, GmailHistoricalImportOptions,
-    GmailHistoricalImportSummary, GmailHistoricalSource, import_gmail_history, import_one_message,
+    GmailHistoricalImportSummary, GmailHistoricalImporter, GmailHistoricalSource,
+    import_gmail_history, import_one_message,
 };
-use crate::rfc822_import::Rfc822Importer;
 
 const DEFAULT_HISTORY_PAGE_SIZE: u16 = 100;
 const MAX_HISTORY_PAGE_SIZE: u16 = 500;
@@ -164,7 +164,7 @@ pub async fn run_gmail_incremental_sync<C, I>(
 ) -> Result<GmailIncrementalSyncSummary, GmailIncrementalSyncError>
 where
     C: GmailIncrementalSource,
-    I: Rfc822Importer,
+    I: GmailHistoricalImporter,
 {
     let Some(start_history_id) = account.history_id.clone() else {
         audit_sync_failed(
@@ -342,7 +342,7 @@ async fn run_expired_cursor_fallback<C, I>(
 ) -> Result<GmailIncrementalSyncSummary, GmailIncrementalSyncError>
 where
     C: GmailIncrementalSource,
-    I: Rfc822Importer,
+    I: GmailHistoricalImporter,
 {
     let message = safe_error_message(&error);
     audit_expired_cursor_fallback(db, &account, expired_history_id, &message).await?;

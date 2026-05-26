@@ -16,9 +16,9 @@ use tokio_util::sync::CancellationToken;
 use crate::gmail_client::{GmailClient, GmailClientError, GmailProfile, GmailTokenSource};
 use crate::gmail_historical_import::{
     GmailHistoricalImportAccount, GmailHistoricalImportError, GmailHistoricalImportOptions,
-    GmailHistoricalImportSummary, GmailHistoricalSource, import_gmail_history,
+    GmailHistoricalImportSummary, GmailHistoricalImporter, GmailHistoricalSource,
+    import_gmail_history,
 };
-use crate::rfc822_import::Rfc822Importer;
 
 const PROFILE_MISMATCH_ERROR_CLASS: &str = "gmail_profile_mismatch";
 const PROFILE_ERROR_CLASS: &str = "gmail_profile";
@@ -94,7 +94,7 @@ pub async fn run_gmail_initial_sync<C, I>(
 ) -> Result<GmailInitialSyncSummary, GmailInitialSyncError>
 where
     C: GmailInitialSyncSource,
-    I: Rfc822Importer,
+    I: GmailHistoricalImporter,
 {
     let profile = match gmail.profile().await {
         Ok(profile) => profile,

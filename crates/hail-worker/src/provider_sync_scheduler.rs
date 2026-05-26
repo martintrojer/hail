@@ -22,6 +22,7 @@ use crate::gmail_incremental_sync::{
 use crate::gmail_initial_sync::{
     GmailInitialSyncError, GmailInitialSyncOptions, run_gmail_initial_sync,
 };
+use crate::provider_import_routing::{RoutingRfc822Importer, ScreenerRfc822ImportRouter};
 use crate::rfc822_import::StalwartJmapRfc822Importer;
 
 const DEFAULT_SYNC_INTERVAL_SECS: i64 = 5 * 60;
@@ -573,7 +574,10 @@ pub mod live {
         async fn importer(
             &self,
             account: &ProviderSyncAccount,
-        ) -> std::result::Result<StalwartJmapRfc822Importer, ProviderSyncRunError> {
+        ) -> std::result::Result<
+            (StalwartJmapRfc822Importer, crate::screener::JmapOpsLive),
+            ProviderSyncRunError,
+        > {
             let token = crate::jmap_helpers::latest_active_token(
                 &self.db,
                 &self.token_decryptor,
@@ -581,10 +585,17 @@ pub mod live {
             )
             .await
             .map_err(|err| ProviderSyncRunError::retryable("jmap_session", err))?;
+            let route_session = hail_jmap::login_bearer(&self.stalwart_jmap_url, token.clone())
+                .await
+                .map_err(|err| ProviderSyncRunError::retryable("jmap_session", err))?;
+            let route_jmap = crate::screener::JmapOpsLive {
+                session: std::sync::Arc::new(route_session),
+                account_id: account.jmap_account_id.clone(),
+            };
             let session = hail_jmap::login_bearer(&self.stalwart_jmap_url, token)
                 .await
                 .map_err(|err| ProviderSyncRunError::retryable("jmap_session", err))?;
-            Ok(StalwartJmapRfc822Importer::new(session))
+            Ok((StalwartJmapRfc822Importer::new(session), route_jmap))
         }
     }
 
@@ -602,7 +613,9 @@ pub mod live {
             cancel: &CancellationToken,
         ) -> std::result::Result<ProviderSyncRunOutcome, ProviderSyncRunError> {
             let gmail = self.gmail_client(&account).await?;
-            let importer = self.importer(&account).await?;
+            let (importer, route_jmap) = self.importer(&account).await?;
+            let router = ScreenerRfc822ImportRouter::new(&route_jmap);
+            let routing_importer = RoutingRfc822Importer::new(&importer, &router);
             let inbox_id = importer
                 .inbox_id()
                 .await
@@ -618,10 +631,16 @@ pub mod live {
                             "provider account missing",
                         )
                     })?;
-            let summary =
-                run_gmail_initial_sync(&self.db, account, &gmail, &importer, options, cancel)
-                    .await
-                    .map_err(classify_initial_sync_error)?;
+            let summary = run_gmail_initial_sync(
+                &self.db,
+                account,
+                &gmail,
+                &routing_importer,
+                options,
+                cancel,
+            )
+            .await
+            .map_err(classify_initial_sync_error)?;
             Ok(if summary.import.completed {
                 ProviderSyncRunOutcome::completed_active()
             } else {
@@ -635,7 +654,9 @@ pub mod live {
             cancel: &CancellationToken,
         ) -> std::result::Result<ProviderSyncRunOutcome, ProviderSyncRunError> {
             let gmail = self.gmail_client(&account).await?;
-            let importer = self.importer(&account).await?;
+            let (importer, route_jmap) = self.importer(&account).await?;
+            let router = ScreenerRfc822ImportRouter::new(&route_jmap);
+            let routing_importer = RoutingRfc822Importer::new(&importer, &router);
             let inbox_id = importer
                 .inbox_id()
                 .await
@@ -652,10 +673,16 @@ pub mod live {
                     "provider account missing",
                 )
             })?;
-            let summary =
-                run_gmail_incremental_sync(&self.db, account, &gmail, &importer, options, cancel)
-                    .await
-                    .map_err(classify_incremental_sync_error)?;
+            let summary = run_gmail_incremental_sync(
+                &self.db,
+                account,
+                &gmail,
+                &routing_importer,
+                options,
+                cancel,
+            )
+            .await
+            .map_err(classify_incremental_sync_error)?;
             Ok(if summary.completed {
                 ProviderSyncRunOutcome::completed_active()
             } else {
