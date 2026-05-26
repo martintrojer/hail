@@ -28,4 +28,5 @@ export const queryKeys = {
   draft: (draftId: string) => [...queryKeys.drafts(), draftId] as const,
   scheduledSends: () => [...queryKeys.all, 'scheduled-sends'] as const,
   workflows: () => [...queryKeys.all, 'workflows'] as const,
+  providerSyncStatuses: () => [...queryKeys.all, 'provider-sync-statuses'] as const,
 };
