@@ -15,7 +15,7 @@ use sqlx::SqlitePool;
 use tracing::{info, warn};
 
 use crate::app_events::{WorkerAppEvent, publish_app_event};
-use crate::screener::{self, Classification, JmapOps, RouteOutcome, route_email};
+use crate::screener::{self, JmapOps, RouteOutcome, route_email};
 
 /// JMAP TypeStates that hail-worker tracks per user. Mirrors
 /// design.md §6.2 (`jmap_state.type_state` column) and §8.1 item 1
@@ -322,9 +322,9 @@ async fn route_envelopes(
 fn app_event_for_route_outcome(outcome: &RouteOutcome) -> Option<WorkerAppEvent> {
     match outcome {
         RouteOutcome::Classified { classification } => Some(match classification {
-            Classification::Imbox => WorkerAppEvent::ImboxNew,
-            Classification::Feed => WorkerAppEvent::FeedNew,
-            Classification::Papertrail => WorkerAppEvent::PapertrailNew,
+            hail_core::MailClassification::Imbox => WorkerAppEvent::ImboxNew,
+            hail_core::MailClassification::Feed => WorkerAppEvent::FeedNew,
+            hail_core::MailClassification::Papertrail => WorkerAppEvent::PapertrailNew,
         }),
         RouteOutcome::ScreenerPending { .. } => Some(WorkerAppEvent::ScreenerPending),
         RouteOutcome::Trashed => Some(WorkerAppEvent::ThreadUpdated),

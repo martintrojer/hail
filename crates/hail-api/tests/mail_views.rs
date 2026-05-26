@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
-    MailClassification, MailView, MailViewError, MailViewItem, MailViewProvider,
+    MailView, MailViewClassification, MailViewError, MailViewItem, MailViewProvider,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -84,7 +84,7 @@ async fn get_view(
     app(state, provider).oneshot(req).await.unwrap()
 }
 
-fn item(n: i64, classification: MailClassification) -> MailViewItem {
+fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
     MailViewItem {
         thread_id: format!("thread-{n}"),
         email_id: format!("email-{n}"),

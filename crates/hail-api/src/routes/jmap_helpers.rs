@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use hail_core::MailClassification;
 use hail_jmap::jmap_client::email::Property;
 use secrecy::SecretString;
 use serde::Serialize;
@@ -289,7 +290,7 @@ pub async fn clear_thread_state(
     user_id: i64,
     thread_id: &str,
 ) {
-    for classification in crate::routes::threads::Classification::ALL {
+    for classification in MailClassification::ALL {
         let _ = actions
             .set_keyword(
                 state,

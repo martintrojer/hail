@@ -15,6 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
+pub use hail_core::MailClassification as Classification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -397,34 +398,6 @@ struct CancelBubbleUpResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 struct ClassifyRequest {
     to: Classification,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Classification {
-    Imbox,
-    Feed,
-    Papertrail,
-}
-
-impl Classification {
-    pub const ALL: [Self; 3] = [Self::Imbox, Self::Feed, Self::Papertrail];
-
-    pub const fn keyword(self) -> &'static str {
-        match self {
-            Self::Imbox => "$hail_imbox",
-            Self::Feed => "$hail_feed",
-            Self::Papertrail => "$hail_papertrail",
-        }
-    }
-
-    pub const fn db_value(self) -> &'static str {
-        match self {
-            Self::Imbox => "imbox",
-            Self::Feed => "feed",
-            Self::Papertrail => "papertrail",
-        }
-    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
