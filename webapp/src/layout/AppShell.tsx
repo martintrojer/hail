@@ -21,6 +21,7 @@ import {
   PenSquare,
   Search,
   Settings,
+  ShieldAlert,
   Sun,
   ShieldOff,
   Trash2,
@@ -60,6 +61,7 @@ const navItems: MenuItem[] = [
   { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
   { to: '/archive', label: 'Archive', Icon: Archive },
   { to: '/search', label: 'Search', Icon: Search },
+  { to: '/spam', label: 'Spam', Icon: ShieldAlert },
   { to: '/trash', label: 'Trash', Icon: Trash2 },
 ];
 
@@ -217,6 +219,7 @@ export function AppShell({
     onGoPaperTrail: () => void navigate({ to: '/papertrail' }),
     onGoScreener: () => void navigate({ to: '/screener' }),
     onGoDrafts: () => void navigate({ to: '/drafts' }),
+    onGoSpam: () => void navigate({ to: '/spam' }),
     onGoTrash: () => void navigate({ to: '/trash' }),
     onGoSetAside: () => void navigate({ to: '/set-aside' }),
     onGoReplyLater: () => void navigate({ to: '/reply-later' }),

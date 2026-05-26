@@ -23,6 +23,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { keys: ['g', 'p'], description: 'Go to Paper Trail' },
       { keys: ['g', 's'], description: 'Go to Screener' },
       { keys: ['g', 'd'], description: 'Go to Drafts' },
+      { keys: ['g', 'j'], description: 'Go to Spam' },
       { keys: ['g', 't'], description: 'Go to Trash' },
       { keys: ['g', 'a'], description: 'Go to Set Aside' },
       { keys: ['g', 'l'], description: 'Go to Reply Later' },

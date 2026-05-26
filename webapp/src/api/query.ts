@@ -282,6 +282,10 @@ export const useArchiveView = createViewHook('archive', (client) =>
 
 export const useTrashView = createViewHook('trash', (client) => client.getTrash());
 
+export const useSpamView = createViewHook('spam', (client) =>
+  client.getSpamView(),
+);
+
 export function useSearch(
   params: SearchParams,
   client = defaultApiClient,

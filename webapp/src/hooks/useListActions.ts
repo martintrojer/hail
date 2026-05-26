@@ -7,6 +7,8 @@ import {
   useReplyLaterThreadMutation,
   useRestoreThreadMutation,
   useSetAsideThreadMutation,
+  useSpamThreadMutation,
+  useNotSpamThreadMutation,
   useTrashThreadMutation,
   useDeleteDraftMutation,
 } from '../api/query';
@@ -19,6 +21,7 @@ export type ListAction =
   | 'reply-later'
   | 'classify'
   | 'restore'
+  | 'not-spam'
   | 'delete'
   | 'delete-forever';
 
@@ -42,6 +45,7 @@ const singularMessages: Record<ListAction, { message: string; undoSuccessMessage
   'reply-later': { message: 'Thread added to Reply Later.', undoSuccessMessage: 'Reply Later undone.' },
   classify: { message: 'Thread moved to Imbox.', undoSuccessMessage: 'Thread classification undone.' },
   restore: { message: 'Thread restored to Imbox.', undoSuccessMessage: 'Restore undone.' },
+  'not-spam': { message: 'Thread marked as not spam.', undoSuccessMessage: 'Not Spam undone.' },
   delete: { message: 'Draft deleted.' },
   'delete-forever': { message: 'Thread deleted forever.' },
 };
@@ -53,6 +57,7 @@ const batchMessages: Record<ListAction, (count: number) => string> = {
   'reply-later': (count) => `${count} thread${count === 1 ? '' : 's'} added to Reply Later.`,
   classify: (count) => `${count} thread${count === 1 ? '' : 's'} moved to Imbox.`,
   restore: (count) => `${count} thread${count === 1 ? '' : 's'} restored to Imbox.`,
+  'not-spam': (count) => `${count} thread${count === 1 ? '' : 's'} marked as not spam.`,
   delete: (count) => `${count} draft${count === 1 ? '' : 's'} deleted.`,
   'delete-forever': (count) => `${count} thread${count === 1 ? '' : 's'} deleted forever.`,
 };
@@ -72,6 +77,8 @@ export function useListActions(config: ListActionConfig) {
   const replyLaterMutation = useReplyLaterThreadMutation(client);
   const classifyMutation = useClassifyThreadMutation(client);
   const restoreMutation = useRestoreThreadMutation(client);
+  const spamMutation = useSpamThreadMutation(client);
+  const notSpamMutation = useNotSpamThreadMutation(client);
   const destroyMutation = useDestroyThreadMutation(client);
   const deleteDraftMutation = useDeleteDraftMutation(client);
 
@@ -96,6 +103,8 @@ export function useListActions(config: ListActionConfig) {
       data = restoreMode === 'restore-endpoint'
         ? await restoreMutation.mutateAsync({ threadId })
         : await classifyMutation.mutateAsync({ threadId, to: 'imbox' });
+    } else if (action === 'not-spam') {
+      data = await notSpamMutation.mutateAsync({ threadId });
     } else if (action === 'delete') {
       data = await deleteDraftMutation.mutateAsync(threadId);
     } else {
@@ -127,6 +136,7 @@ export function useListActions(config: ListActionConfig) {
     replyLater: (threadId: string, options?: ListActionHandlerOptions) => run('reply-later', threadId, options),
     classify: (threadId: string, options?: ListActionHandlerOptions) => run('classify', threadId, options),
     restore: (threadId: string, options?: ListActionHandlerOptions) => run('restore', threadId, options),
+    notSpam: (threadId: string, options?: ListActionHandlerOptions) => run('not-spam', threadId, options),
     delete: (threadId: string, options?: ListActionHandlerOptions) => run('delete', threadId, options),
     deleteForever: (threadId: string, options?: ListActionHandlerOptions) => run('delete-forever', threadId, options),
     run,
@@ -138,6 +148,8 @@ export function useListActions(config: ListActionConfig) {
       replyLaterMutation.isPending ||
       classifyMutation.isPending ||
       restoreMutation.isPending ||
+      spamMutation.isPending ||
+      notSpamMutation.isPending ||
       destroyMutation.isPending ||
       deleteDraftMutation.isPending,
     error:
@@ -147,6 +159,8 @@ export function useListActions(config: ListActionConfig) {
       replyLaterMutation.error ??
       classifyMutation.error ??
       restoreMutation.error ??
+      spamMutation.error ??
+      notSpamMutation.error ??
       destroyMutation.error ??
       deleteDraftMutation.error,
   };

@@ -18,7 +18,7 @@ use axum::extract::{Extension, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
-use hail_core::MailClassification;
+use hail_core::{HAIL_SPAM_KEYWORD, MailClassification, SPAM_KEYWORD};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -81,7 +81,24 @@ impl MailViewProvider for JmapMailViewProvider {
 
             let mut request = session.client().build();
             let mut filter = Filter::from(email_query::Filter::has_keyword(view.keyword()));
-            if view == MailView::Drafts {
+            if view == MailView::Spam {
+                let junk_mailbox_id = hail_jmap::mailbox_id_by_role(
+                    &session,
+                    hail_jmap::jmap_client::mailbox::Role::Junk,
+                )
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))?;
+                let mut conditions = vec![
+                    Filter::from(email_query::Filter::has_keyword(SPAM_KEYWORD.to_string())),
+                    Filter::from(email_query::Filter::has_keyword(
+                        HAIL_SPAM_KEYWORD.to_string(),
+                    )),
+                ];
+                if let Some(junk_mailbox_id) = junk_mailbox_id {
+                    conditions.push(Filter::from(email_query::Filter::in_mailbox(junk_mailbox_id)));
+                }
+                filter = Filter::or(conditions);
+            } else if view == MailView::Drafts {
                 if let Some(drafts_mailbox_id) = hail_jmap::mailbox_id_by_role(
                     &session,
                     hail_jmap::jmap_client::mailbox::Role::Drafts,
@@ -416,6 +433,7 @@ where
         .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_drafts).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_trash).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_spam).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_archive).layer(Extension(mail_provider)))
         .routes(routes!(get_bubble_up))
         .routes(routes!(get_search).layer(Extension(search_provider)))
@@ -443,6 +461,7 @@ pub enum MailView {
     Papertrail,
     Drafts,
     Trash,
+    Spam,
     Archive,
 }
 
@@ -454,6 +473,7 @@ pub enum MailViewClassification {
     Papertrail,
     Drafts,
     Trash,
+    Spam,
     Archive,
 }
 
@@ -475,6 +495,7 @@ impl MailView {
             Self::Papertrail => MailClassification::Papertrail.keyword(),
             Self::Drafts => "$draft",
             Self::Trash => "$deleted",
+            Self::Spam => HAIL_SPAM_KEYWORD,
             Self::Archive => "$hail_archive",
         }
     }
@@ -486,6 +507,7 @@ impl MailView {
             Self::Papertrail => MailViewClassification::Papertrail,
             Self::Drafts => MailViewClassification::Drafts,
             Self::Trash => MailViewClassification::Trash,
+            Self::Spam => MailViewClassification::Spam,
             Self::Archive => MailViewClassification::Archive,
         }
     }
@@ -780,6 +802,26 @@ async fn get_trash(
     Query(query): Query<ViewQuery>,
 ) -> Response {
     get_view(state, user, provider, query, MailView::Trash).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/spam",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Spam mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_spam(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+    Query(query): Query<ViewQuery>,
+) -> Response {
+    get_view(state, user, provider, query, MailView::Spam).await
 }
 
 #[utoipa::path(

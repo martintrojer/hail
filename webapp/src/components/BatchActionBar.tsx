@@ -8,6 +8,7 @@ const actionLabels: Record<ListAction, string> = {
   'reply-later': 'Reply Later',
   classify: 'Move to Imbox',
   restore: 'Restore',
+  'not-spam': 'Not Spam',
   delete: 'Delete',
   'delete-forever': 'Delete forever',
 };

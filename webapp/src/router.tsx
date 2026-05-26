@@ -31,6 +31,7 @@ import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
 import { ThreadPage } from './routes/ThreadPage';
 import { TrashPage } from './routes/TrashPage';
+import { SpamPage } from './routes/SpamPage';
 import { ScreenedOutPage } from './routes/ScreenedOutPage';
 
 function AppShell() {
@@ -539,6 +540,13 @@ const trashRoute = createRoute({
   component: TrashPage,
 });
 
+const spamRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/spam',
+  beforeLoad: requireAuth,
+  component: SpamPage,
+});
+
 const archiveRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/archive',
@@ -602,6 +610,7 @@ const routeTree = rootRoute.addChildren([
   threadReplyRoute,
   searchRoute,
   trashRoute,
+  spamRoute,
   archiveRoute,
   composeRoute,
   adminRoute,
