@@ -1,4 +1,4 @@
-//! Scheduled worker jobs for bubble-up reminders, scheduled sends, and trash purge.
+//! Scheduled worker jobs for bubble-up reminders, scheduled sends, trash purge, and spam purge.
 //!
 //! The scheduler owns hail-side state transitions for due rows:
 //! - `bubble_ups`: query due pending rows, ask JMAP to resurface the
@@ -9,6 +9,8 @@
 //!   `processing`, ask JMAP to submit the saved draft, then mark sent or failed.
 //! - trash purge: ask JMAP to permanently destroy emails in the Trash mailbox
 //!   whose `receivedAt` is older than the configured retention window.
+//! - spam purge: ask JMAP to permanently destroy emails in Junk / `$Junk`
+//!   whose `receivedAt` is older than seven days.
 //!
 //! Failure policy is intentionally split by operation. Bubble-up JMAP failures
 //! are treated as transient per design.md §8.3: the row remains pending and the
@@ -36,6 +38,7 @@ use tracing::{info, warn};
 use crate::app_events::{WorkerAppEvent, publish_app_event, publish_app_event_payload};
 
 pub const DEFAULT_TRASH_RETENTION_DAYS: u16 = 30;
+pub const SPAM_RETENTION_DAYS: u16 = 7;
 const STALE_SCHEDULED_SEND_CLAIM_AFTER_SECS: i64 = 60 * 60;
 const STALE_SCHEDULED_SEND_CLAIM_ERROR: &str = "scheduled send processing claim is stale or missing claimed_at; submission state unknown; manual review required";
 
@@ -61,6 +64,11 @@ pub trait BubbleJmapOps: Send + Sync {
 #[async_trait]
 pub trait TrashPurgeOps: Send + Sync {
     async fn purge_old_trash(&self, user_id: i64, cutoff: DateTime<Utc>) -> Result<usize>;
+}
+
+#[async_trait]
+pub trait SpamPurgeOps: Send + Sync {
+    async fn purge_old_spam(&self, user_id: i64, cutoff: DateTime<Utc>) -> Result<usize>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -563,6 +571,45 @@ pub async fn process_trash_purge(
     Ok(purged)
 }
 
+/// Permanently delete messages in JMAP Junk older than seven days.
+///
+/// The JMAP adapter treats both messages in the Junk mailbox and messages with
+/// Stalwart's `$Junk` verdict keyword as spam. Like Trash purge, per-user JMAP
+/// failures are logged and later users continue processing.
+pub async fn process_spam_purge(
+    db: &SqlitePool,
+    jmap_ops: &dyn SpamPurgeOps,
+    now: DateTime<Utc>,
+) -> Result<usize> {
+    let retention_days = i64::from(SPAM_RETENTION_DAYS);
+    let cutoff = now - Duration::days(retention_days);
+    let user_ids = select_users_with_active_sessions(db, now).await?;
+
+    let mut purged = 0;
+    for user_id in user_ids {
+        match jmap_ops.purge_old_spam(user_id, cutoff).await {
+            Ok(count) => {
+                purged += count;
+                if count > 0 {
+                    info!(user_id, count, "spam purge destroyed old messages");
+                }
+            }
+            Err(err) => {
+                warn!(
+                    user_id,
+                    error = %err,
+                    "spam purge JMAP failure; continuing with later users"
+                );
+            }
+        }
+    }
+
+    if purged > 0 {
+        info!(purged, retention_days, "spam purge processed");
+    }
+    Ok(purged)
+}
+
 async fn select_users_with_active_sessions(
     db: &SqlitePool,
     now: DateTime<Utc>,
@@ -611,7 +658,7 @@ pub(crate) mod live {
     use secrecy::SecretString;
     use sqlx::SqlitePool;
 
-    use super::{BubbleJmapOps, SendSubmitError, SendSubmitter, TrashPurgeOps};
+    use super::{BubbleJmapOps, SendSubmitError, SendSubmitter, SpamPurgeOps, TrashPurgeOps};
 
     use crate::crypto::TokenDecryptor;
 
@@ -738,27 +785,67 @@ pub(crate) mod live {
                 Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id)),
                 Filter::from(email_query::Filter::before(cutoff.timestamp())),
             ]);
-            let mut query = session
-                .client()
-                .email_query(
-                    Some(filter),
-                    Some([email_query::Comparator::received_at().ascending()]),
-                )
-                .await
-                .context("Email/query old Trash messages")?;
-            let email_ids = query.take_ids();
-            let count = email_ids.len();
-
-            for email_id in email_ids {
-                session
-                    .client()
-                    .email_destroy(&email_id)
-                    .await
-                    .with_context(|| format!("Email/set destroy {email_id}"))?;
-            }
-
-            Ok(count)
+            destroy_matching_emails(&session, filter, "Email/query old Trash messages").await
         }
+    }
+
+    #[async_trait]
+    impl SpamPurgeOps for LiveBubbleJmapOps {
+        async fn purge_old_spam(
+            &self,
+            user_id: i64,
+            cutoff: chrono::DateTime<chrono::Utc>,
+        ) -> Result<usize> {
+            let token = self.latest_active_token(user_id).await?;
+            let session = hail_jmap::login_bearer(&self.jmap_url, token)
+                .await
+                .with_context(|| format!("JMAP login for user {user_id}"))?;
+
+            let spam_filter = if let Some(junk_mailbox_id) =
+                hail_jmap::mailbox_id_by_role(&session, Role::Junk)
+                    .await
+                    .context("Mailbox/get Junk role lookup")?
+            {
+                Filter::or([
+                    Filter::from(email_query::Filter::in_mailbox(junk_mailbox_id)),
+                    Filter::from(email_query::Filter::has_keyword("$Junk")),
+                ])
+            } else {
+                Filter::from(email_query::Filter::has_keyword("$Junk"))
+            };
+            let filter = Filter::and([
+                spam_filter,
+                Filter::from(email_query::Filter::before(cutoff.timestamp())),
+            ]);
+            destroy_matching_emails(&session, filter, "Email/query old spam messages").await
+        }
+    }
+
+    async fn destroy_matching_emails(
+        session: &hail_jmap::Session,
+        filter: Filter<email_query::Filter>,
+        context: &'static str,
+    ) -> Result<usize> {
+        let mut query = session
+            .client()
+            .email_query(
+                Some(filter),
+                Some([email_query::Comparator::received_at().ascending()]),
+            )
+            .await
+            .context(context)?;
+        let email_ids = query.take_ids();
+        let count = email_ids.len();
+
+        for email_id in email_ids {
+            session
+                .client()
+                .email_destroy(&email_id)
+                .await
+                .with_context(|| format!("Email/set destroy {email_id}"))?;
+        }
+
+        Ok(count)
     }
 
     pub struct LiveSendSubmitter {

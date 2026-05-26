@@ -31,7 +31,7 @@ use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
 use crate::scheduler::live::{LiveBubbleJmapOps, LiveSendSubmitter};
 use crate::scheduler::{
     DEFAULT_TRASH_RETENTION_DAYS, process_due_bubble_ups, process_due_scheduled_sends,
-    process_trash_purge,
+    process_spam_purge, process_trash_purge,
 };
 use crate::state::AppState;
 use crate::user::{UserSupervisorExit, run_user_supervisor};
@@ -103,6 +103,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     );
     let trash_retention_days = trash_retention_days();
     let mut next_trash_purge_at = chrono::Utc::now();
+    let mut next_spam_purge_at = chrono::Utc::now();
     let mut next_reconcile_at = chrono::Utc::now();
 
     // Reconcile immediately so the first tick doesn't burn a full
@@ -122,6 +123,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             &bubble_jmap,
             &send_submitter,
             &mut next_trash_purge_at,
+            &mut next_spam_purge_at,
             trash_retention_days,
             &cancel,
         )
@@ -163,6 +165,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
                     &bubble_jmap,
                     &send_submitter,
                     &mut next_trash_purge_at,
+                    &mut next_spam_purge_at,
                     trash_retention_days,
                     &cancel,
                 ).await {
@@ -234,6 +237,7 @@ async fn run_scheduler_tick(
     bubble_jmap: &LiveBubbleJmapOps,
     send_submitter: &LiveSendSubmitter,
     next_trash_purge_at: &mut chrono::DateTime<chrono::Utc>,
+    next_spam_purge_at: &mut chrono::DateTime<chrono::Utc>,
     trash_retention_days: u16,
     cancel: &CancellationToken,
 ) -> bool {
@@ -276,6 +280,19 @@ async fn run_scheduler_tick(
             Some(Err(e)) => warn!(error = %e, "scheduler: trash purge tick failed"),
             None => {
                 info!("scheduler: trash purge tick cancelled");
+                return false;
+            }
+        }
+    }
+
+    if now >= *next_spam_purge_at {
+        *next_spam_purge_at = now + chrono::Duration::seconds(TRASH_PURGE_EVERY_SECS);
+        match cancel_or_complete(cancel, process_spam_purge(&state.db, bubble_jmap, now)).await {
+            Some(Ok(purged)) if purged > 0 => info!(purged, "scheduler: spam purge processed"),
+            Some(Ok(_)) => {}
+            Some(Err(e)) => warn!(error = %e, "scheduler: spam purge tick failed"),
+            None => {
+                info!("scheduler: spam purge tick cancelled");
                 return false;
             }
         }
