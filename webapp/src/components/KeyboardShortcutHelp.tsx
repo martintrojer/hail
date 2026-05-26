@@ -12,6 +12,11 @@ const shortcutGroups: ShortcutGroup[] = [
     shortcuts: [
       { keys: ['j'], description: 'Next thread' },
       { keys: ['k'], description: 'Previous thread' },
+      { keys: ['g', 'g'], description: 'First thread' },
+      { keys: ['G'], description: 'Last thread' },
+      { keys: ['Ctrl', 'd'], description: 'Half page down', combo: true },
+      { keys: ['Ctrl', 'u'], description: 'Half page up', combo: true },
+      { keys: ['o'], description: 'Open thread' },
       { keys: ['g', 'i'], description: 'Go to Imbox' },
       { keys: ['g', 'f'], description: 'Go to Feed' },
       { keys: ['g', 'p'], description: 'Go to Paper Trail' },
@@ -28,13 +33,15 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: 'Thread actions',
     shortcuts: [
-      { keys: ['#'], description: 'Trash' },
+      { keys: ['d'], description: 'Trash' },
+      { keys: ['e'], description: 'Archive' },
       { keys: ['y'], description: 'Set aside' },
       { keys: ['l'], description: 'Reply later' },
       { keys: ['r'], description: 'Reply' },
       { keys: ['a'], description: 'Reply all' },
       { keys: ['f'], description: 'Forward' },
       { keys: ['n'], description: 'Add note' },
+      { keys: ['x'], description: 'Select / deselect' },
       { keys: ['Backspace'], description: 'Go back' },
       { keys: ['?'], description: 'Show shortcut help' },
       { keys: ['Esc'], description: 'Close overlay or go back' },
@@ -122,7 +129,7 @@ export function KeyboardShortcutHelp({
                 {group.shortcuts.map((shortcut) => (
                   <div
                     key={`${shortcut.keys.join('-')}-${shortcut.description}`}
-                    className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3"
+                    className="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-3"
                   >
                     <dt className="flex items-center gap-1">
                       {shortcut.keys.map((key, index) => (
