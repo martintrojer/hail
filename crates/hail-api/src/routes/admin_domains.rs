@@ -10,15 +10,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::validation::valid_domain;
 use crate::routes::management_http;
+use crate::routes::response::{bad_request, error_response};
+use crate::routes::validation::valid_domain;
 use crate::state::AppState;
 
 /// Dependency-injection seam for Stalwart domain administration.
@@ -315,39 +316,22 @@ fn normalize_domain(domain: &str) -> String {
 }
 
 fn invalid_domain() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"invalid_domain"}"#,
-    )
-        .into_response()
+    bad_request("invalid_domain")
 }
 
 fn forbidden_admin() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"admin_required"}"#,
-    )
-        .into_response()
+    error_response(StatusCode::FORBIDDEN, "admin_required")
 }
 
 fn management_error(err: ManagementError) -> Response {
     match err {
-        ManagementError::NotConfigured => (
+        ManagementError::NotConfigured => error_response(
             StatusCode::NOT_IMPLEMENTED,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"stalwart_management_unconfigured"}"#,
-        )
-            .into_response(),
+            "stalwart_management_unconfigured",
+        ),
         ManagementError::Upstream(message) => {
             tracing::warn!(error = %message, "stalwart domain management failed");
-            (
-                StatusCode::BAD_GATEWAY,
-                [(header::CONTENT_TYPE, "application/json")],
-                r#"{"error":"stalwart_management_failed"}"#,
-            )
-                .into_response()
+            error_response(StatusCode::BAD_GATEWAY, "stalwart_management_failed")
         }
     }
 }

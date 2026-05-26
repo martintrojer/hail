@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use axum::extract::multipart::{MultipartError, MultipartRejection};
 use axum::extract::{DefaultBodyLimit, Extension, Multipart, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use secrecy::SecretString;
@@ -202,10 +202,5 @@ fn multipart_error(err: MultipartError) -> Response {
 }
 
 fn payload_too_large() -> Response {
-    (
-        StatusCode::PAYLOAD_TOO_LARGE,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"payload_too_large"}"#,
-    )
-        .into_response()
+    crate::routes::response::error_response(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large")
 }

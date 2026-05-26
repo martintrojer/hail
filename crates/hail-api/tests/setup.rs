@@ -625,7 +625,7 @@ async fn post_setup_admin_rejects_invalid_email_or_short_password() {
     let bytes = bad_email.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "invalid_input");
-    assert_eq!(json["field"], "email");
+    assert_eq!(json["detail"], "email");
 
     let short_password = post_admin(
         app(state),
@@ -641,7 +641,7 @@ async fn post_setup_admin_rejects_invalid_email_or_short_password() {
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "invalid_input");
-    assert_eq!(json["field"], "password");
+    assert_eq!(json["detail"], "password");
 }
 
 #[tokio::test]
@@ -675,7 +675,7 @@ async fn post_setup_admin_rejects_invalid_domain() {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["error"], "invalid_input", "domain={domain:?}");
-        assert_eq!(json["field"], "domain", "domain={domain:?}");
+        assert_eq!(json["detail"], "domain", "domain={domain:?}");
     }
 }
 
@@ -695,7 +695,7 @@ async fn post_setup_admin_rejects_email_domain_mismatch() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "invalid_input");
-    assert_eq!(json["field"], "email");
+    assert_eq!(json["detail"], "email");
 }
 
 #[tokio::test]

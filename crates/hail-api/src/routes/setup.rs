@@ -23,7 +23,7 @@ use crate::middleware::session::{
 };
 use crate::routes::auth::UserView;
 use crate::routes::management_http;
-use crate::routes::response::internal;
+use crate::routes::response::{error_response, internal};
 use crate::routes::validation::{valid_domain, valid_email};
 use crate::state::AppState;
 
@@ -462,28 +462,15 @@ fn setup_bootstrap_authorized(state: &AppState, provided: Option<&SecretString>)
 }
 
 fn invalid_input(field: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"invalid_input","field":"{field}"}}"#),
-    )
-        .into_response()
+    crate::routes::response::ApiError::new("invalid_input")
+        .with_detail(field)
+        .into_response(StatusCode::BAD_REQUEST)
 }
 
 fn forbidden_setup_bootstrap_required() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"setup_bootstrap_required"}"#,
-    )
-        .into_response()
+    error_response(StatusCode::FORBIDDEN, "setup_bootstrap_required")
 }
 
 fn conflict_setup_disabled() -> Response {
-    (
-        StatusCode::CONFLICT,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"setup_disabled"}"#,
-    )
-        .into_response()
+    error_response(StatusCode::CONFLICT, "setup_disabled")
 }

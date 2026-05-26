@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::Utc;
@@ -16,7 +16,7 @@ use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
 use crate::routes::management_http;
-use crate::routes::response::{bad_request, internal, not_found};
+use crate::routes::response::{bad_request, error_response, internal, not_found};
 use crate::routes::validation::valid_email;
 use crate::state::AppState;
 
@@ -301,7 +301,7 @@ where
     }
 
     let Some(email) = local_user_email(&state, id).await else {
-        return not_found();
+        return not_found("not_found");
     };
 
     if let Err(err) = management.delete_user(&state, &email).await {
@@ -351,7 +351,7 @@ where
     }
 
     let Some(email) = local_user_email(&state, id).await else {
-        return not_found();
+        return not_found("not_found");
     };
 
     let managed = match management
@@ -577,39 +577,24 @@ fn valid_password(password: &SecretString) -> bool {
 }
 
 fn invalid_input(field: &'static str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"invalid_input","field":"{field}"}}"#),
-    )
-        .into_response()
+    crate::routes::response::ApiError::new("invalid_input")
+        .with_detail(field)
+        .into_response(StatusCode::BAD_REQUEST)
 }
 
 fn forbidden_admin() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"admin_required"}"#,
-    )
-        .into_response()
+    error_response(StatusCode::FORBIDDEN, "admin_required")
 }
 
 fn management_error(err: UserManagementError) -> Response {
     match err {
-        UserManagementError::NotConfigured => (
+        UserManagementError::NotConfigured => error_response(
             StatusCode::NOT_IMPLEMENTED,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"stalwart_management_unconfigured"}"#,
-        )
-            .into_response(),
+            "stalwart_management_unconfigured",
+        ),
         UserManagementError::Upstream(message) => {
             tracing::warn!(error = %message, "stalwart user management failed");
-            (
-                StatusCode::BAD_GATEWAY,
-                [(header::CONTENT_TYPE, "application/json")],
-                r#"{"error":"stalwart_management_failed"}"#,
-            )
-                .into_response()
+            error_response(StatusCode::BAD_GATEWAY, "stalwart_management_failed")
         }
     }
 }

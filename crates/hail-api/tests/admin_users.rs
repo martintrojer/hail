@@ -351,7 +351,7 @@ async fn invalid_email_or_short_password_return_400_without_management() {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "email={email}");
-        assert_eq!(json_body(resp).await["field"], "email", "email={email}");
+        assert_eq!(json_body(resp).await["detail"], "email", "email={email}");
     }
 
     let short_password = request(
@@ -365,6 +365,6 @@ async fn invalid_email_or_short_password_return_400_without_management() {
     )
     .await;
     assert_eq!(short_password.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(short_password).await["field"], "password");
+    assert_eq!(json_body(short_password).await["detail"], "password");
     assert!(management.calls().is_empty());
 }

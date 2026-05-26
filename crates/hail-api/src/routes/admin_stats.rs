@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use secrecy::SecretString;
@@ -18,7 +18,7 @@ use utoipa_axum::routes;
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::jmap_session;
 use crate::routes::management_http;
-use crate::routes::response::internal;
+use crate::routes::response::{error_response, internal};
 use crate::state::AppState;
 
 pub const TAG: &str = "admin";
@@ -249,9 +249,7 @@ fn management_path(base: &str, segments: &[&str]) -> String {
     let mut url = base.trim_end_matches('/').to_string();
     for segment in segments {
         url.push('/');
-        url.push_str(
-            &url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>(),
-        );
+        url.push_str(&url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>());
     }
     url
 }
@@ -269,12 +267,7 @@ fn size_bytes_from_value(value: &serde_json::Value) -> Option<u64> {
 }
 
 fn forbidden_admin() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"admin_required"}"#,
-    )
-        .into_response()
+    error_response(StatusCode::FORBIDDEN, "admin_required")
 }
 
 #[cfg(test)]
