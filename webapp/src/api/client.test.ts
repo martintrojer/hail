@@ -555,6 +555,17 @@ describe('HailApiClient non-composer mutating requests', () => {
     expectMutatingJsonRequest(fetchSpy.mock.calls[2]?.[1], 'POST', { read: true });
   });
 
+  it('requires markThread to return the documented 204 status', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse(200, { undo: null }),
+    );
+
+    await expectHailApiError(client.markThread('thread-1', false), {
+      status: 200,
+      body: { undo: null },
+    });
+  });
+
   it('sends CSRF header and JSON body for contact note updates', async () => {
     const body: PutContactNoteRequest = { markdown: 'met at !!con' };
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
