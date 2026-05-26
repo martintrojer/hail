@@ -3,8 +3,8 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
-const MANAGEMENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const MANAGEMENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MANAGEMENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const MANAGEMENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 static MANAGEMENT_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
