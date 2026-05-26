@@ -537,6 +537,30 @@ pub async fn find_local_mapping_by_rfc822_message_id(
     Ok(row.map(mapping_from_row))
 }
 
+/// Fetch an already-localized mapping by account-scoped RFC822 content digest.
+///
+/// This is the defensive fallback when a provider message has no usable
+/// `Message-ID` or when a retry must reconcile a partial mapping. Like the
+/// Message-ID lookup, it only returns rows that already have a stable local JMAP
+/// identity.
+pub async fn find_local_mapping_by_content_sha256(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    content_sha256: &[u8],
+) -> Result<Option<ProviderMessageMapping>, sqlx::Error> {
+    let row = sqlx::query(mapping_select_sql!(
+        "WHERE provider_account_id = ?1 AND content_sha256 = ?2 \
+           AND jmap_email_id IS NOT NULL AND import_status IN ('imported', 'duplicate') \
+         ORDER BY CASE import_status WHEN 'imported' THEN 0 ELSE 1 END, id ASC \
+         LIMIT 1"
+    ))
+    .bind(provider_account_id)
+    .bind(content_sha256)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(mapping_from_row))
+}
+
 pub async fn list_provider_thread_mappings(
     db: &SqlitePool,
     provider_account_id: i64,

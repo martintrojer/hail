@@ -8,15 +8,17 @@
 use async_trait::async_trait;
 use hail_db::provider_message_mappings::{
     DuplicateProviderMessageMapping, FailedProviderMessageMapping, ImportedProviderMessageMapping,
-    ProviderImportStatus, ProviderMessageSeen, find_local_mapping_by_rfc822_message_id,
-    get_provider_message_mapping, mark_provider_message_duplicate, mark_provider_message_failed,
-    mark_provider_message_imported, record_provider_message_seen,
+    ProviderImportStatus, ProviderMessageSeen, find_local_mapping_by_content_sha256,
+    find_local_mapping_by_rfc822_message_id, get_provider_message_mapping,
+    mark_provider_message_duplicate, mark_provider_message_failed, mark_provider_message_imported,
+    record_provider_message_seen,
 };
 use hail_db::provider_sync_audit::{
     NewProviderSyncAuditLog, ProviderSyncEventType, ProviderSyncOperationKind,
     ProviderSyncResultStatus, insert_provider_sync_audit_log,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -32,6 +34,8 @@ const MAX_PAGE_SIZE: u16 = 500;
 const CURSOR_KIND: &str = "gmail_historical_v1";
 const SKIP_REASON_ALREADY_MAPPED: &str = "provider_message_already_mapped";
 const SKIP_REASON_RFC822_DUPLICATE: &str = "rfc822_message_id_duplicate";
+const SKIP_REASON_CONTENT_DUPLICATE: &str = "content_sha256_duplicate";
+const SKIP_REASON_PARTIAL_MAPPING: &str = "partial_mapping_without_local_jmap_id";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GmailHistoricalImportOptions {
@@ -289,23 +293,46 @@ where
 {
     if let Some(existing) =
         get_provider_message_mapping(db, account.provider_account_id, &listed.id).await?
-        && matches!(
-            existing.import_status,
-            ProviderImportStatus::Imported
-                | ProviderImportStatus::Duplicate
-                | ProviderImportStatus::Skipped
-        )
     {
-        summary.skipped += 1;
-        audit_message_skipped(
-            db,
-            account,
-            &listed.id,
-            SKIP_REASON_ALREADY_MAPPED,
-            Some(existing.import_status.as_str()),
-        )
-        .await?;
-        return Ok(());
+        match existing.import_status {
+            ProviderImportStatus::Imported | ProviderImportStatus::Duplicate
+                if existing.jmap_email_id.is_some() =>
+            {
+                summary.skipped += 1;
+                audit_message_skipped(
+                    db,
+                    account,
+                    &listed.id,
+                    SKIP_REASON_ALREADY_MAPPED,
+                    Some(existing.import_status.as_str()),
+                )
+                .await?;
+                return Ok(());
+            }
+            ProviderImportStatus::Skipped => {
+                summary.skipped += 1;
+                audit_message_skipped(
+                    db,
+                    account,
+                    &listed.id,
+                    SKIP_REASON_ALREADY_MAPPED,
+                    Some(existing.import_status.as_str()),
+                )
+                .await?;
+                return Ok(());
+            }
+            ProviderImportStatus::Imported | ProviderImportStatus::Duplicate => {
+                audit_message_skipped(
+                    db,
+                    account,
+                    &listed.id,
+                    SKIP_REASON_PARTIAL_MAPPING,
+                    Some("terminal mapping has no local JMAP id; attempting provider-header/RFC822 reconciliation"),
+                )
+                .await?;
+            }
+            ProviderImportStatus::Pending | ProviderImportStatus::Failed => {}
+        }
     }
 
     let raw = match gmail.get_raw_message(&listed.id).await {
@@ -319,6 +346,7 @@ where
                 &listed,
                 None,
                 None,
+                None,
                 "gmail_get_raw",
                 &message,
             )
@@ -330,6 +358,7 @@ where
     summary.fetched += 1;
 
     let rfc822_message_id = crate::rfc822_import::first_message_id(&raw.rfc822);
+    let content_sha256 = Sha256::digest(&raw.rfc822).to_vec();
     let provider_thread_id = raw.thread_id.as_deref().or(listed.thread_id.as_deref());
     let provider_history_id = raw.history_id.as_deref();
 
@@ -341,7 +370,7 @@ where
             provider_thread_id,
             provider_history_id,
             rfc822_message_id: rfc822_message_id.as_deref(),
-            content_sha256: None,
+            content_sha256: Some(&content_sha256),
         },
     )
     .await?;
@@ -360,7 +389,7 @@ where
                 provider_thread_id,
                 provider_history_id,
                 rfc822_message_id: Some(message_id),
-                content_sha256: None,
+                content_sha256: Some(&content_sha256),
                 duplicate_jmap_email_id: existing.jmap_email_id.as_deref(),
                 duplicate_jmap_thread_id: existing.jmap_thread_id.as_deref(),
                 duplicate_jmap_mailbox_ids_json: existing.jmap_mailbox_ids_json.as_deref(),
@@ -374,6 +403,38 @@ where
             &raw.id,
             SKIP_REASON_RFC822_DUPLICATE,
             Some(message_id),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if let Some(existing) =
+        find_local_mapping_by_content_sha256(db, account.provider_account_id, &content_sha256)
+            .await?
+        && existing.provider_message_id != raw.id
+    {
+        mark_provider_message_duplicate(
+            db,
+            DuplicateProviderMessageMapping {
+                provider_account_id: account.provider_account_id,
+                provider_message_id: &raw.id,
+                provider_thread_id,
+                provider_history_id,
+                rfc822_message_id: rfc822_message_id.as_deref(),
+                content_sha256: Some(&content_sha256),
+                duplicate_jmap_email_id: existing.jmap_email_id.as_deref(),
+                duplicate_jmap_thread_id: existing.jmap_thread_id.as_deref(),
+                duplicate_jmap_mailbox_ids_json: existing.jmap_mailbox_ids_json.as_deref(),
+            },
+        )
+        .await?;
+        summary.duplicates += 1;
+        audit_message_skipped(
+            db,
+            account,
+            &raw.id,
+            SKIP_REASON_CONTENT_DUPLICATE,
+            Some("raw RFC822 content fingerprint matched an existing local mapping"),
         )
         .await?;
         return Ok(());
@@ -398,6 +459,7 @@ where
                 &listed,
                 provider_history_id,
                 rfc822_message_id.as_deref(),
+                Some(&content_sha256),
                 "stalwart_import",
                 &message,
             )
@@ -423,7 +485,7 @@ where
                 provider_thread_id,
                 provider_history_id,
                 rfc822_message_id: stored_message_id.as_deref(),
-                content_sha256: None,
+                content_sha256: Some(&content_sha256),
                 duplicate_jmap_email_id: Some(&imported.jmap_email_id),
                 duplicate_jmap_thread_id: imported.jmap_thread_id.as_deref(),
                 duplicate_jmap_mailbox_ids_json: Some(&mailbox_ids_json),
@@ -441,7 +503,7 @@ where
                 provider_thread_id,
                 provider_history_id,
                 rfc822_message_id: stored_message_id.as_deref(),
-                content_sha256: None,
+                content_sha256: Some(&content_sha256),
                 jmap_email_id: &imported.jmap_email_id,
                 jmap_thread_id: imported.jmap_thread_id.as_deref(),
                 jmap_mailbox_ids_json: Some(&mailbox_ids_json),
@@ -475,6 +537,7 @@ async fn mark_message_failed(
     listed: &ListMessage,
     provider_history_id: Option<&str>,
     rfc822_message_id: Option<&str>,
+    content_sha256: Option<&[u8]>,
     class: &str,
     message: &str,
 ) -> Result<(), sqlx::Error> {
@@ -486,7 +549,7 @@ async fn mark_message_failed(
             provider_thread_id: listed.thread_id.as_deref(),
             provider_history_id,
             rfc822_message_id,
-            content_sha256: None,
+            content_sha256,
             error_class: class,
             error_message: Some(message),
         },
