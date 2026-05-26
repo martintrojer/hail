@@ -606,7 +606,9 @@ Flow:
 
 ### 11.2 Recipe B — Inbound mail via Cloudflare Email Routing + Tunnel
 
-Use case: residential ISP, CGNAT, or any environment where port 25 is unavailable. The killer recipe.
+Use case: residential ISP, CGNAT, or any environment where port 25 is unavailable
+and the operator accepts a forwarding/import bridge instead of a normal SMTP
+session into Stalwart.
 
 Flow:
 - MX record points to `route1.mx.cloudflare.net` etc. (Cloudflare Email Routing).
@@ -615,6 +617,25 @@ Flow:
 - Outbound: Stalwart sends via a smarthost (e.g. Cloudflare's relay, or a paid relay like Mailgun/Postmark on the free tier) since direct port 25 outbound is also blocked.
 
 The doc covers DNS records (SPF, DKIM, DMARC) for both recipes, including the "Cloudflare signs DKIM on your behalf" gotcha when using Email Routing.
+
+### 11.3 Recipe C — VPS MX gateway plus WireGuard home tunnel
+
+Use case: home-hosted mailbox storage with residential port blocks, CGNAT, or a
+home IP that should not appear in public DNS. This is now the preferred advanced
+home-hosting recipe when the operator wants Stalwart to receive a real SMTP
+transaction instead of importing forwarded mail.
+
+Flow:
+- MX record points to `mx.example.com`, a DNS-only A record on a lightweight VPS.
+- The VPS accepts public SMTP on port 25 and forwards to home Stalwart over
+  WireGuard using HAProxy PROXY protocol or an MTA relay. Blind NAT is documented
+  as possible but discouraged because it can hide the real sender IP from
+  Stalwart.
+- `cloudflared` exposes only `hail-api` for the web UI at `mail.example.com`.
+- Outbound still uses a smarthost; the VPS gateway is not assumed to be a
+  reputable direct sender.
+
+The Cloudflare docs and smoke runbook cover this recipe alongside Email Routing.
 
 ## 12. Out of Scope / Open Questions
 

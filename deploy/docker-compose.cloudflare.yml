@@ -13,9 +13,10 @@
 # The tunnel is the ONLY public web surface; outside hail, your reverse-proxy
 # is on Cloudflare's edge.
 #
-# See ../docs/cloudflare-tunnel.md for both supported recipes:
+# See ../docs/cloudflare-tunnel.md for supported recipes:
 #   Recipe A: web-only tunnel with direct SMTP on port 25.
 #   Recipe B: Cloudflare Email Routing plus a custom relay path.
+#   Recipe C: DNS-only MX on a VPS gateway, WireGuard to home Stalwart.
 
 services:
   hail-api:

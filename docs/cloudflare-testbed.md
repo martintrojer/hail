@@ -1,9 +1,10 @@
 # Cloudflare mail testbed runbook
 
 This runbook is an operator-assisted smoke procedure for hail with Cloudflare
-Tunnel, Cloudflare Email Routing, and the checked-in synthetic mail fixtures. It
-complements [cloudflare-tunnel.md](./cloudflare-tunnel.md), which documents the
-supported deployment recipes.
+Tunnel, optional Cloudflare Email Routing, optional VPS/WireGuard MX gateway,
+and the checked-in synthetic mail fixtures. It complements
+[cloudflare-tunnel.md](./cloudflare-tunnel.md), which documents the supported
+deployment recipes.
 
 > **Uncertainty boundary:** Cloudflare dashboard labels, Email Routing Worker
 > capabilities, MX priorities, and outbound mail products change over time. Use
@@ -16,11 +17,15 @@ supported deployment recipes.
 Prove, with recorded evidence, that:
 
 1. `https://mail.example.com` reaches `hail-api` through Cloudflare Tunnel.
-2. Cloudflare Email Routing accepts inbound mail for `example.com`.
-3. If an operator relay/import bridge exists, routed mail lands in Stalwart and
-   appears in hail's Screener / Imbox / Feed / Paper Trail views.
-4. Outbound delivery expectations are explicit: inbound Email Routing does not
-   by itself make Stalwart a reputable outbound sender.
+2. One inbound mail path accepts mail for `example.com`:
+   - Cloudflare Email Routing accepts inbound mail; or
+   - a DNS-only MX points to a VPS gateway that forwards over WireGuard to home
+     Stalwart.
+3. If an operator relay/import bridge or VPS gateway exists, routed mail lands
+   in Stalwart and appears in hail's Screener / Imbox / Feed / Paper Trail
+   views.
+4. Outbound delivery expectations are explicit: inbound routing/gatewaying does
+   not by itself make Stalwart a reputable outbound sender.
 
 ## Placeholders
 
@@ -28,6 +33,7 @@ Prove, with recorded evidence, that:
 | --- | --- |
 | `example.com` | Cloudflare zone under test |
 | `mail.example.com` | Public hail web URL served through Tunnel |
+| `mx.example.com` | Optional DNS-only MX host pointing at a VPS gateway |
 | `inbound-relay.example.com` | Optional authenticated relay endpoint for routed mail |
 | `smoke@example.com` | Mailbox/routing address under test |
 | `operator@example.net` | External mailbox used for verification/capture |
@@ -51,7 +57,7 @@ Default smoke corpus:
 
 ## Smoke modes
 
-### Mode 1: full Cloudflare-to-hail path
+### Mode 1: full Cloudflare Email Routing-to-hail path
 
 Use only when a working authenticated bridge carries Cloudflare Email Routing
 messages into Stalwart/hail. Possible shapes:
@@ -73,6 +79,18 @@ Cloudflare Email Routing destination, then imports the same fixture corpus via
 JMAP to validate hail UI behavior. It is **not** an end-to-end proof of
 Cloudflare delivery into Stalwart; label notes as "ingress + controlled import".
 
+### Mode 3: VPS/WireGuard MX gateway to home Stalwart
+
+Use when `example.com` has DNS-only MX records pointing at a public VPS gateway,
+and the gateway forwards SMTP to Stalwart over WireGuard. This proves a more
+traditional SMTP path than Email Routing while still hiding the home IP and
+working around residential port blocks.
+
+Do **not** claim Mode 3 passed unless the message was accepted on the public VPS
+MX and arrived in home Stalwart through the tunnel. If the gateway uses
+NAT/MASQUERADE, record that Stalwart may see the VPS/tunnel IP rather than the
+remote sender. Prefer HAProxy PROXY protocol or a real MTA relay if preserving
+sender IP matters for the run.
 ## One-time setup
 
 ### 1. Prepare hail config and Compose
@@ -181,7 +199,11 @@ curl -i https://mail.example.com/readyz
 Stalwart/JMAP are reachable. If `/healthz` works but `/readyz` fails, debug
 hail/Stalwart before mail tests.
 
-### 4. DNS/MX for Email Routing
+### 4. DNS/MX for inbound mail
+
+Choose exactly one public inbound path for a smoke run.
+
+#### Option A: Cloudflare Email Routing
 
 In Cloudflare **Email → Email Routing**, enable routing for `example.com` and
 let Cloudflare create or recommend DNS. The common shape at the time of writing
@@ -200,18 +222,37 @@ Prefer dashboard-provided records if they differ. Do not put a direct SMTP A/MX
 record at the same name as a tunnel CNAME unless intentionally using Recipe A in
 `docs/cloudflare-tunnel.md`.
 
+#### Option B: VPS/WireGuard MX gateway
+
+Use this for `docs/cloudflare-tunnel.md` Recipe C. Cloudflare is DNS-only for
+mail; the public SMTP connection goes to the VPS, then across WireGuard to the
+home Stalwart host.
+
+| Type | Name | Content | Priority | Proxy |
+| --- | --- | --- | --- | --- |
+| `A` | `mx.example.com` | VPS public IPv4 | n/a | DNS only |
+| `MX` | `example.com` | `mx.example.com` | `10` | DNS only |
+| `TXT` | `example.com` | smarthost/provider SPF | n/a | DNS only |
+| `TXT` | `_dmarc.example.com` | `v=DMARC1; p=none; rua=mailto:operator@example.net` | n/a | DNS only |
+| `CNAME` | `mail.example.com` | Cloudflare Tunnel target | n/a | Proxied |
+
+Keep `mx.example.com` and `mail.example.com` separate. Do not use URL syntax in
+DNS values. Verify the VPS provider allows inbound TCP/25 before running the
+smoke.
+
 Verify from outside your LAN if possible:
 
 ```bash
 dig +short MX example.com
+dig +short A mx.example.com
 dig +short TXT example.com
 dig +short TXT _dmarc.example.com
 dig +short CNAME mail.example.com
 ```
 
-### 5. Email Routing destinations and rules
+### 5. Email Routing destinations, rules, or VPS gateway
 
-Minimum ingress-only setup:
+For Cloudflare Email Routing, minimum ingress-only setup:
 
 1. Add and verify `operator@example.net` as a destination address.
 2. Create a rule for `smoke@example.com` or `*@example.com` to that destination.
@@ -230,6 +271,18 @@ Full-path setup adds a secured bridge:
 
 Do **not** expose unauthenticated SMTP or HTTP import endpoints through Tunnel.
 
+For a VPS/WireGuard MX gateway:
+
+1. Start WireGuard on the VPS and home host; record `wg show` handshake evidence.
+2. Start the VPS forwarding layer: HAProxy with PROXY protocol, Postfix/OpenSMTPD
+   relay, or a consciously accepted NAT gateway.
+3. Ensure the home Stalwart listener is reachable from the VPS over WireGuard.
+4. Record whether original sender IP is preserved. HAProxy PROXY protocol or a
+   real MTA relay is preferred; NAT/MASQUERADE may hide the sender behind the
+   VPS tunnel address.
+5. Keep Stalwart/hail web access through Cloudflare Tunnel to `hail-api`; do not
+   publish Stalwart `:8080` directly.
+
 ### 6. Smarthost note for outbound mail
 
 Cloudflare Email Routing is inbound for this runbook. For reply/send smoke tests,
@@ -239,10 +292,10 @@ host/port, SPF/DKIM/DMARC changes, and DKIM selector without committing secrets.
 If no smarthost is configured, write "outbound not tested" and skip outbound
 assertions.
 
-## Sending synthetic fixtures through Cloudflare
+## Sending synthetic fixtures through the inbound path
 
-The fixtures use reserved `.test` / `.example` domains. For Email Routing, send
-with a real SMTP envelope recipient at your zone. Create temporary rewritten
+The fixtures use reserved `.test` / `.example` domains. For public smoke tests,
+send with a real SMTP envelope recipient at your zone. Create temporary rewritten
 copies for clearer UI checks:
 
 ```bash
@@ -256,9 +309,13 @@ done
 
 Keep originals unchanged in git.
 
-### Option A: direct SMTP to Cloudflare MX with swaks
+### Option A: direct SMTP to the public MX with swaks
 
-Use when `swaks` is available and Cloudflare MX accepts direct test SMTP:
+Use when `swaks` is available and the selected MX accepts direct test SMTP. For
+Cloudflare Email Routing, the server is usually `route1.mx.cloudflare.net`. For
+the VPS gateway recipe, use `mx.example.com`.
+
+Cloudflare Email Routing example:
 
 ```bash
 swaks --server route1.mx.cloudflare.net \
@@ -277,8 +334,30 @@ swaks --server route1.mx.cloudflare.net \
   --data @/tmp/hail-cf-fixtures/receipt-papertrail.eml
 ```
 
-Record the SMTP transcript. A `250` response proves only that Cloudflare accepted
-the message; hail visibility still depends on the routing rule and bridge.
+VPS gateway example:
+
+```bash
+swaks --server mx.example.com \
+  --from sender-smoke@example.net \
+  --to smoke@example.com \
+  --data @/tmp/hail-cf-fixtures/personal-simple.eml
+
+swaks --server mx.example.com \
+  --from newsletter@example.net \
+  --to smoke@example.com \
+  --data @/tmp/hail-cf-fixtures/newsletter-tracking-pixel.eml
+
+swaks --server mx.example.com \
+  --from receipts@example.net \
+  --to smoke@example.com \
+  --data @/tmp/hail-cf-fixtures/receipt-papertrail.eml
+```
+
+Record the SMTP transcript. For Cloudflare Email Routing, a `250` response proves
+only that Cloudflare accepted the message; hail visibility still depends on the
+routing rule and bridge. For the VPS gateway, a `250` from the VPS proves only
+edge acceptance; still verify WireGuard forwarding, Stalwart delivery, worker
+routing, and hail UI visibility.
 
 ### Option B: external mailbox fallback
 
@@ -368,7 +447,7 @@ private addresses, or other secrets.
 RUN
 [ ] Date/time UTC:
 [ ] Operator:
-[ ] Mode: full Cloudflare-to-hail | ingress + controlled import
+[ ] Mode: Email Routing full path | ingress + controlled import | VPS/WireGuard gateway
 [ ] Domain:
 [ ] Public URL:
 [ ] Smoke mailbox:
@@ -381,13 +460,17 @@ TUNNEL / COMPOSE
 [ ] curl https://mail.example.com/readyz result:
 [ ] Relevant logs captured with secrets redacted:
 
-DNS / EMAIL ROUTING
-[ ] Email Routing enabled
-[ ] MX records match dashboard:
+DNS / INBOUND ROUTING
+[ ] Inbound mode: Cloudflare Email Routing | VPS/WireGuard MX gateway
+[ ] MX records match selected mode:
 [ ] SPF/DMARC records recorded:
-[ ] Destination operator@example.net verified
-[ ] Rule for smoke@example.com or wildcard active
-[ ] Ordinary external email reached destination
+[ ] If Email Routing: destination operator@example.net verified
+[ ] If Email Routing: rule for smoke@example.com or wildcard active
+[ ] If Email Routing: ordinary external email reached destination
+[ ] If VPS gateway: inbound TCP/25 to VPS confirmed
+[ ] If VPS gateway: WireGuard handshake confirmed
+[ ] If VPS gateway: forwarding mode recorded: HAProxy PROXY | MTA relay | NAT
+[ ] If VPS gateway: sender IP preservation result recorded
 
 SMARTHOST / OUTBOUND
 [ ] Smarthost configured? yes | no
@@ -396,9 +479,9 @@ SMARTHOST / OUTBOUND
 
 FIXTURE SEND / IMPORT
 [ ] Temporary fixture copies rewritten to smoke@example.com
-[ ] personal-simple sent via Cloudflare path; transcript/log:
-[ ] newsletter-tracking-pixel sent via Cloudflare path; transcript/log:
-[ ] receipt-papertrail sent via Cloudflare path; transcript/log:
+[ ] personal-simple sent via selected inbound path; transcript/log:
+[ ] newsletter-tracking-pixel sent via selected inbound path; transcript/log:
+[ ] receipt-papertrail sent via selected inbound path; transcript/log:
 [ ] If Mode 2, controlled JMAP import command succeeded:
 
 HAIL RESULTS
@@ -418,10 +501,14 @@ UNCERTAINTIES / FOLLOWUPS
 
 ## Troubleshooting notes
 
-- Tunnel works but mail does not arrive: inspect Cloudflare Email Routing events,
-  destination verification, Worker/relay logs, and Stalwart logs in that order.
-- Cloudflare accepted SMTP but hail is empty: a `250` from Cloudflare only proves
-  edge acceptance; it does not prove your relay/import bridge worked.
+- Tunnel works but mail does not arrive: inspect the selected inbound path. For
+  Email Routing, check Cloudflare routing events, destination verification,
+  Worker/relay logs, and Stalwart logs in that order. For a VPS gateway, check
+  VPS listener logs, WireGuard handshakes, forwarding/proxy logs, Stalwart logs,
+  then hail-worker logs.
+- Cloudflare or the VPS accepted SMTP but hail is empty: a `250` from the edge
+  only proves edge acceptance; it does not prove your relay/import bridge or
+  WireGuard forwarding worked.
 - `/readyz` fails: inspect `hail-api` logs first, then Stalwart JMAP health.
 - Fixture appears only in Screener: approve/classify the sender; unknown-sender
   Screener behavior is expected on a new mailbox.
