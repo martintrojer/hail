@@ -2,11 +2,13 @@
 #[allow(dead_code)]
 mod gmail_client;
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use serde_json::json;
@@ -14,9 +16,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig, ListHistoryParams,
-    ListMessagesParams, StaticGmailTokenSource, classify_gmail_error, parse_gmail_error,
-    provider_worker_http_client, retry_after_duration,
+    GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig, GmailTokenSource,
+    ListHistoryParams, ListMessagesParams, StaticGmailTokenSource, classify_gmail_error,
+    parse_gmail_error, provider_worker_http_client, retry_after_duration,
 };
 use reqwest::header::{AUTHORIZATION, HeaderValue, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
@@ -40,11 +42,34 @@ struct FakeResponse {
 #[derive(Debug, Default)]
 struct FakeState {
     requests: tokio::sync::Mutex<Vec<RequestRecord>>,
-    profile_hits: AtomicUsize,
+    profile_responses: tokio::sync::Mutex<VecDeque<FakeResponse>>,
+}
+
+#[derive(Clone, Debug)]
+struct CountingTokenSource {
+    token: SecretString,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl GmailTokenSource for CountingTokenSource {
+    async fn bearer_token(&self) -> Result<SecretString, GmailClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.token.clone())
+    }
 }
 
 async fn fake_server() -> (String, Arc<FakeState>) {
-    let state = Arc::new(FakeState::default());
+    fake_server_with_profile_responses(vec![rate_limited_profile(0), ok_profile()]).await
+}
+
+async fn fake_server_with_profile_responses(
+    profile_responses: impl IntoIterator<Item = FakeResponse>,
+) -> (String, Arc<FakeState>) {
+    let state = Arc::new(FakeState {
+        profile_responses: tokio::sync::Mutex::new(profile_responses.into_iter().collect()),
+        ..FakeState::default()
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server_state = state.clone();
@@ -71,11 +96,71 @@ fn client(base_url: &str) -> GmailClient<StaticGmailTokenSource> {
         base_url,
     )
     .expect("client")
-    .with_retry_config(GmailRetryConfig {
-        max_attempts: 3,
+    .with_retry_config(zero_delay_retries(3))
+}
+
+fn counting_client(
+    base_url: &str,
+    retry: GmailRetryConfig,
+) -> (GmailClient<CountingTokenSource>, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let token_source = CountingTokenSource {
+        token: SecretString::from("counted-token"),
+        calls: calls.clone(),
+    };
+    let client = GmailClient::with_base_url(
+        provider_worker_http_client().expect("provider worker http client"),
+        token_source,
+        base_url,
+    )
+    .expect("client")
+    .with_retry_config(retry);
+    (client, calls)
+}
+
+fn zero_delay_retries(max_attempts: u8) -> GmailRetryConfig {
+    GmailRetryConfig {
+        max_attempts,
         base_delay: Duration::ZERO,
         max_delay: Duration::ZERO,
-    })
+    }
+}
+
+fn ok_profile() -> FakeResponse {
+    FakeResponse {
+        status: StatusCode::OK,
+        retry_after: None,
+        body: json!({
+            "emailAddress": "user@gmail.example",
+            "messagesTotal": 10,
+            "threadsTotal": 9,
+            "historyId": "12345"
+        }),
+    }
+}
+
+fn rate_limited_profile(retry_after_seconds: u64) -> FakeResponse {
+    FakeResponse {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        retry_after: Some(retry_after_seconds),
+        body: json!({"error":{"message":"slow down","errors":[{"reason":"rateLimitExceeded"}]}}),
+    }
+}
+
+fn error_profile(
+    status: StatusCode,
+    reason: Option<&str>,
+    message: &str,
+    retry_after: Option<u64>,
+) -> FakeResponse {
+    let errors = reason
+        .map(|reason| json!([{"reason": reason, "message": message}]))
+        .unwrap_or_else(|| json!([]));
+    FakeResponse {
+        status,
+        retry_after,
+        body: json!({"error":{"message": message,"errors": errors}}),
+    }
 }
 
 async fn handle_connection(mut stream: TcpStream, state: Arc<FakeState>) {
@@ -155,24 +240,12 @@ async fn route_request(
 }
 
 async fn profile(state: &FakeState) -> FakeResponse {
-    let hit = state.profile_hits.fetch_add(1, Ordering::SeqCst);
-    if hit == 0 {
-        return FakeResponse {
-            status: StatusCode::TOO_MANY_REQUESTS,
-            retry_after: Some(0),
-            body: json!({"error":{"message":"slow down","errors":[{"reason":"rateLimitExceeded"}]}}),
-        };
-    }
-    FakeResponse {
-        status: StatusCode::OK,
-        retry_after: None,
-        body: json!({
-            "emailAddress": "user@gmail.example",
-            "messagesTotal": 10,
-            "threadsTotal": 9,
-            "historyId": "12345"
-        }),
-    }
+    state
+        .profile_responses
+        .lock()
+        .await
+        .pop_front()
+        .unwrap_or_else(ok_profile)
 }
 
 fn list_messages(query: &std::collections::HashMap<String, String>) -> FakeResponse {
@@ -272,6 +345,146 @@ async fn profile_retries_rate_limit_and_sends_bearer_token() {
             .iter()
             .all(|request| request.authorization.as_deref() == Some("Bearer test-token"))
     );
+}
+
+#[tokio::test]
+async fn profile_retries_5xx_transient_and_fetches_token_per_attempt() {
+    let (base_url, state) = fake_server_with_profile_responses(vec![
+        error_profile(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+            "backend exploded",
+            None,
+        ),
+        error_profile(StatusCode::BAD_GATEWAY, None, "bad gateway", None),
+        ok_profile(),
+    ])
+    .await;
+    let (client, token_calls) = counting_client(&base_url, zero_delay_retries(3));
+
+    let profile = client
+        .profile()
+        .await
+        .expect("profile after transient errors");
+
+    assert_eq!(profile.email_address, "user@gmail.example");
+    assert_eq!(token_calls.load(Ordering::SeqCst), 3);
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.authorization.as_deref() == Some("Bearer counted-token"))
+    );
+}
+
+#[tokio::test]
+async fn profile_returns_last_retryable_error_after_max_attempts() {
+    let (base_url, state) = fake_server_with_profile_responses(vec![
+        error_profile(StatusCode::SERVICE_UNAVAILABLE, None, "try later 1", None),
+        error_profile(StatusCode::SERVICE_UNAVAILABLE, None, "try later 2", None),
+        error_profile(StatusCode::SERVICE_UNAVAILABLE, None, "try later 3", None),
+    ])
+    .await;
+    let (client, token_calls) = counting_client(&base_url, zero_delay_retries(3));
+
+    let error = client.profile().await.expect_err("max attempts exhausted");
+
+    assert!(matches!(
+        error,
+        GmailClientError::Api {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            kind: GmailApiErrorKind::Transient,
+            ref message,
+            ..
+        } if message == "try later 3"
+    ));
+    assert_eq!(token_calls.load(Ordering::SeqCst), 3);
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 3);
+}
+
+#[tokio::test]
+async fn profile_does_not_retry_unauthorized_or_permission_denied() {
+    for (status, reason, expected_kind) in [
+        (
+            StatusCode::UNAUTHORIZED,
+            None,
+            GmailApiErrorKind::Unauthorized,
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            Some("insufficientPermissions"),
+            GmailApiErrorKind::PermissionDenied,
+        ),
+    ] {
+        let (base_url, state) = fake_server_with_profile_responses(vec![error_profile(
+            status,
+            reason,
+            "credentials rejected",
+            None,
+        )])
+        .await;
+        let (client, token_calls) = counting_client(&base_url, zero_delay_retries(3));
+
+        let error = client
+            .profile()
+            .await
+            .expect_err("non-retryable auth error");
+
+        assert!(matches!(
+            error,
+            GmailClientError::Api {
+                status: actual_status,
+                kind: actual_kind,
+                ref message,
+                ..
+            } if actual_status == status
+                && actual_kind == expected_kind
+                && message == "credentials rejected"
+        ));
+        assert_eq!(token_calls.load(Ordering::SeqCst), 1);
+        let requests = state.requests.lock().await;
+        assert_eq!(requests.len(), 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn profile_honors_retry_after_delay_before_next_attempt() {
+    let (base_url, state) =
+        fake_server_with_profile_responses(vec![rate_limited_profile(2), ok_profile()]).await;
+    let (client, token_calls) = counting_client(
+        &base_url,
+        GmailRetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::from_secs(10),
+        },
+    );
+
+    let profile_task = tokio::spawn(async move { client.profile().await });
+    while state.requests.lock().await.len() < 1 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(token_calls.load(Ordering::SeqCst), 1);
+    assert!(!profile_task.is_finished());
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(state.requests.lock().await.len(), 1);
+    assert_eq!(token_calls.load(Ordering::SeqCst), 1);
+    assert!(!profile_task.is_finished());
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let profile = profile_task
+        .await
+        .expect("task joins")
+        .expect("profile after retry-after");
+
+    assert_eq!(profile.email_address, "user@gmail.example");
+    assert_eq!(token_calls.load(Ordering::SeqCst), 2);
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 2);
 }
 
 #[tokio::test]
