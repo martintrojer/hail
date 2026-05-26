@@ -53,6 +53,7 @@ pub struct ProviderSyncAccount {
     pub provider_email: String,
     pub sync_status: String,
     pub last_profile_history_id: Option<String>,
+    pub initial_sync_completed_at: Option<String>,
     pub sync_backoff_secs: Option<i64>,
 }
 
@@ -244,7 +245,7 @@ pub async fn process_provider_sync_tick(
 }
 
 fn sync_mode(account: &ProviderSyncAccount) -> ProviderSyncMode {
-    if account.sync_status == "initial_sync" || account.last_profile_history_id.is_none() {
+    if account.initial_sync_completed_at.is_none() {
         ProviderSyncMode::Initial
     } else {
         ProviderSyncMode::Incremental
@@ -283,11 +284,12 @@ async fn select_due_gmail_provider_accounts(
             String,
             String,
             Option<String>,
+            Option<String>,
             Option<i64>,
         ),
     >(
         "SELECT id, user_id, jmap_account_id, provider_account_id, provider_email, sync_status, \
-                last_profile_history_id, sync_backoff_secs \
+                last_profile_history_id, initial_sync_completed_at, sync_backoff_secs \
          FROM provider_accounts \
          WHERE provider_kind = 'gmail' \
            AND sync_status IN ('initial_sync', 'active', 'error') \
@@ -316,6 +318,7 @@ async fn select_due_gmail_provider_accounts(
                     provider_email,
                     sync_status,
                     last_profile_history_id,
+                    initial_sync_completed_at,
                     sync_backoff_secs,
                 )| ProviderSyncAccount {
                     id,
@@ -325,6 +328,7 @@ async fn select_due_gmail_provider_accounts(
                     provider_email,
                     sync_status,
                     last_profile_history_id,
+                    initial_sync_completed_at,
                     sync_backoff_secs,
                 },
             )
@@ -354,12 +358,13 @@ async fn mark_scheduler_succeeded(
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "UPDATE provider_accounts \
-         SET sync_status = ?1, last_sync_succeeded_at = ?2, last_error_class = NULL, \
+         SET sync_status = ?1, last_sync_succeeded_at = ?2, initial_sync_completed_at = CASE WHEN ?3 THEN COALESCE(initial_sync_completed_at, ?2) ELSE initial_sync_completed_at END, last_error_class = NULL, \
              last_error_message = NULL, next_sync_after = NULL, sync_backoff_secs = NULL, updated_at = ?2 \
-         WHERE id = ?3",
+         WHERE id = ?4",
     )
     .bind(outcome.next_status.as_str())
     .bind(&now)
+    .bind(outcome.next_status == ProviderSyncNextStatus::Active)
     .bind(account.id)
     .execute(db)
     .await
