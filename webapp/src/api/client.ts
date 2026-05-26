@@ -86,6 +86,12 @@ type UndoPostSuccess = ResponseBody<
 type AdminStatsGetSuccess = ResponseBody<
   paths['/api/admin/stats']['get']['responses']['200']
 >;
+type ScheduledSendsGetSuccess = ResponseBody<
+  paths['/api/scheduled-sends']['get']['responses']['200']
+>;
+type ScheduledSendDeleteSuccess = ResponseBody<
+  paths['/api/scheduled-sends/{scheduled_send_id}']['delete']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -204,6 +210,9 @@ export type UploadedBlob = components['schemas']['UploadedBlob'];
 export type ComposeRequest = components['schemas']['ComposePayload'];
 export type ReplyRequest = components['schemas']['ReplyPayload'];
 export type ComposeResponse = components['schemas']['ComposeResponse'];
+export type ScheduledSend = components['schemas']['ScheduledSendResponse'];
+export type ScheduledSendsResponse = ScheduledSendsGetSuccess;
+export type CancelScheduledSendResponse = ScheduledSendDeleteSuccess;
 export type DraftRequest = components['schemas']['DraftPayload'];
 export type DraftResponse = components['schemas']['DraftResponse'];
 export type DraftDetails = DraftGetSuccess;
@@ -794,6 +803,28 @@ export class HailApiClient {
         mutating: true,
       }),
       body.send_at ? 201 : 200,
+    );
+  }
+
+  async listScheduledSends(): Promise<ScheduledSendsResponse> {
+    return this.#json<ScheduledSendsResponse>(
+      await this.#request('/api/scheduled-sends'),
+      200,
+    );
+  }
+
+  async cancelScheduledSend(
+    scheduledSendId: number,
+  ): Promise<CancelScheduledSendResponse> {
+    return this.#json<CancelScheduledSendResponse>(
+      await this.#request(
+        `/api/scheduled-sends/${encodeURIComponent(String(scheduledSendId))}`,
+        {
+          method: 'DELETE',
+          mutating: true,
+        },
+      ),
+      200,
     );
   }
 

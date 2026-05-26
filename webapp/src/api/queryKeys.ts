@@ -23,4 +23,5 @@ export const queryKeys = {
   thread: (threadId: string) => [...queryKeys.threads(), threadId] as const,
   drafts: () => [...queryKeys.all, 'drafts'] as const,
   draft: (draftId: string) => [...queryKeys.drafts(), draftId] as const,
+  scheduledSends: () => [...queryKeys.all, 'scheduled-sends'] as const,
 };
