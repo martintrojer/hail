@@ -26,6 +26,7 @@ pub mod threads_view;
 pub mod undo;
 pub mod validation;
 pub mod views;
+pub mod workflows;
 pub mod ws;
 
 // `test_stub` is gated behind the `__test-stubs` feature so it never

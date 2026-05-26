@@ -41,6 +41,7 @@ use crate::routes::health;
         (name = crate::routes::threads::TAG, description = "Thread mutation verbs."),
         (name = crate::routes::undo::TAG, description = "Short-lived undo token execution."),
         (name = crate::routes::views::TAG, description = "Mail list views and unified search."),
+        (name = crate::routes::workflows::TAG, description = "Workflow/mail rule CRUD endpoints."),
     ),
 )]
 pub struct ApiDoc;

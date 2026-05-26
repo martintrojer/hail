@@ -117,6 +117,10 @@ fn build_api_router(
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
+        routes::workflows::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
     ] {
         api.merge(protected_api);
     }
@@ -158,6 +162,7 @@ fn build_api_router(
         .merge(Router::from(routes::threads_view::router()))
         .merge(routes::undo::router())
         .merge(routes::views::router())
+        .merge(routes::workflows::router())
         .merge(routes::ws::router());
 
     #[cfg(feature = "__test-stubs")]
