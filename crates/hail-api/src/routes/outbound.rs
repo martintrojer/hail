@@ -73,6 +73,7 @@ where
     E: ProviderError,
     F: FnOnce(&mut hail_jmap::jmap_client::email::Email<hail_jmap::jmap_client::Set>),
 {
+    ensure_sender_identity::<E>(session, headers.from).await?;
     let drafts_mailbox_id = required_drafts_mailbox_id(session)
         .await
         .map_err(provider_error::<E>)?;
@@ -111,7 +112,7 @@ pub async fn submit_email<E>(
 where
     E: ProviderError,
 {
-    let identity_id = identity_id_for::<E>(session, from).await?;
+    let identity_id = required_identity_id_for::<E>(session, from).await?;
     let mut request = session.client().build();
     let create_id = request
         .set_email_submission()
@@ -331,7 +332,28 @@ fn markdown_to_plain_text(markdown: &str) -> String {
     text.trim().to_string()
 }
 
-async fn identity_id_for<E>(session: &hail_jmap::Session, from: &str) -> Result<String, E>
+async fn required_identity_id_for<E>(session: &hail_jmap::Session, from: &str) -> Result<String, E>
+where
+    E: ProviderError,
+{
+    matching_identity_id::<E>(session, from)
+        .await?
+        .ok_or_else(E::sender_identity_unavailable)
+}
+
+async fn ensure_sender_identity<E>(session: &hail_jmap::Session, from: &str) -> Result<(), E>
+where
+    E: ProviderError,
+{
+    required_identity_id_for::<E>(session, from)
+        .await
+        .map(|_| ())
+}
+
+async fn matching_identity_id<E>(
+    session: &hail_jmap::Session,
+    from: &str,
+) -> Result<Option<String>, E>
 where
     E: ProviderError,
 {
@@ -344,17 +366,11 @@ where
         .send_get_identity()
         .await
         .map_err(provider_error::<E>)?;
-    let mut identities = response.take_list();
-    if let Some(index) = identities.iter().position(|identity| {
-        identity
+    Ok(response.take_list().into_iter().find_map(|mut identity| {
+        let matches_from = identity
             .email()
-            .is_some_and(|email| email.eq_ignore_ascii_case(from))
-    }) {
-        return Ok(identities[index].take_id());
-    }
-    identities
-        .first_mut()
-        .map(|identity| identity.take_id())
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| E::provider("identity not found".to_string()))
+            .is_some_and(|email| email.eq_ignore_ascii_case(from));
+        let id = identity.take_id();
+        (matches_from && !id.is_empty()).then_some(id)
+    }))
 }

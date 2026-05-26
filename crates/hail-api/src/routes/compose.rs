@@ -187,12 +187,17 @@ pub struct ReplyContext {
 }
 #[derive(Debug)]
 pub enum ComposeError {
+    SenderIdentityUnavailable,
     Provider(String),
 }
 
 impl crate::routes::jmap_helpers::ProviderError for ComposeError {
     fn provider(message: String) -> Self {
         Self::Provider(message)
+    }
+
+    fn sender_identity_unavailable() -> Self {
+        Self::SenderIdentityUnavailable
     }
 }
 
@@ -362,6 +367,9 @@ async fn reply(
     {
         Ok(Some(context)) => context,
         Ok(None) => return not_found("not_found"),
+        Err(ComposeError::SenderIdentityUnavailable) => {
+            return bad_request("sender_identity_unavailable");
+        }
         Err(ComposeError::Provider(err)) => return provider_failed(user.id, err),
     };
     let message = match payload.into_message(context) {
@@ -559,6 +567,9 @@ async fn create_and_maybe_send(
         .await
     {
         Ok(id) => id,
+        Err(ComposeError::SenderIdentityUnavailable) => {
+            return bad_request("sender_identity_unavailable");
+        }
         Err(ComposeError::Provider(err)) => return provider_failed(user.id, err),
     };
     if let Some(send_at) = send_at {
@@ -621,6 +632,7 @@ async fn create_and_maybe_send(
             })
             .into_response()
         }
+        Err(ComposeError::SenderIdentityUnavailable) => bad_request("sender_identity_unavailable"),
         Err(ComposeError::Provider(err)) => provider_failed(user.id, err),
     }
 }
