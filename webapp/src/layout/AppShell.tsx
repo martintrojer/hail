@@ -252,9 +252,9 @@ export function AppShell({
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((open) => !open)}
-              className="rounded-md px-1 py-1 text-xl font-bold lowercase tracking-tight text-ink-primary focus-ring outline-none hover:text-accent-blue"
+              className="rounded-md px-1 py-1 focus-ring outline-none"
             >
-              hail
+              <img src="/logo-icon-transparent.png" alt="hail" className="h-7" />
             </button>
 
             {menuOpen ? (
