@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useMenuKeyboardNav, menuKeyDownHandler } from '../hooks/useMenuKeyboardNav';
 import {
   Archive,
   Bookmark,
@@ -93,6 +94,7 @@ function MenuButton({
   return (
     <button
       type="button"
+      role="menuitem"
       onClick={onClick}
       className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-[0.875rem] font-medium text-ink-primary hover:bg-bg-hover focus:bg-bg-hover focus:outline-none"
     >
@@ -117,6 +119,8 @@ export function MessageActionPopup({
     { onEscape: onClose },
     { enabled: open },
   );
+
+  useMenuKeyboardNav({ menuRef: popupRef, open });
 
   useEffect(() => {
     if (!open) {
@@ -162,6 +166,7 @@ export function MessageActionPopup({
       ref={popupRef}
       role="menu"
       aria-label="Message actions"
+      onKeyDown={(e) => menuKeyDownHandler(popupRef, onClose, e)}
       className="absolute z-50 w-60 rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
       style={{ top: position.top, left: position.left }}
     >

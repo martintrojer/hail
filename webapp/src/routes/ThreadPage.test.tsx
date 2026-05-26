@@ -308,7 +308,7 @@ describe('ThreadPage', () => {
       name: 'Message actions',
     });
     fireEvent.click(actionButtons[1]);
-    fireEvent.click(screen.getByRole('button', { name: 'Add a Note' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add a Note' }));
     fireEvent.change(screen.getByLabelText('Note text'), {
       target: { value: 'Follow up on plain message.' },
     });
@@ -347,7 +347,7 @@ describe('ThreadPage', () => {
       name: 'Message actions',
     });
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Set Aside' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Set Aside' }));
 
     await waitFor(() => {
       expect(client.setAsideCalls).toEqual(['thread-1']);
@@ -373,7 +373,7 @@ describe('ThreadPage', () => {
       name: 'Message actions',
     });
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Trash' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Thread action failed with HTTP 500.',
@@ -391,14 +391,14 @@ describe('ThreadPage', () => {
     });
 
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Reply Later' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply Later' }));
     await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-1']));
     expect(
       await screen.findByText('Thread added to Reply Later.'),
     ).toBeInTheDocument();
 
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
     await waitFor(() => expect(client.archiveCalls).toEqual(['thread-1']));
 
     fireEvent.click(actionButtons[0]);
@@ -414,7 +414,7 @@ describe('ThreadPage', () => {
     ).toBeInTheDocument();
 
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Trash' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Trash' }));
     await waitFor(() => expect(client.trashCalls).toEqual(['thread-1']));
     expect(await screen.findByText('Thread moved to trash.')).toBeInTheDocument();
 
@@ -435,7 +435,7 @@ describe('ThreadPage', () => {
     });
 
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply' }));
     await waitFor(() => {
       expect(window.location.pathname).toBe('/compose');
       expect(window.location.search).toContain('replyTo=thread-1');
@@ -448,7 +448,7 @@ describe('ThreadPage', () => {
       .findAllByRole('button', { name: 'Message actions' })
       .then((buttons) => buttons[0]);
     fireEvent.click(firstReplyAllActionButton);
-    fireEvent.click(screen.getByRole('button', { name: 'Reply All' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply All' }));
     await waitFor(() => {
       expect(window.location.pathname).toBe('/compose');
       expect(window.location.search).toContain('replyTo=thread-1');
@@ -461,7 +461,7 @@ describe('ThreadPage', () => {
       .findAllByRole('button', { name: 'Message actions' })
       .then((buttons) => buttons[0]);
     fireEvent.click(firstForwardActionButton);
-    fireEvent.click(screen.getByRole('button', { name: 'Forward' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Forward' }));
     await waitFor(() => {
       expect(window.location.pathname).toBe('/compose');
       expect(window.location.search).toContain('forward=message-html');
@@ -476,7 +476,7 @@ describe('ThreadPage', () => {
       name: 'Message actions',
     });
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Bubble Up' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Bubble Up' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Tomorrow morning' }));
 
     await waitFor(() => {

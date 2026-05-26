@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type ComponentType,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useAuth } from '../auth/AuthProvider';
@@ -28,6 +27,7 @@ import {
   iconSizeProps,
 } from '../components/icons';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useMenuKeyboardNav, menuKeyDownHandler } from '../hooks/useMenuKeyboardNav';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { Pile } from './Pile';
 
@@ -269,29 +269,10 @@ export function AppShell({
 
   function closeMenu() {
     setMenuOpen(false);
+    logoButtonRef.current?.focus();
   }
 
-  function handleMenuKeyDown(event: ReactKeyboardEvent) {
-    const items = menuRef.current?.querySelectorAll<HTMLElement>('[role=menuitem]');
-    if (!items?.length) {
-      return;
-    }
-
-    const current = Array.from(items).indexOf(document.activeElement as HTMLElement);
-
-    if (event.key === 'ArrowDown' || event.key === 'j') {
-      event.preventDefault();
-      const next = current < items.length - 1 ? current + 1 : 0;
-      items[next]?.focus();
-    } else if (event.key === 'ArrowUp' || event.key === 'k') {
-      event.preventDefault();
-      const prev = current > 0 ? current - 1 : items.length - 1;
-      items[prev]?.focus();
-    } else if (event.key === 'Enter' && current >= 0) {
-      event.preventDefault();
-      items[current]?.click();
-    }
-  }
+  useMenuKeyboardNav({ menuRef, open: menuOpen, autoFocus: false });
 
   return (
     <div className="min-h-screen bg-bg-page text-ink-primary">
@@ -338,7 +319,7 @@ export function AppShell({
                 ref={menuRef}
                 role="menu"
                 aria-label="Main menu"
-                onKeyDown={handleMenuKeyDown}
+                onKeyDown={(e) => menuKeyDownHandler(menuRef, closeMenu, e)}
                 className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border"
               >
                 <nav className="space-y-1" aria-label="Primary navigation">

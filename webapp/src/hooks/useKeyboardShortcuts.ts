@@ -29,6 +29,7 @@ export interface KeyboardShortcutHandlers {
   onReplyAll?: () => void;
   onForward?: () => void;
   onAddNote?: () => void;
+  onOpenActionMenu?: () => void;
   onGoBack?: () => void;
   onSend?: () => void;
   onToggleSelect?: () => void;
@@ -211,6 +212,7 @@ export function useKeyboardShortcuts(
         a: handlers.onReplyAll,
         f: handlers.onForward,
         n: handlers.onAddNote,
+        '.': handlers.onOpenActionMenu,
         o: handlers.onOpenThread,  // vim open
         x: handlers.onToggleSelect,
         c: handlers.onCompose,
