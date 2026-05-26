@@ -220,6 +220,7 @@ export function AppShell({
     onGoSetAside: () => void navigate({ to: '/set-aside' }),
     onGoReplyLater: () => void navigate({ to: '/reply-later' }),
     onGoBubbleUp: () => void navigate({ to: '/bubble-up' }),
+    onGoArchive: () => void navigate({ to: '/archive' }),
     onToggleMenu: () => {
       setMenuOpen((prev) => {
         const next = !prev;

@@ -25,6 +25,7 @@ export interface KeyboardShortcutHandlers {
   onGoSetAside?: () => void;
   onGoReplyLater?: () => void;
   onGoBubbleUp?: () => void;
+  onGoArchive?: () => void;
   onReplyAll?: () => void;
   onForward?: () => void;
   onAddNote?: () => void;
@@ -178,6 +179,7 @@ export function useKeyboardShortcuts(
           a: handlers.onGoSetAside,
           l: handlers.onGoReplyLater,
           b: handlers.onGoBubbleUp,
+          r: handlers.onGoArchive,
         };
         if (run(event, routeHandlers[key])) {
           return;
