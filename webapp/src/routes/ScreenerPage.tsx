@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react';
+import { Link } from '@tanstack/react-router';
+import { ShieldOff } from 'lucide-react';
 import type { HailApiClient } from '../api/client';
 import {
   type ScreenerClassification,
@@ -278,7 +280,18 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
     <AppShell
       title="The Screener"
       description="New senders end up here. Decide if they get in."
-      actions={<ScreenerBanner pendingCount={pendingCount} />}
+      actions={
+        <div className="flex items-center gap-4">
+          <ScreenerBanner pendingCount={pendingCount} />
+          <Link
+            to="/screened-out"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-secondary hover:text-ink-primary"
+          >
+            <ShieldOff size={14} />
+            Screened Out
+          </Link>
+        </div>
+      }
       list={pendingList}
     />
   );
