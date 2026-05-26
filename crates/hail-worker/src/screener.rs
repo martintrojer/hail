@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+pub use hail_core::screener::{Classification, normalize_sender};
+use hail_core::screener::{ScreenerDecision, ScreenerRule, ScreenerRuleParseError, lookup_rule};
 use hail_jmap::jmap_client;
 use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
 use sqlx::SqliteConnection;
@@ -16,34 +18,6 @@ pub struct EmailEnvelope {
     pub keywords: Vec<String>,
     pub received_at: Option<DateTime<Utc>>,
     pub size: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Classification {
-    Imbox,
-    Feed,
-    Papertrail,
-}
-
-impl Classification {
-    #[must_use]
-    pub fn keyword(&self) -> &'static str {
-        match self {
-            Self::Imbox => "$hail_imbox",
-            Self::Feed => "$hail_feed",
-            Self::Papertrail => "$hail_papertrail",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "imbox" => Some(Self::Imbox),
-            "feed" => Some(Self::Feed),
-            "papertrail" => Some(Self::Papertrail),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,16 +118,6 @@ impl JmapOpsLive {
     }
 }
 
-#[must_use]
-pub fn normalize_sender(addr: &str) -> String {
-    let trimmed = addr.trim();
-    let email = match (trimmed.rfind('<'), trimmed.rfind('>')) {
-        (Some(start), Some(end)) if start < end => &trimmed[start + 1..end],
-        _ => trimmed,
-    };
-    email.trim().to_ascii_lowercase()
-}
-
 /// System senders whose mail should bypass the screener and go straight to Imbox.
 /// Covers bounce notifications (mailer-daemon), postmaster, and null-sender bounces.
 fn is_system_sender(from: &str) -> bool {
@@ -185,26 +149,42 @@ pub async fn route_email(
     }
 
     let sender = normalize_sender(&env.from);
-    let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT sender_address, decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
     )
     .bind(user_id)
     .bind(&sender)
     .fetch_optional(&mut *conn)
     .await?;
 
-    match row {
-        Some((decision, classify_as)) if decision == "allow" => {
-            let classify_as = classify_as.ok_or_else(|| {
-                RouteError::InvalidClassification("allow rule missing classify_as".to_string())
-            })?;
-            let classification = Classification::parse(&classify_as)
-                .ok_or(RouteError::InvalidClassification(classify_as))?;
+    let rules = match row {
+        Some((sender_address, decision, classify_as)) => vec![
+            ScreenerRule::from_db(sender_address, &decision, classify_as.as_deref()).map_err(
+                |err| match err {
+                    ScreenerRuleParseError::MissingClassification => {
+                        RouteError::InvalidClassification(
+                            "allow rule missing classify_as".to_string(),
+                        )
+                    }
+                    ScreenerRuleParseError::InvalidClassification(value) => {
+                        RouteError::InvalidClassification(value)
+                    }
+                    ScreenerRuleParseError::InvalidDecision(value) => {
+                        RouteError::InvalidDecision(value)
+                    }
+                },
+            )?,
+        ],
+        None => Vec::new(),
+    };
+
+    match lookup_rule(&rules, &sender) {
+        Some(ScreenerDecision::Allow(classification)) => {
             jmap.apply_keyword(&env.id, classification.keyword())
                 .await?;
             Ok(RouteOutcome::Classified { classification })
         }
-        Some((decision, _)) if decision == "deny" => {
+        Some(ScreenerDecision::Deny) => {
             let trash_id = jmap
                 .get_mailbox_by_role("trash")
                 .await?
@@ -212,13 +192,12 @@ pub async fn route_email(
             jmap.move_to_mailbox(&env.id, &trash_id).await?;
             Ok(RouteOutcome::Trashed)
         }
-        Some((decision, _)) if decision == "pending" => {
+        Some(ScreenerDecision::Pending) => {
             move_to_screener_if_needed(jmap, env).await?;
             Ok(RouteOutcome::ScreenerPending {
                 sender: sender.clone(),
             })
         }
-        Some((decision, _)) => Err(RouteError::InvalidDecision(decision)),
         None => {
             move_to_screener_if_needed(jmap, env).await?;
             let first_seen_at = env.received_at.unwrap_or_else(Utc::now).to_rfc3339();

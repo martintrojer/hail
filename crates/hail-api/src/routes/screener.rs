@@ -19,6 +19,8 @@ use axum::extract::{Extension, Path, State, rejection::JsonRejection};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
+pub use hail_core::screener::Classification;
+use hail_core::screener::normalize_sender;
 use hail_jmap::{SCREENER_MAILBOX_NAME, mailbox_id_by_name};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -231,41 +233,6 @@ impl ScreenerDecision {
         match self {
             Self::Approve => "allow",
             Self::Deny => "deny",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Classification {
-    Imbox,
-    Feed,
-    Papertrail,
-}
-
-impl Classification {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "imbox" => Some(Self::Imbox),
-            "feed" => Some(Self::Feed),
-            "papertrail" => Some(Self::Papertrail),
-            _ => None,
-        }
-    }
-
-    pub const fn keyword(self) -> &'static str {
-        match self {
-            Self::Imbox => "$hail_imbox",
-            Self::Feed => "$hail_feed",
-            Self::Papertrail => "$hail_papertrail",
-        }
-    }
-
-    const fn db_value(self) -> &'static str {
-        match self {
-            Self::Imbox => "imbox",
-            Self::Feed => "feed",
-            Self::Papertrail => "papertrail",
         }
     }
 }
@@ -911,15 +878,6 @@ struct ScreenerRuleSnapshot {
     classify_as: Option<String>,
     decided_at: Option<DateTime<Utc>>,
     first_seen_at: DateTime<Utc>,
-}
-
-fn normalize_sender(sender: &str) -> String {
-    let trimmed = sender.trim();
-    let email = match (trimmed.rfind('<'), trimmed.rfind('>')) {
-        (Some(start), Some(end)) if start < end => &trimmed[start + 1..end],
-        _ => trimmed,
-    };
-    email.trim().to_ascii_lowercase()
 }
 
 fn looks_like_sender(sender: &str) -> bool {

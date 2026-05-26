@@ -942,6 +942,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "url",
+ "utoipa",
 ]
 
 [[package]]
