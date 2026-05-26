@@ -16,7 +16,7 @@
 //! nonce from the OS CSPRNG. (Reusing a nonce under the same key would
 //! be catastrophic for GCM; this is the standard countermeasure.)
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::TryRngCore;
 use secrecy::{ExposeSecret, SecretString};
@@ -85,6 +85,36 @@ pub fn seal(plaintext: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, CryptoErro
     Ok(out)
 }
 
+/// Encrypt `plaintext` under `key` with additional authenticated data and a
+/// fresh random 96-bit nonce. Output layout matches [`seal`].
+///
+/// The AAD is authenticated but not encrypted or stored in the output; callers
+/// must provide the same bytes to [`open_with_aad`]. Use this for row/context
+/// binding where swapping ciphertexts between records should fail to decrypt.
+pub fn seal_with_aad(
+    plaintext: &[u8],
+    key: &[u8; KEY_LEN],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce_bytes)
+        .map_err(|_| CryptoError::Rng)?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let mut buffer = plaintext.to_vec();
+    cipher
+        .encrypt_in_place(nonce, aad, &mut buffer)
+        .map_err(|_| CryptoError::Decrypt)?;
+
+    let mut out = Vec::with_capacity(NONCE_LEN + buffer.len());
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&buffer);
+    Ok(out)
+}
+
 /// Decrypt a buffer produced by [`seal`] under the same `key`. Returns
 /// the original plaintext, or [`CryptoError`] if the AEAD tag failed to
 /// verify (tampering, truncation, wrong key — indistinguishable).
@@ -97,6 +127,24 @@ pub fn open(ciphertext: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, CryptoErr
     cipher
         .decrypt(Nonce::from_slice(nonce_bytes), body)
         .map_err(|_| CryptoError::Decrypt)
+}
+
+/// Decrypt a buffer produced by [`seal_with_aad`] under the same `key` and AAD.
+pub fn open_with_aad(
+    ciphertext: &[u8],
+    key: &[u8; KEY_LEN],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    if ciphertext.len() < NONCE_LEN + TAG_LEN {
+        return Err(CryptoError::Malformed);
+    }
+    let (nonce_bytes, body) = ciphertext.split_at(NONCE_LEN);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut buffer = body.to_vec();
+    cipher
+        .decrypt_in_place(Nonce::from_slice(nonce_bytes), aad, &mut buffer)
+        .map_err(|_| CryptoError::Decrypt)?;
+    Ok(buffer)
 }
 
 /// Parse the operator-provided server key into the 32-byte form
@@ -193,6 +241,20 @@ mod tests {
         // Trim to less than nonce + tag.
         let short = &ct[..NONCE_LEN + TAG_LEN - 1];
         assert!(matches!(open(short, &k(0x33)), Err(CryptoError::Malformed)));
+    }
+
+    #[test]
+    fn open_with_aad_roundtrip_and_context_authentication() {
+        let key = k(0x44);
+        let aad = b"provider-account:7:refresh";
+        let pt = b"oauth token";
+        let ct = seal_with_aad(pt, &key, aad).expect("seal with aad");
+
+        assert_eq!(open_with_aad(&ct, &key, aad).expect("open with aad"), pt);
+        assert!(matches!(
+            open_with_aad(&ct, &key, b"provider-account:8:refresh"),
+            Err(CryptoError::Decrypt)
+        ));
     }
 
     #[test]

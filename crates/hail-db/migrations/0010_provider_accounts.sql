@@ -1,6 +1,6 @@
 -- Provider import account and mapping foundation.
--- OAuth/token crypto implementation lands in follow-up tasks; this migration only
--- creates durable sidecar state and idempotency keys.
+-- Refresh-token encryption helpers live in hail-core provider token crypto;
+-- this schema stores only encrypted token blobs or external secret references.
 
 CREATE TABLE provider_accounts (
   id                              INTEGER PRIMARY KEY,
