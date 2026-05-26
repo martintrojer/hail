@@ -55,7 +55,7 @@ User-facing features that didn't make v1.
 - **Compose identity selection** — pick sender identity for multi-domain users (`tighten-compose-identity-selection`)
 - **Clips** — highlight and save text snippets from emails (`clips-feature`)
 - **User invites** — admin invite link for passwordless onboarding (`user-invite-flow`)
-- **PWA** — service worker for offline shell, web push notifications, installable app (`pwa-service-worker`)
+- **PWA** — installable web app with an offline shell for the signed-in SPA. The service worker caches same-origin static assets only and deliberately bypasses `/api/*`, `/healthz`, and `/readyz`, so authenticated mail/API responses are never served stale. Web push notifications remain a separate future task (`pwa-service-worker`).
 
 ### Deployment
 - **Cloudflare Tunnel E2E** — validated runbook for Tunnel + Email Routing (`e2e-cloudflare-mail-smoke`)

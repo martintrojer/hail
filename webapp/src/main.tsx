@@ -7,6 +7,9 @@ import { ApiClientProvider } from './api/ApiClientProvider';
 import './index.css';
 import { queryClient } from './lib/queryClient';
 import { router } from './router';
+import { registerServiceWorker } from './pwa';
+
+registerServiceWorker();
 
 const apiClient = new HailApiClient({ baseUrl: window.location.origin });
 

@@ -29,6 +29,7 @@ Modern email clients treat your inbox as an infinite stream. hail takes a differ
 - **Archive & Search.** Archive what you're done with. Full-text search across all views.
 - **Keyboard-first.** Vim-style navigation throughout. `j`/`k`, `gg`/`G`, `d`, `e`, `y`, `m`, `.`, `?` — it all works.
 - **Dark mode.** Warm dark palette with system detection or manual toggle.
+- **PWA-ready.** The SPA ships a web app manifest and a conservative service worker: hail can be installed on desktop/mobile, and already-loaded static shell assets remain available offline without caching authenticated mail or API responses.
 
 ## Architecture
 
