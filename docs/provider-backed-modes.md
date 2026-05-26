@@ -257,7 +257,9 @@ For v1.2 provider import, hail chooses **Mode P2: provider importer into
 Stalwart**. Gmail/provider remains the public mailbox edge, but Stalwart remains
 the local source of truth for the hail UI after import. The detailed source of
 truth, OAuth, dedupe, scheduler, retry, and Gmail-to-Stalwart flow rules live in
-[provider-import-architecture.md](./provider-import-architecture.md).
+[provider-import-architecture.md](./provider-import-architecture.md). The
+outbound/sent-copy policy for P2 lives in
+[provider-outbound-strategy.md](./provider-outbound-strategy.md).
 
 If we add additional no-public-server support, the lowest-risk order is:
 
