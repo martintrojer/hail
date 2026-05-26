@@ -14,8 +14,92 @@ use hail_worker::gmail_historical_import::{
     GmailHistoricalImportAccount, GmailHistoricalImportOptions, GmailHistoricalSource,
     import_gmail_history,
 };
+use hail_worker::provider_import_routing::{RoutingRfc822Importer, ScreenerRfc822ImportRouter};
 use hail_worker::rfc822_import::{FakeRfc822Importer, Rfc822ImportError};
+use hail_worker::screener::{JmapOps, RouteError};
 use tokio_util::sync::CancellationToken;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum JmapCall {
+    GetOrCreateMailbox(String),
+    GetMailboxByRole(String),
+    ApplyKeyword {
+        email_id: String,
+        keyword: String,
+    },
+    MoveToMailbox {
+        email_id: String,
+        mailbox_id: String,
+    },
+}
+
+#[derive(Debug)]
+struct FakeJmapOps {
+    calls: Mutex<Vec<JmapCall>>,
+}
+
+impl Default for FakeJmapOps {
+    fn default() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl FakeJmapOps {
+    fn calls(&self) -> Vec<JmapCall> {
+        self.calls.lock().expect("jmap calls").clone()
+    }
+}
+
+#[async_trait]
+impl JmapOps for FakeJmapOps {
+    async fn get_or_create_mailbox(&self, name: &str) -> Result<String, RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::GetOrCreateMailbox(name.to_string()));
+        Ok(match name {
+            hail_jmap::SCREENER_MAILBOX_NAME => "screener-id".to_string(),
+            "Junk" => "junk-id".to_string(),
+            other => format!("{}-id", other.to_ascii_lowercase()),
+        })
+    }
+
+    async fn get_mailbox_by_role(&self, role: &str) -> Result<Option<String>, RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::GetMailboxByRole(role.to_string()));
+        Ok(match role {
+            "trash" => Some("trash-id".to_string()),
+            "junk" => Some("junk-id".to_string()),
+            _ => None,
+        })
+    }
+
+    async fn apply_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::ApplyKeyword {
+                email_id: email_id.to_string(),
+                keyword: keyword.to_string(),
+            });
+        Ok(())
+    }
+
+    async fn move_to_mailbox(&self, email_id: &str, mailbox_id: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::MoveToMailbox {
+                email_id: email_id.to_string(),
+                mailbox_id: mailbox_id.to_string(),
+            });
+        Ok(())
+    }
+}
 
 fn fresh_db_url() -> (String, TempDb) {
     let mut dir = std::env::temp_dir();
@@ -626,4 +710,221 @@ async fn retries_failed_import_mapping_without_duplicating_stalwart_mail() {
         imported.provider_history_id.as_deref(),
         Some("history-retry-2")
     );
+}
+
+#[tokio::test]
+async fn routed_import_applies_allowed_sender_classification() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    sqlx::query(
+        "INSERT INTO screener_rules \
+         (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+         VALUES (?, 'allowed@example.com', 'allow', 'feed', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("allow rule");
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-allowed".to_owned(),
+                thread_id: Some("thread-allowed".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_from_message(
+            "gmail-allowed",
+            "thread-allowed",
+            "history-allowed",
+            "allowed-msg@example.com",
+            "Allowed Sender <allowed@example.com>",
+        )],
+    );
+    let importer = FakeRfc822Importer::default();
+    let jmap = FakeJmapOps::default();
+    let router = ScreenerRfc822ImportRouter::new(&jmap);
+    let routed_importer = RoutingRfc822Importer::new(&importer, &router);
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &routed_importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("routed import");
+
+    assert_eq!(summary.imported, 1);
+    assert_eq!(
+        jmap.calls(),
+        vec![JmapCall::ApplyKeyword {
+            email_id: "email-1".to_string(),
+            keyword: "$hail_feed".to_string(),
+        }]
+    );
+    let event_type: String = sqlx::query_scalar("SELECT event_type FROM app_events")
+        .fetch_one(&pool)
+        .await
+        .expect("app event");
+    assert_eq!(event_type, "feed.new");
+}
+
+#[tokio::test]
+async fn routed_import_sends_unknown_sender_to_screener_pending() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-unknown".to_owned(),
+                thread_id: Some("thread-unknown".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_from_message(
+            "gmail-unknown",
+            "thread-unknown",
+            "history-unknown",
+            "unknown-msg@example.com",
+            "Unknown <unknown@example.com>",
+        )],
+    );
+    let importer = FakeRfc822Importer::default();
+    let jmap = FakeJmapOps::default();
+    let router = ScreenerRfc822ImportRouter::new(&jmap);
+    let routed_importer = RoutingRfc822Importer::new(&importer, &router);
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &routed_importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("routed import");
+
+    assert_eq!(summary.imported, 1);
+    assert_eq!(
+        jmap.calls(),
+        vec![
+            JmapCall::GetOrCreateMailbox("Screener".to_string()),
+            JmapCall::MoveToMailbox {
+                email_id: "email-1".to_string(),
+                mailbox_id: "screener-id".to_string(),
+            },
+        ]
+    );
+    let rule: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(user_id)
+    .bind("unknown@example.com")
+    .fetch_one(&pool)
+    .await
+    .expect("pending rule");
+    assert_eq!(rule, ("pending".to_string(), None));
+    let event_type: String = sqlx::query_scalar("SELECT event_type FROM app_events")
+        .fetch_one(&pool)
+        .await
+        .expect("app event");
+    assert_eq!(event_type, "screener.pending");
+}
+
+#[tokio::test]
+async fn routed_import_moves_denied_sender_to_trash() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    sqlx::query(
+        "INSERT INTO screener_rules \
+         (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+         VALUES (?, 'denied@example.com', 'deny', NULL, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("deny rule");
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-denied".to_owned(),
+                thread_id: Some("thread-denied".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_from_message(
+            "gmail-denied",
+            "thread-denied",
+            "history-denied",
+            "denied-msg@example.com",
+            "Denied <denied@example.com>",
+        )],
+    );
+    let importer = FakeRfc822Importer::default();
+    let jmap = FakeJmapOps::default();
+    let router = ScreenerRfc822ImportRouter::new(&jmap);
+    let routed_importer = RoutingRfc822Importer::new(&importer, &router);
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &routed_importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("routed import");
+
+    assert_eq!(summary.imported, 1);
+    assert_eq!(
+        jmap.calls(),
+        vec![
+            JmapCall::GetMailboxByRole("trash".to_string()),
+            JmapCall::MoveToMailbox {
+                email_id: "email-1".to_string(),
+                mailbox_id: "trash-id".to_string(),
+            },
+        ]
+    );
+    let event_type: String = sqlx::query_scalar("SELECT event_type FROM app_events")
+        .fetch_one(&pool)
+        .await
+        .expect("app event");
+    assert_eq!(event_type, "thread.updated");
+}
+
+fn raw_from_message(
+    id: &str,
+    thread_id: &str,
+    history_id: &str,
+    message_id: &str,
+    from: &str,
+) -> RawGmailMessage {
+    RawGmailMessage {
+        id: id.to_owned(),
+        thread_id: Some(thread_id.to_owned()),
+        history_id: Some(history_id.to_owned()),
+        rfc822: format!(
+            "From: {from}\r\nTo: user@example.com\r\nMessage-ID: <{message_id}>\r\nSubject: hi\r\n\r\nBody"
+        )
+        .into_bytes(),
+    }
 }

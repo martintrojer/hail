@@ -27,6 +27,7 @@ use crate::gmail_client::{
     GmailClient, GmailClientError, GmailTokenSource, ListMessage, ListMessagesParams,
     ListMessagesResponse, RawGmailMessage,
 };
+use crate::provider_import_routing::RoutedRfc822Importer;
 use crate::rfc822_import::{Rfc822ImportRequest, Rfc822Importer};
 
 const DEFAULT_PAGE_SIZE: u16 = 100;
@@ -164,6 +165,66 @@ pub enum GmailHistoricalImportError {
     CursorSerialize(#[from] serde_json::Error),
     #[error("gmail list failed: {0}")]
     GmailList(#[source] GmailClientError),
+    #[error(transparent)]
+    Rfc822Import(#[from] crate::rfc822_import::Rfc822ImportError),
+    #[error(transparent)]
+    RoutedImport(#[from] crate::provider_import_routing::RoutedRfc822ImportError),
+}
+
+#[async_trait]
+pub trait GmailHistoricalImporter: Send + Sync {
+    async fn import_gmail_rfc822(
+        &self,
+        db: &SqlitePool,
+        user_id: i64,
+        request: Rfc822ImportRequest,
+    ) -> Result<
+        crate::provider_import_routing::RoutedImportedRfc822Message,
+        GmailHistoricalImportError,
+    >;
+}
+
+#[async_trait]
+impl<T> GmailHistoricalImporter for T
+where
+    T: Rfc822Importer,
+{
+    async fn import_gmail_rfc822(
+        &self,
+        _db: &SqlitePool,
+        _user_id: i64,
+        request: Rfc822ImportRequest,
+    ) -> Result<
+        crate::provider_import_routing::RoutedImportedRfc822Message,
+        GmailHistoricalImportError,
+    > {
+        Ok(
+            crate::provider_import_routing::RoutedImportedRfc822Message {
+                imported: self.import_rfc822(request).await?,
+                route_outcome: None,
+            },
+        )
+    }
+}
+
+#[async_trait]
+impl<I, R> GmailHistoricalImporter
+    for crate::provider_import_routing::RoutingRfc822Importer<'_, I, R>
+where
+    I: Rfc822Importer,
+    R: crate::provider_import_routing::Rfc822ImportRouter,
+{
+    async fn import_gmail_rfc822(
+        &self,
+        db: &SqlitePool,
+        user_id: i64,
+        request: Rfc822ImportRequest,
+    ) -> Result<
+        crate::provider_import_routing::RoutedImportedRfc822Message,
+        GmailHistoricalImportError,
+    > {
+        Ok(self.import_and_route_rfc822(db, user_id, request).await?)
+    }
 }
 
 pub async fn import_gmail_history<C, I>(
@@ -176,7 +237,7 @@ pub async fn import_gmail_history<C, I>(
 ) -> Result<GmailHistoricalImportSummary, GmailHistoricalImportError>
 where
     C: GmailHistoricalSource,
-    I: Rfc822Importer,
+    I: GmailHistoricalImporter,
 {
     if options.target_mailbox_ids.is_empty() {
         return Err(GmailHistoricalImportError::NoTargetMailbox);
@@ -289,7 +350,7 @@ pub(crate) async fn import_one_message<C, I>(
 ) -> Result<(), GmailHistoricalImportError>
 where
     C: GmailHistoricalSource,
-    I: Rfc822Importer,
+    I: GmailHistoricalImporter,
 {
     if let Some(existing) =
         get_provider_message_mapping(db, account.provider_account_id, &listed.id).await?
@@ -448,8 +509,11 @@ where
         provider_message_id: Some(raw.id.clone()),
     };
 
-    let imported = match importer.import_rfc822(request).await {
-        Ok(imported) => imported,
+    let routed_import = match importer
+        .import_gmail_rfc822(db, account.user_id, request)
+        .await
+    {
+        Ok(routed_import) => routed_import,
         Err(error) => {
             let message = safe_error_message(&error);
             summary.failed += 1;
@@ -468,6 +532,7 @@ where
             return Ok(());
         }
     };
+    let imported = routed_import.imported;
 
     let mailbox_ids_json = serde_json::to_string(&imported.jmap_mailbox_ids)?;
     let stored_message_id = imported
