@@ -14,8 +14,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig, ListMessagesParams,
-    StaticGmailTokenSource, classify_gmail_error, parse_gmail_error, retry_after_duration,
+    GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig, ListHistoryParams,
+    ListMessagesParams, StaticGmailTokenSource, classify_gmail_error, parse_gmail_error,
+    retry_after_duration,
 };
 use reqwest::header::{AUTHORIZATION, HeaderValue, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
@@ -143,6 +144,7 @@ async fn route_request(
     match path {
         "/gmail/v1/users/me/profile" => profile(state).await,
         "/gmail/v1/users/me/messages" => list_messages(query),
+        "/gmail/v1/users/me/history" => list_history(query),
         path if path.starts_with("/gmail/v1/users/me/messages/") => get_message(path),
         _ => FakeResponse {
             status: StatusCode::NOT_FOUND,
@@ -192,6 +194,28 @@ fn list_messages(query: &std::collections::HashMap<String, String>) -> FakeRespo
                 "messages":[{"id":"m1","threadId":"t1"}],
                 "nextPageToken":"page-2",
                 "resultSizeEstimate":2
+            }),
+        },
+    }
+}
+
+fn list_history(query: &std::collections::HashMap<String, String>) -> FakeResponse {
+    assert_eq!(query.get("startHistoryId").map(String::as_str), Some("100"));
+    match query.get("pageToken").map(String::as_str) {
+        Some("hist-2") => FakeResponse {
+            status: StatusCode::OK,
+            retry_after: None,
+            body: json!({
+                "history":[{"id":"102","messagesAdded":[{"message":{"id":"m2","threadId":"t2"}}]}],
+                "historyId":"103"
+            }),
+        },
+        _ => FakeResponse {
+            status: StatusCode::OK,
+            retry_after: None,
+            body: json!({
+                "history":[{"id":"101","messagesAdded":[{"message":{"id":"m1","threadId":"t1"}}]}],
+                "nextPageToken":"hist-2"
             }),
         },
     }
@@ -300,6 +324,47 @@ async fn pagination_loop_is_detected() {
         error,
         GmailClientError::PaginationLoop { page_token } if page_token == "loop"
     ));
+}
+
+#[tokio::test]
+async fn list_history_pages_and_encodes_filters() {
+    let (base_url, state) = fake_server().await;
+    let first = client(&base_url)
+        .list_history(&ListHistoryParams {
+            start_history_id: "100".to_owned(),
+            max_results: Some(999),
+            page_token: None,
+            label_id: Some("INBOX".to_owned()),
+            history_types: vec!["messageAdded".to_owned()],
+        })
+        .await
+        .expect("history");
+    assert_eq!(first.history[0].id, "101");
+    assert_eq!(first.next_page_token.as_deref(), Some("hist-2"));
+
+    let second = client(&base_url)
+        .list_history(&ListHistoryParams {
+            start_history_id: "100".to_owned(),
+            max_results: Some(50),
+            page_token: first.next_page_token,
+            label_id: Some("INBOX".to_owned()),
+            history_types: vec!["messageAdded".to_owned()],
+        })
+        .await
+        .expect("history page 2");
+    assert_eq!(second.history_id.as_deref(), Some("103"));
+
+    let requests = state.requests.lock().await;
+    let first_query = requests[0].query.as_deref().expect("query");
+    assert!(first_query.contains("startHistoryId=100"), "{first_query}");
+    assert!(first_query.contains("maxResults=500"), "{first_query}");
+    assert!(first_query.contains("labelId=INBOX"), "{first_query}");
+    assert!(
+        first_query.contains("historyTypes=messageAdded"),
+        "{first_query}"
+    );
+    let second_query = requests[1].query.as_deref().expect("query");
+    assert!(second_query.contains("pageToken=hist-2"), "{second_query}");
 }
 
 #[tokio::test]

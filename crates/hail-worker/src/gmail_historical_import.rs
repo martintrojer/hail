@@ -274,7 +274,7 @@ where
     }
 }
 
-async fn import_one_message<C, I>(
+pub(crate) async fn import_one_message<C, I>(
     db: &SqlitePool,
     account: &GmailHistoricalImportAccount,
     gmail: &C,
