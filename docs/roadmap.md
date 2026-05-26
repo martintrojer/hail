@@ -12,6 +12,8 @@ Quick wins from review findings and code quality cleanup. Mostly small effort, h
 - **Hamburger keyboard nav** — fix j/k/Enter in the main menu dropdown (`fix-hamburger-keyboard-nav`)
 - **Scheduled send cancel UI** — show pending scheduled sends with cancel button (`spa-scheduled-send-cancel-ui`)
 - **Mark thread read/unread** — wire SPA API client contract (`fix-spa-api-client-mark-thread-contract`)
+- **Spam filtering** — Stalwart spam verdict routing, spam view, mark-as-spam, auto-purge (`spam-filtering` → `mark-as-spam-verb`, `worker-spam-routing`, `spam-view`, `spam-auto-purge`)
+- **Auth rate limiting** — per-IP rate limit on login/setup endpoints (`auth-rate-limiting`)
 
 ### Performance
 - **Screener N+1 fix** — batch JMAP queries instead of per-sender lookups (`fix-screener-view-n-plus-one`)
@@ -47,15 +49,18 @@ Quick wins from review findings and code quality cleanup. Mostly small effort, h
 User-facing features that didn't make v1.
 
 ### Email workflow
-- **Spam filtering** — SpamAssassin/rspamd integration with Screener bypass rules (`spam-filtering`)
-- **Workflows / mail rules** — user-defined routing rules: auto-classify senders, keyword triggers, auto-reply (`ui-workflows-rules`)
+- **Workflows / mail rules** — user-defined routing rules (`ui-workflows-rules` → `workflows-rules-api`, `workflows-rules-spa`)
 - **Screener Speakeasy** — secret address that bypasses the Screener (`ui-screener-speakeasy`)
 - **All Files view** — browse all attachments across threads (`ui-all-files-view`)
 - **Compose identity selection** — pick sender identity for multi-domain users (`tighten-compose-identity-selection`)
+- **Clips** — highlight and save text snippets from emails (`clips-feature`)
+- **User invites** — admin invite link for passwordless onboarding (`user-invite-flow`)
+- **PWA** — service worker for offline shell, web push notifications, installable app (`pwa-service-worker`)
 
 ### Deployment
 - **Cloudflare Tunnel E2E** — validated runbook for Tunnel + Email Routing (`e2e-cloudflare-mail-smoke`)
 - **Shared Stalwart provisioning** — deduplicate user/domain provisioning between setup and admin (`share-email-domain-stalwart-provisioning`)
+- **Litestream backup** — compose overlay for continuous SQLite replication to S3/R2 (`litestream-backup`)
 
 ---
 
