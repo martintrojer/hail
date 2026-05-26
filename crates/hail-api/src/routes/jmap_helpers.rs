@@ -306,18 +306,9 @@ pub async fn clear_thread_state(
             .set_keyword(state, token.clone(), thread_id, keyword, false)
             .await;
     }
-    let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-        .bind(user_id)
-        .bind(thread_id)
-        .execute(&state.db)
-        .await;
-    let _ = sqlx::query(
-        "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
-    )
-    .bind(user_id)
-    .bind(thread_id)
-    .execute(&state.db)
-    .await;
+    if let Err(err) = hail_db::clear_thread_sidecar_state(&state.db, user_id, thread_id).await {
+        tracing::warn!(user_id, thread_id = %thread_id, error = %err, "thread sidecar cleanup failed");
+    }
 }
 
 fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {

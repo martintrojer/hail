@@ -496,11 +496,10 @@ async fn bubble_up(
             .set_keyword(&state, user.jmap_token.clone(), &thread_id, keyword, false)
             .await;
     }
-    let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-        .bind(user.id)
-        .bind(&thread_id)
-        .execute(&state.db)
-        .await;
+    if let Err(err) = hail_db::clear_thread_stack_positions(&state.db, user.id, &thread_id).await {
+        tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread stack cleanup failed during bubble-up schedule");
+        return internal();
+    }
 
     (
         StatusCode::CREATED,
@@ -606,11 +605,9 @@ async fn classify_thread(
                 tracing::warn!(user_id = user.id, thread_id = %thread_id, keyword = pile_keyword, error = ?err, "failed to remove pile keyword during classify");
             }
         }
-        let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-            .bind(user.id)
-            .bind(&thread_id)
-            .execute(&state.db)
-            .await;
+        hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id)
+            .await
+            .map_err(provider_error)?;
 
         Ok(match previous_classification {
             Some(previous) if previous != body.to => {
@@ -719,6 +716,10 @@ async fn add_to_stack(
             .await
             .map_err(provider_error)?;
 
+        hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id)
+            .await
+            .map_err(provider_error)?;
+
         let now = Utc::now();
         sqlx::query(
             "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
@@ -765,6 +766,9 @@ async fn archive_thread(
         actions
             .archive(&state, user.jmap_token.clone(), &thread_id)
             .await?;
+        hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id)
+            .await
+            .map_err(provider_error)?;
         tracing::debug!(user_id = user.id, thread_id = %thread_id, "archive undo unavailable: previous mailbox snapshot not captured");
         Ok(None)
     })
@@ -842,18 +846,9 @@ async fn restore_thread(
                 Classification::Imbox,
             )
             .await?;
-        let _ = sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-            .bind(user.id)
-            .bind(&thread_id)
-            .execute(&state.db)
-            .await;
-        let _ = sqlx::query(
-            "DELETE FROM bubble_ups WHERE user_id = ?1 AND thread_id = ?2 AND fired_at IS NULL",
-        )
-        .bind(user.id)
-        .bind(&thread_id)
-        .execute(&state.db)
-        .await;
+        hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id)
+            .await
+            .map_err(provider_error)?;
 
         tracing::debug!(user_id = user.id, thread_id = %thread_id, "restore undo unavailable: previous mailbox snapshot not captured");
         Ok(None)
@@ -900,14 +895,8 @@ async fn destroy_thread(
                 tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread note cleanup failed after destroy");
                 return internal();
             }
-            if let Err(err) =
-                sqlx::query("DELETE FROM stack_positions WHERE user_id = ?1 AND thread_id = ?2")
-                    .bind(user.id)
-                    .bind(&thread_id)
-                    .execute(&state.db)
-                    .await
-            {
-                tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "stack cleanup failed after destroy");
+            if let Err(err) = hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id).await {
+                tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread sidecar cleanup failed after destroy");
                 return internal();
             }
             if let Err(err) =

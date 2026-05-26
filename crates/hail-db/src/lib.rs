@@ -66,6 +66,39 @@ pub async fn mark_thread_seen(
     Ok(())
 }
 
+/// Clear stack placement rows for a thread.
+pub async fn clear_thread_stack_positions(
+    pool: &SqlitePool,
+    user_id: i64,
+    thread_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM stack_positions WHERE user_id = ? AND thread_id = ?")
+        .bind(user_id)
+        .bind(thread_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Clear sidecar state that should not survive moving a thread between views.
+///
+/// Fired Bubble Ups are retained as history; only pending reminders are removed.
+pub async fn clear_thread_sidecar_state(
+    pool: &SqlitePool,
+    user_id: i64,
+    thread_id: &str,
+) -> Result<(), sqlx::Error> {
+    clear_thread_stack_positions(pool, user_id, thread_id).await?;
+    sqlx::query(
+        "DELETE FROM bubble_ups WHERE user_id = ? AND thread_id = ? AND fired_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(thread_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Return whether a user has seen a thread.
 pub async fn is_thread_seen(
     pool: &SqlitePool,
