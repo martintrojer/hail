@@ -1,5 +1,6 @@
 use secrecy::{ExposeSecret, SecretString};
 use tracing::instrument;
+use url::Url;
 
 use crate::Error;
 use jmap_client::client::Credentials;
@@ -57,13 +58,9 @@ impl Session {
 }
 
 fn base_url_host(base_url: &str) -> Option<String> {
-    base_url
-        .split_once("://")
-        .map_or(base_url, |(_, rest)| rest)
-        .split(['/', ':'])
-        .next()
-        .filter(|host| !host.is_empty())
-        .map(str::to_owned)
+    Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
 }
 
 fn session_from_client(client: jmap_client::client::Client) -> Result<Session, Error> {
@@ -93,5 +90,45 @@ fn is_auth_error(error: &jmap_client::Error) -> bool {
             status.starts_with("401") || status.starts_with("403")
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_normal_host() {
+        assert_eq!(
+            base_url_host("https://mail.example.org"),
+            Some("mail.example.org".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_host_with_port_and_path() {
+        assert_eq!(
+            base_url_host("https://mail.example.org:8443/jmap/session"),
+            Some("mail.example.org".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_ipv6_literal_host() {
+        assert_eq!(
+            base_url_host("https://[2001:db8::1]:8443/jmap/session"),
+            Some("[2001:db8::1]".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_urls() {
+        assert_eq!(base_url_host("not a url"), None);
+        assert_eq!(base_url_host("https://"), None);
+    }
+
+    #[test]
+    fn rejects_urls_without_hosts() {
+        assert_eq!(base_url_host("file:///tmp/jmap"), None);
     }
 }
