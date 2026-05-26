@@ -28,6 +28,7 @@ import { DraftsPage } from './routes/DraftsPage';
 import { MailViewPage } from './routes/MailViewPage';
 import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
+import { ScreenerSpeakeasyPage } from './routes/ScreenerSpeakeasyPage';
 import { SearchPage } from './routes/SearchPage';
 import { ScheduledSendsPage } from './routes/ScheduledSendsPage';
 import { ThreadPage } from './routes/ThreadPage';
@@ -493,6 +494,13 @@ const screenedOutRoute = createRoute({
   component: ScreenedOutPage,
 });
 
+const screenerSpeakeasyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/screener/speakeasy',
+  beforeLoad: requireAuth,
+  component: ScreenerSpeakeasyPage,
+});
+
 const setAsideRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/set-aside',
@@ -616,6 +624,7 @@ const routeTree = rootRoute.addChildren([
   scheduledRoute,
   screenerRoute,
   screenedOutRoute,
+  screenerSpeakeasyRoute,
   setAsideRoute,
   replyLaterRoute,
   bubbleUpRoute,

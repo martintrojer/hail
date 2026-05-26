@@ -14,6 +14,7 @@ import {
   useNotSpamThreadMutation,
   usePapertrailView,
   useReplyLaterThreadMutation,
+  useScreenerAllowedView,
   useScreenerDecisionMutation,
   useScreenerView,
   useUndoDenyMutation,
@@ -29,6 +30,7 @@ export function ApiHookSmoke() {
   void useMe();
   void useSetupState();
   void useScreenerView();
+  void useScreenerAllowedView();
   void useDeniedSenders();
   void useImboxView();
   void useFeedView();

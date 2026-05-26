@@ -4,20 +4,27 @@ import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
 
 export type ScreenerRoutingDestination = 'imbox' | 'feed' | 'papertrail';
 
+export const routingDestinationLabels = {
+  imbox: 'The Imbox',
+  feed: 'The Feed',
+  papertrail: 'Paper Trail',
+} as const satisfies Record<ScreenerRoutingDestination, string>;
+
 export interface ScreenerRoutingDropdownProps {
   open: boolean;
   onClose: () => void;
   onSelect: (destination: ScreenerRoutingDestination) => void;
   anchorRect?: DOMRect | null;
+  value?: ScreenerRoutingDestination;
 }
 
 const routingOptions: Array<{
   value: ScreenerRoutingDestination;
   label: string;
 }> = [
-  { value: 'imbox', label: 'The Imbox' },
-  { value: 'feed', label: 'The Feed' },
-  { value: 'papertrail', label: 'Paper Trail' },
+  { value: 'imbox', label: routingDestinationLabels.imbox },
+  { value: 'feed', label: routingDestinationLabels.feed },
+  { value: 'papertrail', label: routingDestinationLabels.papertrail },
 ];
 
 function dropdownPosition(anchorRect: DOMRect | null | undefined) {
@@ -43,6 +50,7 @@ export function ScreenerRoutingDropdown({
   onClose,
   onSelect,
   anchorRect,
+  value = 'imbox',
 }: ScreenerRoutingDropdownProps) {
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -91,7 +99,7 @@ export function ScreenerRoutingDropdown({
       style={{ top: position.top, left: position.left }}
     >
       {routingOptions.map((option) => {
-        const isDefault = option.value === 'imbox';
+        const isSelected = option.value === value;
 
         return (
           <button
@@ -99,12 +107,12 @@ export function ScreenerRoutingDropdown({
             type="button"
             role="menuitem"
             className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium text-ink-primary hover:bg-bg-hover focus:bg-bg-hover focus:outline-none ${
-              isDefault ? 'bg-bg-selected' : ''
+              isSelected ? 'bg-bg-selected' : ''
             }`}
             onClick={() => selectDestination(option.value)}
           >
             <span className="flex-1">{option.label}</span>
-            {isDefault ? (
+            {isSelected ? (
               <span aria-hidden="true" className="text-ink-secondary">
                 ✓
               </span>

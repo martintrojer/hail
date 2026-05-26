@@ -229,6 +229,14 @@ export type BlobUploadPart =
 export type ScreenerDecision = 'approve' | 'deny';
 export type ScreenerClassification = components['schemas']['MailClassification'];
 export type ScreenerPendingSender = components['schemas']['ScreenerSender'];
+export interface ScreenerAllowedSender {
+  sender_address: string;
+  classify_as: ScreenerClassification;
+  decided_at?: string | null;
+}
+export interface ScreenerAllowedView {
+  allowed: ScreenerAllowedSender[];
+}
 export type DeniedSender = components['schemas']['DeniedSender'];
 export type DeniedSendersResponse = DeniedSendersGetSuccess;
 export interface UndoDenyRequest {
@@ -420,6 +428,13 @@ export class HailApiClient {
   async getScreenerView(): Promise<ScreenerView> {
     return this.#json<ScreenerView>(
       await this.#request('/api/views/screener'),
+      200,
+    );
+  }
+
+  async getScreenerAllowedView(): Promise<ScreenerAllowedView> {
+    return this.#json<ScreenerAllowedView>(
+      await this.#request('/api/views/screener/allowed'),
       200,
     );
   }
