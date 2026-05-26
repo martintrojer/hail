@@ -96,6 +96,18 @@ podman rm --force hail-stalwart-manual
 rm -rf "$root"
 ```
 
+## Deployment example validation
+
+Provider smarthost config snippets and their optional Compose overlay are
+validated with a lightweight Python script. It parses the example TOML/YAML,
+asserts Gmail/generic relays use STARTTLS/auth environment placeholders rather
+than checked-in secrets, and verifies the canonical Compose/Stalwart deployment
+remains relay-free by default:
+
+```bash
+scripts/validate-provider-smarthost-examples.py
+```
+
 ## Local mail testbed
 
 `scripts/local-mail-testbed.sh` is the repeatable local/direct mail smoke
