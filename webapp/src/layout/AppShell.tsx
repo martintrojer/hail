@@ -34,6 +34,8 @@ interface AppShellProps {
   list?: ReactNode;
   reading?: ReactNode;
   actions?: ReactNode;
+  /** Use wider content area (e.g. for two-column layouts). */
+  wide?: boolean;
 }
 
 interface MenuItem {
@@ -154,6 +156,7 @@ export function AppShell({
   list,
   reading,
   actions,
+  wide,
 }: AppShellProps) {
   const { user, logout, logoutLoading } = useAuth();
   const navigate = useNavigate();
@@ -351,7 +354,7 @@ export function AppShell({
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-center-column px-4 pb-16 pt-2 sm:px-6">
+      <main className={`mx-auto w-full px-4 pb-16 pt-2 sm:px-6 ${wide ? 'max-w-5xl' : 'max-w-center-column'}`}>
         {description ? (
           <p className="mb-6 max-w-2xl hail-body text-ink-secondary">
             {description}
