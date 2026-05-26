@@ -84,7 +84,7 @@ See [docs/quickstart.md](docs/quickstart.md) for the full guide including DNS, T
 | [roadmap.md](docs/roadmap.md) | Post-v1 backlog, release themes, TUI plans |
 | [cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Cloudflare Tunnel + Email Routing recipes |
 | [reverse-proxy.md](docs/reverse-proxy.md) | Nginx/Caddy reverse proxy setup |
-| [backup.md](docs/backup.md) | Backup and restore procedures |
+| [backup.md](docs/backup.md) | Backup/restore procedures, including optional Litestream hail.db replication |
 | [upgrade.md](docs/upgrade.md) | Upgrade guide between versions |
 | [testing.md](docs/testing.md) | Test strategy and running tests |
 

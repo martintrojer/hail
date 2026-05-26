@@ -127,7 +127,21 @@ Back up `HAIL_SERVER_KEY`; restored sessions cannot be decrypted without it.
 Keep `HAIL_SETUP_BOOTSTRAP_TOKEN` private until setup is complete. It is only
 needed to authorize the first admin creation form.
 
-## 5. Start the stack
+## 5. Optional: enable hail.db backups
+
+Litestream backup for the SQLite sidecar is an optional Compose overlay and is
+not required for local development:
+
+```bash
+cp deploy/litestream.example.yml deploy/litestream.yml
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml up -d
+# or: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml up -d
+```
+
+The example config writes to a local file replica. For production S3/R2 setup
+and restore drills, see `docs/backup.md`.
+
+## 6. Start the stack
 
 Podman:
 
@@ -152,7 +166,7 @@ curl -i http://127.0.0.1:8080/readyz
 curl -i https://mail.example.com:8080/readyz
 ```
 
-## 6. Complete the first-run wizard
+## 7. Complete the first-run wizard
 
 Open:
 
@@ -179,7 +193,7 @@ In the wizard:
 For production, put real TLS in front of hail with Caddy, Traefik, or
 Cloudflare Tunnel before inviting other users.
 
-## 7. Publish DNS for direct SMTP
+## 8. Publish DNS for direct SMTP
 
 For direct delivery to Stalwart, create:
 
@@ -204,7 +218,7 @@ dig +short MX example.com
 dig +short A mail.example.com
 ```
 
-## 8. Send a test email
+## 9. Send a test email
 
 From an outside mailbox, send:
 
@@ -219,7 +233,7 @@ Open hail and go to **Screener**. Mail from a new sender should appear there.
 Approve the sender and choose Imbox, Feed, or Paper Trail. Future mail from
 that sender follows the rule. If the sender is already approved, check Imbox.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Mail is not arriving
 

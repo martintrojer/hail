@@ -10,6 +10,8 @@
 #
 # Production/direct SMTP still needs the canonical low-port mapping in
 # deploy/docker-compose.yml or a reverse/proxy/mail-routing setup.
+#
+# Optional hail.db backups: add docker-compose.litestream.yml; see docs/backup.md.
 
 services:
   stalwart:
