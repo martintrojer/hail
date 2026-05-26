@@ -312,6 +312,116 @@ async fn bubble_up_view_returns_current_users_future_pending_rows_ordered_by_sur
 }
 
 #[tokio::test]
+async fn sectioned_imbox_partitions_bubbled_new_and_seen_items() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "sectioned@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "sectioned-other@example.org").await;
+    let now = Utc::now();
+
+    for thread_id in ["thread-3", "thread-4", "thread-6"] {
+        hail_db::mark_thread_seen(&state.db, alice_id, thread_id)
+            .await
+            .unwrap();
+    }
+    hail_db::mark_thread_seen(&state.db, bob_id, "thread-2")
+        .await
+        .unwrap();
+
+    for (user_id, thread_id, fired_at) in [
+        (alice_id, "thread-1", Some(now)),
+        (alice_id, "thread-3", Some(now)),
+        (alice_id, "thread-5", None),
+        (bob_id, "thread-2", Some(now)),
+    ] {
+        sqlx::query(
+            "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(user_id)
+        .bind(thread_id)
+        .bind(now)
+        .bind(fired_at)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+
+    let provider = Arc::new(FakeProvider::new(
+        (1..=6)
+            .map(|n| item_with_view(n, MailView::Imbox))
+            .collect(),
+    ));
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&alice_sid),
+        "/api/views/imbox/sectioned?limit=6",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(provider.calls(), vec![(MailView::Imbox, 6)]);
+    let json = json_body(resp).await;
+    assert_eq!(
+        thread_ids(&json["bubbled_up"]),
+        vec!["thread-1", "thread-3"]
+    );
+    assert_eq!(
+        thread_ids(&json["new_for_you"]),
+        vec!["thread-2", "thread-5"]
+    );
+    assert_eq!(
+        thread_ids(&json["previously_seen"]),
+        vec!["thread-4", "thread-6"]
+    );
+    assert_eq!(json["new_count"], 2);
+    assert_eq!(json["previously_seen_total"], 2);
+}
+
+#[tokio::test]
+async fn sectioned_imbox_caps_previously_seen_but_reports_total() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "sectioned-cap@example.org").await;
+
+    for n in 1..=30 {
+        hail_db::mark_thread_seen(&state.db, user_id, &format!("thread-{n}"))
+            .await
+            .unwrap();
+    }
+    let provider = Arc::new(FakeProvider::new(
+        (1..=30)
+            .map(|n| item_with_view(n, MailView::Imbox))
+            .collect(),
+    ));
+
+    let resp = get_view(
+        state,
+        provider,
+        Some(&sid),
+        "/api/views/imbox/sectioned?limit=30",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["previously_seen"].as_array().unwrap().len(), 25);
+    assert_eq!(json["previously_seen_total"], 30);
+    assert_eq!(json["new_count"], 0);
+    assert_eq!(json["new_for_you"].as_array().unwrap().len(), 0);
+}
+
+fn thread_ids(value: &Value) -> Vec<&str> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["thread_id"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
 async fn provider_error_returns_stable_internal_json() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "erin@example.org").await;
