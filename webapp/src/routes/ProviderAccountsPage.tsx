@@ -40,6 +40,10 @@ function statusLabel(status: ProviderSyncStatusValue) {
   }
 }
 
+function canTriggerSync(status: ProviderSyncStatusValue) {
+  return !['disabled', 'disconnected', 'revoked'].includes(status);
+}
+
 function healthTone(status: ProviderSyncStatusValue) {
   switch (status) {
     case 'active':
@@ -132,7 +136,7 @@ function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
             {statusLabel(status.sync_status)}
           </div>
         </div>
-        <button type="button" onClick={onSync} disabled={syncing || status.sync_status === 'disconnected'} className="rounded-full bg-accent-blue px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60">
+        <button type="button" onClick={onSync} disabled={syncing || !canTriggerSync(status.sync_status)} className="rounded-full bg-accent-blue px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60">
           {syncing ? 'Requesting sync…' : 'Sync now'}
         </button>
       </div>
