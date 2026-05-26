@@ -3,6 +3,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/re
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  ImboxSectionedResponse,
   MailClassification,
   MailViewKind,
   MailViewResponse,
@@ -52,6 +53,19 @@ class MailViewPageTestClient extends TestHailApiClient {
   override async getImbox(): Promise<MailViewResponse> {
     this.calls.push('imbox');
     return this.responses.imbox ?? Promise.resolve(mailViewResponse('imbox'));
+  }
+
+  override async getImboxSectioned(): Promise<ImboxSectionedResponse> {
+    this.calls.push('imbox');
+    const response = await (this.responses.imbox ?? Promise.resolve(mailViewResponse('imbox')));
+
+    return {
+      bubbled_up: [],
+      new_for_you: response.items,
+      previously_seen: [],
+      new_count: response.items.length,
+      previously_seen_total: 0,
+    };
   }
 
   override async getFeed(): Promise<MailViewResponse> {
@@ -442,7 +456,7 @@ describe('MailViewPage', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Power through' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
 
     expect(
       await screen.findByRole('region', { name: 'Power through Imbox' }),
@@ -489,7 +503,7 @@ describe('MailViewPage', () => {
     client.failingActions.add('reply-later');
     renderMailView('imbox', client);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Power through' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Reply Later' }));
 
     await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-fails']));
@@ -515,7 +529,7 @@ describe('MailViewPage', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Power through' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
     expect(await screen.findByText('Back to list')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
