@@ -1,6 +1,6 @@
+import { useApiClient } from '../api/ApiClientProvider';
 import type { HailApiClient, MailClassification, UndoableResponse } from '../api/client';
 import {
-  defaultApiClient,
   useArchiveThreadMutation,
   useClassifyThreadMutation,
   useDestroyThreadMutation,
@@ -63,7 +63,8 @@ function undoFrom(data: unknown) {
 }
 
 export function useListActions(config: ListActionConfig) {
-  const client = config.client ?? defaultApiClient;
+  const contextClient = useApiClient();
+  const client = config.client ?? contextClient;
   const undoToast = useUndoToast();
   const archiveMutation = useArchiveThreadMutation(client);
   const trashMutation = useTrashThreadMutation(client);
