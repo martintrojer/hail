@@ -1,15 +1,12 @@
 import { useRef, useState } from 'react';
 import type { HailApiClient } from '../api/client';
 import {
-  type DeniedSender,
   type ScreenerClassification,
   type ScreenerPendingSender,
 } from '../api/client';
 import {
-  useDeniedSenders,
   useScreenerDecisionMutation,
   useScreenerView,
-  useUndoDenyMutation,
 } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
@@ -245,116 +242,6 @@ function PendingSenderCard({
   );
 }
 
-function DeniedSenderRow({
-  sender,
-  client,
-}: {
-  sender: DeniedSender;
-  client?: HailApiClient;
-}) {
-  const { showToast } = useUndoToast();
-  const undo = useUndoDenyMutation(client, {
-    onSuccess: () => {
-      showToast({ message: `Restored ${sender.sender_address} to the Screener.` });
-    },
-  });
-
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border-subtle bg-bg-surface px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-semibold text-ink-primary">
-          {sender.sender_address}
-        </p>
-        <p className="mt-1 text-xs text-ink-tertiary">
-          Denied {formatDate(sender.denied_at)}
-        </p>
-        {undo.isError ? (
-          <p role="alert" className="mt-2 text-xs text-accent-red">
-            {actionErrorMessage(undo.error, 'Decision')}
-          </p>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        onClick={() => undo.mutate(sender.sender_address)}
-        disabled={undo.isPending}
-        className={`${pillButtonClass('outline', 'md')} self-start sm:self-auto`}
-      >
-        {undo.isPending ? 'Undoing…' : 'Undo'}
-      </button>
-    </div>
-  );
-}
-
-function DeniedSendersList({
-  senders,
-  client,
-}: {
-  senders: DeniedSender[];
-  client?: HailApiClient;
-}) {
-  return (
-    <div className="space-y-3">
-      <ListView
-        items={senders}
-        renderItem={(sender) => <DeniedSenderRow sender={sender} client={client} />}
-        keyExtractor={(sender) => sender.sender_address}
-        hasMore={false}
-        isLoadingMore={false}
-        onLoadMore={() => {}}
-        emptyState={<p className="text-sm text-ink-tertiary">No denied senders yet.</p>}
-      />
-    </div>
-  );
-}
-
-function PreviouslyDeniedSection({ client }: { client?: HailApiClient }) {
-  const [expanded, setExpanded] = useState(false);
-  const query = useDeniedSenders(client, { enabled: expanded });
-  const deniedCount = query.data?.denied.length ?? 0;
-
-  return (
-    <section className="mt-8 rounded-lg border border-border-subtle bg-bg-surface/60 p-4">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        className="flex w-full items-center justify-between gap-4 text-left"
-      >
-        <span>
-          <span className="block text-sm font-semibold text-ink-primary">
-            Previously denied
-          </span>
-          <span className="mt-1 block text-xs text-ink-tertiary">
-            Review blocked senders and undo mistakes.
-          </span>
-        </span>
-        <span className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary">
-          {expanded ? 'Hide' : 'Show'}
-          {expanded && deniedCount > 0 ? ` (${deniedCount})` : ''}
-        </span>
-      </button>
-
-      {expanded ? (
-        <div className="mt-4">
-          {query.isPending ? (
-            <LoadingState label="Loading denied senders" />
-          ) : query.isError ? (
-            <ErrorState
-              message={viewErrorMessage(query.error, 'Screener')}
-              onRetry={() => void query.refetch()}
-            />
-          ) : query.data.denied.length === 0 ? (
-            <p className="text-sm text-ink-tertiary">No denied senders yet.</p>
-          ) : (
-            <DeniedSendersList senders={query.data.denied} client={client} />
-          )}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
 export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
   const query = useScreenerView(client);
   const pendingCount = query.data?.senders.length ?? 0;
@@ -392,12 +279,7 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
       title="The Screener"
       description="New senders end up here. Decide if they get in."
       actions={<ScreenerBanner pendingCount={pendingCount} />}
-      list={
-        <>
-          {pendingList}
-          <PreviouslyDeniedSection client={client} />
-        </>
-      }
+      list={pendingList}
     />
   );
 }
