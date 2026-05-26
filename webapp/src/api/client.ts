@@ -47,6 +47,9 @@ type PileGetSuccess = ResponseBody<
 type MailViewGetSuccess = ResponseBody<
   paths['/api/views/imbox']['get']['responses']['200']
 >;
+type ArchiveGetSuccess = ResponseBody<
+  paths['/api/views/archive']['get']['responses']['200']
+>;
 type TrashGetSuccess = ResponseBody<
   paths['/api/views/trash']['get']['responses']['200']
 >;
@@ -144,6 +147,7 @@ export type MailClassification = components['schemas']['MailClassification'];
 export type MailViewKind = Extract<MailClassification, 'imbox' | 'feed' | 'papertrail'>;
 export type DraftsViewKind = 'drafts';
 export type TrashViewKind = 'trash';
+export type ArchiveViewKind = 'archive';
 export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type MailViewItem = components['schemas']['MailViewItem'];
@@ -156,6 +160,7 @@ export interface ImboxSectionedResponse {
   previously_seen_total: number;
 }
 export type TrashViewResponse = TrashGetSuccess;
+export type ArchiveViewResponse = ArchiveGetSuccess;
 export type SearchResult = components['schemas']['SearchResult'];
 export type MailSearchResult = Extract<SearchResult, { type: 'mail' }>;
 export type ContactNoteSearchResult = Extract<SearchResult, { type: 'contact_note' }>;
@@ -438,6 +443,13 @@ export class HailApiClient {
   async getDrafts(): Promise<MailViewResponse> {
     return this.#json<MailViewResponse>(
       await this.#request('/api/views/drafts'),
+      200,
+    );
+  }
+
+  async getArchiveView(): Promise<ArchiveViewResponse> {
+    return this.#json<ArchiveViewResponse>(
+      await this.#request('/api/views/archive'),
       200,
     );
   }

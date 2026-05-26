@@ -20,6 +20,7 @@ import { useTheme } from './hooks/useTheme';
 import { formErrorMessage } from './lib/errorMessages';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
+import { ArchivePage } from './routes/ArchivePage';
 import { BubbleUpPage } from './routes/BubbleUpPage';
 import { ComposerPage } from './routes/ComposerPage';
 import { DraftsPage } from './routes/DraftsPage';
@@ -535,6 +536,13 @@ const trashRoute = createRoute({
   component: TrashPage,
 });
 
+const archiveRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/archive',
+  beforeLoad: requireAuth,
+  component: ArchivePage,
+});
+
 interface ComposeSearch {
   replyTo?: string;
   replyAll?: boolean;
@@ -591,6 +599,7 @@ const routeTree = rootRoute.addChildren([
   threadReplyRoute,
   searchRoute,
   trashRoute,
+  archiveRoute,
   composeRoute,
   adminRoute,
 ]);

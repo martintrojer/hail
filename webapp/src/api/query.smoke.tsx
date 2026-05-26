@@ -7,6 +7,7 @@ import {
   useDeniedSenders,
   useFeedView,
   useImboxView,
+  useArchiveView,
   useLoginMutation,
   useLogoutMutation,
   useMe,
@@ -30,6 +31,7 @@ export function ApiHookSmoke() {
   void useImboxView();
   void useFeedView();
   void usePapertrailView();
+  void useArchiveView();
   void useTrashView();
   void useContact('person@example.com');
   void useLoginMutation();
@@ -44,6 +46,7 @@ export function ApiHookSmoke() {
   void useContactNoteMutation();
   void useBubbleUpMutation();
   void queryKeys.contact('person@example.com');
+  void queryKeys.view('archive');
   void queryKeys.view('trash');
   void queryKeys.view('imbox');
 

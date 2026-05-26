@@ -18,6 +18,8 @@ export function viewErrorMessage(error: Error, context?: string): string {
           return 'Your session expired. Sign in again to refresh this view.';
         case 'Trash':
           return 'Your session expired. Sign in again to refresh Trash.';
+        case 'Archive':
+          return 'Your session expired. Sign in again to refresh Archive.';
         case 'Screener':
           return 'Your session expired. Sign in again to refresh the Screener.';
         case 'Drafts':
@@ -36,6 +38,8 @@ export function viewErrorMessage(error: Error, context?: string): string {
       return 'Mail view failed to load. Refresh and try again.';
     case 'Trash':
       return 'Trash failed to load. Refresh and try again.';
+    case 'Archive':
+      return 'Archive failed to load. Refresh and try again.';
     case 'Screener':
       return 'Screener failed to load. Refresh and try again.';
     case 'Drafts':

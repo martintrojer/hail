@@ -29,6 +29,7 @@ use crate::routes::jmap_helpers::{
     MAIL_VIEW_PROPERTIES, hydrate_thread_previews, jmap_session, trash_mailbox_id,
 };
 use crate::routes::response::{bad_request, internal};
+use crate::routes::threads::MailboxRole;
 use crate::state::AppState;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -96,6 +97,15 @@ impl MailViewProvider for JmapMailViewProvider {
                     return Ok(Vec::new());
                 };
                 filter = Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id));
+            } else if view == MailView::Archive {
+                let Some(archive_mailbox_id) =
+                    hail_jmap::mailbox_id_by_role(&session, MailboxRole::Archive.jmap())
+                        .await
+                        .map_err(|err| MailViewError::provider(err.to_string()))?
+                else {
+                    return Ok(Vec::new());
+                };
+                filter = Filter::from(email_query::Filter::in_mailbox(archive_mailbox_id));
             }
             request
                 .query_email()
@@ -346,7 +356,8 @@ where
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_drafts).layer(Extension(mail_provider.clone())))
-        .routes(routes!(get_trash).layer(Extension(mail_provider)))
+        .routes(routes!(get_trash).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_archive).layer(Extension(mail_provider)))
         .routes(routes!(get_bubble_up))
         .routes(routes!(get_search).layer(Extension(search_provider)))
 }
@@ -372,6 +383,7 @@ pub enum MailView {
     Papertrail,
     Drafts,
     Trash,
+    Archive,
 }
 
 impl MailView {
@@ -382,6 +394,7 @@ impl MailView {
             Self::Papertrail => "$hail_papertrail",
             Self::Drafts => "$draft",
             Self::Trash => "$deleted",
+            Self::Archive => "$hail_archive",
         }
     }
 
@@ -392,6 +405,7 @@ impl MailView {
             Self::Papertrail => MailClassification::Papertrail,
             Self::Drafts => MailClassification::Drafts,
             Self::Trash => MailClassification::Trash,
+            Self::Archive => MailClassification::Archive,
         }
     }
 }
@@ -404,6 +418,7 @@ pub enum MailClassification {
     Papertrail,
     Drafts,
     Trash,
+    Archive,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -667,6 +682,26 @@ async fn get_trash(
     Query(query): Query<ViewQuery>,
 ) -> Response {
     get_view(state, user, provider, query, MailView::Trash).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/archive",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Archive mail view.", body = MailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "JMAP mail view lookup failed."),
+    ),
+)]
+async fn get_archive(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+    Query(query): Query<ViewQuery>,
+) -> Response {
+    get_view(state, user, provider, query, MailView::Archive).await
 }
 
 #[utoipa::path(
