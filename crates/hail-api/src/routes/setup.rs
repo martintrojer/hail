@@ -5,10 +5,11 @@
 //! two concurrent first-run submissions cannot both create admins.
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-use axum::extract::{Extension, State};
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::post};
@@ -155,12 +156,20 @@ async fn setup_state(State(state): State<AppState>) -> Response {
 async fn setup_admin<P>(
     State(state): State<AppState>,
     Extension(provisioner): Extension<Arc<P>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<SetupAdminRequest>,
 ) -> Response
 where
     P: UserProvisioner,
 {
+    let ip =
+        crate::middleware::rate_limit::client_ip(&headers, Some(addr.ip())).unwrap_or(addr.ip());
+    if !state.auth_rate_limiter.check(ip) {
+        tracing::warn!(%ip, "setup: rate-limited");
+        return crate::middleware::rate_limit::too_many_requests();
+    }
+
     let email = body.email.trim().to_lowercase();
     let display_name = body
         .display_name

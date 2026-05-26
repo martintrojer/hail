@@ -35,7 +35,7 @@ async fn fixture_state_with_public_url(
         db,
         config,
         server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
+        auth_rate_limiter: Arc::new(IpRateLimiter::default()),
         events: hail_api::events::AppEventBus::default(),
     }
 }

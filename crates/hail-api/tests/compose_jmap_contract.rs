@@ -101,7 +101,7 @@ impl ContractRuntime {
             db,
             config,
             server_key: Arc::new(key),
-            login_limiter: Arc::new(IpRateLimiter::new(100, Duration::from_secs(60))),
+            auth_rate_limiter: Arc::new(IpRateLimiter::new(100, Duration::from_secs(60))),
             events: hail_api::events::AppEventBus::default(),
         };
 

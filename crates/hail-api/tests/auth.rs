@@ -166,7 +166,7 @@ async fn malformed_payload_returns_400_and_does_not_call_provider() {
 #[tokio::test]
 async fn rate_limiter_returns_429_after_attempts_without_calling_provider() {
     let (mut state, _key) = fixture_state().await;
-    state.login_limiter = Arc::new(IpRateLimiter::new(2, StdDuration::from_secs(60)));
+    state.auth_rate_limiter = Arc::new(IpRateLimiter::new(2, StdDuration::from_secs(60)));
     let calls = Arc::new(AtomicUsize::new(0));
 
     for _ in 0..2 {
@@ -189,6 +189,41 @@ async fn rate_limiter_returns_429_after_attempts_without_calling_provider() {
     .await;
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn rate_limiter_keys_on_x_forwarded_for_when_present() {
+    let (mut state, _key) = fixture_state().await;
+    state.auth_rate_limiter = Arc::new(IpRateLimiter::new(1, StdDuration::from_secs(60)));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = ok_provider("acct", calls.clone());
+
+    let first = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
+        .body(Body::from(
+            json!({ "email": "alice@example.org", "password": "correct horse battery staple" })
+                .to_string(),
+        ))
+        .unwrap();
+    let first = login_with_provider(state.clone(), first, provider.clone()).await;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
+        .body(Body::from(
+            json!({ "email": "bob@example.org", "password": "correct horse battery staple" })
+                .to_string(),
+        ))
+        .unwrap();
+    let second = login_with_provider(state, second, provider).await;
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

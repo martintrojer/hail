@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
         db,
         config,
         server_key: Arc::new(server_key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
+        auth_rate_limiter: Arc::new(IpRateLimiter::default()),
         events: hail_api::events::AppEventBus::default(),
     };
 

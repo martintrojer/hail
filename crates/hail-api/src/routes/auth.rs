@@ -114,17 +114,13 @@ where
     Fut: Future<Output = Result<String, String>>,
 {
     // Rate-limit BEFORE we touch Stalwart so spraying credentials is
-    // cheap to absorb. We key on the connecting peer's IP — fine for our
-    // single-host deployment, where there is no upstream proxy
-    // injecting `X-Forwarded-For` we'd need to trust.
-    if !state.login_limiter.check(addr.ip()) {
-        tracing::warn!(ip = %addr.ip(), "login: rate-limited");
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"rate_limited"}"#,
-        )
-            .into_response();
+    // cheap to absorb. Prefer X-Forwarded-For for reverse-proxy deployments;
+    // otherwise use the direct peer address from ConnectInfo.
+    let ip =
+        crate::middleware::rate_limit::client_ip(&headers, Some(addr.ip())).unwrap_or(addr.ip());
+    if !state.auth_rate_limiter.check(ip) {
+        tracing::warn!(%ip, "login: rate-limited");
+        return crate::middleware::rate_limit::too_many_requests();
     }
 
     let email = body.email.trim().to_lowercase();
