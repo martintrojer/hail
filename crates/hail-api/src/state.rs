@@ -25,9 +25,9 @@ pub struct AppState {
     /// output (we don't derive Debug on AppState for the same reason —
     /// see the manual impl below).
     pub server_key: Arc<[u8; hail_core::KEY_LEN]>,
-    /// In-memory rate limiter for `/api/auth/login` (5 attempts / 60s
-    /// per remote IP). See `middleware::rate_limit`.
-    pub login_limiter: Arc<crate::middleware::rate_limit::IpRateLimiter>,
+    /// In-memory rate limiter for sensitive public auth endpoints (5 attempts
+    /// / 60s per remote IP). See `middleware::rate_limit`.
+    pub auth_rate_limiter: Arc<crate::middleware::rate_limit::IpRateLimiter>,
     /// Process-local event fan-out for `/api/ws`. Worker-originated events
     /// cross the process boundary through the SQLite `app_events` outbox and
     /// are rebroadcast into this bus by the API bridge task.

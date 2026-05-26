@@ -1,6 +1,7 @@
 //! Tiny in-memory token bucket keyed by remote IP.
 //!
-//! Used to throttle `/api/auth/login` to 5 attempts / 60s per source IP.
+//! Used to throttle sensitive public auth endpoints (`/api/auth/login` and
+//! `/api/setup/admin`) to 5 attempts / 60s per source IP.
 //! This deliberately avoids `tower-governor`: that crate pulls in
 //! `governor` + `dashmap` + `nonzero_ext`, all of which would be net-new
 //! transitive surface for one rate-limited endpoint. For our scale (≤ 20
@@ -18,6 +19,9 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
 /// Max successful + failed attempts per window.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 5;
@@ -90,6 +94,33 @@ impl IpRateLimiter {
     }
 }
 
+/// Resolve the best client IP candidate for rate limiting.
+///
+/// We prefer the first address in `X-Forwarded-For` so deployments behind a
+/// reverse proxy rate-limit the original client instead of the proxy. If the
+/// header is absent or malformed, fall back to the direct peer address supplied
+/// by Axum's `ConnectInfo`.
+pub fn client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> Option<IpAddr> {
+    headers
+        .get(header::HeaderName::from_static("x-forwarded-for"))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .or(fallback)
+}
+
+/// Standard JSON 429 response for throttled public auth attempts.
+pub fn too_many_requests() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"rate_limited"}"#,
+    )
+        .into_response()
+}
+
 impl Default for IpRateLimiter {
     fn default() -> Self {
         Self::new(DEFAULT_MAX_ATTEMPTS, DEFAULT_WINDOW)
@@ -127,5 +158,31 @@ mod tests {
         assert!(!lim.check(ip));
         std::thread::sleep(Duration::from_millis(80));
         assert!(lim.check(ip));
+    }
+
+    #[test]
+    fn client_ip_prefers_first_x_forwarded_for_address() {
+        let headers = HeaderMap::from_iter([(
+            header::HeaderName::from_static("x-forwarded-for"),
+            "203.0.113.7, 10.0.0.1".parse().unwrap(),
+        )]);
+
+        assert_eq!(
+            client_ip(&headers, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            Some("203.0.113.7".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn client_ip_falls_back_when_x_forwarded_for_is_bad() {
+        let headers = HeaderMap::from_iter([(
+            header::HeaderName::from_static("x-forwarded-for"),
+            "not an ip".parse().unwrap(),
+        )]);
+
+        assert_eq!(
+            client_ip(&headers, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
     }
 }

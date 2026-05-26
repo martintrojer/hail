@@ -48,7 +48,7 @@ async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) 
         db,
         config,
         server_key: Arc::new(key),
-        login_limiter: Arc::new(IpRateLimiter::default()),
+        auth_rate_limiter: Arc::new(IpRateLimiter::default()),
         events: hail_api::events::AppEventBus::default(),
     };
     (state, key)
@@ -218,6 +218,9 @@ async fn post_admin_raw(app: Router, body: &str) -> axum::response::Response {
         .uri("/api/setup/admin")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, "setup-test")
+        .extension(axum::extract::ConnectInfo(
+            "127.0.0.1:10000".parse::<std::net::SocketAddr>().unwrap(),
+        ))
         .body(Body::from(body.to_string()))
         .unwrap();
     app.oneshot(req).await.unwrap()
@@ -330,6 +333,67 @@ async fn post_setup_admin_rejects_missing_or_wrong_bootstrap_token() {
     let bytes = wrong.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "setup_bootstrap_required");
+}
+
+#[tokio::test]
+async fn post_setup_admin_rate_limited_by_forwarded_ip_without_provisioning() {
+    let (mut state, _key) = fixture_state(None).await;
+    state.auth_rate_limiter = Arc::new(IpRateLimiter::new(2, Duration::from_secs(60)));
+    let provisioner = Arc::new(FakeProvisioner::default());
+    let body = body_with_bootstrap_token(
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        "setup-test-bootstrap-token",
+    );
+
+    for _ in 0..2 {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/setup/admin")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::USER_AGENT, "setup-test")
+            .header("x-forwarded-for", "203.0.113.77")
+            .extension(axum::extract::ConnectInfo(
+                "127.0.0.1:10000".parse::<std::net::SocketAddr>().unwrap(),
+            ))
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let resp = app_with_provisioner(state.clone(), provisioner.clone())
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        sqlx::query("DELETE FROM sessions")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users")
+            .execute(&state.db)
+            .await
+            .unwrap();
+    }
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/setup/admin")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::USER_AGENT, "setup-test")
+        .header("x-forwarded-for", "203.0.113.77")
+        .extension(axum::extract::ConnectInfo(
+            "127.0.0.1:10000".parse::<std::net::SocketAddr>().unwrap(),
+        ))
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app_with_provisioner(state, provisioner.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "rate_limited");
+    assert_eq!(provisioner.call_count(), 2);
 }
 
 #[tokio::test]
