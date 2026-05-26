@@ -19,7 +19,12 @@ The name is a pun: **h**ey + em**ail**.
 - Reproduce hey.com's signature user experience (Screener, Imbox/Feed/Paper Trail, the Pile, thread-as-document, spy-pixel blocking, contact notes, bubble-up, send-later) on self-hosted infrastructure.
 - Be the **easiest** way to run hey-style email at home or on a small VPS. One `docker compose up`, ten minutes to first received mail.
 - Speak JMAP exclusively to the mail server. No IMAP fallback in hail's code.
-- Provide working recipes for the two most common self-host networking situations: direct port 25, and Cloudflare Tunnel + Cloudflare Email Routing for users on CGNAT or residential ISPs.
+- Provide working recipes for common self-host networking situations: direct
+  port 25, Cloudflare Tunnel + Cloudflare Email Routing, and a VPS/WireGuard MX
+  gateway for home networks behind CGNAT or residential ISP blocks.
+- Document provider-backed modes, such as Gmail-backed hail or provider import
+  into Stalwart, as future alternatives for operators who do not want to run any
+  public mail server.
 - Stay a thin product layer on top of an unmodified upstream Stalwart. Stalwart should remain swappable in principle.
 
 ### Non-Goals
@@ -51,6 +56,11 @@ Persistent state lives in one Docker volume containing:
 - Optional Litestream working directory
 
 No separate Postgres or Redis. Single-binary `hail` (with two entry-points), single SQLite file, single Stalwart instance. The entire stack is four containers, one of which is optional.
+
+**Provider-backed alternatives** are documented but not canonical v1. In those
+modes, an existing Gmail/provider mailbox or Cloudflare Email Routing bridge
+feeds hail/Stalwart through sync/import instead of public SMTP. See
+[`provider-backed-modes.md`](./provider-backed-modes.md).
 
 ## 4. Architecture
 
