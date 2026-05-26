@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { formatDateTime } from '../lib/dates';
 import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
-import { StickyNote, iconSizeProps } from './icons';
+import { Check, StickyNote, iconSizeProps } from './icons';
 
 export interface MailRowProps {
   from: string;
@@ -11,6 +11,8 @@ export interface MailRowProps {
   receivedAtFallback?: string;
   unread?: boolean;
   hasNotes?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
   children?: ReactNode;
 }
 
@@ -22,6 +24,42 @@ function NewPill() {
   );
 }
 
+function senderInitial(from: string) {
+  return (from.trim()[0] ?? '?').toUpperCase();
+}
+
+function SelectionToggle({
+  from,
+  selected,
+  onToggleSelect,
+}: {
+  from: string;
+  selected: boolean;
+  onToggleSelect: () => void;
+}) {
+  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    onToggleSelect();
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      aria-pressed={selected}
+      aria-label={`${selected ? 'Deselect' : 'Select'} ${from || 'Unknown sender'}`}
+      className={`grid h-9 w-9 shrink-0 place-items-center rounded-full border text-sm font-semibold transition focus-ring outline-none ${
+        selected
+          ? 'border-accent-blue bg-accent-blue text-white'
+          : 'border-border-menu bg-bg-hover text-ink-secondary hover:border-accent-blue hover:text-accent-blue'
+      }`}
+    >
+      {selected ? <Check {...iconSizeProps.sm} aria-hidden="true" /> : senderInitial(from)}
+    </button>
+  );
+}
+
 export function MailRow({
   from,
   subject,
@@ -30,30 +68,37 @@ export function MailRow({
   receivedAtFallback,
   unread = false,
   hasNotes = false,
+  selected = false,
+  onToggleSelect,
   children,
 }: MailRowProps) {
   const content = (
-    <div className="min-w-0 flex-1">
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <p className={`${senderNameClass} ${unread ? 'font-bold' : ''}`}>
-            {from || 'Unknown sender'}
-          </p>
-          {unread ? <NewPill /> : null}
+    <div className="flex min-w-0 flex-1 items-start gap-3">
+      {onToggleSelect ? (
+        <SelectionToggle from={from} selected={selected} onToggleSelect={onToggleSelect} />
+      ) : null}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className={`${senderNameClass} ${unread ? 'font-bold' : ''}`}>
+              {from || 'Unknown sender'}
+            </p>
+            {unread ? <NewPill /> : null}
+          </div>
+          <time className={timeClass}>{formatDateTime(receivedAt, receivedAtFallback)}</time>
         </div>
-        <time className={timeClass}>{formatDateTime(receivedAt, receivedAtFallback)}</time>
+        <p className={`mt-1 flex items-center ${subjectClass}`}>
+          <span className="truncate">{subject || '(no subject)'}</span>
+          {hasNotes ? (
+            <StickyNote
+              {...iconSizeProps.sm}
+              className="ml-1.5 inline-block shrink-0 align-[-0.125em] text-ink-tertiary"
+              aria-label="Thread has notes"
+            />
+          ) : null}
+        </p>
+        {preview ? <p className={`mt-1 ${previewClass}`}>{preview}</p> : null}
       </div>
-      <p className={`mt-1 flex items-center ${subjectClass}`}>
-        <span className="truncate">{subject || '(no subject)'}</span>
-        {hasNotes ? (
-          <StickyNote
-            {...iconSizeProps.sm}
-            className="ml-1.5 inline-block shrink-0 align-[-0.125em] text-ink-tertiary"
-            aria-label="Thread has notes"
-          />
-        ) : null}
-      </p>
-      {preview ? <p className={`mt-1 ${previewClass}`}>{preview}</p> : null}
     </div>
   );
 

@@ -15,6 +15,7 @@ import {
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
+import { UndoToastProvider } from './components/UndoToastProvider';
 import { useTheme } from './hooks/useTheme';
 import { formErrorMessage } from './lib/errorMessages';
 import { queryClient } from './lib/queryClient';
@@ -33,7 +34,9 @@ import { ScreenedOutPage } from './routes/ScreenedOutPage';
 function AppShell() {
   return (
     <AuthProvider>
-      <Outlet />
+      <UndoToastProvider>
+        <Outlet />
+      </UndoToastProvider>
     </AuthProvider>
   );
 }

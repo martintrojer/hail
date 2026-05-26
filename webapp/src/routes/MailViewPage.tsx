@@ -1,10 +1,12 @@
 import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import {
   type HailApiClient,
 
   type MailViewItem,
   type MailViewKind,
+  type ThreadVerbResponse,
 } from '../api/client';
 import {
   useArchiveThreadMutation,
@@ -16,7 +18,10 @@ import {
   useScreenerView,
   useSetAsideThreadMutation,
   useTrashThreadMutation,
+  defaultApiClient,
 } from '../api/query';
+import { queryKeys } from '../api/queryKeys';
+import { BatchActionBar } from '../components/BatchActionBar';
 import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle, X, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
@@ -196,14 +201,23 @@ function MailListRow({
   item,
   view,
   client,
+  selected,
+  onToggleSelect,
 }: {
   item: MailViewItem;
   view: MailViewKind;
   client?: HailApiClient;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   return (
     <div className="relative">
-      <MailThreadRow item={item} view={view} />
+      <MailThreadRow
+        item={item}
+        view={view}
+        selected={selected}
+        onToggleSelect={onToggleSelect}
+      />
       <ThreadShortcutActions item={item} client={client} />
     </div>
   );
@@ -219,24 +233,44 @@ function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
   );
 }
 
-function MailThreadRow({ item, view }: { item: MailViewItem; view: MailViewKind }) {
+function MailThreadRow({
+  item,
+  view,
+  selected,
+  onToggleSelect,
+}: {
+  item: MailViewItem;
+  view: MailViewKind;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   if (view === 'feed') {
-    return <FeedThreadRow item={item} />;
+    return <FeedThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />;
   }
 
   if (view === 'papertrail') {
-    return <PaperTrailThreadRow item={item} />;
+    return <PaperTrailThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />;
   }
 
-  return <ImboxThreadRow item={item} />;
+  return <ImboxThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />;
 }
 
-function ImboxThreadRow({ item }: { item: MailViewItem }) {
+function ImboxThreadRow({
+  item,
+  selected = false,
+  onToggleSelect,
+}: {
+  item: MailViewItem;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   return (
     <ThreadLink
       threadId={item.thread_id}
       mailListItem
-      className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-4 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-5"
+      className={`block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-4 pl-3 pr-0 focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-5 ${
+        selected ? 'bg-accent-blue/10' : 'hover:bg-bg-hover'
+      }`}
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
@@ -247,17 +281,29 @@ function ImboxThreadRow({ item }: { item: MailViewItem }) {
         receivedAt={item.received_at}
         unread={item.unread}
         hasNotes={item.has_notes}
+        selected={selected}
+        onToggleSelect={onToggleSelect}
       />
     </ThreadLink>
   );
 }
 
-function FeedThreadRow({ item }: { item: MailViewItem }) {
+function FeedThreadRow({
+  item,
+  selected = false,
+  onToggleSelect,
+}: {
+  item: MailViewItem;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   return (
     <ThreadLink
       threadId={item.thread_id}
       mailListItem
-      className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-6 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-7"
+      className={`block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-6 pl-3 pr-0 focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-7 ${
+        selected ? 'bg-accent-blue/10' : 'hover:bg-bg-hover'
+      }`}
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
@@ -268,17 +314,29 @@ function FeedThreadRow({ item }: { item: MailViewItem }) {
         receivedAt={item.received_at}
         unread={item.unread}
         hasNotes={item.has_notes}
+        selected={selected}
+        onToggleSelect={onToggleSelect}
       />
     </ThreadLink>
   );
 }
 
-function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
+function PaperTrailThreadRow({
+  item,
+  selected = false,
+  onToggleSelect,
+}: {
+  item: MailViewItem;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   return (
     <ThreadLink
       threadId={item.thread_id}
       mailListItem
-      className="block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-2.5 pl-3 pr-0 hover:bg-bg-hover focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-3"
+      className={`block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-2.5 pl-3 pr-0 focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-3 ${
+        selected ? 'bg-accent-blue/10' : 'hover:bg-bg-hover'
+      }`}
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
@@ -288,6 +346,8 @@ function PaperTrailThreadRow({ item }: { item: MailViewItem }) {
         preview=""
         receivedAt={item.received_at}
         hasNotes={item.has_notes}
+        selected={selected}
+        onToggleSelect={onToggleSelect}
       />
     </ThreadLink>
   );
@@ -513,9 +573,40 @@ export function MailViewPage({
   client,
 }: MailViewPageProps) {
   const query = useMailView(view, client);
+  const queryClient = useQueryClient();
+  const apiClient = client ?? defaultApiClient;
+  const undoToast = useUndoToast();
   const screenerQuery = useScreenerView(client);
   const pendingCount = screenerQuery.data?.senders?.length ?? 0;
   const [powerThroughOpen, setPowerThroughOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  function toggleSelect(threadId: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }
+
+  async function batchAction(action: (threadId: string) => Promise<unknown>) {
+    await Promise.all([...selected].map(action));
+    setSelected(new Set());
+    void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+  }
+
+  function batchActionWithToast(
+    action: (threadId: string) => Promise<ThreadVerbResponse>,
+    message: string,
+  ) {
+    void batchAction(async (threadId) => {
+      const data = await action(threadId);
+      return data;
+    }).then(() => {
+      undoToast.showToast({ message, undo: null });
+    });
+  }
 
   const items = useMemo(
     () => (query.isSuccess ? query.data.items : []),
@@ -526,6 +617,7 @@ export function MailViewPage({
     if (view !== 'imbox') {
       setPowerThroughOpen(false);
     }
+    setSelected(new Set());
   }, [view]);
 
   useEffect(() => {
@@ -576,9 +668,47 @@ export function MailViewPage({
     list = (
       <div>
         {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
+        {selected.size > 0 ? (
+          <BatchActionBar
+            count={selected.size}
+            onDeselectAll={() => setSelected(new Set())}
+            onArchive={() =>
+              batchActionWithToast(
+                (threadId) => apiClient.archiveThread(threadId),
+                `${selected.size} thread${selected.size === 1 ? '' : 's'} archived.`,
+              )
+            }
+            onTrash={() =>
+              batchActionWithToast(
+                (threadId) => apiClient.trashThread(threadId),
+                `${selected.size} thread${selected.size === 1 ? '' : 's'} moved to trash.`,
+              )
+            }
+            onSetAside={() =>
+              batchActionWithToast(
+                (threadId) => apiClient.setAsideThread(threadId),
+                `${selected.size} thread${selected.size === 1 ? '' : 's'} added to Set Aside.`,
+              )
+            }
+            onReplyLater={() =>
+              batchActionWithToast(
+                (threadId) => apiClient.replyLaterThread(threadId),
+                `${selected.size} thread${selected.size === 1 ? '' : 's'} added to Reply Later.`,
+              )
+            }
+          />
+        ) : null}
         <ListView
           items={query.data.items}
-          renderItem={(item) => <MailListRow item={item} view={view} client={client} />}
+          renderItem={(item) => (
+            <MailListRow
+              item={item}
+              view={view}
+              client={client}
+              selected={selected.has(item.thread_id)}
+              onToggleSelect={() => toggleSelect(item.thread_id)}
+            />
+          )}
           keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
           hasMore={false}
           isLoadingMore={false}
