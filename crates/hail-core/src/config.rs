@@ -48,6 +48,10 @@ pub struct Config {
     pub stalwart: StalwartConfig,
     /// HTTP server bind + public URL (for cookie scope / CORS).
     pub server: ServerConfig,
+    /// Optional provider import settings. Gmail OAuth credentials are required
+    /// only when provider import mode is enabled in the UI/API.
+    #[serde(default)]
+    pub provider_import: ProviderImportConfig,
     /// Optional admin block. When `None`, the first-run wizard at `/setup`
     /// can be used only if explicit setup bootstrap config is also present.
     #[serde(default)]
@@ -84,6 +88,30 @@ pub struct ServerConfig {
     /// `HAIL_WEBAPP_DIR`, then falls back to `/srv/hail/webapp`.
     #[serde(default)]
     pub webapp_dir: Option<PathBuf>,
+}
+
+/// Provider import settings. Optional so non-Gmail deployments can run without
+/// OAuth credentials until they enable provider-backed import mode.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderImportConfig {
+    #[serde(default)]
+    pub gmail: GmailProviderConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct GmailProviderConfig {
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub oauth_client_secret: Option<SecretString>,
+    #[serde(default)]
+    pub oauth_auth_url: Option<String>,
+    #[serde(default)]
+    pub oauth_token_url: Option<String>,
+    #[serde(default)]
+    pub oauth_revoke_url: Option<String>,
+    #[serde(default)]
+    pub api_base_url: Option<String>,
 }
 
 /// Pre-provisioned admin login. Setting this block opts out of the wizard

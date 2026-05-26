@@ -24,6 +24,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "workflow_rules",
     "user_invites",
     "provider_accounts",
+    "provider_oauth_states",
     "provider_message_mappings",
     "provider_sync_events",
 ];
@@ -46,6 +47,7 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_provider_accounts_user",
     "idx_provider_accounts_status",
     "idx_provider_accounts_provider_email",
+    "idx_provider_oauth_states_user",
     "idx_provider_message_mappings_thread",
     "idx_provider_message_mappings_rfc822",
     "idx_provider_message_mappings_jmap_email",

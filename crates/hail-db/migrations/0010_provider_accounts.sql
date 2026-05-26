@@ -1,7 +1,3 @@
--- Provider import account and mapping foundation.
--- Refresh-token encryption helpers live in hail-core provider token crypto;
--- this schema stores only encrypted token blobs or external secret references.
-
 CREATE TABLE provider_accounts (
   id                              INTEGER PRIMARY KEY,
   user_id                         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -41,6 +37,20 @@ CREATE TABLE provider_accounts (
 CREATE INDEX idx_provider_accounts_user ON provider_accounts(user_id);
 CREATE INDEX idx_provider_accounts_status ON provider_accounts(sync_status);
 CREATE INDEX idx_provider_accounts_provider_email ON provider_accounts(provider_kind, provider_email);
+
+CREATE TABLE provider_oauth_states (
+  token_hash             TEXT PRIMARY KEY,
+  user_id                INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id             TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  provider_kind          TEXT NOT NULL CHECK (provider_kind IN ('gmail')),
+  redirect_uri           TEXT NOT NULL,
+  requested_scopes_json  TEXT NOT NULL DEFAULT '[]',
+  expires_at             TEXT NOT NULL,
+  consumed_at            TEXT,
+  created_at             TEXT NOT NULL
+);
+CREATE INDEX idx_provider_oauth_states_user
+  ON provider_oauth_states(user_id, provider_kind, expires_at);
 
 CREATE TABLE provider_message_mappings (
   id                    INTEGER PRIMARY KEY,
