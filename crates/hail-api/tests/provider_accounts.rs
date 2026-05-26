@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use hail_api::middleware::auth::CSRF_HEADER;
 use hail_api::middleware::session::SESSION_COOKIE;
 use hail_api::routes::provider_accounts::{
@@ -162,6 +162,24 @@ async fn gmail_connect_returns_readonly_authorization_url_and_persists_state_has
     assert_eq!(requests[0].scopes, vec![GMAIL_READONLY.to_owned()]);
 }
 
+fn redirect_location(headers: &HeaderMap) -> &str {
+    headers
+        .get(header::LOCATION)
+        .expect("redirect location")
+        .to_str()
+        .expect("location is valid header value")
+}
+
+async fn connected_account_id(state: &AppState, user_id: i64) -> i64 {
+    sqlx::query_scalar(
+        "SELECT id FROM provider_accounts WHERE user_id = ?1 AND provider_kind = 'gmail'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once() {
     let (state, key) = app_state().await;
@@ -175,14 +193,13 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
         .oneshot(auth_request(Method::GET, &uri, &session_id))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = json_body(resp).await;
-    assert_eq!(body["provider_kind"], "gmail");
-    assert_eq!(body["provider_email"], "gmail.user@example.com");
-    assert_eq!(body["granted_scopes"], serde_json::json!([GMAIL_READONLY]));
-    assert_eq!(body["last_profile_history_id"], "12345");
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(resp.headers()),
+        "/provider-accounts?connected=gmail"
+    );
 
-    let account_id = body["id"].as_i64().expect("account id");
+    let account_id = connected_account_id(&state, user_id).await;
     let (provider_account_id, encrypted): (String, Vec<u8>) = sqlx::query_as(
         "SELECT provider_account_id, refresh_token_enc FROM provider_accounts WHERE id = ?1",
     )
@@ -212,7 +229,62 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
         .oneshot(auth_request(Method::GET, &uri, &session_id))
         .await
         .unwrap();
-    assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(replay.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(replay.headers()),
+        "/provider-accounts?error=invalid_oauth_state"
+    );
+}
+
+#[tokio::test]
+async fn gmail_callback_redirects_safe_errors_to_provider_accounts_page() {
+    let (state, key) = app_state().await;
+    let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+
+    for (uri, expected_location) in [
+        (
+            "/api/provider-accounts/gmail/callback?state=visible-state-token&error=access_denied&code=visible-code",
+            "/provider-accounts?error=oauth_denied",
+        ),
+        (
+            "/api/provider-accounts/gmail/callback?code=visible-code",
+            "/provider-accounts?error=missing_state",
+        ),
+        (
+            "/api/provider-accounts/gmail/callback?state=visible-state-token",
+            "/provider-accounts?error=missing_code",
+        ),
+    ] {
+        let resp = app(state.clone(), client.clone())
+            .oneshot(auth_request(Method::GET, uri, &session_id))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{uri}");
+        assert_eq!(redirect_location(resp.headers()), expected_location);
+        assert!(!redirect_location(resp.headers()).contains("visible-state-token"));
+        assert!(!redirect_location(resp.headers()).contains("visible-code"));
+    }
+
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(
+            Method::GET,
+            &format!("/api/provider-accounts/gmail/callback?state={state_token}"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(resp.headers()),
+        "/provider-accounts?error=missing_code"
+    );
+    assert_eq!(
+        client.exchange_codes.lock().expect("exchange codes").len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -414,7 +486,8 @@ async fn disconnect_revokes_refresh_token_and_clears_local_secret() {
         .oneshot(auth_request(Method::GET, &uri, &session_id))
         .await
         .unwrap();
-    let account_id = json_body(resp).await["id"].as_i64().unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let account_id = connected_account_id(&state, _user_id).await;
 
     let disconnect_uri = format!("/api/provider-accounts/{account_id}/disconnect");
     let resp = app(state.clone(), client.clone())

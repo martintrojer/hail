@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { HailApiClient, ProviderAccount, ProviderSyncStatus } from '../api/client';
 import {
   useConnectGmailMutation,
@@ -13,7 +13,7 @@ import { actionErrorMessage } from '../lib/errorMessages';
 interface ProviderAccountsPageProps {
   client?: HailApiClient;
   initialAccount?: ProviderAccount | null;
-  location?: Pick<Location, 'assign'>;
+  location?: Pick<Location, 'assign'> & { search?: string };
   confirmDisconnect?: (message: string) => boolean;
 }
 
@@ -71,6 +71,30 @@ function failureText(status: ProviderSyncStatus) {
   const message = status.last_error_message || status.last_error_event?.safe_error_message;
   if (className && message) return `${className}: ${message}`;
   return className || message || 'No recent failure recorded';
+}
+
+function callbackErrorMessage(error: string) {
+  switch (error) {
+    case 'oauth_denied': return 'Gmail connection was cancelled before hail received access.';
+    case 'missing_state':
+    case 'missing_code':
+    case 'invalid_oauth_state': return 'Gmail connection could not be verified. Please try connecting again.';
+    case 'oauth_exchange_failed': return 'Gmail connection failed while exchanging authorization with Google. Please try again.';
+    case 'callback_failed': return 'Gmail connected at Google, but hail could not finish saving the account. Please try again.';
+    default: return 'Gmail connection did not complete. Please try again.';
+  }
+}
+
+function providerCallbackNotice(search: string | undefined) {
+  const params = new URLSearchParams(search ?? '');
+  if (params.get('connected') === 'gmail') {
+    return { kind: 'connected' as const, message: 'Gmail connected. Hail is refreshing import status now.' };
+  }
+  const error = params.get('error');
+  if (error) {
+    return { kind: 'error' as const, message: callbackErrorMessage(error) };
+  }
+  return null;
 }
 
 function DetailTile({ label, value }: { label: string; value: string }) {
@@ -167,10 +191,18 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
 
 export function ProviderAccountsPage({ client, initialAccount = null, location = window.location, confirmDisconnect = window.confirm }: ProviderAccountsPageProps) {
   const [account, setAccount] = useState<ProviderAccount | null>(initialAccount);
+  const callbackNotice = useMemo(() => providerCallbackNotice(location.search), [location.search]);
   const connectGmail = useConnectGmailMutation(client, { onSuccess: (data) => location.assign(data.authorization_url) });
   const disconnectProviderAccount = useDisconnectProviderAccountMutation(client, { onSuccess: (updated) => setAccount(updated) });
   const syncStatuses = useProviderSyncStatuses(client);
   const triggerSync = useTriggerProviderSyncMutation(client);
+  const { refetch: refetchSyncStatuses } = syncStatuses;
+
+  useEffect(() => {
+    if (callbackNotice) {
+      void refetchSyncStatuses();
+    }
+  }, [callbackNotice, refetchSyncStatuses]);
 
   const connectedAccount = useMemo(() => account && account.provider_kind === 'gmail' ? account : null, [account]);
   const gmailStatuses = syncStatuses.data?.accounts ?? [];
@@ -207,6 +239,14 @@ export function ProviderAccountsPage({ client, initialAccount = null, location =
 
         {connectGmail.error ? <p role="alert" className="mt-4 rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">{actionErrorMessage(connectGmail.error, 'Connect Gmail')}</p> : null}
       </section>
+
+      {callbackNotice ? (
+        callbackNotice.kind === 'connected' ? (
+          <p role="status" className="rounded-2xl border border-accent-green/30 bg-accent-green/10 p-4 text-sm text-ink-primary">{callbackNotice.message}</p>
+        ) : (
+          <p role="alert" className="rounded-2xl border border-accent-red/30 bg-accent-red/10 p-4 text-sm text-accent-red">{callbackNotice.message}</p>
+        )
+      ) : null}
 
       {syncStatuses.isPending ? (
         <StateCard title="Checking Gmail import status" body="Loading Gmail sync health from hail-api." className="rounded-2xl border border-hairline bg-surface p-8 text-center" />
