@@ -167,7 +167,7 @@ function TabBar({
 }
 
 export function ScreenedOutPage({ client }: ScreenedOutPageProps) {
-  const [activeTab, setActiveTab] = useState<ScreenedOutTab>('senders');
+  const [activeTab, setActiveTab] = useState<ScreenedOutTab>('emails');
   const query = useDeniedSenders(client);
   const denied = useMemo(
     () => (query.isSuccess ? query.data.denied : []),
