@@ -143,6 +143,18 @@ depth = 2
 # - /admin Create user ensures the user's email domain exists before creating
 #   the principal, so one shared domain can host many mailboxes without editing
 #   this file or restarting Stalwart.
+#
+# Provider-import outbound smarthosts:
+# - Normal non-provider deployments should leave outbound routing at Stalwart's
+#   defaults or manage it in the WebUI; this base file does not force a relay.
+# - Provider import mode may relay outbound mail through the mailbox provider so
+#   the provider's reputation/DKIM/SPF path is used. See:
+#     docs/provider-outbound-strategy.md
+#     deploy/stalwart-provider-gmail-smarthost.example.toml
+#     deploy/stalwart-provider-generic-smarthost.example.toml
+# - Those snippets keep local-domain delivery local and relay only external
+#   recipients. They read SMTP credentials from environment placeholders such as
+#   HAIL_PROVIDER_SMTP_SECRET; do not commit real provider secrets.
 [directory."internal"]
 type = "internal"
 store = "sqlite"

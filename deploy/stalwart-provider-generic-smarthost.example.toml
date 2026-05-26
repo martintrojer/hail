@@ -1,0 +1,48 @@
+#############################################
+# OPTIONAL provider-import smarthost example: generic SMTP relay
+#############################################
+# Copy this file to your private Stalwart config only when this deployment runs
+# provider import mode and should relay outbound mail through a provider/relay
+# such as Fastmail, Microsoft 365, Postmark, Mailgun, Amazon SES, SMTP2GO, or a
+# VPS relay you control. The default deploy/stalwart.example.toml intentionally
+# does not include this routing, so normal direct-delivery deployments remain
+# unchanged.
+#
+# Requires Stalwart v0.16+ MTA outbound route objects. In the WebUI the same
+# knobs live under Settings -> MTA -> Outbound -> Routes / Strategies.
+# Upstream routing docs: https://stalw.art/docs/mta/outbound/routing/
+#
+# Secret handling:
+# - Do not replace the env placeholders with real credentials in git.
+# - Pass HAIL_PROVIDER_SMTP_HOST, HAIL_PROVIDER_SMTP_USERNAME, and
+#   HAIL_PROVIDER_SMTP_SECRET via a local deploy/.env file, Compose secret
+#   injection, or your operator secret manager.
+# - Redact usernames if they are private addresses; always redact the secret.
+#
+# This example uses STARTTLS on 587. For implicit TLS on 465, set port = 465 and
+# queue.route."provider-smtp".tls.implicit = true in your private config.
+
+[queue.strategy]
+# Keep local-domain delivery inside Stalwart. Relay only external recipients.
+# This prevents local hail/Stalwart mail from looping through the provider.
+route = [
+  { if = "is_local_domain('', rcpt_domain)", then = "'local'" },
+  { else = "'provider-smtp'" },
+]
+
+[queue.route."local"]
+type = "local"
+
+[queue.route."provider-smtp"]
+type = "relay"
+address = "%{env:HAIL_PROVIDER_SMTP_HOST}%"
+port = 587
+protocol = "smtp"
+
+[queue.route."provider-smtp".tls]
+implicit = false
+allow-invalid-certs = false
+
+[queue.route."provider-smtp".auth]
+username = "%{env:HAIL_PROVIDER_SMTP_USERNAME}%"
+secret = "%{env:HAIL_PROVIDER_SMTP_SECRET}%"

@@ -1,3 +1,4 @@
 # Operator-local deployment files
+.env
 litestream.yml
 backups/

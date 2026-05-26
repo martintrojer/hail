@@ -227,6 +227,65 @@ Credentials must be stored in Stalwart/operator secret configuration, not in the
 SPA. If hail stores or provisions smarthost credentials in the future, they must
 use the same encrypted-at-rest posture as provider OAuth refresh tokens.
 
+### Deploy examples
+
+The checked-in base Stalwart config deliberately does **not** enable a provider
+relay. Normal self-hosted/non-provider deployments continue to use Stalwart's
+existing outbound defaults or whatever the operator configures in the Stalwart
+WebUI. Provider import mode operators can opt in by copying one of these example
+snippets into their private Stalwart configuration:
+
+- `deploy/stalwart-provider-gmail-smarthost.example.toml` for Gmail SMTP
+  submission at `smtp.gmail.com:587` with STARTTLS;
+- `deploy/stalwart-provider-generic-smarthost.example.toml` for a generic SMTP
+  relay on port 587 with STARTTLS.
+
+Both snippets define a local route plus a provider relay route and select routes
+with a Stalwart outbound expression:
+
+```toml
+[queue.strategy]
+route = [
+  { if = "is_local_domain('', rcpt_domain)", then = "'local'" },
+  { else = "'provider-smtp'" },
+]
+```
+
+That shape is intentional: local-domain recipients stay inside Stalwart, while
+external recipients are relayed through the configured provider. Do not set the
+route expression to always return the relay id, because that can loop or leak
+local delivery through the provider.
+
+Provider SMTP secrets are environment placeholders, for example:
+
+```toml
+[queue.route."provider-smtp".auth]
+username = "%{env:HAIL_PROVIDER_SMTP_USERNAME}%"
+secret = "%{env:HAIL_PROVIDER_SMTP_SECRET}%"
+```
+
+When using Compose, add `deploy/docker-compose.provider-smarthost.yml` as an
+explicit overlay and put real values in an uncommitted `deploy/.env` file or in
+your secret manager. `deploy/.env.example` documents the variable names with
+redacted placeholders only. Logs, screenshots, task notes, and support bundles
+must redact `HAIL_PROVIDER_SMTP_SECRET` and should redact SMTP usernames when
+they contain private email addresses.
+
+For Gmail, use `HAIL_PROVIDER_SMTP_USERNAME=you@gmail.com` (or a configured
+send-as identity) and a Gmail app password or Workspace-approved SMTP relay
+credential in `HAIL_PROVIDER_SMTP_SECRET`; never commit or document the real
+value. For generic relays, set `HAIL_PROVIDER_SMTP_HOST` to the provider host and
+use the provider-issued SMTP username/password or API key. If the relay requires
+implicit TLS on 465, copy the generic example and set `port = 465` plus
+`implicit = true` in the private config.
+
+Stalwart v0.16+ also exposes these settings as MTA outbound Route/Strategy
+objects in the WebUI. If the operator edits the WebUI instead of TOML, keep the
+same semantics: a `Local` route for local domains, a `Relay` route for the
+provider, STARTTLS/implicit TLS matching provider policy, auth secret sourced
+from operator secrets, and no open-relay broadening beyond authenticated Stalwart
+submission.
+
 ### Gmail API send config
 
 For Gmail API send, hail needs:
