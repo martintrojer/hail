@@ -545,26 +545,20 @@ async fn consume_oauth_state(
     state: &str,
 ) -> Result<Option<OAuthStateRow>, sqlx::Error> {
     let now = Utc::now();
-    let mut tx = db.begin().await?;
+    let state_hash = token_hash(state);
     let row = sqlx::query_as::<_, (String,)>(
-        "SELECT redirect_uri FROM provider_oauth_states \
-         WHERE token_hash = ?1 AND user_id = ?2 AND session_id = ?3 AND provider_kind = ?4 AND consumed_at IS NULL AND expires_at > ?5",
+        "UPDATE provider_oauth_states SET consumed_at = ?1 \
+         WHERE token_hash = ?2 AND user_id = ?3 AND session_id = ?4 AND provider_kind = ?5 AND consumed_at IS NULL AND expires_at > ?6 \
+         RETURNING redirect_uri",
     )
-    .bind(token_hash(state))
+    .bind(now)
+    .bind(state_hash)
     .bind(user_id)
     .bind(session_id)
     .bind(GMAIL_PROVIDER_KIND)
     .bind(now)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(db)
     .await?;
-    if row.is_some() {
-        sqlx::query("UPDATE provider_oauth_states SET consumed_at = ?1 WHERE token_hash = ?2")
-            .bind(now)
-            .bind(token_hash(state))
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
     Ok(row.map(|(redirect_uri,)| OAuthStateRow { redirect_uri }))
 }
 
