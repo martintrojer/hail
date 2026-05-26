@@ -251,6 +251,10 @@ async fn get_thread(
         }
     };
 
+    if let Err(err) = hail_db::mark_thread_seen(&state.db, user.id, &thread_id).await {
+        tracing::warn!(?err, "failed to mark thread seen");
+    }
+
     let participants = participants_for(&assembled.messages);
     let messages = assembled
         .messages

@@ -169,6 +169,27 @@ async fn invalid_thread_id_returns_400_without_assembling() {
 }
 
 #[tokio::test]
+async fn opening_thread_marks_it_seen_for_current_user() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "seen-owner@example.org").await;
+    let (other_user_id, _other_sid) = seed_session(&state, &key, "seen-other@example.org").await;
+
+    let (status, _json) = get_json(state.clone(), &sid, default_assembler()).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        hail_db::is_thread_seen(&state.db, user_id, "thread-123")
+            .await
+            .expect("seen lookup")
+    );
+    assert!(
+        !hail_db::is_thread_seen(&state.db, other_user_id, "thread-123")
+            .await
+            .expect("other user seen lookup")
+    );
+}
+
+#[tokio::test]
 async fn response_embeds_current_user_thread_notes_ordered_by_id() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "notes-owner@example.org").await;
