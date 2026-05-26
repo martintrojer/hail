@@ -28,7 +28,6 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: 'Thread actions',
     shortcuts: [
-      { keys: ['e'], description: 'Archive' },
       { keys: ['#'], description: 'Trash' },
       { keys: ['y'], description: 'Set aside' },
       { keys: ['l'], description: 'Reply later' },
