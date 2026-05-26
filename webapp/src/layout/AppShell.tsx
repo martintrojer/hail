@@ -243,8 +243,8 @@ export function AppShell({
         />
       ) : null}
 
-      <header className="relative z-40 px-4 py-5 sm:px-6 sm:py-6">
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 sm:gap-6">
+      <header className="relative z-40 px-4 py-3 sm:px-6 sm:py-4">
+        <div className="flex items-center justify-between">
           <div className="relative">
             <button
               ref={logoButtonRef}
@@ -319,10 +319,6 @@ export function AppShell({
             ) : null}
           </div>
 
-          <h1 className="min-w-0 truncate hail-page-title text-ink-primary">
-            {title}
-          </h1>
-
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <Link
               to="/compose"
@@ -362,8 +358,11 @@ export function AppShell({
       </header>
 
       <main className={`mx-auto w-full px-4 pb-16 pt-2 sm:px-6 ${wide ? 'max-w-5xl' : 'max-w-center-column'}`}>
+        <h1 className="mb-1 text-2xl font-bold tracking-tight text-ink-primary sm:text-3xl">
+          {title}
+        </h1>
         {description ? (
-          <p className="mb-6 max-w-2xl hail-body text-ink-secondary">
+          <p className="mb-6 max-w-2xl text-sm text-ink-secondary">
             {description}
           </p>
         ) : null}
