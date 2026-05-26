@@ -274,6 +274,10 @@ export const usePapertrailView = createViewHook('papertrail', (client) =>
 
 export const useDraftsView = createViewHook('drafts', (client) => client.getDrafts());
 
+export const useArchiveView = createViewHook('archive', (client) =>
+  client.getArchiveView(),
+);
+
 export const useTrashView = createViewHook('trash', (client) => client.getTrash());
 
 export function useSearch(

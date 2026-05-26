@@ -9,6 +9,7 @@ import {
 import { useAuth } from '../auth/AuthProvider';
 import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
+  Archive,
   ArrowUpCircle,
   Bookmark,
   Clock,
@@ -55,6 +56,7 @@ const navItems: MenuItem[] = [
   { to: '/set-aside', label: 'Set Aside', Icon: Bookmark },
   { to: '/reply-later', label: 'Reply Later', Icon: Clock },
   { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
+  { to: '/archive', label: 'Archive', Icon: Archive },
   { to: '/search', label: 'Search', Icon: Search },
   { to: '/trash', label: 'Trash', Icon: Trash2 },
 ];
