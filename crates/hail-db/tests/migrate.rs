@@ -21,6 +21,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "app_events",
     "thread_notes",
     "thread_seen",
+    "workflow_rules",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -34,6 +35,7 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_app_events_user_id",
     "idx_thread_notes_thread",
     "idx_thread_seen_user",
+    "idx_workflow_rules_user",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[

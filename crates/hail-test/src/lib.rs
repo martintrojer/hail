@@ -21,13 +21,12 @@ use secrecy::SecretString;
 
 /// Build a fresh in-memory API [`AppState`] for integration tests.
 pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
-    let uniq = uuid_like();
-    let url = format!("sqlite:file:hail_api_test_{uniq}?mode=memory&cache=shared");
+    let url = "sqlite::memory:";
     let db = connect(&url).await.expect("open sqlite");
     hail_db::migrate(&db).await.expect("migrate");
 
     let key = [0x5Au8; KEY_LEN];
-    let config = fixture_config(&url, &key);
+    let config = fixture_config(url, &key);
 
     let state = AppState {
         db,
@@ -163,15 +162,6 @@ impl Drop for TempDb {
     fn drop(&mut self) {
         let _ = &self.0;
     }
-}
-
-fn uuid_like() -> String {
-    static N: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}_{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
 }
 
 /// Relative path to the synthetic RFC822 corpus from the workspace root.
