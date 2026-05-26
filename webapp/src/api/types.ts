@@ -1,4 +1,4 @@
-// This file is auto-generated from http://localhost:8080/api/openapi.json.
+// This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
     "/api/admin/stats": {

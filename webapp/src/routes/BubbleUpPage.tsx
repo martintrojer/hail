@@ -51,12 +51,15 @@ function BubbleUpRow({ item }: { item: BubbleUpViewItem }) {
         to="/thread/$threadId"
         search={{ from: undefined }} params={{ threadId: item.thread_id }}
         className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none"
-        aria-label={`Open thread ${item.thread_id}`}
+        aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
       >
         <p className={senderNameClass}>
-          {item.thread_id}
+          {item.from || 'Unknown sender'}
         </p>
-        <p className="mt-1 text-sm leading-snug text-ink-secondary">
+        <p className="mt-1 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary">
+          {item.subject || '(no subject)'}
+        </p>
+        <p className="mt-1 text-sm leading-snug text-ink-tertiary">
           <time dateTime={item.surface_at}>
             Bubbles up at {formatBubbleTime(item.surface_at)}
           </time>
