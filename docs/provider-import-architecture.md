@@ -197,6 +197,27 @@ The provider message id is the primary idempotency key for Gmail imports. RFC822
 be missing, reused, or differ between provider copies. The mapping lets retries
 resume safely after crashes between fetch, import, route, and status update.
 
+### Historical import foundation
+
+This module is cancellation-aware via a caller-supplied `CancellationToken`,
+pages Gmail `messages.list`, fetches raw RFC822 with `messages.get(format=raw)`,
+imports through the RFC822 primitive, records provider mappings/audit rows, and
+updates `provider_accounts.backfill_cursor_json` after each durable page. The
+cursor stores the next Gmail page token and the bounded option shape (labels,
+query, spam/trash flag) so a retry can resume the same historical window without
+storing raw message bodies in `hail.db`.
+
+Production wiring should pass:
+
+- a `GmailClient<T: GmailTokenSource>` backed by encrypted provider tokens;
+- `StalwartJmapRfc822Importer` for the connected user's local Stalwart account;
+- bounded `GmailHistoricalImportOptions` chosen by the scheduler/UI.
+
+The importer remains one-way: it reads Gmail labels/query filters as import
+bounds only and never mutates Gmail mailbox state. It first skips already-final
+provider mappings, then uses account-scoped RFC822 `Message-ID` mappings as a
+secondary duplicate signal before creating a Stalwart email.
+
 ### Sync scheduler
 
 Provider import runs in `hail-worker` as cancellation-aware jobs. The scheduler
