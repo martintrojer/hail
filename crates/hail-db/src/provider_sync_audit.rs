@@ -8,6 +8,8 @@
 
 use sqlx::{Row, SqlitePool};
 
+use crate::provider_error_redaction::{safe_provider_error_message, safe_provider_metadata_json};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSyncOperationKind {
     Oauth,
@@ -143,8 +145,10 @@ pub async fn insert_provider_sync_audit_log(
     .bind(log.result_status.as_str())
     .bind(log.safe_error_code)
     .bind(log.safe_error_class)
-    .bind(log.safe_error_message)
-    .bind(log.metadata_json)
+    .bind(log.safe_error_message.map(|message| {
+        safe_provider_error_message(&message)
+    }))
+    .bind(log.metadata_json.map(safe_provider_metadata_json))
     .bind(now)
     .fetch_one(db)
     .await

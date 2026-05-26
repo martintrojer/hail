@@ -105,6 +105,25 @@ async fn insert_provider_account(
     .expect("provider account id")
 }
 
+fn hostile_leak_error() -> &'static str {
+    "failed with Authorization: Bearer ya29.mapping-secret access_token=ya29.mapping-secret refresh_token=1//mapping-refresh\r\n\r\nSubject: Mapping Private\r\n\r\nMapping body must not persist"
+}
+
+fn assert_no_hostile_leak(surface: &str) {
+    for forbidden in [
+        "Bearer",
+        "ya29.mapping-secret",
+        "1//mapping-refresh",
+        "Subject: Mapping Private",
+        "Mapping body must not persist",
+    ] {
+        assert!(
+            !surface.contains(forbidden),
+            "surface leaked {forbidden:?}: {surface}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn seen_mapping_is_idempotent_by_provider_message_id() {
     let (pool, _guard) = setup().await;
@@ -153,6 +172,50 @@ async fn seen_mapping_is_idempotent_by_provider_message_id() {
         .expect("get mapping")
         .expect("mapping exists");
     assert_eq!(stored.id, first.id);
+}
+
+#[tokio::test]
+async fn failed_mapping_redacts_tokens_and_raw_body_in_error_message() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "failed-redact@example.com", "acct-failed-redact").await;
+    let provider_account_id = insert_provider_account(
+        &pool,
+        user_id,
+        "acct-failed-redact",
+        "gmail-provider-redact",
+    )
+    .await;
+
+    let failed = mark_provider_message_failed(
+        &pool,
+        FailedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: "gmail-failed-redact",
+            provider_thread_id: Some("thread-redact"),
+            provider_history_id: Some("history-redact"),
+            rfc822_message_id: Some("<redact@example.com>"),
+            content_sha256: Some(&[7_u8; 32]),
+            error_class: "hostile_error",
+            error_message: Some(hostile_leak_error()),
+        },
+    )
+    .await
+    .expect("mark failed");
+
+    assert_eq!(failed.import_status, ProviderImportStatus::Failed);
+    let error = failed.error_message.expect("stored error message");
+    assert_no_hostile_leak(&error);
+    assert!(error.contains("[redacted]"));
+
+    let raw_db_error: String = sqlx::query_scalar(
+        "SELECT error_message FROM provider_message_mappings WHERE provider_account_id = ?1 AND provider_message_id = ?2",
+    )
+    .bind(provider_account_id)
+    .bind("gmail-failed-redact")
+    .fetch_one(&pool)
+    .await
+    .expect("raw db error");
+    assert_no_hostile_leak(&raw_db_error);
 }
 
 #[tokio::test]

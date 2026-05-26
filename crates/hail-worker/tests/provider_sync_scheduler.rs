@@ -14,6 +14,25 @@ use sqlx::SqlitePool;
 use tokio::sync::Barrier;
 use tokio_util::sync::CancellationToken;
 
+fn hostile_leak_error() -> String {
+    "sync failed Authorization: Bearer ya29.scheduler-secret access_token=ya29.scheduler-secret refresh_token=1//scheduler-refresh\n\nSubject: Scheduler Private\n\nScheduler body text must not be stored".to_owned()
+}
+
+fn assert_no_hostile_leak(surface: &str) {
+    for forbidden in [
+        "Bearer",
+        "ya29.scheduler-secret",
+        "1//scheduler-refresh",
+        "Subject: Scheduler Private",
+        "Scheduler body text must not be stored",
+    ] {
+        assert!(
+            !surface.contains(forbidden),
+            "surface leaked {forbidden:?}: {surface}"
+        );
+    }
+}
+
 #[derive(Debug, Default)]
 struct FakeRunner {
     calls: Mutex<Vec<(i64, &'static str)>>,
@@ -195,6 +214,57 @@ async fn tick_runs_initial_and_incremental_accounts_and_persists_success() {
         .await
         .expect("audit");
     assert!(audit.iter().any(|row| row.event_type == "sync_completed"));
+}
+
+#[tokio::test]
+async fn scheduler_redacts_hostile_runner_error_in_account_and_audit_status() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let id = insert_provider(&pool, user_id, "active", Some("100"), None, None).await;
+    let runner = FakeRunner::default();
+    runner.set_result(
+        id,
+        Err(ProviderSyncRunError::retryable(
+            "gmail_hostile_error",
+            hostile_leak_error(),
+        )),
+    );
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now,
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.failed, 1);
+    let account_error: String =
+        sqlx::query_scalar("SELECT last_error_message FROM provider_accounts WHERE id = ?1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("last error message");
+    assert_no_hostile_leak(&account_error);
+    assert!(account_error.contains("[redacted]"));
+
+    let audit = list_provider_sync_audit_logs(&pool, user_id, id, 10)
+        .await
+        .expect("audit");
+    let failed = audit
+        .iter()
+        .find(|row| row.event_type == "message_retry_scheduled")
+        .expect("message_retry_scheduled audit");
+    let audit_error = failed
+        .safe_error_message
+        .as_deref()
+        .expect("safe error message");
+    assert_no_hostile_leak(audit_error);
+    assert!(audit_error.contains("[redacted]"));
+    let metadata = failed.metadata_json.as_deref().expect("retry metadata");
+    assert_no_hostile_leak(metadata);
 }
 
 #[tokio::test]
