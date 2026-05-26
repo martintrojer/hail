@@ -3,7 +3,7 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 interface ShortcutGroup {
   title: string;
-  shortcuts: Array<{ keys: string[]; description: string }>;
+  shortcuts: Array<{ keys: string[]; description: string; combo?: boolean }>;
 }
 
 const shortcutGroups: ShortcutGroup[] = [
@@ -44,7 +44,7 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: 'Composer',
     shortcuts: [
-      { keys: ['Ctrl', 'Enter'], description: 'Send' },
+      { keys: ['Ctrl', 'Enter'], description: 'Send', combo: true },
       { keys: ['Esc'], description: 'Close composer' },
     ],
   },
@@ -129,7 +129,7 @@ export function KeyboardShortcutHelp({
                       {shortcut.keys.map((key, index) => (
                         <span key={`${key}-${index}`} className="flex items-center gap-1">
                           {index > 0 ? (
-                            <span className="text-xs text-ink-tertiary">then</span>
+                            <span className="text-xs text-ink-tertiary">{shortcut.combo ? '+' : 'then'}</span>
                           ) : null}
                           <Keycap>{key}</Keycap>
                         </span>

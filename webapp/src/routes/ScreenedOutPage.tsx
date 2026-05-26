@@ -125,7 +125,49 @@ function BlockedSenderRow({
   );
 }
 
+type ScreenedOutTab = 'emails' | 'senders';
+
+function TabBar({
+  active,
+  onChange,
+  counts,
+}: {
+  active: ScreenedOutTab;
+  onChange: (tab: ScreenedOutTab) => void;
+  counts: { emails: number; senders: number };
+}) {
+  const tabs: Array<{ id: ScreenedOutTab; label: string; count: number }> = [
+    { id: 'emails', label: 'Screened Emails', count: counts.emails },
+    { id: 'senders', label: 'Blocked Senders', count: counts.senders },
+  ];
+
+  return (
+    <div className="mb-4 flex gap-1 rounded-lg bg-bg-canvas p-1" role="tablist">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          role="tab"
+          type="button"
+          aria-selected={active === tab.id}
+          onClick={() => onChange(tab.id)}
+          className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            active === tab.id
+              ? 'bg-bg-surface text-ink-primary shadow-sm'
+              : 'text-ink-tertiary hover:text-ink-secondary'
+          }`}
+        >
+          {tab.label}
+          {tab.count > 0 ? (
+            <span className="ml-1.5 text-xs text-ink-tertiary">({tab.count})</span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function ScreenedOutPage({ client }: ScreenedOutPageProps) {
+  const [activeTab, setActiveTab] = useState<ScreenedOutTab>('senders');
   const query = useDeniedSenders(client);
   const denied = useMemo(
     () => (query.isSuccess ? query.data.denied : []),
@@ -143,18 +185,19 @@ export function ScreenedOutPage({ client }: ScreenedOutPageProps) {
       />
     );
   } else {
+    const emptyMessage =
+      activeTab === 'emails'
+        ? 'No screened-out emails.'
+        : 'No blocked senders.';
+
     list = (
-      <div className="space-y-8">
-        <section aria-labelledby="screened-out-emails-heading">
-          <div className="mb-4">
-            <h2 id="screened-out-emails-heading" className="text-lg font-semibold text-ink-primary">
-              Screened-out emails
-            </h2>
-            <p className="mt-1 text-sm text-ink-secondary">
-              Mail from denied senders. Sender cards stand in for per-message
-              previews until the denied-email view includes subjects and snippets.
-            </p>
-          </div>
+      <div>
+        <TabBar
+          active={activeTab}
+          onChange={setActiveTab}
+          counts={{ emails: denied.length, senders: denied.length }}
+        />
+        {activeTab === 'emails' ? (
           <ListView
             items={denied}
             renderItem={(sender) => (
@@ -166,36 +209,27 @@ export function ScreenedOutPage({ client }: ScreenedOutPageProps) {
             onLoadMore={() => {}}
             emptyState={
               <p className="rounded-lg bg-bg-surface p-6 text-center text-sm text-ink-tertiary">
-                No screened-out emails.
+                {emptyMessage}
               </p>
             }
           />
-        </section>
-
-        <section aria-labelledby="blocked-senders-heading">
-          <div className="mb-4">
-            <h2 id="blocked-senders-heading" className="text-lg font-semibold text-ink-primary">
-              Blocked senders
-            </h2>
-            <p className="mt-1 text-sm text-ink-secondary">
-              Allow a sender and choose whether future and matching historical mail
-              belongs in Imbox, Feed, or Paper Trail.
-            </p>
-          </div>
+        ) : (
           <ListView
             items={denied}
-            renderItem={(sender) => <BlockedSenderRow sender={sender} client={client} />}
+            renderItem={(sender) => (
+              <BlockedSenderRow sender={sender} client={client} />
+            )}
             keyExtractor={senderKey}
             hasMore={false}
             isLoadingMore={false}
             onLoadMore={() => {}}
             emptyState={
               <p className="rounded-lg bg-bg-surface p-6 text-center text-sm text-ink-tertiary">
-                No blocked senders.
+                {emptyMessage}
               </p>
             }
           />
-        </section>
+        )}
       </div>
     );
   }
