@@ -27,7 +27,7 @@ import {
   iconSizeProps,
 } from '../components/icons';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { useMenuKeyboardNav, menuKeyDownHandler } from '../hooks/useMenuKeyboardNav';
+import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { Pile } from './Pile';
 
@@ -272,7 +272,7 @@ export function AppShell({
     logoButtonRef.current?.focus();
   }
 
-  useMenuKeyboardNav({ menuRef, open: menuOpen, autoFocus: false });
+  useMenuKeyboardNav({ menuRef, open: menuOpen, onClose: closeMenu, autoFocus: false });
 
   return (
     <div className="min-h-screen bg-bg-page text-ink-primary">
@@ -319,7 +319,6 @@ export function AppShell({
                 ref={menuRef}
                 role="menu"
                 aria-label="Main menu"
-                onKeyDown={(e) => menuKeyDownHandler(menuRef, closeMenu, e)}
                 className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border"
               >
                 <nav className="space-y-1" aria-label="Primary navigation">

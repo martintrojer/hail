@@ -1,32 +1,26 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   type HailApiClient,
-
   type MailViewItem,
   type MailViewKind,
   type ThreadVerbResponse,
 } from '../api/client';
 import {
-  useArchiveThreadMutation,
   useClassifyThreadMutation,
   useFeedView,
   useImboxSectioned,
   usePapertrailView,
-  useReplyLaterThreadMutation,
   useScreenerView,
   useSetAsideThreadMutation,
   useTrashThreadMutation,
   defaultApiClient,
 } from '../api/query';
-import { queryKeys } from '../api/queryKeys';
-import { BatchActionBar } from '../components/BatchActionBar';
+import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
-import { ListView } from '../components/ListView';
 import { MailRow as SharedMailRow } from '../components/MailRow';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useUndoToast } from '../components/UndoToastProvider';
@@ -77,147 +71,24 @@ function classificationLabel(classification: string) {
   return (viewLabels as Record<string, string>)[classification] ?? classification;
 }
 
-function ShortcutActionButton({
-  action,
-  label,
-  busy,
-  onClick,
-}: {
-  action: string;
-  label: string;
-  busy: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      data-hail-shortcut-action={action}
-      disabled={busy}
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onClick();
-      }}
-      className="sr-only"
-      tabIndex={-1}
-    >
-      {label}
-    </button>
-  );
-}
-
-function ThreadShortcutActions({
-  item,
-  client,
-  onHandled,
-}: {
-  item: MailViewItem;
-  client?: HailApiClient;
-  onHandled?: () => void;
-}) {
-  const undoToast = useUndoToast();
-  const archive = useArchiveThreadMutation(client, {
-    onSuccess: (data) => {
-      undoToast.showToast({
-        message: 'Thread archived.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Archive undone.',
-      });
-      onHandled?.();
-    },
-  });
-  const trash = useTrashThreadMutation(client, {
-    onSuccess: (data) => {
-      undoToast.showToast({
-        message: 'Thread moved to trash.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Trash undone.',
-      });
-      onHandled?.();
-    },
-  });
-  const setAside = useSetAsideThreadMutation(client, {
-    onSuccess: (data) => {
-      undoToast.showToast({
-        message: 'Thread added to Set Aside.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Set Aside undone.',
-      });
-      onHandled?.();
-    },
-  });
-  const replyLater = useReplyLaterThreadMutation(client, {
-    onSuccess: (data) => {
-      undoToast.showToast({
-        message: 'Thread added to Reply Later.',
-        undo: data.undo ? { id: data.undo.id } : null,
-        undoSuccessMessage: 'Reply Later undone.',
-      });
-      onHandled?.();
-    },
-  });
-  const busy =
-    archive.isPending || trash.isPending || setAside.isPending || replyLater.isPending;
-  const error = archive.error ?? trash.error ?? setAside.error ?? replyLater.error;
-
-  return (
-    <>
-      <ShortcutActionButton
-        action="archive"
-        label="Archive"
-        busy={busy}
-        onClick={() => archive.mutate({ threadId: item.thread_id })}
-      />
-      <ShortcutActionButton
-        action="trash"
-        label="Trash"
-        busy={busy}
-        onClick={() => trash.mutate({ threadId: item.thread_id })}
-      />
-      <ShortcutActionButton
-        action="set-aside"
-        label="Set Aside"
-        busy={busy}
-        onClick={() => setAside.mutate({ threadId: item.thread_id })}
-      />
-      <ShortcutActionButton
-        action="reply-later"
-        label="Reply Later"
-        busy={busy}
-        onClick={() => replyLater.mutate({ threadId: item.thread_id })}
-      />
-      {error ? (
-        <span role="alert" className="sr-only">
-          {actionErrorMessage(error, 'Thread action')}
-        </span>
-      ) : null}
-    </>
-  );
-}
-
 function MailListRow({
   item,
   view,
-  client,
   selected,
   onToggleSelect,
 }: {
   item: MailViewItem;
   view: MailViewKind;
-  client?: HailApiClient;
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
   return (
-    <div className="relative">
-      <MailThreadRow
-        item={item}
-        view={view}
-        selected={selected}
-        onToggleSelect={onToggleSelect}
-      />
-      <ThreadShortcutActions item={item} client={client} />
-    </div>
+    <MailThreadRow
+      item={item}
+      view={view}
+      selected={selected}
+      onToggleSelect={onToggleSelect}
+    />
   );
 }
 
@@ -368,14 +239,6 @@ function isSectionedImboxData(data: unknown): data is {
   );
 }
 
-function flattenImboxSections(data: ReturnType<typeof useMailView>['data']): MailViewItem[] {
-  if (!isSectionedImboxData(data)) {
-    return [];
-  }
-
-  return [...data.bubbled_up, ...data.new_for_you, ...data.previously_seen];
-}
-
 function getFlatViewItems(data: ReturnType<typeof useMailView>['data']): MailViewItem[] {
   if (!data || isSectionedImboxData(data)) {
     return [];
@@ -388,31 +251,31 @@ function MailRows({
   items,
   view,
   client,
-  selected,
-  onToggleSelect,
 }: {
   items: MailViewItem[];
   view: MailViewKind;
   client?: HailApiClient;
-  selected: Set<string>;
-  onToggleSelect: (threadId: string) => void;
 }) {
   return (
-    <>
-      {items.map((item) => (
+    <ActionableList
+      items={items}
+      actions={{
+        client,
+        availableActions: ['archive', 'trash', 'set-aside', 'reply-later', 'classify'],
+      }}
+      renderItem={(item, { selected, onToggleSelect }) => (
         <MailListRow
-          key={`${item.thread_id}:${item.email_id}`}
           item={item}
           view={view}
-          client={client}
-          selected={selected.has(item.thread_id)}
-          onToggleSelect={() => onToggleSelect(item.thread_id)}
+          selected={selected}
+          onToggleSelect={onToggleSelect}
         />
-      ))}
-    </>
+      )}
+      keyExtractor={(item) => item.thread_id}
+      emptyState={null}
+    />
   );
 }
-
 
 type PowerThroughAction = 'imbox' | 'feed' | 'papertrail' | 'set-aside' | 'trash';
 
@@ -515,11 +378,9 @@ function PowerThroughCard({
 function ImboxSectionedList({
   data,
   client,
-  selected,
   powerThrough,
   ptIndex,
   powerThroughStatus,
-  onToggleSelect,
   onStartPowerThrough,
   onPowerThroughAction,
   onExitPowerThrough,
@@ -532,11 +393,9 @@ function ImboxSectionedList({
     previously_seen_total: number;
   };
   client?: HailApiClient;
-  selected: Set<string>;
   powerThrough: boolean;
   ptIndex: number;
   powerThroughStatus: PowerThroughStatus;
-  onToggleSelect: (threadId: string) => void;
   onStartPowerThrough: () => void;
   onPowerThroughAction: (action: PowerThroughAction) => void;
   onExitPowerThrough: () => void;
@@ -565,8 +424,6 @@ function ImboxSectionedList({
             items={bubbledUp}
             view="imbox"
             client={client}
-            selected={selected}
-            onToggleSelect={onToggleSelect}
           />
         </section>
       ) : null}
@@ -617,8 +474,6 @@ function ImboxSectionedList({
             items={newForYou}
             view="imbox"
             client={client}
-            selected={selected}
-            onToggleSelect={onToggleSelect}
           />
         )}
       </section>
@@ -640,21 +495,11 @@ function ImboxSectionedList({
             items={previouslySeen}
             view="imbox"
             client={client}
-            selected={selected}
-            onToggleSelect={onToggleSelect}
           />
         </section>
       ) : null}
     </div>
   );
-}
-
-function findFocusedThreadId() {
-  if (!(document.activeElement instanceof HTMLElement)) {
-    return null;
-  }
-
-  return document.activeElement.dataset.hailThreadId ?? null;
 }
 
 export function MailViewPage({
@@ -664,7 +509,6 @@ export function MailViewPage({
   client,
 }: MailViewPageProps) {
   const query = useMailView(view, client);
-  const queryClient = useQueryClient();
   const apiClient = client ?? defaultApiClient;
   const undoToast = useUndoToast();
   const screenerQuery = useScreenerView(client);
@@ -672,44 +516,6 @@ export function MailViewPage({
   const [powerThrough, setPowerThrough] = useState(false);
   const [ptIndex, setPtIndex] = useState(0);
   const [showPowerThroughDone, setShowPowerThroughDone] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  function toggleSelect(threadId: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(threadId)) next.delete(threadId);
-      else next.add(threadId);
-      return next;
-    });
-  }
-
-  async function batchAction(action: (threadId: string) => Promise<unknown>) {
-    await Promise.all([...selected].map(action));
-    setSelected(new Set());
-    void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
-  }
-
-  function batchActionWithToast(
-    action: (threadId: string) => Promise<ThreadVerbResponse>,
-    message: string,
-  ) {
-    void batchAction(async (threadId) => {
-      const data = await action(threadId);
-      return data;
-    }).then(() => {
-      undoToast.showToast({ message, undo: null });
-    });
-  }
-
-  const items = useMemo(() => {
-    if (!query.isSuccess) {
-      return [];
-    }
-
-    return view === 'imbox'
-      ? flattenImboxSections(query.data)
-      : getFlatViewItems(query.data);
-  }, [query.data, query.isSuccess, view]);
 
   useEffect(() => {
     if (view !== 'imbox') {
@@ -717,33 +523,8 @@ export function MailViewPage({
       setPtIndex(0);
       setShowPowerThroughDone(false);
     }
-    setSelected(new Set());
   }, [view]);
 
-  useEffect(() => {
-    function handleMailShortcut(event: Event) {
-      const customEvent = event as CustomEvent<{ action?: string }>;
-      const action = customEvent.detail?.action;
-      if (!action) {
-        return;
-      }
-
-      const focusedThreadId = findFocusedThreadId();
-      const selectedItem =
-        items.find((item) => item.thread_id === focusedThreadId) ?? items[0];
-      if (!selectedItem) {
-        return;
-      }
-
-      const actionButton = document.querySelector<HTMLButtonElement>(
-        `[data-hail-thread-id="${CSS.escape(selectedItem.thread_id)}"] [data-hail-shortcut-action="${action}"]`,
-      );
-      actionButton?.click();
-    }
-
-    window.addEventListener('hail:mail-shortcut', handleMailShortcut);
-    return () => window.removeEventListener('hail:mail-shortcut', handleMailShortcut);
-  }, [items]);
 
   const classifyPowerThrough = useClassifyThreadMutation(client);
   const setAsidePowerThrough = useSetAsideThreadMutation(client);
@@ -938,65 +719,33 @@ export function MailViewPage({
           </div>
         ) : null}
         {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
-        {selected.size > 0 ? (
-          <BatchActionBar
-            count={selected.size}
-            onDeselectAll={() => setSelected(new Set())}
-            onArchive={() =>
-              batchActionWithToast(
-                (threadId) => apiClient.archiveThread(threadId),
-                `${selected.size} thread${selected.size === 1 ? '' : 's'} archived.`,
-              )
-            }
-            onTrash={() =>
-              batchActionWithToast(
-                (threadId) => apiClient.trashThread(threadId),
-                `${selected.size} thread${selected.size === 1 ? '' : 's'} moved to trash.`,
-              )
-            }
-            onSetAside={() =>
-              batchActionWithToast(
-                (threadId) => apiClient.setAsideThread(threadId),
-                `${selected.size} thread${selected.size === 1 ? '' : 's'} added to Set Aside.`,
-              )
-            }
-            onReplyLater={() =>
-              batchActionWithToast(
-                (threadId) => apiClient.replyLaterThread(threadId),
-                `${selected.size} thread${selected.size === 1 ? '' : 's'} added to Reply Later.`,
-              )
-            }
-          />
-        ) : null}
         {view === 'imbox' && isSectionedImboxData(query.data) ? (
           <ImboxSectionedList
             data={query.data}
             client={client}
-            selected={selected}
             powerThrough={powerThrough}
             ptIndex={ptIndex}
             powerThroughStatus={powerThroughStatus}
-            onToggleSelect={toggleSelect}
             onStartPowerThrough={startPowerThrough}
             onPowerThroughAction={handlePowerThroughAction}
             onExitPowerThrough={exitPowerThrough}
           />
         ) : (
-          <ListView
+          <ActionableList
             items={getFlatViewItems(query.data)}
-            renderItem={(item) => (
+            actions={{
+              client,
+              availableActions: ['archive', 'trash', 'set-aside', 'reply-later', 'classify'],
+            }}
+            renderItem={(item, { selected, onToggleSelect }) => (
               <MailListRow
                 item={item}
                 view={view}
-                client={client}
-                selected={selected.has(item.thread_id)}
-                onToggleSelect={() => toggleSelect(item.thread_id)}
+                selected={selected}
+                onToggleSelect={onToggleSelect}
               />
             )}
-            keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
-            hasMore={false}
-            isLoadingMore={false}
-            onLoadMore={() => {}}
+            keyExtractor={(item) => item.thread_id}
             emptyState={<StateCard title={emptyState.title} body={emptyState.body} />}
           />
         )}

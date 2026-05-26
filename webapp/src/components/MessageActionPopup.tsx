@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useMenuKeyboardNav, menuKeyDownHandler } from '../hooks/useMenuKeyboardNav';
+import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
 import {
   Archive,
   Bookmark,
@@ -120,7 +120,7 @@ export function MessageActionPopup({
     { enabled: open },
   );
 
-  useMenuKeyboardNav({ menuRef: popupRef, open });
+  useMenuKeyboardNav({ menuRef: popupRef, open, onClose });
 
   useEffect(() => {
     if (!open) {
@@ -166,7 +166,6 @@ export function MessageActionPopup({
       ref={popupRef}
       role="menu"
       aria-label="Message actions"
-      onKeyDown={(e) => menuKeyDownHandler(popupRef, onClose, e)}
       className="absolute z-50 w-60 rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
       style={{ top: position.top, left: position.left }}
     >

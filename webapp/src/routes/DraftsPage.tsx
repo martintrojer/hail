@@ -5,11 +5,11 @@ import {
   type MailViewItem,
 } from '../api/client';
 import { defaultApiClient, useDeleteDraftMutation, useDraftsView } from '../api/query';
-import { ErrorState } from '../components/ErrorState';
+import { ActionableList } from '../components/ActionableList';
 import { Trash2, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
+import { ErrorState } from '../components/ErrorState';
 import { StateCard } from '../components/StateCard';
-import { ListView } from '../components/ListView';
 import { MailRow } from '../components/MailRow';
 import { AppShell } from '../layout/AppShell';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
@@ -50,6 +50,7 @@ function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient 
         to="/compose"
         search={{ draftId: item.email_id }}
         className="min-w-0 flex-1 focus-ring outline-none focus-visible:rounded-md"
+        data-hail-thread-id={item.email_id}
         data-hail-mail-list-item="true"
         aria-label={`Resume draft ${item.subject || '(no subject)'}`}
       >
@@ -86,13 +87,11 @@ export function DraftsPage({ client = defaultApiClient }: DraftsPageProps) {
     );
   } else {
     list = (
-      <ListView
+      <ActionableList
         items={items}
+        actions={{ client, availableActions: ['delete'] }}
         renderItem={(item) => <DraftRow item={item} client={client} />}
-        keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
-        hasMore={false}
-        isLoadingMore={false}
-        onLoadMore={() => {}}
+        keyExtractor={(item) => item.email_id}
         emptyState={<StateCard title="No drafts." />}
       />
     );

@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { type BubbleUpViewItem } from '../api/client';
 import { useBubbleUpView, useCancelBubbleUpMutation } from '../api/query';
+import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
-import { ListView } from '../components/ListView';
 import { LoadingState } from '../components/LoadingState';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
@@ -51,6 +51,8 @@ function BubbleUpRow({ item }: { item: BubbleUpViewItem }) {
         to="/thread/$threadId"
         search={{ from: undefined }} params={{ threadId: item.thread_id }}
         className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none"
+        data-hail-mail-list-item="true"
+        data-hail-thread-id={item.thread_id}
         aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
       >
         <p className={senderNameClass}>
@@ -94,13 +96,11 @@ function BubbleUpList() {
   }
 
   return (
-    <ListView
+    <ActionableList
       items={query.data.items}
+      actions={{ availableActions: ['archive', 'trash'] }}
       renderItem={(item) => <BubbleUpRow item={item} />}
-      keyExtractor={(item) => String(item.bubble_id)}
-      hasMore={false}
-      isLoadingMore={false}
-      onLoadMore={() => {}}
+      keyExtractor={(item) => item.thread_id}
       emptyState={<EmptyBubbleUpState />}
     />
   );
