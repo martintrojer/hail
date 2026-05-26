@@ -264,9 +264,9 @@ function ReplyLaterList({
   const selectedItem = data.items.find((i) => i.thread_id === selectedId) ?? null;
 
   return (
-    <div className="flex min-h-[400px] gap-0 sm:gap-0">
+    <div className="flex min-h-[400px] gap-0">
       {/* Left: thread list */}
-      <div className={`min-w-0 ${selectedItem ? 'w-1/2 border-r border-border-hairline' : 'w-full'}`}>
+      <div className={`min-w-0 ${selectedItem ? 'w-2/5 border-r border-border-hairline' : 'w-full'}`}>
         <ListView
           items={data.items}
           renderItem={(item) => (
@@ -288,7 +288,7 @@ function ReplyLaterList({
 
       {/* Right: reply panel */}
       {selectedItem ? (
-        <div className="w-1/2">
+        <div className="w-3/5">
           <ReplyPanel
             key={selectedItem.thread_id}
             item={selectedItem}
@@ -368,6 +368,7 @@ export function PileSectionPage({ kind }: PileSectionPageProps) {
       title={config.title}
       description={config.description}
       list={list}
+      wide={kind === 'reply-later'}
     />
   );
 }
