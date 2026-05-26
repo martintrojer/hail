@@ -138,6 +138,18 @@ describe('HailApiClient GET request contract', () => {
     );
     expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
   });
+  it('sends credentials for scheduled-send list lookups', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, []));
+
+    await client.listScheduledSends();
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/scheduled-sends'),
+    );
+    expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
+  });
 });
 
 describe('HailApiClient blob upload contract', () => {
@@ -461,6 +473,25 @@ describe('HailApiClient non-composer mutating requests', () => {
     expectMutatingJsonRequest(fetchSpy.mock.calls[0]?.[1], 'POST', {
       to: 'papertrail',
     });
+  });
+
+  it('sends CSRF header without JSON content type for scheduled-send cancel', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse(200, {
+        id: 42,
+        draft_email_id: 'draft-1',
+        send_at: '2026-05-23T13:00:00Z',
+        status: 'cancelled',
+        created_at: '2026-05-23T12:00:00Z',
+      }),
+    );
+
+    await client.cancelScheduledSend(42);
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/scheduled-sends/42'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'DELETE');
   });
 
   it('sends CSRF header without JSON content type for bodyless thread verbs', async () => {

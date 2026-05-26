@@ -29,6 +29,7 @@ import { MailViewPage } from './routes/MailViewPage';
 import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
+import { ScheduledSendsPage } from './routes/ScheduledSendsPage';
 import { ThreadPage } from './routes/ThreadPage';
 import { TrashPage } from './routes/TrashPage';
 import { SpamPage } from './routes/SpamPage';
@@ -373,6 +374,10 @@ function DraftsRoutePage() {
   return <DraftsPage />;
 }
 
+function ScheduledRoutePage() {
+  return <ScheduledSendsPage />;
+}
+
 function ComposePage() {
   const { replyTo, replyAll, draftId } = composeRoute.useSearch();
   return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} draftId={draftId} />;
@@ -465,6 +470,13 @@ const draftsRoute = createRoute({
   path: '/drafts',
   beforeLoad: requireAuth,
   component: DraftsRoutePage,
+});
+
+const scheduledRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/scheduled',
+  beforeLoad: requireAuth,
+  component: ScheduledRoutePage,
 });
 
 const screenerRoute = createRoute({
@@ -601,6 +613,7 @@ const routeTree = rootRoute.addChildren([
   feedRoute,
   paperTrailRoute,
   draftsRoute,
+  scheduledRoute,
   screenerRoute,
   screenedOutRoute,
   setAsideRoute,

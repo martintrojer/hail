@@ -29,6 +29,8 @@ import {
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
+  type ScheduledSend,
+  type ScheduledSendsResponse,
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
@@ -43,6 +45,7 @@ import {
   type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
+  type CancelScheduledSendResponse,
 } from './client';
 import { queryKeys } from './queryKeys';
 
@@ -285,6 +288,17 @@ export const useTrashView = createViewHook('trash', (client) => client.getTrash(
 export const useSpamView = createViewHook('spam', (client) =>
   client.getSpamView(),
 );
+
+export function useScheduledSends(
+  client = defaultApiClient,
+  options?: QueryConfig<ScheduledSendsResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.scheduledSends(),
+    queryFn: () => client.listScheduledSends(),
+    ...options,
+  });
+}
 
 export function useSearch(
   params: SearchParams,
@@ -671,6 +685,26 @@ export interface SendComposeMutationVariables {
   request: ComposeRequest;
 }
 
+export function useCancelScheduledSendMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, CancelScheduledSendResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (scheduledSendId) => client.cancelScheduledSend(scheduledSendId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ScheduledSend[] | undefined>(
+        queryKeys.scheduledSends(),
+        (current) => current?.map((item) => (item.id === data.id ? data : item)),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.scheduledSends() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
 export function useSendComposeMutation(
   client = defaultApiClient,
   options?: MutationConfig<SendComposeMutationVariables, ComposeResponse>,
@@ -694,6 +728,9 @@ export function useSendComposeMutation(
         });
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      if (data.status === 'pending') {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.scheduledSends() });
+      }
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
