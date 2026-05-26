@@ -4,8 +4,9 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN};
+use hail_core::KEY_LEN;
 use hail_db::connect;
+use hail_test::fixture_config;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -19,15 +20,7 @@ async fn fixture_state_with_public_url(
     hail_db::migrate(&db).await.expect("migrate");
 
     let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-        std::env::remove_var("HAIL_WEBAPP_DIR");
-    }
-    let mut config = Config::load_from(None).expect("load config");
+    let mut config = fixture_config(&url, &key);
     config.server.public_url = public_url.to_string();
     config.server.webapp_dir = webapp_dir;
 

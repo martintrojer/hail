@@ -13,8 +13,9 @@ use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::middleware::session::SESSION_COOKIE;
 use hail_api::routes::setup::{ProvisionError, ProvisionedUser, UserProvisioner};
 use hail_api::state::AppState;
-use hail_core::{AdminConfig, Config, KEY_LEN, SetupConfig};
+use hail_core::{AdminConfig, KEY_LEN, SetupConfig};
 use hail_db::connect;
+use hail_test::fixture_config;
 use http_body_util::BodyExt;
 use secrecy::SecretString;
 use tokio::sync::Barrier;
@@ -27,17 +28,7 @@ async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) 
     hail_db::migrate(&db).await.expect("migrate");
 
     let key = [0x5Au8; KEY_LEN];
-    unsafe {
-        std::env::set_var("HAIL_DATABASE_URL", &url);
-        std::env::set_var("HAIL_STALWART__JMAP_URL", "http://127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__BIND", "127.0.0.1:0");
-        std::env::set_var("HAIL_SERVER__PUBLIC_URL", "http://localhost");
-        std::env::set_var("HAIL_SECRETS__SERVER_KEY", hex::encode(key));
-        std::env::remove_var("HAIL_ADMIN__EMAIL");
-        std::env::remove_var("HAIL_ADMIN__PASSWORD_HASH");
-        std::env::remove_var("HAIL_ADMIN__DISPLAY_NAME");
-    }
-    let mut config = Config::load_from(None).expect("load config");
+    let mut config = fixture_config(&url, &key);
     config.admin = admin;
     config.setup = SetupConfig {
         bootstrap_enabled: true,
