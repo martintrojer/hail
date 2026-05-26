@@ -35,6 +35,8 @@ const viewTitles: Record<MailViewKind, string> = {
 class MailViewPageTestClient extends TestHailApiClient {
   readonly calls: MailViewKind[] = [];
   readonly classifyCalls: Array<{ threadId: string; to: MailClassification }> = [];
+  readonly archiveCalls: string[] = [];
+  readonly trashCalls: string[] = [];
   readonly setAsideCalls: string[] = [];
   readonly replyLaterCalls: string[] = [];
   failingActions = new Set<string>();
@@ -71,6 +73,16 @@ class MailViewPageTestClient extends TestHailApiClient {
   ): Promise<ThreadVerbResponse> {
     this.classifyCalls.push({ threadId, to });
     return this.threadVerbResponse(`classify-${to}`);
+  }
+
+  override async archiveThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.archiveCalls.push(threadId);
+    return this.threadVerbResponse('archive');
+  }
+
+  override async trashThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.trashCalls.push(threadId);
+    return this.threadVerbResponse('trash');
   }
 
   override async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
@@ -354,6 +366,51 @@ describe('MailViewPage', () => {
     expect(
       within(link).queryByText('Order #123 was paid.'),
     ).not.toBeInTheDocument();
+  });
+
+  it('selects rows from the avatar control and runs batch actions', async () => {
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-one',
+              email_id: 'email-one',
+              from: 'Alice Sender',
+              subject: 'First thread',
+            }),
+            mailItem('imbox', {
+              thread_id: 'thread-two',
+              email_id: 'email-two',
+              from: 'Bob Sender',
+              subject: 'Second thread',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    const firstLink = await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
+    });
+    const secondLink = screen.getByRole('link', {
+      name: 'Open Second thread from Bob Sender',
+    });
+
+    fireEvent.click(within(firstLink).getByRole('button', { name: 'Select Alice Sender' }));
+    fireEvent.click(within(secondLink).getByRole('button', { name: 'Select Bob Sender' }));
+
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    expect(
+      within(firstLink).getByRole('button', { name: 'Deselect Alice Sender' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Set Aside' })[0]);
+
+    await waitFor(() => expect(client.setAsideCalls).toEqual(['thread-one', 'thread-two']));
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
+    expect(screen.getByText('2 threads added to Set Aside.')).toBeInTheDocument();
   });
 
   it('powers through Imbox threads with thread actions and advances through the batch', async () => {
