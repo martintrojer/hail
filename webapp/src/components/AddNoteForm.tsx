@@ -24,6 +24,7 @@ export function AddNoteForm({ onSave, onCancel }: AddNoteFormProps) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         className="min-h-28 w-full resize-y rounded-lg border border-border-hairline bg-bg-surface p-3 hail-body text-ink-primary outline-none placeholder:text-ink-tertiary focus:border-accent-blue"
+        autoFocus
         placeholder="Add a note…"
         aria-label="Note text"
       />
