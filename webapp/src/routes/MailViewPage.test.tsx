@@ -39,6 +39,7 @@ class MailViewPageTestClient extends TestHailApiClient {
   readonly archiveCalls: string[] = [];
   readonly trashCalls: string[] = [];
   readonly setAsideCalls: string[] = [];
+  readonly markThreadCalls: Array<{ threadId: string; read: boolean }> = [];
   readonly replyLaterCalls: string[] = [];
   failingActions = new Set<string>();
 
@@ -102,6 +103,10 @@ class MailViewPageTestClient extends TestHailApiClient {
   override async setAsideThread(threadId: string): Promise<ThreadVerbResponse> {
     this.setAsideCalls.push(threadId);
     return this.threadVerbResponse('set-aside');
+  }
+
+  override async markThread(threadId: string, read: boolean): Promise<void> {
+    this.markThreadCalls.push({ threadId, read });
   }
 
   override async replyLaterThread(
@@ -458,20 +463,18 @@ describe('MailViewPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
 
-    expect(
-      await screen.findByRole('region', { name: 'Power through Imbox' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('1 of 3')).toBeInTheDocument();
     expect(screen.getByText('Keep me here')).toBeInTheDocument();
-    expect(screen.getByText('2 threads after this one')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Keep in Imbox' }));
     await waitFor(() =>
-      expect(client.classifyCalls).toEqual([
-        { threadId: 'thread-keep', to: 'imbox' },
+      expect(client.markThreadCalls).toEqual([
+        { threadId: 'thread-keep', read: true },
       ]),
     );
     expect(await screen.findByText('Move me out')).toBeInTheDocument();
-    expect(screen.getByText('Moved thread to Imbox.')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    expect(screen.getByText('Kept thread in Imbox.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Move to Feed' }));
     await waitFor(() =>
@@ -485,7 +488,7 @@ describe('MailViewPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Set Aside' }));
     await waitFor(() => expect(client.setAsideCalls).toEqual(['thread-aside']));
-    expect(await screen.findByText('Power through complete')).toBeInTheDocument();
+    expect(await screen.findByText('All done!')).toBeInTheDocument();
     expect(screen.getByText('Thread added to Set Aside.')).toBeInTheDocument();
   });
 
@@ -500,18 +503,18 @@ describe('MailViewPage', () => {
         ]),
       ),
     });
-    client.failingActions.add('reply-later');
+    client.failingActions.add('trash');
     renderMailView('imbox', client);
 
     fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Reply Later' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Trash' }));
 
-    await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-fails']));
+    await waitFor(() => expect(client.trashCalls).toEqual(['thread-fails']));
     expect(
       await screen.findByText('Thread action failed with HTTP 500.'),
     ).toBeInTheDocument();
     expect(screen.getByText('Stays visible')).toBeInTheDocument();
-    expect(screen.queryByText('Power through complete')).not.toBeInTheDocument();
+    expect(screen.queryByText('All done!')).not.toBeInTheDocument();
   });
 
   it('leaves power through and returns to the Imbox list when done is clicked', async () => {
@@ -532,11 +535,9 @@ describe('MailViewPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
     expect(await screen.findByText('Back to list')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Exit' }));
 
-    expect(
-      screen.queryByRole('region', { name: 'Power through Imbox' }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('1 of 1')).not.toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: 'Open Back to list from Alice Sender' }),
     ).toBeInTheDocument();
