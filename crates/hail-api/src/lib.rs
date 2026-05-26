@@ -103,6 +103,10 @@ fn build_api_router(
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
+        routes::provider_sync::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::screener::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
@@ -166,6 +170,7 @@ fn build_api_router(
         .merge(routes::provider_accounts::router_with_client(Arc::new(
             routes::provider_accounts::LiveGmailOAuthClient::from_config(&state.config),
         )))
+        .merge(routes::provider_sync::router())
         .merge(routes::screener::router())
         .merge(routes::threads::router())
         .merge(Router::from(routes::threads_view::router()))

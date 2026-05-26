@@ -39,6 +39,7 @@ use crate::routes::health;
         (name = crate::routes::drafts::TAG, description = "Draft autosave create/update endpoints."),
         (name = crate::routes::pile::TAG, description = "Saved thread piles such as Set Aside and Reply Later."),
         (name = crate::routes::provider_accounts::TAG, description = "Provider import account OAuth and disconnect endpoints."),
+        (name = crate::routes::provider_sync::TAG, description = "Provider import sync status and manual trigger endpoints."),
         (name = crate::routes::screener::TAG, description = "Screener pending sender view and decisions."),
         (name = crate::routes::threads::TAG, description = "Thread mutation verbs."),
         (name = crate::routes::undo::TAG, description = "Short-lived undo token execution."),
