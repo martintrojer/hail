@@ -27,6 +27,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { keys: ['g', 'a'], description: 'Go to Set Aside' },
       { keys: ['g', 'l'], description: 'Go to Reply Later' },
       { keys: ['g', 'b'], description: 'Go to Bubble Up' },
+      { keys: ['g', 'r'], description: 'Go to Archive' },
       { keys: ['/'], description: 'Focus search' },
       { keys: ['c'], description: 'Compose' },
     ],
