@@ -123,7 +123,15 @@ pub enum GmailIncrementalSyncError {
     Import(#[from] GmailHistoricalImportError),
 }
 
+#[allow(dead_code)]
 pub async fn load_gmail_incremental_sync_account(
+    db: &SqlitePool,
+    provider_account_row_id: i64,
+) -> Result<Option<GmailIncrementalSyncAccount>, sqlx::Error> {
+    load_gmail_incremental_sync_account_by_id(db, provider_account_row_id).await
+}
+
+pub(crate) async fn load_gmail_incremental_sync_account_by_id(
     db: &SqlitePool,
     provider_account_row_id: i64,
 ) -> Result<Option<GmailIncrementalSyncAccount>, sqlx::Error> {

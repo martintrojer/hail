@@ -141,7 +141,15 @@ where
     Ok(GmailInitialSyncSummary { profile, import })
 }
 
+#[allow(dead_code)]
 pub async fn load_gmail_provider_account(
+    db: &SqlitePool,
+    provider_account_row_id: i64,
+) -> Result<Option<GmailProviderAccount>, sqlx::Error> {
+    load_gmail_provider_account_by_id(db, provider_account_row_id).await
+}
+
+pub(crate) async fn load_gmail_provider_account_by_id(
     db: &SqlitePool,
     provider_account_row_id: i64,
 ) -> Result<Option<GmailProviderAccount>, sqlx::Error> {

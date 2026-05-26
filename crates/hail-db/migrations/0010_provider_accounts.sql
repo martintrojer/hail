@@ -21,6 +21,8 @@ CREATE TABLE provider_accounts (
   backfill_cursor_json            TEXT,
   last_sync_attempted_at          TEXT,
   last_sync_succeeded_at          TEXT,
+  next_sync_after                 TEXT,
+  sync_backoff_secs               INTEGER,
   last_error_class                TEXT,
   last_error_message              TEXT,
   disconnected_at                 TEXT,
@@ -36,6 +38,7 @@ CREATE TABLE provider_accounts (
 );
 CREATE INDEX idx_provider_accounts_user ON provider_accounts(user_id);
 CREATE INDEX idx_provider_accounts_status ON provider_accounts(sync_status);
+CREATE INDEX idx_provider_accounts_next_sync ON provider_accounts(provider_kind, sync_status, next_sync_after);
 CREATE INDEX idx_provider_accounts_provider_email ON provider_accounts(provider_kind, provider_email);
 
 CREATE TABLE provider_oauth_states (
