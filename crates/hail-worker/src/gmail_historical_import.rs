@@ -946,6 +946,5 @@ async fn audit_message_failed(
 }
 
 fn safe_error_message(error: &impl std::fmt::Display) -> String {
-    let message = error.to_string();
-    message.chars().take(240).collect()
+    hail_db::provider_error_redaction::safe_provider_error_message(error)
 }

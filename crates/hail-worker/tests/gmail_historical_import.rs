@@ -288,6 +288,25 @@ fn list_fixture_page(
     }
 }
 
+fn hostile_leak_error() -> String {
+    "provider failure Authorization: Bearer ya29.access-secret access_token=ya29.access-secret refresh_token=1//refresh-secret\r\n\r\nSubject: Private Body\r\n\r\nThis raw RFC822 body must not be stored".to_owned()
+}
+
+fn assert_no_hostile_leak(surface: &str) {
+    for forbidden in [
+        "Bearer",
+        "ya29.access-secret",
+        "1//refresh-secret",
+        "Subject: Private Body",
+        "This raw RFC822 body must not be stored",
+    ] {
+        assert!(
+            !surface.contains(forbidden),
+            "surface leaked {forbidden:?}: {surface}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn imports_gmail_pages_into_stalwart_and_records_mapping_and_audit() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
@@ -779,6 +798,70 @@ async fn full_rerun_after_completed_import_does_not_import_or_fetch_again() {
     assert_eq!(second.fetched, 0);
     assert!(second_gmail.raw_gets().is_empty());
     assert_eq!(importer.imports().len(), 1);
+}
+
+#[tokio::test]
+async fn failed_message_import_redacts_tokens_and_raw_body_from_mapping_and_audit() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let importer = FakeRfc822Importer::default();
+    importer.fail_next_for_provider_message_id(
+        "gmail-hostile-leak",
+        Rfc822ImportError::Jmap(hostile_leak_error()),
+    );
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-hostile-leak".to_owned(),
+                thread_id: Some("thread-hostile".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![RawGmailMessage {
+            id: "gmail-hostile-leak".to_owned(),
+            thread_id: Some("thread-hostile".to_owned()),
+            history_id: Some("history-hostile".to_owned()),
+            rfc822: b"From: sender@example.com\r\nTo: user@example.com\r\nMessage-ID: <hostile@example.com>\r\nSubject: imported body\r\n\r\nImported raw body is not an error".to_vec(),
+        }],
+    );
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("historical import records failed message");
+
+    assert_eq!(summary.failed, 1);
+    let mapping = get_provider_message_mapping(&pool, provider_account_id, "gmail-hostile-leak")
+        .await
+        .expect("mapping lookup")
+        .expect("failed mapping");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Failed);
+    let mapping_error = mapping.error_message.expect("mapping error message");
+    assert_no_hostile_leak(&mapping_error);
+    assert!(mapping_error.contains("[redacted]"));
+
+    let audit = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 10)
+        .await
+        .expect("audit logs");
+    let failed_event = audit
+        .iter()
+        .find(|event| event.event_type == "message_failed")
+        .expect("message_failed audit event");
+    let audit_error = failed_event
+        .safe_error_message
+        .as_deref()
+        .expect("audit safe error message");
+    assert_no_hostile_leak(audit_error);
+    assert!(audit_error.contains("[redacted]"));
 }
 
 #[tokio::test]

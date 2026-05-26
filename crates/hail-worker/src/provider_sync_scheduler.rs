@@ -515,7 +515,7 @@ async fn audit_scheduler_event(
 }
 
 fn safe_error_message(error: &impl std::fmt::Display) -> String {
-    error.to_string().chars().take(240).collect()
+    hail_db::provider_error_redaction::safe_provider_error_message(error)
 }
 
 pub mod live {

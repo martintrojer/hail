@@ -14,6 +14,7 @@ use utoipa_axum::routes;
 use crate::middleware::auth::AuthUser;
 use crate::routes::response::{error_response, internal};
 use crate::state::AppState;
+use hail_db::provider_error_redaction::safe_provider_error_message;
 
 pub const TAG: &str = "provider-sync";
 
@@ -204,7 +205,9 @@ async fn row_to_status(
         next_sync_after: row.get("next_sync_after"),
         sync_backoff_secs: row.get("sync_backoff_secs"),
         last_error_class: row.get("last_error_class"),
-        last_error_message: row.get("last_error_message"),
+        last_error_message: row
+            .get::<Option<String>, _>("last_error_message")
+            .map(|message| safe_provider_error_message(&message)),
         last_profile_history_id: row.get("last_profile_history_id"),
         profile_synced_at: row.get("profile_synced_at"),
         last_sync_event: load_event_summary(db, user_id, id, None).await?,
@@ -249,7 +252,9 @@ async fn load_event_summary(
         event_type: row.get("event_type"),
         result_status: row.get("result_status"),
         safe_error_class: row.get("safe_error_class"),
-        safe_error_message: row.get("safe_error_message"),
+        safe_error_message: row
+            .get::<Option<String>, _>("safe_error_message")
+            .map(|message| safe_provider_error_message(&message)),
         created_at: row.get("created_at"),
     }))
 }

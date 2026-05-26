@@ -97,6 +97,25 @@ async fn insert_provider_account(
         .expect("provider account id")
 }
 
+fn hostile_leak_error() -> &'static str {
+    "audit failed Authorization: Bearer ya29.audit-secret access_token=ya29.audit-secret refresh_token=1//audit-refresh\r\n\r\nSubject: Audit Private\r\n\r\nAudit body must not persist"
+}
+
+fn assert_no_hostile_leak(surface: &str) {
+    for forbidden in [
+        "Bearer",
+        "ya29.audit-secret",
+        "1//audit-refresh",
+        "Subject: Audit Private",
+        "Audit body must not persist",
+    ] {
+        assert!(
+            !surface.contains(forbidden),
+            "surface leaked {forbidden:?}: {surface}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn insert_and_list_provider_sync_audit_logs_for_account() {
     let (pool, _guard) = setup().await;
@@ -158,6 +177,57 @@ async fn insert_and_list_provider_sync_audit_logs_for_account() {
         Some(r#"{"jmapEmailId":"jmap-email-1"}"#)
     );
     assert_eq!(logs[1].id, first_id);
+}
+
+#[tokio::test]
+async fn audit_log_insert_redacts_tokens_and_raw_body_from_safe_fields_and_metadata() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "audit-redact@example.com", "acct-audit-redact").await;
+    let provider_account_id = insert_provider_account(&pool, user_id, "acct-audit-redact").await;
+
+    insert_provider_sync_audit_log(
+        &pool,
+        NewProviderSyncAuditLog {
+            user_id,
+            provider_account_id,
+            operation_kind: ProviderSyncOperationKind::Failure,
+            event_type: ProviderSyncEventType::SyncFailed,
+            provider_message_id: Some("gmail-audit-redact"),
+            result_status: ProviderSyncResultStatus::Failed,
+            safe_error_code: Some("hostile_error"),
+            safe_error_class: Some("hostile_error"),
+            safe_error_message: Some(hostile_leak_error()),
+            metadata_json: Some(
+                r#"{"detail":"Authorization: Bearer ya29.audit-secret","body":"Subject: Audit Private\n\nAudit body must not persist"}"#,
+            ),
+        },
+    )
+    .await
+    .expect("audit insert");
+
+    let logs = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 10)
+        .await
+        .expect("list audit logs");
+    let log = logs.first().expect("audit log");
+    let safe_error = log
+        .safe_error_message
+        .as_deref()
+        .expect("safe error message");
+    assert_no_hostile_leak(safe_error);
+    assert!(safe_error.contains("[redacted]"));
+    let metadata = log.metadata_json.as_deref().expect("metadata");
+    assert_no_hostile_leak(metadata);
+    assert!(metadata.contains("[redacted]"));
+
+    let (raw_error, raw_metadata): (String, String) = sqlx::query_as(
+        "SELECT safe_error_message, metadata_json FROM provider_sync_events WHERE id = ?1",
+    )
+    .bind(log.id)
+    .fetch_one(&pool)
+    .await
+    .expect("raw audit row");
+    assert_no_hostile_leak(&raw_error);
+    assert_no_hostile_leak(&raw_metadata);
 }
 
 #[tokio::test]

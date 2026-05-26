@@ -22,6 +22,25 @@ use tower::ServiceExt;
 
 const GMAIL_READONLY: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
+fn hostile_leak_error() -> &'static str {
+    "api failed Authorization: Bearer ya29.api-secret access_token=ya29.api-secret refresh_token=1//api-refresh\n\nSubject: API Private\n\nAPI body must not be exposed"
+}
+
+fn assert_no_hostile_leak(surface: &str) {
+    for forbidden in [
+        "Bearer",
+        "ya29.api-secret",
+        "1//api-refresh",
+        "Subject: API Private",
+        "API body must not be exposed",
+    ] {
+        assert!(
+            !surface.contains(forbidden),
+            "surface leaked {forbidden:?}: {surface}"
+        );
+    }
+}
+
 #[derive(Default)]
 struct FakeGmailOAuthClient {
     auth_requests: Mutex<Vec<GmailAuthorizationRequest>>,
@@ -484,6 +503,61 @@ async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
         account["last_error_event"]["safe_error_message"],
         "provider asked us to retry later"
     );
+}
+
+#[tokio::test]
+async fn sync_status_output_redacts_hostile_error_fields() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_ref, sync_status, last_error_class, last_error_message, \
+          created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
+                 'kms://token/alice', 'error', 'hostile_error', ?2, ?3, ?3) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(hostile_leak_error())
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    insert_provider_sync_audit_log(
+        &state.db,
+        NewProviderSyncAuditLog {
+            user_id,
+            provider_account_id: account_id,
+            operation_kind: ProviderSyncOperationKind::Failure,
+            event_type: ProviderSyncEventType::SyncFailed,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Failed,
+            safe_error_code: Some("hostile_error"),
+            safe_error_class: Some("hostile_error"),
+            safe_error_message: Some(hostile_leak_error()),
+            metadata_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::GET,
+            "/api/provider-accounts/sync-status",
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    let rendered = serde_json::to_string(&body).expect("response json");
+    assert_no_hostile_leak(&rendered);
+    assert!(rendered.contains("[redacted]"));
 }
 
 #[tokio::test]

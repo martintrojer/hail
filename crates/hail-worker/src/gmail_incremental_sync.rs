@@ -627,5 +627,5 @@ async fn audit_expired_cursor_fallback(
 }
 
 fn safe_error_message(error: &impl std::fmt::Display) -> String {
-    error.to_string().chars().take(240).collect()
+    hail_db::provider_error_redaction::safe_provider_error_message(error)
 }

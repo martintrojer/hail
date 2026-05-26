@@ -15,6 +15,8 @@
 
 use sqlx::{Row, SqlitePool};
 
+use crate::provider_error_redaction::safe_provider_error_message;
+
 macro_rules! mapping_select_sql {
     ($where_clause:literal) => {
         concat!(
@@ -427,7 +429,9 @@ pub async fn mark_provider_message_skipped(
             content_sha256: skipped.content_sha256,
             import_status: ProviderImportStatus::Skipped,
             error_class: skipped.reason_class,
-            error_message: skipped.reason_message,
+            error_message: skipped
+                .reason_message
+                .map(|message| safe_provider_error_message(&message)),
         },
     )
     .await
@@ -448,7 +452,9 @@ pub async fn mark_provider_message_failed(
             content_sha256: failed.content_sha256,
             import_status: ProviderImportStatus::Failed,
             error_class: failed.error_class,
-            error_message: failed.error_message,
+            error_message: failed
+                .error_message
+                .map(|message| safe_provider_error_message(&message)),
         },
     )
     .await
@@ -463,7 +469,7 @@ struct NonImportedMapping<'a> {
     content_sha256: Option<&'a [u8]>,
     import_status: ProviderImportStatus,
     error_class: &'a str,
-    error_message: Option<&'a str>,
+    error_message: Option<String>,
 }
 
 async fn upsert_non_imported_mapping(
@@ -495,7 +501,7 @@ async fn upsert_non_imported_mapping(
     .bind(mapping.import_status.as_str())
     .bind(&now)
     .bind(mapping.error_class)
-    .bind(mapping.error_message)
+    .bind(mapping.error_message.as_deref())
     .execute(db)
     .await?;
 
