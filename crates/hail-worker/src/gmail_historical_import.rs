@@ -736,9 +736,10 @@ async fn mark_sync_succeeded(
         "initial_sync"
     };
     sqlx::query(
-        "UPDATE provider_accounts SET sync_status = ?1, last_sync_succeeded_at = ?2, last_error_class = NULL, last_error_message = NULL, updated_at = ?2 WHERE id = ?3",
+        "UPDATE provider_accounts SET sync_status = ?1, initial_sync_completed_at = CASE WHEN ?2 THEN COALESCE(initial_sync_completed_at, ?3) ELSE initial_sync_completed_at END, last_sync_succeeded_at = ?3, last_error_class = NULL, last_error_message = NULL, updated_at = ?3 WHERE id = ?4",
     )
     .bind(status)
+    .bind(summary.completed)
     .bind(now)
     .bind(provider_account_id)
     .execute(db)

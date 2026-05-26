@@ -261,8 +261,8 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     assert!(!gmail.list_params()[0].include_spam_trash);
     assert_eq!(importer.imports().len(), 2);
 
-    let row: (String, String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT sync_status, last_profile_history_id, profile_synced_at, backfill_cursor_json, last_error_message \
+    let row: (String, String, Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT sync_status, last_profile_history_id, profile_synced_at, initial_sync_completed_at, backfill_cursor_json, last_error_message \
          FROM provider_accounts WHERE id = ?1",
     )
     .bind(account.id)
@@ -272,8 +272,9 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     assert_eq!(row.0, "initial_sync");
     assert_eq!(row.1, "profile-history-42");
     assert!(row.2.is_some());
-    assert!(row.3.expect("cursor").contains("next-page"));
-    assert!(row.4.is_none());
+    assert!(row.3.is_none());
+    assert!(row.4.expect("cursor").contains("next-page"));
+    assert!(row.5.is_none());
 }
 
 #[tokio::test]

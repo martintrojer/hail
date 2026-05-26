@@ -408,9 +408,9 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
           granted_scopes_json, consented_at, refresh_token_enc, refresh_token_key_id, \
           cached_access_token_expires_at, access_token_refreshed_at, last_profile_history_id, \
-          profile_synced_at, sync_status, backfill_cursor_json, last_sync_attempted_at, \
+          profile_synced_at, initial_sync_completed_at, sync_status, backfill_cursor_json, last_sync_attempted_at, \
           last_sync_succeeded_at, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
+         VALUES (?, ?, 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -425,6 +425,7 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .bind("2026-01-01T00:30:00Z")
     .bind("history-123")
     .bind("2026-01-01T00:30:00Z")
+    .bind("2026-01-01T00:45:00Z")
     .bind(r#"{"pageToken":"abc"}"#)
     .bind("2026-01-01T00:40:00Z")
     .bind("2026-01-01T00:45:00Z")

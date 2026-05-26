@@ -121,14 +121,15 @@ async fn insert_provider(
     sqlx::query(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, refresh_token_enc, \
-          last_profile_history_id, sync_status, last_sync_attempted_at, next_sync_after, created_at, updated_at) \
-         VALUES (?, 'acct-provider', 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          last_profile_history_id, initial_sync_completed_at, sync_status, last_sync_attempted_at, next_sync_after, created_at, updated_at) \
+         VALUES (?, 'acct-provider', 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(format!("gmail-{status}-{history_id:?}-{next_sync_after:?}"))
     .bind(format!("{status}@gmail.example"))
     .bind(vec![1_u8; 29])
     .bind(history_id)
+    .bind((status == "active").then_some("2026-01-01T00:10:00Z"))
     .bind(status)
     .bind(last_attempt)
     .bind(next_sync_after)
@@ -249,6 +250,12 @@ async fn next_sync_after_prevents_early_retry() {
         Some((now - Duration::seconds(1)).to_rfc3339()),
     )
     .await;
+    sqlx::query("UPDATE provider_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
+        .bind("2026-01-01T00:10:00Z")
+        .bind(due)
+        .execute(&pool)
+        .await
+        .expect("mark initial complete");
     let future = insert_provider(
         &pool,
         user_id,
@@ -258,6 +265,12 @@ async fn next_sync_after_prevents_early_retry() {
         Some((now + Duration::minutes(10)).to_rfc3339()),
     )
     .await;
+    sqlx::query("UPDATE provider_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
+        .bind("2026-01-01T00:10:00Z")
+        .bind(future)
+        .execute(&pool)
+        .await
+        .expect("mark initial complete");
     let runner = FakeRunner::default();
 
     let summary = process_provider_sync_tick(
@@ -313,6 +326,57 @@ async fn tick_ignores_accounts_with_unresolved_external_token_refs() {
     assert_eq!(summary.considered, 0);
     assert!(runner.calls().is_empty());
     assert_eq!(provider_state(&pool, id).await.0, "disabled");
+}
+
+#[tokio::test]
+async fn errored_incomplete_initial_with_profile_history_retries_initial() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let incomplete = insert_provider(
+        &pool,
+        user_id,
+        "error",
+        Some("profile-history-before-import-failed"),
+        Some((now - Duration::minutes(10)).to_rfc3339()),
+        Some((now - Duration::seconds(1)).to_rfc3339()),
+    )
+    .await;
+    let completed_then_errored = insert_provider(
+        &pool,
+        user_id,
+        "error",
+        Some("incremental-history"),
+        Some((now - Duration::minutes(10)).to_rfc3339()),
+        Some((now - Duration::seconds(1)).to_rfc3339()),
+    )
+    .await;
+    sqlx::query("UPDATE provider_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
+        .bind("2026-01-01T00:10:00Z")
+        .bind(completed_then_errored)
+        .execute(&pool)
+        .await
+        .expect("mark initial complete");
+    let runner = FakeRunner::default();
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now,
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.initial_runs, 1);
+    assert_eq!(summary.incremental_runs, 1);
+    assert_eq!(
+        runner.calls(),
+        vec![
+            (incomplete, "initial"),
+            (completed_then_errored, "incremental")
+        ]
+    );
 }
 
 #[tokio::test]
