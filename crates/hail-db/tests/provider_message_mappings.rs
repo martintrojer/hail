@@ -1,9 +1,14 @@
 use hail_db::provider_message_mappings::{
-    DuplicateProviderMessageMapping, FailedProviderMessageMapping, ImportedProviderMessageMapping,
-    ProviderImportStatus, ProviderMessageSeen, SkippedProviderMessageMapping,
+    DedupedProviderSentCopyMapping, DuplicateProviderMessageMapping, FailedProviderMessageMapping,
+    ImportedProviderMessageMapping, LocalSentMessageRef, ProviderImportStatus, ProviderMessageSeen,
+    ProviderSentCopyImportDecision, ProviderSentCopyImportInput,
+    SENT_COPY_REASON_EXISTING_LOCAL_MESSAGE_ID_MATCH, SENT_COPY_REASON_LOCAL_SENT_MESSAGE_ID_MATCH,
+    SENT_COPY_REASON_NO_LOCAL_SENT_MATCH, SENT_COPY_REASON_PROVIDER_MESSAGE_ALREADY_MAPPED,
+    SkippedProviderMessageMapping, decide_provider_sent_copy_import,
     find_local_mapping_by_rfc822_message_id, get_provider_message_mapping,
     list_provider_thread_mappings, mark_provider_message_duplicate, mark_provider_message_failed,
-    mark_provider_message_imported, mark_provider_message_skipped, record_provider_message_seen,
+    mark_provider_message_imported, mark_provider_message_skipped, mark_provider_sent_copy_deduped,
+    record_provider_message_seen,
 };
 
 fn fresh_db_url() -> (String, TempDb) {
@@ -337,6 +342,171 @@ async fn duplicate_mapping_records_provider_copy_without_new_import() {
     assert_eq!(
         thread_mappings[1].provider_message_id,
         "gmail-provider-sent-copy"
+    );
+}
+
+#[tokio::test]
+async fn provider_sent_copy_policy_dedupes_against_local_sent_message_id() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "sent-copy-user@example.com", "acct-sent-copy-user").await;
+    let provider_account_id =
+        insert_provider_account(&pool, user_id, "acct-sent-copy-user", "gmail-provider-sent").await;
+
+    let decision = decide_provider_sent_copy_import(
+        &pool,
+        ProviderSentCopyImportInput {
+            provider_account_id,
+            provider_message_id: "gmail-sent-copy-1",
+            rfc822_message_id: Some("<local-sent@example.com>"),
+            local_sent: Some(LocalSentMessageRef {
+                rfc822_message_id: "<local-sent@example.com>",
+                jmap_email_id: "jmap-local-sent",
+                jmap_thread_id: Some("jmap-thread-sent"),
+                jmap_mailbox_ids_json: Some(r#"["mailbox-sent"]"#),
+            }),
+        },
+    )
+    .await
+    .expect("sent copy decision");
+
+    let ProviderSentCopyImportDecision::DeduplicateToLocal {
+        jmap_email_id,
+        jmap_thread_id,
+        jmap_mailbox_ids_json,
+        reason_class,
+    } = decision
+    else {
+        panic!("expected local sent dedupe decision");
+    };
+    assert_eq!(reason_class, SENT_COPY_REASON_LOCAL_SENT_MESSAGE_ID_MATCH);
+    assert_eq!(jmap_email_id, "jmap-local-sent");
+    assert_eq!(jmap_thread_id.as_deref(), Some("jmap-thread-sent"));
+
+    let mapping = mark_provider_sent_copy_deduped(
+        &pool,
+        DedupedProviderSentCopyMapping {
+            provider_account_id,
+            provider_message_id: "gmail-sent-copy-1",
+            provider_thread_id: Some("gmail-thread-sent"),
+            provider_history_id: Some("history-sent"),
+            rfc822_message_id: Some("<local-sent@example.com>"),
+            content_sha256: Some(&[7_u8; 32]),
+            duplicate_jmap_email_id: &jmap_email_id,
+            duplicate_jmap_thread_id: jmap_thread_id.as_deref(),
+            duplicate_jmap_mailbox_ids_json: jmap_mailbox_ids_json.as_deref(),
+            reason_class,
+            reason_message: Some("provider Sent copy matched local Stalwart Sent Message-ID"),
+        },
+    )
+    .await
+    .expect("mark sent copy deduped");
+
+    assert_eq!(mapping.import_status, ProviderImportStatus::Duplicate);
+    assert_eq!(mapping.jmap_email_id.as_deref(), Some("jmap-local-sent"));
+    assert_eq!(mapping.error_class.as_deref(), Some(reason_class));
+    assert_eq!(mapping.imported_at, None);
+
+    let retry_decision = decide_provider_sent_copy_import(
+        &pool,
+        ProviderSentCopyImportInput {
+            provider_account_id,
+            provider_message_id: "gmail-sent-copy-1",
+            rfc822_message_id: Some("<local-sent@example.com>"),
+            local_sent: None,
+        },
+    )
+    .await
+    .expect("retry sent copy decision");
+    let ProviderSentCopyImportDecision::SkipAlreadyMapped {
+        existing,
+        reason_class,
+    } = retry_decision
+    else {
+        panic!("expected already mapped skip decision");
+    };
+    assert_eq!(existing.id, mapping.id);
+    assert_eq!(
+        reason_class,
+        SENT_COPY_REASON_PROVIDER_MESSAGE_ALREADY_MAPPED
+    );
+}
+
+#[tokio::test]
+async fn provider_sent_copy_policy_uses_existing_message_id_mapping_before_importing() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(
+        &pool,
+        "sent-copy-existing@example.com",
+        "acct-sent-existing",
+    )
+    .await;
+    let provider_account_id = insert_provider_account(
+        &pool,
+        user_id,
+        "acct-sent-existing",
+        "gmail-provider-existing",
+    )
+    .await;
+
+    mark_provider_message_imported(
+        &pool,
+        ImportedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: "gmail-localized-original",
+            provider_thread_id: Some("gmail-thread-existing"),
+            provider_history_id: Some("history-existing"),
+            rfc822_message_id: Some("<existing-local@example.com>"),
+            content_sha256: Some(&[8_u8; 32]),
+            jmap_email_id: "jmap-existing-local",
+            jmap_thread_id: Some("jmap-thread-existing"),
+            jmap_mailbox_ids_json: Some(r#"["mailbox-sent"]"#),
+        },
+    )
+    .await
+    .expect("seed existing mapping");
+
+    let decision = decide_provider_sent_copy_import(
+        &pool,
+        ProviderSentCopyImportInput {
+            provider_account_id,
+            provider_message_id: "gmail-sent-copy-existing",
+            rfc822_message_id: Some("<existing-local@example.com>"),
+            local_sent: None,
+        },
+    )
+    .await
+    .expect("sent copy decision");
+
+    let ProviderSentCopyImportDecision::DeduplicateToLocal {
+        jmap_email_id,
+        reason_class,
+        ..
+    } = decision
+    else {
+        panic!("expected existing mapping dedupe decision");
+    };
+    assert_eq!(
+        reason_class,
+        SENT_COPY_REASON_EXISTING_LOCAL_MESSAGE_ID_MATCH
+    );
+    assert_eq!(jmap_email_id, "jmap-existing-local");
+
+    let unmatched = decide_provider_sent_copy_import(
+        &pool,
+        ProviderSentCopyImportInput {
+            provider_account_id,
+            provider_message_id: "gmail-unmatched-sent-copy",
+            rfc822_message_id: Some("<provider-only@example.com>"),
+            local_sent: None,
+        },
+    )
+    .await
+    .expect("unmatched sent copy decision");
+    assert_eq!(
+        unmatched,
+        ProviderSentCopyImportDecision::ImportAsProviderMessage {
+            reason_class: SENT_COPY_REASON_NO_LOCAL_SENT_MATCH,
+        }
     );
 }
 
