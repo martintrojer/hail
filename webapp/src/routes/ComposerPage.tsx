@@ -26,6 +26,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { InlineNote } from '../components/InlineNote';
 import { useGoBack } from '../hooks/useGoBack';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { AppShell } from '../layout/AppShell';
 import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDate, formatFullDateTime } from '../lib/dates';
@@ -368,9 +369,17 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     sendCompose.mutate({ threadId: replyToThreadId, request });
   }
 
+  function submitComposer() {
+    if (!canSubmit || sendCompose.isPending) {
+      return;
+    }
+
+    send(buildComposeRequest());
+  }
+
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    send(buildComposeRequest());
+    submitComposer();
   }
 
   function sendLater() {
@@ -381,6 +390,11 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     }
     send(buildComposeRequest(sendAt));
   }
+
+  useKeyboardShortcuts({
+    onSend: submitComposer,
+    onEscape: closeComposer,
+  });
 
   const autosaveError = createDraft.error ?? updateDraft.error;
   const savingDraft = createDraft.isPending || updateDraft.isPending;

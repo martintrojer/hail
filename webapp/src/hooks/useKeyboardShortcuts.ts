@@ -15,6 +15,16 @@ export interface KeyboardShortcutHandlers {
   onGoFeed?: () => void;
   onGoPaperTrail?: () => void;
   onGoScreener?: () => void;
+  onGoDrafts?: () => void;
+  onGoTrash?: () => void;
+  onGoSetAside?: () => void;
+  onGoReplyLater?: () => void;
+  onGoBubbleUp?: () => void;
+  onReplyAll?: () => void;
+  onForward?: () => void;
+  onAddNote?: () => void;
+  onGoBack?: () => void;
+  onSend?: () => void;
   onShowHelp?: () => void;
 }
 
@@ -109,11 +119,18 @@ export function useKeyboardShortcuts(
         }
       }
 
+      const key = event.key.toLowerCase();
+
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && key === 'enter') {
+        if (run(event, handlers.onSend)) {
+          return;
+        }
+      }
+
       if (isEditableTarget(event.target)) {
         return;
       }
 
-      const key = event.key.toLowerCase();
       const hasModifier = event.altKey || event.ctrlKey || event.metaKey;
 
       if (hasModifier) {
@@ -127,6 +144,11 @@ export function useKeyboardShortcuts(
           f: handlers.onGoFeed,
           p: handlers.onGoPaperTrail,
           s: handlers.onGoScreener,
+          d: handlers.onGoDrafts,
+          t: handlers.onGoTrash,
+          a: handlers.onGoSetAside,
+          l: handlers.onGoReplyLater,
+          b: handlers.onGoBubbleUp,
         };
         if (run(event, routeHandlers[key])) {
           return;
@@ -147,6 +169,10 @@ export function useKeyboardShortcuts(
         y: handlers.onSetAside,
         l: handlers.onReplyLater,
         r: handlers.onReply,
+        a: handlers.onReplyAll,
+        f: handlers.onForward,
+        n: handlers.onAddNote,
+        Backspace: handlers.onGoBack,
         c: handlers.onCompose,
         '/': handlers.onFocusSearch,
         '?': handlers.onShowHelp,
