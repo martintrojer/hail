@@ -19,7 +19,9 @@ and the Gmail client choice in
   state does not mutate Gmail in v1.2.
 - **Outbound is a hook, not sync:** sending may later use provider SMTP/API or a
   Stalwart smarthost, but outbound work must preserve local sent-state semantics
-  in Stalwart and avoid turning v1.2 import into bidirectional mailbox sync.
+  in Stalwart and avoid turning v1.2 import into bidirectional mailbox sync. The
+  concrete outbound policy is documented in
+  [provider-outbound-strategy.md](./provider-outbound-strategy.md).
 - **OAuth and tokens stay server-side:** the browser only starts/observes OAuth
   through `hail-api`. Refresh tokens are encrypted in `hail.db`; access tokens
   are short-lived memory values and are never returned to the SPA.
@@ -33,7 +35,7 @@ and the Gmail client choice in
 | Hail views and product keywords (`$hail_imbox`, Screener, Feed, Paper Trail, etc.) | Stalwart keywords plus `hail.db` product tables | Routing runs after import via existing worker/JMAP primitives. Provider labels do not become the authoritative hail view model. |
 | Import cursors, provider account metadata, dedupe mappings, sync status, retry state | `hail.db` | Sidecar state only; no duplicate message body/archive store. |
 | OAuth refresh tokens | `hail.db`, encrypted with hail server-key crypto | Plaintext only in process memory while refreshing. Never logged or exposed to browser/API clients. |
-| Outbound sent-copy state | Stalwart for local UI | Provider send hooks must either import/dedupe the sent copy or rely on Stalwart's local sent object according to the outbound strategy doc. |
+| Outbound sent-copy state | Stalwart for local UI | Provider send hooks must either import/dedupe the sent copy or rely on Stalwart's local sent object according to [provider-outbound-strategy.md](./provider-outbound-strategy.md). |
 
 The invariant is: **once a provider message has crossed the import boundary,
 Stalwart is authoritative for what hail shows**. If Gmail later changes a label,
@@ -233,15 +235,16 @@ create silent duplicates, expose secrets, or lose the ability to resume.
 ## Outbound strategy hooks
 
 Provider import mode must leave room for outbound delivery without forcing it
-into the initial importer:
+into the initial importer. The selected strategy is documented in
+[provider-outbound-strategy.md](./provider-outbound-strategy.md): prefer
+Stalwart submission through a provider SMTP smarthost first, use Gmail API send
+as a provider-specific fallback, keep Stalwart sent state authoritative for the
+hail UI, and dedupe any provider-created sent copies against local sent mail.
 
-- Stalwart may submit through a provider SMTP smarthost; or
-- hail may call Gmail `messages.send` using an added `gmail.send` scope; or
-- a later provider-specific sender may import/dedupe the provider's sent copy.
-
-Whichever strategy is chosen, the local Stalwart sent state remains what the hail
-UI reads. Provider-created sent copies must be deduped against local sent mail so
-the thread does not show duplicate outbound messages.
+At this architecture layer, the important invariant is that outbound egress does
+not become bidirectional mailbox sync. Sending through a provider may create a
+provider Sent copy, but Gmail/provider labels, read state, archive/delete state,
+and mailbox mutations are still not written by hail in v1.2.
 
 ## Non-goals for v1.2
 

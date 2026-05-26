@@ -151,8 +151,11 @@ the rationale is in `docs/design.md` §6.
   or another provider may be the public mailbox edge, but imported RFC822 lands
   in Stalwart and the hail UI continues to treat Stalwart/JMAP as authoritative.
   Provider cursors, encrypted OAuth tokens, and dedupe mappings live in
-  `hail.db`; provider mailbox state is not the hail UI source of truth. See
-  `docs/provider-import-architecture.md`.
+  `hail.db`; provider mailbox state is not the hail UI source of truth. Provider
+  outbound prefers Stalwart smarthost relay, uses Gmail API send only as a
+  fallback, and dedupes provider Sent copies against local Stalwart sent state.
+  See `docs/provider-import-architecture.md` and
+  `docs/provider-outbound-strategy.md`.
 - **Alternate clients are expected later.** The planned Node/Ink TUI is
   deliberately a client of `hail-api`, not a parallel mail client that talks to
   Stalwart. That keeps one source of truth for Screener, Pile, search, and
@@ -408,8 +411,10 @@ should behave as if the mail arrived normally.
 - provider cursors, account metadata, dedupe mappings, retry state, and sync
   status live in `hail.db`;
 - message bodies, threads, blobs, and visible mail state live in Stalwart;
-- outbound provider send/smarthost support is a later hook and must preserve
-  Stalwart sent-state and dedupe provider-created sent copies.
+- outbound provider send/smarthost support must follow
+  `docs/provider-outbound-strategy.md`: prefer Stalwart smarthost relay, keep
+  Stalwart sent-state authoritative, use Gmail API send only as a fallback, and
+  dedupe provider-created sent copies.
 
 **Rejected for v1.2:**
 
@@ -423,7 +428,9 @@ should behave as if the mail arrived normally.
 
 **Why:** this gives existing Gmail users an "escape Gmail" backfill/incremental
 import path while keeping hail's core architecture stable. Detailed component
-rules live in `docs/provider-import-architecture.md`.
+rules live in `docs/provider-import-architecture.md`; outbound provider
+submission and sent-copy dedupe rules live in
+`docs/provider-outbound-strategy.md`.
 
 ### 6.14 Provider-backed modes are future deployment variants
 
