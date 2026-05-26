@@ -23,8 +23,37 @@ async fn seed_rule(
     classify_as: Option<&str>,
     first_seen_at: chrono::DateTime<Utc>,
 ) {
-    sqlx::query("INSERT INTO screener_rules (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5)")
-        .bind(user_id).bind(sender).bind(decision).bind(classify_as).bind(first_seen_at).execute(&state.db).await.unwrap();
+    seed_rule_with_decided_at(
+        state,
+        user_id,
+        sender,
+        decision,
+        classify_as,
+        first_seen_at,
+        None,
+    )
+    .await;
+}
+
+async fn seed_rule_with_decided_at(
+    state: &AppState,
+    user_id: i64,
+    sender: &str,
+    decision: &str,
+    classify_as: Option<&str>,
+    first_seen_at: chrono::DateTime<Utc>,
+    decided_at: Option<chrono::DateTime<Utc>>,
+) {
+    sqlx::query("INSERT INTO screener_rules (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+        .bind(user_id)
+        .bind(sender)
+        .bind(decision)
+        .bind(classify_as)
+        .bind(decided_at)
+        .bind(first_seen_at)
+        .execute(&state.db)
+        .await
+        .unwrap();
 }
 
 fn app(state: AppState, backfill: Arc<FakeBackfill>) -> Router {
@@ -275,6 +304,100 @@ async fn screener_view_sorts_newest_first() {
         got,
         vec!["new@example.org", "middle@example.org", "old@example.org"]
     );
+}
+
+#[tokio::test]
+async fn allowed_senders_view_returns_current_user_allowed_rows_with_timestamps() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (bob_id, _) = seed_session(&state, &key, "bob@example.org").await;
+    let now = Utc::now();
+    seed_rule_with_decided_at(
+        &state,
+        alice_id,
+        "old-allowed@example.org",
+        "allow",
+        Some("feed"),
+        now - Duration::days(3),
+        Some(now - Duration::hours(2)),
+    )
+    .await;
+    seed_rule(
+        &state,
+        alice_id,
+        "pending@example.org",
+        "pending",
+        None,
+        now,
+    )
+    .await;
+    seed_rule(&state, alice_id, "denied@example.org", "deny", None, now).await;
+    seed_rule_with_decided_at(
+        &state,
+        alice_id,
+        "NEW-ALLOWED@EXAMPLE.ORG",
+        "allow",
+        Some("papertrail"),
+        now - Duration::days(1),
+        Some(now),
+    )
+    .await;
+    seed_rule(
+        &state,
+        alice_id,
+        "legacy-allowed@example.org",
+        "allow",
+        Some("imbox"),
+        now - Duration::hours(1),
+    )
+    .await;
+    seed_rule(
+        &state,
+        bob_id,
+        "bob-allowed@example.org",
+        "allow",
+        Some("imbox"),
+        now,
+    )
+    .await;
+
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/views/screener/allowed",
+        Some(&alice_sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let allowed = json["allowed"].as_array().unwrap();
+    assert_eq!(allowed.len(), 3);
+    assert_eq!(allowed[0]["sender_address"], "new-allowed@example.org");
+    assert_eq!(allowed[0]["classify_as"], "papertrail");
+    assert!(allowed[0]["first_seen_at"].is_string());
+    assert!(allowed[0]["decided_at"].is_string());
+    assert_eq!(allowed[1]["sender_address"], "legacy-allowed@example.org");
+    assert_eq!(allowed[1]["classify_as"], "imbox");
+    assert!(allowed[1]["decided_at"].is_null());
+    assert_eq!(allowed[2]["sender_address"], "old-allowed@example.org");
+    assert_eq!(allowed[2]["classify_as"], "feed");
+}
+
+#[tokio::test]
+async fn allowed_senders_view_requires_auth() {
+    let (state, _) = fixture_state().await;
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/views/screener/allowed",
+        None,
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

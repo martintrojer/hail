@@ -32,6 +32,9 @@ type ContactNotePutSuccess = ResponseBody<
 type ScreenerGetSuccess = ResponseBody<
   paths['/api/views/screener']['get']['responses']['200']
 >;
+type ScreenerAllowedGetSuccess = ResponseBody<
+  paths['/api/views/screener/allowed']['get']['responses']['200']
+>;
 type DeniedSendersGetSuccess = ResponseBody<
   paths['/api/views/screener/denied']['get']['responses']['200']
 >;
@@ -248,14 +251,8 @@ export type BlobUploadPart =
 export type ScreenerDecision = 'approve' | 'deny';
 export type ScreenerClassification = components['schemas']['MailClassification'];
 export type ScreenerPendingSender = components['schemas']['ScreenerSender'];
-export interface ScreenerAllowedSender {
-  sender_address: string;
-  classify_as: ScreenerClassification;
-  decided_at?: string | null;
-}
-export interface ScreenerAllowedView {
-  allowed: ScreenerAllowedSender[];
-}
+export type ScreenerAllowedSender = components['schemas']['AllowedSender'];
+export type ScreenerAllowedView = ScreenerAllowedGetSuccess;
 export type DeniedSender = components['schemas']['DeniedSender'];
 export type DeniedSendersResponse = DeniedSendersGetSuccess;
 export interface UndoDenyRequest {

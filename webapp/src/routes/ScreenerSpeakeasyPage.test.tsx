@@ -115,11 +115,13 @@ function sampleAllowedView(
       {
         sender_address: 'friend@example.com',
         classify_as: 'imbox',
+        first_seen_at: '2026-05-20T09:00:00Z',
         decided_at: '2026-05-21T10:00:00Z',
       },
       {
         sender_address: 'receipts@example.com',
         classify_as: 'papertrail',
+        first_seen_at: '2026-05-22T11:00:00Z',
         decided_at: null,
       },
     ],
@@ -141,6 +143,8 @@ describe('ScreenerSpeakeasyPage', () => {
     expect(await screen.findByRole('heading', { name: 'Speakeasy' })).toBeInTheDocument();
     expect(await screen.findByText('friend@example.com')).toBeInTheDocument();
     expect(screen.getByText('Routed to The Imbox')).toBeInTheDocument();
+    expect(screen.getByText('First seen May 20, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Approved May 21, 2026')).toBeInTheDocument();
     expect(screen.getByText('receipts@example.com')).toBeInTheDocument();
     expect(screen.getByText('Routed to Paper Trail')).toBeInTheDocument();
     expect(screen.getByText('2 approved senders')).toBeInTheDocument();
