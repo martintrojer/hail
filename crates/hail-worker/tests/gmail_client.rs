@@ -16,7 +16,7 @@ use tokio::net::{TcpListener, TcpStream};
 use gmail_client::{
     GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig, ListHistoryParams,
     ListMessagesParams, StaticGmailTokenSource, classify_gmail_error, parse_gmail_error,
-    retry_after_duration,
+    provider_worker_http_client, retry_after_duration,
 };
 use reqwest::header::{AUTHORIZATION, HeaderValue, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
@@ -66,7 +66,7 @@ fn format_base_url(addr: SocketAddr) -> String {
 
 fn client(base_url: &str) -> GmailClient<StaticGmailTokenSource> {
     GmailClient::with_base_url(
-        reqwest::Client::new(),
+        provider_worker_http_client().expect("provider worker http client"),
         StaticGmailTokenSource::new(SecretString::from("test-token")),
         base_url,
     )
