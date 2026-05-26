@@ -94,3 +94,17 @@ pub async fn seen_thread_ids(
             .await?;
     Ok(rows.into_iter().collect())
 }
+
+/// Return all thread ids for Bubble Ups that have fired for a user.
+pub async fn fired_bubble_up_thread_ids(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<HashSet<String>, sqlx::Error> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT thread_id FROM bubble_ups WHERE user_id = ? AND fired_at IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}

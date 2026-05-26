@@ -342,6 +342,7 @@ where
     let search_provider: Arc<dyn SearchProvider> = search_provider;
     OpenApiRouter::new()
         .routes(routes!(get_imbox).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_imbox_sectioned).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_drafts).layer(Extension(mail_provider.clone())))
@@ -530,6 +531,15 @@ struct MailViewResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+struct ImboxSectionedResponse {
+    bubbled_up: Vec<MailViewItem>,
+    new_for_you: Vec<MailViewItem>,
+    previously_seen: Vec<MailViewItem>,
+    new_count: usize,
+    previously_seen_total: usize,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 struct BubbleUpViewResponse {
     items: Vec<BubbleUpViewItem>,
 }
@@ -557,6 +567,26 @@ async fn get_imbox(
     Query(query): Query<ViewQuery>,
 ) -> Response {
     get_view(state, user, provider, query, MailView::Imbox).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/imbox/sectioned",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Imbox mail view partitioned into Bubble Up, new, and seen sections.", body = ImboxSectionedResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Imbox sectioned view lookup failed."),
+    ),
+)]
+async fn get_imbox_sectioned(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+    Query(query): Query<ViewQuery>,
+) -> Response {
+    get_imbox_sectioned_view(state, user, provider, query).await
 }
 
 #[utoipa::path(
@@ -845,6 +875,78 @@ async fn get_view(
     Json(MailViewResponse {
         items,
         next_cursor: None,
+    })
+    .into_response()
+}
+
+async fn get_imbox_sectioned_view(
+    state: AppState,
+    user: AuthUser,
+    provider: Arc<dyn MailViewProvider>,
+    query: ViewQuery,
+) -> Response {
+    let _cursor = query.cursor.as_deref();
+    let limit = query.normalized_limit();
+
+    let mut items = match provider
+        .list(&state, user.jmap_token.clone(), MailView::Imbox, limit)
+        .await
+    {
+        Ok(items) => items,
+        Err(err) => {
+            tracing::warn!(user_id = user.id, error = %err.0, "imbox sectioned view lookup failed");
+            return internal();
+        }
+    };
+
+    if let Err(err) = annotate_note_flags(&state, user.id, &mut items).await {
+        tracing::error!(user_id = user.id, error = %err, "imbox sectioned note flag lookup failed");
+        return internal();
+    }
+
+    let seen_thread_ids = match hail_db::seen_thread_ids(&state.db, user.id).await {
+        Ok(thread_ids) => thread_ids,
+        Err(err) => {
+            tracing::error!(user_id = user.id, error = %err, "seen thread id lookup failed");
+            return internal();
+        }
+    };
+    let fired_bubble_up_thread_ids = match hail_db::fired_bubble_up_thread_ids(&state.db, user.id)
+        .await
+    {
+        Ok(thread_ids) => thread_ids,
+        Err(err) => {
+            tracing::error!(user_id = user.id, error = %err, "fired bubble-up thread id lookup failed");
+            return internal();
+        }
+    };
+
+    let mut bubbled_up = Vec::new();
+    let mut new_for_you = Vec::new();
+    let mut previously_seen = Vec::new();
+    let mut previously_seen_total = 0;
+
+    for item in items {
+        if fired_bubble_up_thread_ids.contains(&item.thread_id) {
+            bubbled_up.push(item);
+        } else if seen_thread_ids.contains(&item.thread_id) {
+            previously_seen_total += 1;
+            if previously_seen.len() < 25 {
+                previously_seen.push(item);
+            }
+        } else {
+            new_for_you.push(item);
+        }
+    }
+
+    let new_count = new_for_you.len();
+
+    Json(ImboxSectionedResponse {
+        bubbled_up,
+        new_for_you,
+        previously_seen,
+        new_count,
+        previously_seen_total,
     })
     .into_response()
 }
