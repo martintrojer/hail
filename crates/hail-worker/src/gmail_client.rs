@@ -305,6 +305,32 @@ where
         }
     }
 
+    /// `GET /gmail/v1/users/me/history`
+    pub async fn list_history(
+        &self,
+        params: &ListHistoryParams,
+    ) -> Result<ListHistoryResponse, GmailClientError> {
+        let max_results = params
+            .max_results
+            .map(|value| value.clamp(1, 500).to_string());
+        let mut query = Vec::new();
+        query.push(("startHistoryId", params.start_history_id.as_str()));
+        if let Some(value) = max_results.as_deref() {
+            query.push(("maxResults", value));
+        }
+        if let Some(value) = params.page_token.as_deref() {
+            query.push(("pageToken", value));
+        }
+        if let Some(value) = params.label_id.as_deref() {
+            query.push(("labelId", value));
+        }
+        for history_type in &params.history_types {
+            query.push(("historyTypes", history_type.as_str()));
+        }
+
+        self.get_json("users/me/history", &query).await
+    }
+
     /// `GET /gmail/v1/users/me/messages/{id}?format=raw`
     pub async fn get_raw_message(
         &self,
@@ -396,6 +422,28 @@ pub struct ListMessagesParams {
     pub include_spam_trash: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ListHistoryParams {
+    pub start_history_id: String,
+    pub max_results: Option<u16>,
+    pub page_token: Option<String>,
+    pub label_id: Option<String>,
+    pub history_types: Vec<String>,
+}
+
+impl ListHistoryParams {
+    #[must_use]
+    pub fn new(start_history_id: impl Into<String>) -> Self {
+        Self {
+            start_history_id: start_history_id.into(),
+            max_results: None,
+            page_token: None,
+            label_id: None,
+            history_types: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GmailProfile {
@@ -417,6 +465,38 @@ pub struct ListMessagesResponse {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ListMessage {
+    pub id: String,
+    pub thread_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListHistoryResponse {
+    #[serde(default)]
+    pub history: Vec<GmailHistoryRecord>,
+    pub next_page_token: Option<String>,
+    pub history_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailHistoryRecord {
+    pub id: String,
+    #[serde(default)]
+    pub messages_added: Vec<GmailHistoryMessageRef>,
+    #[serde(default)]
+    pub messages: Vec<GmailHistoryMessage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailHistoryMessageRef {
+    pub message: GmailHistoryMessage,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailHistoryMessage {
     pub id: String,
     pub thread_id: Option<String>,
 }
