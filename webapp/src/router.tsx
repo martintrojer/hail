@@ -21,6 +21,7 @@ import { useTheme } from './hooks/useTheme';
 import { formErrorMessage } from './lib/errorMessages';
 import { queryClient } from './lib/queryClient';
 import { AdminPage } from './routes/AdminPage';
+import { AllFilesPage } from './routes/AllFilesPage';
 import { ArchivePage } from './routes/ArchivePage';
 import { BubbleUpPage } from './routes/BubbleUpPage';
 import { ComposerPage } from './routes/ComposerPage';
@@ -485,6 +486,13 @@ const scheduledRoute = createRoute({
   component: ScheduledRoutePage,
 });
 
+const allFilesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/files',
+  beforeLoad: requireAuth,
+  component: AllFilesPage,
+});
+
 const screenerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/screener',
@@ -627,6 +635,7 @@ const routeTree = rootRoute.addChildren([
   paperTrailRoute,
   draftsRoute,
   scheduledRoute,
+  allFilesRoute,
   screenerRoute,
   screenedOutRoute,
   screenerSpeakeasyRoute,

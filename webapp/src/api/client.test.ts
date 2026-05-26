@@ -95,6 +95,19 @@ describe('HailApiClient GET request contract', () => {
     expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
   });
 
+  it('sends credentials and query limit for attachment listing', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await client.listAttachments(75);
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/attachments?limit=75'),
+    );
+    expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
+  });
+
   it('sends credentials and encoded ids for thread lookups', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
