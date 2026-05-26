@@ -10,6 +10,90 @@ continues to own mail storage, SMTP, and JMAP.
 > but treat Cloudflare-specific UI names as a checklist to confirm before a
 > production cutover.
 
+## Recommended setup at a glance
+
+For home-hosted hail with private local storage, the recommended production
+shape is:
+
+```text
+Inbound mail:
+Remote sender
+  → DNS-only MX: mx.example.com
+  → small public VPS gateway
+  → WireGuard tunnel
+  → home Stalwart server
+  → hail routing/UI
+
+Web UI:
+Browser
+  → https://mail.example.com
+  → Cloudflare Tunnel
+  → hail-api at home
+
+Outbound mail:
+Home Stalwart
+  → authenticated smarthost / relay
+  → recipient inbox
+```
+
+This gives the main self-hosting benefits without relying on residential mail
+connectivity:
+
+- mail data stays at home on the operator's Stalwart server;
+- the home IP does not appear in public DNS;
+- residential port-25 blocks and CGNAT are bypassed;
+- inbound mail remains a normal SMTP transaction into Stalwart, not a forwarded
+  Cloudflare Email Routing import workaround;
+- the hail web UI is exposed through Cloudflare Tunnel instead of direct public
+  HTTP ports;
+- outbound deliverability uses a reputable smarthost rather than a residential
+  or low-reputation VPS IP.
+
+Use separate public names:
+
+```text
+mx.example.com      → VPS public IP, DNS-only / grey cloud
+mail.example.com    → Cloudflare Tunnel to hail-api, proxied / orange cloud
+```
+
+Core DNS shape:
+
+```text
+example.com       MX     10 mx.example.com
+mx.example.com    A      <VPS_PUBLIC_IP>                DNS only
+mail.example.com  CNAME  <tunnel>.cfargotunnel.com      Proxied
+```
+
+SPF, DKIM, and DMARC should match the outbound smarthost or signer. Start DMARC
+at `p=none` while validating alignment and tighten later after reports are clean.
+
+The VPS is a gateway, not the mailbox host. Prefer HAProxy with PROXY protocol
+or a real MTA relay such as Postfix/OpenSMTPD over blind NAT, because
+NAT/MASQUERADE can hide original sender IPs from Stalwart. The home server runs
+Stalwart, `hail-api`, `hail-worker`, SQLite state, `cloudflared`, and the
+WireGuard peer; it should not need public inbound ports.
+
+One-line recommendation: **Cloudflare Tunnel for web, DNS-only VPS MX over
+WireGuard for inbound SMTP, and a reputable smarthost for outbound mail.**
+
+## Recipe comparison
+
+| Question | Recipe A: web-only Tunnel, direct SMTP | Recipe B: Cloudflare Email Routing + Tunnel | Recipe C: VPS MX gateway + WireGuard |
+| --- | --- | --- | --- |
+| Best for | VPS/business ISP/home network with public inbound TCP/25 | CGNAT or blocked TCP/25 when forwarding/import is acceptable | Home-hosted storage behind CGNAT/residential blocks while preserving normal SMTP delivery |
+| Public MX points to | Your Stalwart host or direct mail host | Cloudflare MX hosts (`route*.mx.cloudflare.net`) | `mx.example.com` on a small VPS |
+| Cloudflare role for mail | DNS only | Inbound mail receiver/forwarder | DNS only |
+| Cloudflare role for web | Tunnel to `hail-api` | Tunnel to `hail-api` | Tunnel to `hail-api` |
+| Home IP in public DNS | Yes, unless the direct host is a VPS | No | No |
+| Inbound mail reaches Stalwart as | Direct SMTP connection | Forwarded/imported message via verified destination, Worker, or custom bridge | SMTP forwarded over WireGuard from the VPS |
+| Preserves original SMTP session | Yes | No; Cloudflare receives and forwards/imports | Yes if using HAProxy PROXY protocol or MTA relay; weaker with NAT/MASQUERADE |
+| Queueing during home outage | Only if Stalwart/direct host is up or has its own queue | Cloudflare/destination behavior; bridge-dependent | Yes if using a VPS MTA relay; no/limited with pure TCP proxy or NAT |
+| Operational complexity | Lowest | Medium to high because a secure bridge/import path is required | Medium; requires VPS, WireGuard, and a forwarding layer |
+| Privacy trade-off | Direct host IP is public | Cloudflare sees/handles inbound messages | VPS sees SMTP metadata and may transiently queue mail depending on design |
+| Reliability trade-off | Depends on home/direct-host uptime | Depends on Cloudflare Email Routing plus bridge | VPS can absorb public network role; MTA relay variant can queue while home is down |
+| Outbound recommendation | Smarthost strongly recommended | Smarthost required for practical sending | Smarthost strongly recommended; do not rely on residential outbound |
+| Recommended status | Good for simple VPS/direct-port deployments | Useful fallback/import recipe | Preferred advanced home-hosted setup |
+
 ## Assumptions and names
 
 The examples use these placeholders:
@@ -24,10 +108,39 @@ The examples use these placeholders:
 
 Replace them before copying commands.
 
-Cloudflare Tunnel can proxy HTTP and several TCP protocols, but it does **not**
-make public SMTP on port 25 magically reachable from the internet in the normal
-MX sense. Recipe A keeps port 25 direct. Recipe B uses Cloudflare Email Routing
-for inbound mail and a relay/smarthost for outbound mail.
+Cloudflare Tunnel can proxy HTTP and several client-assisted TCP protocols, but
+it does **not** make public SMTP on port 25 reachable from the internet in the
+normal MX sense. Recipe A keeps port 25 direct. Recipe B uses Cloudflare Email
+Routing for inbound mail and a relay/smarthost for outbound mail. Recipe C uses
+a lightweight public VPS as the MX gateway and carries SMTP back to a home
+Stalwart host over WireGuard; this is usually the most realistic
+CGNAT/residential setup when you want Stalwart to receive the original SMTP
+transaction instead of importing forwarded mail.
+
+## Current Cloudflare / mail constraints to verify
+
+As of the May 2026 docs reviewed for this guide:
+
+- Cloudflare DNS proxy status applies to `A`, `AAAA`, and `CNAME` records. Raw
+  mail records and MX targets must remain **DNS only**. Do not orange-cloud
+  SMTP, IMAP, POP3, or submission hostnames unless you are deliberately using a
+  Cloudflare product that supports that exact protocol and client flow.
+- Cloudflare Tunnel public hostnames are appropriate for HTTP/HTTPS web surfaces
+  such as `hail-api`. Tunnel TCP services are client-assisted
+  (`cloudflared access tcp`) and are not a drop-in public MX endpoint for
+  arbitrary remote MTAs on port 25.
+- `cloudflared` connectors need outbound connectivity to Cloudflare Tunnel
+  edges, commonly port `7844` over TCP/UDP depending on protocol fallback.
+- Cloudflare Email Routing remains primarily an inbound forwarding/routing
+  product. Cloudflare Email Service / Email Sending may be useful for app or
+  transactional mail, but is plan/limit dependent and is not a transparent SMTP
+  smarthost for Stalwart.
+- Many VPS providers block or throttle outbound port 25 by default. Inbound port
+  25 for MX may also be policy-gated. Verify your provider before building a
+  gateway.
+- Stalwart v0.16+ expects the normal WebUI/JMAP public URL to be HTTPS on the
+  configured hostname. Plain `:8080` is mainly bootstrap/recovery or
+  reverse-proxy upstream, not the day-to-day public admin URL.
 
 ## Prerequisites
 
@@ -358,22 +471,210 @@ Stalwart/hail after your relay step. Because the relay shape is operator-defined
 log every hop during first setup: Cloudflare routing event, Worker log, relay log,
 Stalwart delivery log, and hail UI visibility.
 
+## Recipe C: VPS MX gateway plus WireGuard to home Stalwart
+
+Use this when the operator wants mailbox data to live at home but residential
+inbound TCP/25, CGNAT, or home-IP privacy makes direct MX impractical. A small
+public VPS becomes the DNS-visible MX endpoint. It forwards SMTP over a
+WireGuard tunnel to Stalwart running on the home host. Cloudflare is DNS for
+mail and Tunnel for the hail web UI; Cloudflare is not in the SMTP data path.
+
+This is the preferred advanced recipe when you want Stalwart to receive mail via
+normal SMTP rather than Cloudflare Email Routing forwarding/import.
+
+### Flow
+
+```text
+Remote MTA ──SMTP/25──> VPS public IP ──HAProxy/Postfix──> WireGuard ──> Home Stalwart
+Browser ──HTTPS──> Cloudflare ──Tunnel──> cloudflared ──HTTP──> hail-api
+Stalwart outbound ──submission/API──> paid smarthost ──> Recipient MX
+```
+
+### DNS records for Recipe C
+
+Keep MX and web names separate. DNS values are hostnames, not URLs; never write
+`https://` or `://` in MX, A, SPF, DKIM, or DMARC values.
+
+| Type | Name | Content | Proxy | Purpose |
+| --- | --- | --- | --- | --- |
+| `A` | `mx.example.com` | `203.0.113.10` | DNS only | VPS gateway public address |
+| `MX` | `example.com` | `mx.example.com` priority `10` | DNS only | Public inbound SMTP target |
+| `CNAME` | `mail.example.com` | `<uuid>.cfargotunnel.com` | Proxied | hail web UI through Tunnel |
+| `TXT` | `example.com` | provider-specific SPF | DNS only | Authorize outbound smarthost, not the home host |
+| `TXT` | `_dmarc.example.com` | `v=DMARC1; p=none; rua=mailto:postmaster@example.com` initially | DNS only | DMARC reports during setup |
+| `TXT` | `<selector>._domainkey.example.com` | smarthost/Stalwart DKIM key | DNS only | DKIM for the system that signs outbound mail |
+
+Example SPF for a smarthost must come from that provider's current docs. Do not
+invent values such as `include:brevo.com` unless the provider tells you to use
+that exact include. If only the smarthost sends outbound mail for the domain,
+SPF usually authorizes only the smarthost. The VPS receives inbound mail and does
+not need SPF authorization unless it also sends.
+
+### VPS provider checklist
+
+Before provisioning, verify all of these with the provider and account age:
+
+- Inbound TCP/25 to the VPS is allowed.
+- Outbound TCP/25 policy is understood. Direct outbound is not required if
+  Stalwart uses a smarthost, but local queue tests and bounce delivery may still
+  touch port 25 depending on gateway design.
+- Reverse DNS/PTR can be set for the VPS IP if the VPS ever sends mail directly.
+- Abuse limits permit running a personal MX gateway.
+- The VPS has a stable IPv4 address. IPv6 is useful but not a replacement for
+  IPv4 MX reachability.
+
+### WireGuard addressing
+
+Example private tunnel addresses:
+
+```text
+VPS WireGuard:  10.0.0.1/24
+Home Stalwart:  10.0.0.2/24
+WireGuard UDP:  51820 on the VPS
+```
+
+Use normal WireGuard hardening: unique keys, `PersistentKeepalive = 25` on the
+home peer, restricted firewall rules, and systemd enablement on both sides. The
+home server only needs outbound UDP to the VPS; it does not need public inbound
+ports.
+
+### Forwarding design: prefer L4 proxy or MTA relay over blind NAT
+
+Avoid a simple DNAT/MASQUERADE recipe like this as the final design:
+
+```bash
+iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 25 -j DNAT --to-destination 10.0.0.2:25
+iptables -t nat -A POSTROUTING -o wg0 -j MASQUERADE
+```
+
+It may deliver mail, but masquerading makes Stalwart see the VPS tunnel address
+instead of the real remote sender IP. That weakens logs, abuse controls,
+rate-limits, DNSBL/reputation checks, and forensic value.
+
+Prefer one of these patterns:
+
+1. **HAProxy TCP forwarding with PROXY protocol.** HAProxy listens on the VPS
+   public mail ports and forwards to Stalwart over WireGuard using PROXY v2.
+   Configure Stalwart to trust the VPS/WireGuard source for PROXY protocol. This
+   preserves original client IP metadata while keeping storage at home.
+2. **Postfix/OpenSMTPD edge relay.** The VPS is the public MX, accepts mail for
+   your domain, queues during home outages, and relays to Stalwart over
+   WireGuard. This is operationally robust but transiently stores mail on the
+   VPS, so it is a privacy trade-off.
+
+If you intentionally use raw NAT, document the loss of source IP as an accepted
+trade-off and compensate with stricter filtering on the VPS edge.
+
+### Ports to expose through the VPS
+
+Minimum viable inbound mail:
+
+| Port | Expose on VPS? | Notes |
+| --- | --- | --- |
+| `25/tcp` | Yes | Required for remote MTAs to deliver mail. |
+| `465/tcp` | Optional | Only if external mail clients submit through Stalwart. Prefer Cloudflare Tunnel/hail web for normal use. |
+| `587/tcp` | Optional | STARTTLS submission; newer Stalwart installs may not enable this by default. |
+| `993/tcp` | Optional | IMAPS for external native clients. Not needed for hail web UI. |
+| `8080/tcp` | No | Stalwart bootstrap/recovery or internal HTTP upstream only. Do not publish directly. |
+| `443/tcp` | Usually no for hail | The hail web UI should be reached through Cloudflare Tunnel to `hail-api`. |
+
+For hail, browsers talk to `hail-api`, not directly to Stalwart/JMAP. A Tunnel
+public hostname should normally point to `http://hail-api:8080` inside the
+Compose network. Expose Stalwart's own WebUI only for initial setup or deliberate
+admin operations, and prefer binding it to localhost/VPN/internal networks.
+
+### Cloudflare Tunnel for hail web UI
+
+Dashboard public hostname:
+
+- Hostname: `mail.example.com`
+- Service type: `HTTP`
+- Service URL: `http://hail-api:8080`
+
+If `cloudflared` runs on the home host outside Compose, the service URL can be a
+LAN or WireGuard-reachable address. In the checked-in Compose overlay,
+`cloudflared` runs in the Compose network and reaches `hail-api` by service name.
+
+Protect administrative surfaces with hail authentication first. Cloudflare
+Access can add another gate around `mail.example.com` or selected paths, but be
+careful with path-only rules when an application uses OAuth/JMAP discovery and
+redirects. Test login, setup, logout, and API calls after adding Access.
+
+### Outbound mail
+
+Recipe C still should not send directly from the residential home IP. Configure
+Stalwart to use an authenticated smarthost such as Postmark, Mailgun, Amazon
+SES, SMTP2GO, Brevo, or a VPS relay you control. Record:
+
+- submission host and port, usually `587`, `465`, or provider-specific `2525`;
+- SPF include or exact SPF record from the provider;
+- DKIM selector and DNS record from the signing system;
+- DMARC policy and report mailbox;
+- whether Stalwart or the smarthost signs DKIM.
+
+Start DMARC at `p=none` while validating alignment, then move to `quarantine` or
+`reject` only after reports look clean.
+
+### Smoke tests for Recipe C
+
+From outside the VPS/home network:
+
+```bash
+dig +short MX example.com
+dig +short A mx.example.com
+nc -vz mx.example.com 25
+curl -I https://mail.example.com/healthz
+```
+
+On the VPS:
+
+```bash
+wg show
+ss -tlnp | egrep ':(25|465|587|993)'
+# If using HAProxy:
+journalctl -u haproxy --since '10 minutes ago'
+```
+
+On the home host:
+
+```bash
+wg show
+ss -tlnp | egrep ':(25|465|587|993|8080)'
+docker compose ps stalwart hail-api hail-worker
+```
+
+Send a real external test message to `smoke@example.com` and verify:
+
+1. the VPS accepted the SMTP connection;
+2. the WireGuard tunnel carried it to the home host;
+3. Stalwart delivered it;
+4. `hail-worker` routed it;
+5. hail shows it in Screener or the expected view.
+
 ## Operational checklist
 
 - Keep direct SMTP (`A`/`MX`) and tunnel CNAME names separate if Cloudflare will
-  not allow both at `mail.example.com`.
+  not allow both at `mail.example.com`; the clearest pattern is
+  `mx.example.com` for SMTP and `mail.example.com` for hail web.
 - Use DNS-only records for MX targets and mail authentication TXT records.
+- Do not put URL schemes (`http://`, `https://`, `://`) in DNS mail records.
 - Do not expose unauthenticated relay services through Cloudflare Tunnel.
+- For home/CGNAT deployments that need real SMTP delivery into Stalwart, prefer
+  Recipe C's VPS WireGuard gateway over Cloudflare Email Routing import bridges.
+- If a VPS forwards SMTP with NAT/MASQUERADE, understand that Stalwart may lose
+  the real sender IP; prefer HAProxy PROXY protocol or a real MTA relay.
 - Prefer token-based tunnels for simple Compose deployments.
 - Pin `cloudflare/cloudflared` to a version if you require reproducible releases;
   `latest` is convenient but moves.
 - Re-run `curl -I https://mail.example.com/healthz` after every tunnel or DNS
   change.
-- Re-run SPF, DKIM, and DMARC checks after enabling Email Routing or changing a
-  smarthost.
+- Re-run SPF, DKIM, and DMARC checks after enabling Email Routing, changing a
+  smarthost, or moving SMTP through a VPS gateway.
 
 ## Related files
 
 - `docs/design.md` §3 for the deployment shape.
-- `docs/design.md` §11 for the two required Cloudflare recipes.
+- `docs/design.md` §11 for the supported Cloudflare/VPS recipes.
 - `deploy/docker-compose.cloudflare.yml` once the compose overlay task lands.
+- Stalwart reverse-proxy and HAProxy docs when using Recipe C with PROXY
+  protocol.

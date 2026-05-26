@@ -8,8 +8,9 @@ This guide takes a fresh host to one received message in hail. Replace
 You need:
 
 - A domain you control, with DNS access.
-- A host with TCP `25` and `8080` reachable from the internet, or a Cloudflare
-  account for the tunnel / Email Routing recipe.
+- A host with TCP `25` and `8080` reachable from the internet, a Cloudflare
+  account for the web tunnel / Email Routing recipe, or a VPS gateway for the
+  WireGuard MX recipe.
 - Podman with `podman compose`, or Docker with the Compose plugin.
 - `openssl`.
 
@@ -21,8 +22,11 @@ podman --version && podman compose version
 # or: docker --version && docker compose version
 ```
 
-If port 25 is blocked or you are behind CGNAT, use the Cloudflare recipe for
-mail ingress. You can still start the local stack with this guide.
+If port 25 is blocked or you are behind CGNAT, use `docs/cloudflare-tunnel.md`.
+The most realistic home-hosted mail ingress is often Recipe C: DNS-only MX to a
+small VPS gateway, then WireGuard to the home Stalwart host. Cloudflare Email
+Routing remains documented for forwarding/import-based setups. You can still
+start the local stack with this guide.
 
 ## 2. Clone and enter the repo
 

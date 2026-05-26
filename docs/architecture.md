@@ -322,8 +322,9 @@ session. Both paths converge on the same database state.
 
 ### 6.10 Cloudflare Tunnel support is MVP, not polish
 
-**Decision:** v1 includes both Cloudflare Tunnel recipes: web-only tunnel and
-Email Routing/CGNAT-friendly inbound mail.
+**Decision:** v1 includes Cloudflare-oriented deployment recipes for web-only
+Tunnel, Email Routing/CGNAT-friendly inbound mail, and a VPS WireGuard MX gateway
+for home-hosted Stalwart.
 
 **Rejected:**
 
@@ -332,7 +333,10 @@ Email Routing/CGNAT-friendly inbound mail.
 - **Build a custom Cloudflare integration service first.** Too much product
   surface for v1; docs + compose overlay are enough.
 
-**Why:** receiving mail without opening port 25 is a self-hosting killer feature.
+**Why:** receiving mail without opening port 25 on the home network is a
+self-hosting killer feature. Cloudflare Email Routing is useful for
+forwarding/import setups, but the more realistic normal-SMTP home deployment is
+a DNS-only MX on a lightweight VPS that forwards over WireGuard to home Stalwart.
 The recipe is part of the value proposition, not an afterthought.
 
 ### 6.11 Async shutdown must be cancellation-first
