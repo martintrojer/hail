@@ -325,6 +325,12 @@ async fn imports_gmail_pages_into_stalwart_and_records_mapping_and_audit() {
     assert_eq!(imports.len(), 2);
     assert_eq!(imports[0].mailbox_ids, vec!["inbox"]);
     assert_eq!(imports[0].keywords, vec!["$seen"]);
+    assert_eq!(gmail.list_params()[0].label_ids, vec!["INBOX"]);
+    assert_eq!(
+        gmail.list_params()[0].query.as_deref(),
+        Some("newer_than:30d -in:sent")
+    );
+    assert!(!gmail.list_params()[0].include_spam_trash);
 
     let audit = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 10)
         .await
@@ -338,6 +344,125 @@ async fn imports_gmail_pages_into_stalwart_and_records_mapping_and_audit() {
             .count(),
         2
     );
+}
+
+#[tokio::test]
+async fn defaults_exclude_spam_trash_and_sent_from_inbound_import() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: Vec::new(),
+            next_page_token: None,
+            result_size_estimate: Some(0),
+        }],
+        Vec::new(),
+    );
+    let importer = FakeRfc822Importer::default();
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("empty historical import");
+
+    assert!(summary.completed);
+    let params = gmail.list_params();
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].query.as_deref(), Some("-in:sent"));
+    assert!(params[0].label_ids.is_empty());
+    assert!(!params[0].include_spam_trash);
+    assert!(importer.imports().is_empty());
+}
+
+#[tokio::test]
+async fn provider_labels_are_only_import_hints_not_local_keywords() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-hinted".to_owned(),
+                thread_id: Some("thread-hinted".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-hinted",
+            "thread-hinted",
+            "history-hinted",
+            "hinted@example.com",
+        )],
+    );
+    let importer = FakeRfc822Importer::default();
+    let mut options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+    options.label_ids = vec!["STARRED".to_owned(), "CATEGORY_PROMOTIONS".to_owned()];
+    options.keywords = Vec::new();
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("hinted historical import");
+
+    assert_eq!(summary.imported, 1);
+    assert_eq!(
+        gmail.list_params()[0].label_ids,
+        ["STARRED", "CATEGORY_PROMOTIONS"]
+    );
+    let imports = importer.imports();
+    assert_eq!(imports.len(), 1);
+    assert!(imports[0].keywords.is_empty());
+    assert_eq!(imports[0].mailbox_ids, vec!["inbox"]);
+}
+
+#[tokio::test]
+async fn explicit_sent_copy_import_can_disable_default_sent_exclusion() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: Vec::new(),
+            next_page_token: None,
+            result_size_estimate: Some(0),
+        }],
+        Vec::new(),
+    );
+    let importer = FakeRfc822Importer::default();
+    let mut options = GmailHistoricalImportOptions::into_mailboxes(["sent"]);
+    options.exclude_sent = false;
+    options.label_ids = vec!["SENT".to_owned()];
+
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("explicit sent import window");
+
+    assert_eq!(gmail.list_params()[0].label_ids, ["SENT"]);
+    assert_eq!(gmail.list_params()[0].query, None);
 }
 
 #[tokio::test]

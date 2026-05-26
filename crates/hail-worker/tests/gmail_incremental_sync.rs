@@ -230,6 +230,13 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
 }
 
 #[tokio::test]
+async fn default_incremental_sync_tracks_message_additions_only() {
+    let options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
+
+    assert_eq!(options.history_types, vec!["messageAdded"]);
+}
+
+#[tokio::test]
 async fn incremental_history_imports_new_messages_and_advances_cursor() {
     let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
     let gmail = FakeGmail::new(

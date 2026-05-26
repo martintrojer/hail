@@ -417,7 +417,15 @@ where
 pub struct ListMessagesParams {
     pub max_results: Option<u16>,
     pub page_token: Option<String>,
+    /// Gmail search query for read-only discovery/import bounds.
+    ///
+    /// This must not be interpreted as authoritative local state; hail-side
+    /// archive/delete/read mutations are local Stalwart/JMAP mutations in v1.2.
     pub query: Option<String>,
+    /// Gmail label ids for read-only discovery/import bounds.
+    ///
+    /// The Gmail client intentionally exposes no label mutation API for v1.2
+    /// one-way import.
     pub label_ids: Vec<String>,
     pub include_spam_trash: bool,
 }

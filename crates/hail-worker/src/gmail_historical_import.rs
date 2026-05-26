@@ -4,6 +4,12 @@
 //! Gmail API access, Stalwart/JMAP RFC822 creation, and hail.db idempotency
 //! behind narrow traits so tests can use in-memory fakes and production can wire
 //! the real Gmail wrapper plus [`crate::rfc822_import::StalwartJmapRfc822Importer`].
+//!
+//! v1.2 import is intentionally one-way. Gmail labels, archive/read state,
+//! Trash, Spam, and Sent are provider-owned signals. This importer may use
+//! provider labels and queries as bounded discovery hints, but it must not write
+//! Gmail labels or derive authoritative hail/Stalwart state from them after the
+//! raw RFC822 import boundary.
 
 use async_trait::async_trait;
 use hail_db::provider_message_mappings::{
@@ -40,12 +46,31 @@ const SKIP_REASON_PARTIAL_MAPPING: &str = "partial_mapping_without_local_jmap_id
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GmailHistoricalImportOptions {
+    /// Gmail label ids used only to bound/discover import candidates.
+    ///
+    /// Provider labels are not converted into hail/Stalwart keywords and hail
+    /// never adds/removes labels on Gmail during v1.2 import.
     pub label_ids: Vec<String>,
+    /// Optional Gmail search query used only as an import/discovery bound.
     pub query: Option<String>,
     pub max_messages: Option<usize>,
     pub page_size: u16,
+    /// Include Gmail Spam and Trash in the read/import window.
+    ///
+    /// The v1.2 default is `false`; local spam/trash/delete decisions remain
+    /// Stalwart/hail state and are not mirrored back to Gmail.
     pub include_spam_trash: bool,
+    /// Exclude Gmail Sent from the default inbound import window.
+    ///
+    /// Provider-created Sent copies are handled by outbound sent-copy dedupe
+    /// rather than normal inbox import. Set this to `false` only for an
+    /// explicit sent-copy import/dedupe pass.
+    pub exclude_sent: bool,
     pub target_mailbox_ids: Vec<String>,
+    /// Local Stalwart/JMAP keywords to apply at import time.
+    ///
+    /// These are hail/Stalwart keywords chosen by hail. They are not derived
+    /// from Gmail/provider labels in v1.2.
     pub keywords: Vec<String>,
     pub resume: bool,
 }
@@ -59,6 +84,7 @@ impl GmailHistoricalImportOptions {
             max_messages: None,
             page_size: DEFAULT_PAGE_SIZE,
             include_spam_trash: false,
+            exclude_sent: true,
             target_mailbox_ids: target_mailbox_ids.into_iter().map(Into::into).collect(),
             keywords: Vec::new(),
             resume: true,
@@ -100,6 +126,8 @@ struct GmailHistoricalBackfillCursor {
     label_ids: Vec<String>,
     query: Option<String>,
     include_spam_trash: bool,
+    #[serde(default = "default_exclude_sent")]
+    exclude_sent: bool,
     next_page_token: Option<String>,
     processed: usize,
     completed: bool,
@@ -112,6 +140,7 @@ impl GmailHistoricalBackfillCursor {
             label_ids: options.label_ids.clone(),
             query: options.query.clone(),
             include_spam_trash: options.include_spam_trash,
+            exclude_sent: options.exclude_sent,
             next_page_token: None,
             processed: 0,
             completed: false,
@@ -123,7 +152,34 @@ impl GmailHistoricalBackfillCursor {
             && self.label_ids == options.label_ids
             && self.query == options.query
             && self.include_spam_trash == options.include_spam_trash
+            && self.exclude_sent == options.exclude_sent
     }
+}
+
+const GMAIL_SENT_QUERY_EXCLUSION: &str = "-in:sent";
+
+fn default_exclude_sent() -> bool {
+    true
+}
+
+fn effective_gmail_query(options: &GmailHistoricalImportOptions) -> Option<String> {
+    match (options.query.as_deref(), options.exclude_sent) {
+        (Some(query), true) if query_mentions_sent_exclusion(query) => Some(query.to_owned()),
+        (Some(query), true) if query.trim().is_empty() => {
+            Some(GMAIL_SENT_QUERY_EXCLUSION.to_owned())
+        }
+        (Some(query), true) => Some(format!("{} {}", query.trim(), GMAIL_SENT_QUERY_EXCLUSION)),
+        (None, true) => Some(GMAIL_SENT_QUERY_EXCLUSION.to_owned()),
+        (Some(query), false) if query.trim().is_empty() => None,
+        (Some(query), false) => Some(query.to_owned()),
+        (None, false) => None,
+    }
+}
+
+fn query_mentions_sent_exclusion(query: &str) -> bool {
+    query
+        .split_whitespace()
+        .any(|term| term.eq_ignore_ascii_case(GMAIL_SENT_QUERY_EXCLUSION))
 }
 
 #[async_trait]
@@ -282,7 +338,7 @@ where
         let params = ListMessagesParams {
             max_results: Some(options.normalized_page_size(remaining)),
             page_token: cursor.next_page_token.clone(),
-            query: options.query.clone(),
+            query: effective_gmail_query(&options),
             label_ids: options.label_ids.clone(),
             include_spam_trash: options.include_spam_trash,
         };
@@ -718,8 +774,11 @@ async fn audit_sync_started(
     let metadata = serde_json::json!({
         "labels": options.label_ids,
         "query": options.query,
+        "effectiveQuery": effective_gmail_query(options),
         "maxMessages": options.max_messages,
         "pageSize": options.page_size,
+        "includeSpamTrash": options.include_spam_trash,
+        "excludeSent": options.exclude_sent,
         "resuming": page_token.is_some(),
     })
     .to_string();

@@ -6,6 +6,11 @@
 //! account-scoped dedupe signal for cases where Gmail exposes the same message
 //! under a different provider id.
 //!
+//! Provider labels, Gmail archive/read/delete state, and Spam/Trash/Sent
+//! placement are not mirrored into hail from this table and are not written back
+//! to Gmail in v1.2. Provider metadata stored here is import/dedupe evidence;
+//! visible mail state after import belongs to local Stalwart/JMAP.
+//!
 //! Do not store message bodies, raw RFC822, tokens, or other secrets here.
 
 use sqlx::{Row, SqlitePool};

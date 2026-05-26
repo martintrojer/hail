@@ -37,7 +37,13 @@ pub struct GmailIncrementalSyncAccount {
 pub struct GmailIncrementalSyncOptions {
     pub page_size: u16,
     pub max_history_records: Option<usize>,
+    /// Optional Gmail history label bound. Read-only import hint only.
     pub label_id: Option<String>,
+    /// Gmail history event types to observe.
+    ///
+    /// Defaults to `messageAdded` only. v1.2 intentionally ignores
+    /// labelAdded/labelRemoved history for archive/read/delete/label mirroring;
+    /// provider labels are not authoritative after import.
     pub history_types: Vec<String>,
     pub historical_fallback: GmailHistoricalImportOptions,
 }
@@ -53,11 +59,7 @@ impl GmailIncrementalSyncOptions {
             page_size: DEFAULT_HISTORY_PAGE_SIZE,
             max_history_records: Some(1_000),
             label_id: None,
-            history_types: vec![
-                "messageAdded".to_owned(),
-                "labelAdded".to_owned(),
-                "labelRemoved".to_owned(),
-            ],
+            history_types: vec!["messageAdded".to_owned()],
             historical_fallback,
         }
     }

@@ -256,6 +256,8 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     assert!(!summary.import.completed);
     assert_eq!(gmail.raw_gets(), vec!["gmail-1", "gmail-2"]);
     assert_eq!(gmail.list_params()[0].label_ids, vec!["INBOX"]);
+    assert_eq!(gmail.list_params()[0].query.as_deref(), Some("-in:sent"));
+    assert!(!gmail.list_params()[0].include_spam_trash);
     assert_eq!(importer.imports().len(), 2);
 
     let row: (String, String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
