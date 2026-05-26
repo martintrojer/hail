@@ -1,3 +1,5 @@
+use sqlx::Row;
+
 use hail_db::provider_message_mappings::{
     DedupedProviderSentCopyMapping, DuplicateProviderMessageMapping, FailedProviderMessageMapping,
     ImportedProviderMessageMapping, LocalSentMessageRef, ProviderImportStatus, ProviderMessageSeen,
@@ -226,6 +228,113 @@ async fn imported_mapping_stores_local_jmap_ids_and_is_upsertable() {
     );
     assert_eq!(updated.content_sha256.as_deref(), Some(&[2_u8; 32][..]));
     assert_eq!(updated.jmap_email_id.as_deref(), Some("jmap-email-1b"));
+}
+
+#[tokio::test]
+async fn content_sha256_must_be_32_bytes() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "hash-user@example.com", "acct-hash-user").await;
+    let provider_account_id =
+        insert_provider_account(&pool, user_id, "acct-hash-user", "gmail-provider-hash").await;
+
+    let bad = record_provider_message_seen(
+        &pool,
+        ProviderMessageSeen {
+            provider_account_id,
+            provider_message_id: "gmail-msg-short-hash",
+            provider_thread_id: None,
+            provider_history_id: None,
+            rfc822_message_id: None,
+            content_sha256: Some(&[9_u8; 31]),
+        },
+    )
+    .await;
+
+    assert!(bad.is_err(), "short content_sha256 must fail CHECK");
+
+    let text_hash = sqlx::query(
+        "INSERT INTO provider_message_mappings \
+         (provider_account_id, provider_message_id, content_sha256, import_status, created_at, updated_at) \
+         VALUES (?, 'gmail-msg-text-hash', ?, 'pending', ?, ?)",
+    )
+    .bind(provider_account_id)
+    .bind("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+
+    assert!(text_hash.is_err(), "text content_sha256 must fail CHECK");
+
+    let ok = record_provider_message_seen(
+        &pool,
+        ProviderMessageSeen {
+            provider_account_id,
+            provider_message_id: "gmail-msg-valid-hash",
+            provider_thread_id: None,
+            provider_history_id: None,
+            rfc822_message_id: None,
+            content_sha256: Some(&[9_u8; 32]),
+        },
+    )
+    .await
+    .expect("valid SHA-256 digest accepted");
+
+    assert_eq!(ok.content_sha256.as_deref(), Some(&[9_u8; 32][..]));
+}
+
+#[tokio::test]
+async fn content_sha256_lookup_uses_account_scoped_partial_index() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "hash-index-user@example.com", "acct-hash-index").await;
+    let provider_account_id = insert_provider_account(
+        &pool,
+        user_id,
+        "acct-hash-index",
+        "gmail-provider-hash-index",
+    )
+    .await;
+
+    mark_provider_message_imported(
+        &pool,
+        ImportedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: "gmail-hash-indexed",
+            provider_thread_id: None,
+            provider_history_id: None,
+            rfc822_message_id: None,
+            content_sha256: Some(&[10_u8; 32]),
+            jmap_email_id: "jmap-hash-indexed",
+            jmap_thread_id: None,
+            jmap_mailbox_ids_json: None,
+        },
+    )
+    .await
+    .expect("seed indexed hash mapping");
+
+    let plan_rows = sqlx::query(
+        "EXPLAIN QUERY PLAN \
+         SELECT id FROM provider_message_mappings \
+         WHERE provider_account_id = ?1 AND content_sha256 = ?2 \
+           AND jmap_email_id IS NOT NULL AND import_status IN ('imported', 'duplicate') \
+         ORDER BY CASE import_status WHEN 'imported' THEN 0 ELSE 1 END, id ASC \
+         LIMIT 1",
+    )
+    .bind(provider_account_id)
+    .bind(vec![10_u8; 32])
+    .fetch_all(&pool)
+    .await
+    .expect("query plan");
+    let plan = plan_rows
+        .iter()
+        .map(|row| row.get::<String, _>("detail"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        plan.contains("idx_provider_message_mappings_content_sha256"),
+        "content digest dedupe lookup must use content_sha256 index; plan was {plan}"
+    );
 }
 
 #[tokio::test]
