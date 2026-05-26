@@ -76,19 +76,23 @@ Stalwart can own them.
 
 ### `provider_accounts` schema
 
-`hail.db` needs provider account rows keyed to hail users. The schema should
-store at least:
+`hail.db` now has a provider import table family under
+`crates/hail-db/migrations/0010_provider_accounts.sql`:
 
-- hail user id / JMAP account id binding;
-- provider kind (`gmail` initially), provider account id/email, display email;
-- granted OAuth scopes and consent time;
-- encrypted refresh token envelope and token metadata;
-- latest access-token expiry metadata if useful for observability, not as a
-  durable secret;
-- sync mode/status (`disabled`, `initial_sync`, `active`, `error`, `revoked`);
-- history/cursor checkpoints and backfill window progress;
-- last successful sync, last attempted sync, error class/message safe for UI;
-- revocation/deauthorization timestamps.
+- `provider_accounts` stores one server-side OAuth/provider connection per hail
+  user/provider identity, including hail/JMAP account binding, provider kind
+  (`gmail` initially), provider account id/email, granted scopes, encrypted
+  refresh-token material or external secret reference, cached access-token
+  expiry metadata, profile/history cursor, sync status, safe error state,
+  disconnect/revocation timestamps, and audit timestamps.
+- `provider_message_mappings` records Gmail/provider message and thread ids
+  mapped to local Stalwart/JMAP email/thread/mailbox ids. The unique
+  `(provider_account_id, provider_message_id)` constraint is the primary import
+  idempotency key; RFC822 `Message-ID`, content hash, local ids, status, and
+  timestamps support duplicate detection and restartable retries.
+- `provider_sync_events` stores coarse, UI-safe account/message sync events and
+  errors. It is an audit/status stream only; it must not include tokens, raw
+  RFC822, message bodies, attachment content, or other secrets.
 
 Do not store message bodies or raw RFC822 in this table family. Any import queue
 payload that temporarily contains RFC822 must have an explicit retention policy
