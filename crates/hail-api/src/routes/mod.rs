@@ -19,6 +19,7 @@ pub mod management_http;
 pub mod notes;
 pub mod outbound;
 pub mod pile;
+pub mod provider_accounts;
 pub mod response;
 pub mod screener;
 pub mod setup;

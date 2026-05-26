@@ -44,6 +44,19 @@ public_url = "https://hail.example.com"
 # HAIL_WEBAPP_DIR, then defaults to /srv/hail/webapp.
 # webapp_dir = "/srv/hail/webapp"
 
+# --- Provider import / Gmail OAuth (OPTIONAL) -------------------------------
+# Required only for Gmail provider import mode. Prefer env vars for the secret:
+#   export HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID="...apps.googleusercontent.com"
+#   export HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET="..."
+#
+# [provider_import.gmail]
+# oauth_client_id = "REPLACE_ME.apps.googleusercontent.com"
+# oauth_client_secret = "REPLACE_ME"
+# oauth_auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+# oauth_token_url = "https://oauth2.googleapis.com/token"
+# oauth_revoke_url = "https://oauth2.googleapis.com/revoke"
+# api_base_url = "https://gmail.googleapis.com"
+
 # --- Admin (OPTIONAL) -------------------------------------------------------
 # Uncomment AND set to disable the first-run wizard at /setup. Leave commented
 # to enable the wizard.

@@ -22,6 +22,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::{Router, extract::Request};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -98,6 +99,10 @@ fn build_api_router(
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
+        routes::provider_accounts::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::screener::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
@@ -158,6 +163,9 @@ fn build_api_router(
         .merge(routes::drafts::router())
         .merge(routes::notes::router())
         .merge(routes::pile::router())
+        .merge(routes::provider_accounts::router_with_client(Arc::new(
+            routes::provider_accounts::LiveGmailOAuthClient::from_config(&state.config),
+        )))
         .merge(routes::screener::router())
         .merge(routes::threads::router())
         .merge(Router::from(routes::threads_view::router()))

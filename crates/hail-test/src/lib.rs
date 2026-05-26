@@ -54,6 +54,7 @@ pub fn fixture_config(database_url: impl Into<String>, server_key: &[u8; KEY_LEN
         },
         admin: None,
         setup: SetupConfig::default(),
+        provider_import: hail_core::ProviderImportConfig::default(),
         secrets: SecretsConfig {
             server_key: SecretString::from(hex::encode(server_key)),
         },

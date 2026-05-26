@@ -177,6 +177,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-accounts/gmail/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["gmail_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-accounts/gmail/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["connect_gmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/provider-accounts/{id}/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disconnect_provider_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scheduled-sends": {
         parameters: {
             query?: never;
@@ -992,6 +1040,10 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        GmailConnectResponse: {
+            authorization_url: string;
+            scopes: string[];
+        };
         ImboxSectionedResponse: {
             bubbled_up: components["schemas"]["MailViewItem"][];
             new_count: number;
@@ -1054,6 +1106,19 @@ export interface components {
         };
         PileViewResponse: {
             items: components["schemas"]["PileItem"][];
+        };
+        ProviderAccountResponse: {
+            /** Format: date-time */
+            cached_access_token_expires_at?: string | null;
+            display_email?: string | null;
+            granted_scopes: string[];
+            /** Format: int64 */
+            id: number;
+            last_profile_history_id?: string | null;
+            provider_account_id: string;
+            provider_email: string;
+            provider_kind: string;
+            sync_status: string;
         };
         PutNoteRequest: {
             markdown: string;
@@ -1874,6 +1939,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    gmail_callback: {
+        parameters: {
+            query: {
+                state: string;
+                code?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gmail account connected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountResponse"];
+                };
+            };
+        };
+    };
+    connect_gmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gmail OAuth authorization URL. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GmailConnectResponse"];
+                };
+            };
+        };
+    };
+    disconnect_provider_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider account disconnected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountResponse"];
+                };
             };
         };
     };
