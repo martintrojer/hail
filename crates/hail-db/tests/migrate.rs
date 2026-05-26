@@ -50,36 +50,56 @@ const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
     "created_at",
 ];
 
-/// Build a fresh DB URL backed by a unique temp file. We deliberately avoid
+/// Build a fresh DB URL backed by a unique temp directory. We deliberately avoid
 /// `sqlite::memory:` because a multi-connection pool gives each connection
 /// its own private in-memory DB, which makes migrations invisible to later
 /// queries. A scratch file is also closer to the production code path
 /// (WAL + sync NORMAL + foreign_keys).
-fn fresh_db_url() -> (String, std::path::PathBuf) {
-    let mut path = std::env::temp_dir();
+fn fresh_db_url() -> (String, TempDb) {
+    let mut dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let thread = format!("{:?}", std::thread::current().id());
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .expect("time")
         .as_nanos();
-    let pid = std::process::id();
-    path.push(format!("hail-db-test-{pid}-{nanos}.sqlite"));
-    let url = format!("sqlite://{}", path.display());
-    (url, path)
+
+    for attempt in 0..100_u8 {
+        dir.push(format!(
+            "hail-db-migrate-test-{pid}-{thread}-{nanos}-{attempt}"
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                let path = dir.join("hail.db");
+                let url = format!("sqlite://{}", path.display());
+                return (url, TempDb { dir, path });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                dir.pop();
+            }
+            Err(err) => panic!("create temp db dir: {err}"),
+        }
+    }
+
+    panic!("failed to allocate unique temp db dir");
 }
 
-struct TempDb(std::path::PathBuf);
+struct TempDb {
+    dir: std::path::PathBuf,
+    path: std::path::PathBuf,
+}
 
 impl Drop for TempDb {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(self.0.with_extension("sqlite-shm"));
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(self.path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(self.path.with_extension("db-shm"));
+        let _ = std::fs::remove_dir(&self.dir);
     }
 }
 
 async fn setup() -> (sqlx::SqlitePool, TempDb) {
-    let (url, path) = fresh_db_url();
-    let guard = TempDb(path);
+    let (url, guard) = fresh_db_url();
     let pool = hail_db::connect(&url).await.expect("connect");
     hail_db::migrate(&pool).await.expect("migrate");
     (pool, guard)
