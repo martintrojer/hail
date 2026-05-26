@@ -104,6 +104,12 @@ type WorkflowPostSuccess = ResponseBody<
 type WorkflowPutSuccess = ResponseBody<
   paths['/api/workflows/{id}']['put']['responses']['200']
 >;
+type InvitePreviewSuccess = ResponseBody<
+  paths['/api/invite/{token}']['get']['responses']['200']
+>;
+type InviteAcceptSuccess = ResponseBody<
+  paths['/api/invite/{token}/accept']['post']['responses']['201']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -128,6 +134,29 @@ export interface CreateAdminUserRequest {
   email: string;
   password: string;
   display_name?: string | null;
+}
+
+export interface CreateInviteRequest {
+  email: string;
+  display_name?: string | null;
+}
+
+export interface CreatedInviteResponse {
+  email: string;
+  display_name?: string | null;
+  expires_at: string;
+  invite_url: string;
+}
+
+export interface CreatedInviteEnvelope {
+  invite: CreatedInviteResponse;
+}
+
+export type InvitePreview = InvitePreviewSuccess;
+export type InviteAcceptResponse = InviteAcceptSuccess;
+
+export interface AcceptInviteRequest {
+  password: string;
 }
 
 export interface ResetAdminUserPasswordRequest {
@@ -386,6 +415,38 @@ export class HailApiClient {
   async createAdminUser(body: CreateAdminUserRequest): Promise<UserEnvelope> {
     return this.#json<UserEnvelope>(
       await this.#request('/api/admin/users', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async createInvite(body: CreateInviteRequest): Promise<CreatedInviteEnvelope> {
+    return this.#json<CreatedInviteEnvelope>(
+      await this.#request('/api/admin/invites', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async getInvite(token: string): Promise<InvitePreview> {
+    return this.#json<InvitePreview>(
+      await this.#request(`/api/invite/${encodeURIComponent(token)}`),
+      200,
+    );
+  }
+
+  async acceptInvite(
+    token: string,
+    body: AcceptInviteRequest,
+  ): Promise<InviteAcceptResponse> {
+    return this.#json<InviteAcceptResponse>(
+      await this.#request(`/api/invite/${encodeURIComponent(token)}/accept`, {
         method: 'POST',
         body,
         mutating: true,

@@ -4,6 +4,7 @@ export const queryKeys = {
   me: () => [...queryKeys.auth(), 'me'] as const,
   setup: () => [...queryKeys.all, 'setup'] as const,
   setupState: () => [...queryKeys.setup(), 'state'] as const,
+  invite: (token: string) => [...queryKeys.all, 'invite', token] as const,
   admin: () => [...queryKeys.all, 'admin'] as const,
   adminUsers: () => [...queryKeys.admin(), 'users'] as const,
   adminStats: () => [...queryKeys.admin(), 'stats'] as const,

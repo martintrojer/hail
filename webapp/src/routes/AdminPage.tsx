@@ -5,7 +5,7 @@ import {
   useAdminDomains,
   useAdminStats,
   useAdminUsers,
-  useCreateAdminUserMutation,
+  useCreateInviteMutation,
   useDeleteAdminDomainMutation,
   useDeleteAdminUserMutation,
   useResetAdminUserPasswordMutation,
@@ -153,34 +153,31 @@ function FormError({ error, action }: { error: Error | null; action: string }) {
 function CreateUserForm() {
   const emailId = useId();
   const displayNameId = useId();
-  const passwordId = useId();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [password, setPassword] = useState('');
-  const createUser = useCreateAdminUserMutation(undefined, {
-    onSuccess: () => {
+  const [inviteUrl, setInviteUrl] = useState('');
+  const createInvite = useCreateInviteMutation(undefined, {
+    onSuccess: (data) => {
       setEmail('');
       setDisplayName('');
-      setPassword('');
+      setInviteUrl(data.invite.invite_url);
     },
   });
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    createUser.mutate({
+    createInvite.mutate({
       email,
-      password,
       display_name: displayName.trim() || null,
     });
   }
 
   return (
     <form onSubmit={onSubmit} className="rounded-lg border border-hairline bg-surface p-4">
-      <h2 className="text-lg font-semibold text-ink-primary">Create user</h2>
+      <h2 className="text-lg font-semibold text-ink-primary">Invite user</h2>
       <p className="mt-2 text-sm leading-6 text-ink-secondary">
-        Hail ensures the email domain exists in Stalwart before creating the
-        mailbox user, so a shared domain can be added once here and reused by
-        every mailbox.
+        Send an expiring invite link so the user sets their own password. The
+        link is shown once here; copy it before leaving this page.
       </p>
       <div className="mt-4 space-y-3">
         <Field
@@ -201,23 +198,25 @@ function CreateUserForm() {
           required={false}
           placeholder="Person Name"
         />
-        <Field
-          id={passwordId}
-          label="Initial password"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          autoComplete="new-password"
-          minLength={12}
-        />
-        <p className="text-xs text-ink-primary0">Passwords must be at least 12 characters.</p>
-        <FormError error={createUser.error} action="Create user" />
+        <FormError error={createInvite.error} action="Create invite" />
+        {inviteUrl ? (
+          <div className="rounded-lg border border-accent-green/30 bg-accent-green/10 p-3">
+            <p className="text-sm font-semibold text-ink-primary">Invite link created</p>
+            <input
+              readOnly
+              value={inviteUrl}
+              onFocus={(event) => event.currentTarget.select()}
+              className="mt-2 w-full rounded-lg border border-hairline bg-page px-3 py-2 text-sm text-ink-primary"
+              aria-label="Invite link"
+            />
+          </div>
+        ) : null}
         <button
           type="submit"
-          disabled={createUser.isPending}
+          disabled={createInvite.isPending}
           className="w-full rounded-full bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {createUser.isPending ? 'Creating…' : 'Create user'}
+          {createInvite.isPending ? 'Creating invite…' : 'Create invite link'}
         </button>
       </div>
     </form>

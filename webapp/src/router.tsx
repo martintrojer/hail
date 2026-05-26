@@ -11,6 +11,8 @@ import {
 import { useApiClient } from './api/ApiClientProvider';
 import {
   defaultApiClient,
+  useAcceptInviteMutation,
+  useInvite,
   useLoginMutation,
   useSetupAdminMutation,
   useSetupState,
@@ -186,6 +188,73 @@ function setupInactiveMessage(reason: string | undefined) {
     return 'Setup is complete because an admin user already exists.';
   }
   return 'Setup is not active for this instance.';
+}
+
+function InvitePage() {
+  const navigate = useNavigate();
+  const { token } = inviteRoute.useParams();
+  const [password, setPassword] = useState('');
+  const invite = useInvite(token);
+  const acceptInvite = useAcceptInviteMutation(defaultApiClient, {
+    onSuccess: () => {
+      void navigate({ to: '/imbox' });
+    },
+  });
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    acceptInvite.mutate({ token, body: { password } });
+  }
+
+  return (
+    <CenteredPage>
+      <form
+        onSubmit={onSubmit}
+        className="rounded-2xl border border-border-menu bg-bg-surface p-6 shadow-2xl shadow-ink-primary/10"
+      >
+        <h2 className="text-2xl font-semibold">Accept invite</h2>
+        {invite.isPending ? (
+          <p className="mt-4 text-sm text-ink-secondary">Checking invite…</p>
+        ) : invite.isError ? (
+          <p role="alert" className="mt-4 rounded-lg border border-red-800 bg-red-950/70 px-3 py-2 text-sm text-red-100">
+            This invite is invalid, expired, or already used.
+          </p>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-ink-secondary">
+              Create a password for {invite.data.email}.
+            </p>
+            <div className="mt-6 space-y-4">
+              <TextInput
+                id="invite-password"
+                label="Password"
+                type="password"
+                value={password}
+                onChange={setPassword}
+                autoComplete="new-password"
+                minLength={12}
+              />
+              <p className="text-xs text-ink-tertiary">Password must be at least 12 characters.</p>
+              <ErrorMessage
+                message={
+                  acceptInvite.error
+                    ? formErrorMessage(acceptInvite.error, 'Invite failed. Try again.')
+                    : null
+                }
+              />
+              <button
+                type="submit"
+                disabled={acceptInvite.isPending}
+                className="w-full rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {acceptInvite.isPending ? 'Creating account…' : 'Create account'}
+              </button>
+            </div>
+          </>
+        )}
+      </form>
+    </CenteredPage>
+  );
 }
 
 function SetupPage() {
@@ -440,6 +509,12 @@ const setupRoute = createRoute({
   component: SetupPage,
 });
 
+const inviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/invite/$token',
+  component: InvitePage,
+});
+
 async function requireAuth() {
   try {
     return await queryClient.ensureQueryData({
@@ -638,6 +713,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   setupRoute,
+  inviteRoute,
   imboxRoute,
   feedRoute,
   paperTrailRoute,
