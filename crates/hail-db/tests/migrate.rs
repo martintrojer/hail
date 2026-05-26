@@ -52,6 +52,7 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_provider_message_mappings_rfc822",
     "idx_provider_message_mappings_jmap_email",
     "idx_provider_message_mappings_status",
+    "idx_provider_message_mappings_content_sha256",
     "idx_provider_sync_events_account_time",
     "idx_provider_sync_events_type",
     "idx_provider_sync_events_user_account_time",
@@ -573,6 +574,38 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     .execute(&pool)
     .await;
     assert!(bad_status.is_err(), "import status must be constrained");
+
+    let bad_content_hash = sqlx::query(
+        "INSERT INTO provider_message_mappings \
+         (provider_account_id, provider_message_id, content_sha256, import_status, created_at, updated_at) \
+         VALUES (?, 'gmail-msg-bad-hash', ?, 'pending', ?, ?)",
+    )
+    .bind(account_id)
+    .bind(vec![8_u8; 31])
+    .bind("2026-01-01T00:11:00Z")
+    .bind("2026-01-01T00:11:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        bad_content_hash.is_err(),
+        "content_sha256 must be constrained to 32-byte SHA-256 digests"
+    );
+
+    let text_content_hash = sqlx::query(
+        "INSERT INTO provider_message_mappings \
+         (provider_account_id, provider_message_id, content_sha256, import_status, created_at, updated_at) \
+         VALUES (?, 'gmail-msg-text-hash', ?, 'pending', ?, ?)",
+    )
+    .bind(account_id)
+    .bind("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    .bind("2026-01-01T00:11:00Z")
+    .bind("2026-01-01T00:11:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        text_content_hash.is_err(),
+        "content_sha256 must be stored as a 32-byte BLOB, not 32 chars of text"
+    );
 
     sqlx::query(
         "INSERT INTO provider_sync_events \
