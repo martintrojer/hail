@@ -213,8 +213,7 @@ mod live {
 
     use anyhow::{Context, Result};
     use async_trait::async_trait;
-    use hail_jmap::jmap_client::core::query::Filter;
-    use hail_jmap::jmap_client::email::query as email_query;
+    use hail_jmap::jmap_client::core::response::ThreadGetResponse;
     use secrecy::SecretString;
     use sqlx::SqlitePool;
 
@@ -266,26 +265,18 @@ mod live {
                 .await
                 .with_context(|| format!("JMAP login for user {user_id}"))?;
 
-            let mut existing = HashSet::new();
-            for id in ids {
-                let mut query = session
-                    .client()
-                    .email_query(
-                        Some(Filter::from(email_query::Filter::in_thread(id))),
-                        None::<
-                            Vec<
-                                hail_jmap::jmap_client::core::query::Comparator<
-                                    email_query::Comparator,
-                                >,
-                            >,
-                        >,
-                    )
-                    .await
-                    .with_context(|| format!("Email/query inThread={id} for user {user_id}"))?;
-                if !query.take_ids().is_empty() {
-                    existing.insert(id.clone());
-                }
-            }
+            let mut request = session.client().build();
+            request.get_thread().ids(ids.iter().cloned());
+            let mut response = request
+                .send_single::<ThreadGetResponse>()
+                .await
+                .with_context(|| format!("Thread/get batch for user {user_id}"))?;
+
+            let existing = response
+                .take_list()
+                .into_iter()
+                .map(|thread| thread.id().to_string())
+                .collect();
             Ok(VerificationOutcome::Verified(existing))
         }
     }

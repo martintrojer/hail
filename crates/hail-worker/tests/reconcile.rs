@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,6 +25,7 @@ use reconcile::{ReconcileReport, ThreadVerifier, VerificationOutcome, process_re
 struct FakeThreadVerifier {
     existing_by_user: HashMap<i64, HashSet<String>>,
     unverifiable_by_user: HashMap<i64, &'static str>,
+    calls: Mutex<Vec<(i64, Vec<String>)>>,
 }
 
 impl FakeThreadVerifier {
@@ -37,15 +39,20 @@ impl FakeThreadVerifier {
         self.unverifiable_by_user.insert(user_id, message);
         self
     }
+
+    fn calls(&self) -> Vec<(i64, Vec<String>)> {
+        self.calls.lock().expect("calls mutex").clone()
+    }
 }
 
 #[async_trait]
 impl ThreadVerifier for FakeThreadVerifier {
-    async fn existing_threads(
-        &self,
-        user_id: i64,
-        ids: &[String],
-    ) -> Result<VerificationOutcome> {
+    async fn existing_threads(&self, user_id: i64, ids: &[String]) -> Result<VerificationOutcome> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push((user_id, ids.to_vec()));
+
         if let Some(message) = self.unverifiable_by_user.get(&user_id) {
             return Ok(VerificationOutcome::Unverifiable((*message).to_string()));
         }
@@ -249,7 +256,10 @@ async fn unverifiable_user_is_skipped_without_deleting_that_users_refs() {
         .expect("reconcile should skip unverifiable users");
 
     assert_eq!(stack_threads(&pool, alice).await, Vec::<String>::new());
-    assert_eq!(pending_bubble_threads(&pool, alice).await, Vec::<String>::new());
+    assert_eq!(
+        pending_bubble_threads(&pool, alice).await,
+        Vec::<String>::new()
+    );
     assert_eq!(stack_threads(&pool, bob).await, vec!["bob-stack-unchecked"]);
     assert_eq!(
         pending_bubble_threads(&pool, bob).await,
@@ -259,6 +269,48 @@ async fn unverifiable_user_is_skipped_without_deleting_that_users_refs() {
     assert_eq!(report.users_unverifiable, 1);
     assert_eq!(report.stack_positions_deleted, 1);
     assert_eq!(report.bubble_ups_deleted, 1);
+}
+
+#[tokio::test]
+async fn batches_unique_thread_ids_per_user_into_one_verifier_call() {
+    let (pool, _guard, alice, bob) = setup_db().await;
+    insert_stack(&pool, alice, "reply_later", "alice-a", 1).await;
+    insert_stack(&pool, alice, "reply_later", "alice-b", 2).await;
+    insert_stack(&pool, alice, "set_aside", "alice-b", 3).await;
+    insert_bubble(&pool, alice, "alice-a", None).await;
+    insert_bubble(&pool, alice, "alice-c", None).await;
+    insert_stack(&pool, bob, "reply_later", "bob-a", 1).await;
+    insert_bubble(&pool, bob, "bob-a", None).await;
+    insert_bubble(&pool, bob, "bob-b", None).await;
+
+    let verifier = FakeThreadVerifier::default()
+        .with_existing(alice, &["alice-a", "alice-b", "alice-c"])
+        .with_existing(bob, &["bob-a", "bob-b"]);
+
+    let report = process_reconciliation(&pool, &verifier, Utc::now())
+        .await
+        .expect("reconcile");
+
+    assert_eq!(
+        verifier.calls(),
+        vec![
+            (
+                alice,
+                vec![
+                    "alice-a".to_string(),
+                    "alice-b".to_string(),
+                    "alice-c".to_string(),
+                ],
+            ),
+            (bob, vec!["bob-a".to_string(), "bob-b".to_string()]),
+        ]
+    );
+    assert_eq!(report.users_checked, 2);
+    assert_eq!(report.thread_ids_checked, 5);
+    assert_eq!(report.stack_positions_checked, 4);
+    assert_eq!(report.bubble_ups_checked, 4);
+    assert_eq!(report.stack_positions_deleted, 0);
+    assert_eq!(report.bubble_ups_deleted, 0);
 }
 
 #[tokio::test]
