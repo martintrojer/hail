@@ -167,7 +167,7 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
           <div
             role="status"
             aria-live="polite"
-            className={`pointer-events-auto flex w-full max-w-md items-center justify-between gap-4 rounded-lg bg-ink-primary px-4 py-3 text-sm text-white opacity-0 shadow-lg shadow-ink-primary/25 transition-opacity duration-150 ease-out ${
+            className={`pointer-events-auto flex w-full max-w-md items-center justify-between gap-4 rounded-lg bg-[#1a1a1a] px-4 py-3 text-sm text-[#f5f0eb] opacity-0 shadow-lg shadow-black/25 transition-opacity duration-150 ease-out ${
               isShown ? 'opacity-100' : 'opacity-0'
             }`}
           >
