@@ -30,14 +30,28 @@ pub async fn catchup_user(
         }
 
         info!(user_id, type_state = ?type_state, "catchup: starting");
-        if cursor_exists(db, user_id, type_state).await? {
+        let exists = tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            result = cursor_exists(db, user_id, type_state) => result?,
+        };
+
+        if exists {
             let mut types = BTreeSet::new();
             types.insert((*type_state).to_string());
-            let changes = handle_changes_strict(db, user_id, fetcher, jmap_ops, &types).await?;
+            let changes = tokio::select! {
+                _ = cancel.cancelled() => return Ok(()),
+                result = handle_changes_strict(db, user_id, fetcher, jmap_ops, &types) => result?,
+            };
             info!(user_id, type_state = ?type_state, changes, "catchup: applied");
         } else {
-            let state = fetcher.current_state(type_state).await?;
-            upsert_cursor(db, user_id, type_state, &state).await?;
+            let state = tokio::select! {
+                _ = cancel.cancelled() => return Ok(()),
+                result = fetcher.current_state(type_state) => result?,
+            };
+            tokio::select! {
+                _ = cancel.cancelled() => return Ok(()),
+                result = upsert_cursor(db, user_id, type_state, &state) => result?,
+            };
             info!(user_id, type_state = ?type_state, changes = 0usize, "catchup: applied");
         }
     }
