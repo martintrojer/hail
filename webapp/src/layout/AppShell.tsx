@@ -193,7 +193,9 @@ export function AppShell({
     onGoBubbleUp: () => void navigate({ to: '/bubble-up' }),
     onShowHelp: () => setShortcutHelpOpen(true),
     onEscape: () => {
-      if (menuOpen) {
+      if (shortcutHelpOpen) {
+        setShortcutHelpOpen(false);
+      } else if (menuOpen) {
         setMenuOpen(false);
         logoButtonRef.current?.focus();
       }
