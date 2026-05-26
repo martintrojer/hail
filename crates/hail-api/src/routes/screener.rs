@@ -12,7 +12,7 @@
 //! production uses [`JmapScreenerBackfill`] to move/keyword existing Screener
 //! messages as soon as the sender is approved or denied.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use axum::extract::{Extension, Path, State, rejection::JsonRejection};
@@ -440,7 +440,10 @@ async fn enrich_screener_senders(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("{SCREENER_MAILBOX_NAME} mailbox not found"))?;
 
-    for sender in senders {
+    let mut sender_email_ids = Vec::with_capacity(senders.len());
+    let mut email_ids = Vec::new();
+
+    for sender in senders.iter_mut() {
         let ids =
             jmap_email_ids_from_sender_in_mailbox(&session, &sender.sender, &screener_mailbox_id)
                 .await
@@ -451,40 +454,57 @@ async fn enrich_screener_senders(
         if ids.is_empty() {
             sender.latest_preview = None;
             sender.emails.clear();
-            continue;
+        } else {
+            email_ids.extend(ids.iter().cloned());
         }
+        sender_email_ids.push(ids);
+    }
 
-        let mut request = session.client().build();
-        request
-            .get_email()
-            .ids(ids)
-            .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
-        let mut response = request
-            .send_get_email()
-            .await
-            .map_err(|err| err.to_string())?;
+    if email_ids.is_empty() {
+        return Ok(());
+    }
 
-        let emails: Vec<_> = response
-            .take_list()
+    email_ids.sort();
+    email_ids.dedup();
+
+    let mut request = session.client().build();
+    request
+        .get_email()
+        .ids(email_ids)
+        .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
+    let mut response = request
+        .send_get_email()
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let emails_by_id: HashMap<_, _> = response
+        .take_list()
+        .into_iter()
+        .filter_map(|email| {
+            let email_id = email.id()?.to_string();
+            let received_at = email
+                .received_at()
+                .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+            let summary = ScreenerEmail {
+                email_id: email_id.clone(),
+                subject: email.subject().unwrap_or_default().to_string(),
+                preview: email.preview().unwrap_or_default().to_string(),
+                received_at,
+            };
+            let preview = ScreenerLatestPreview {
+                subject: summary.subject.clone(),
+                preview: summary.preview.clone(),
+                from: format_from(email.from()),
+                received_at,
+            };
+            Some((email_id, (summary, preview)))
+        })
+        .collect();
+
+    for (sender, ids) in senders.iter_mut().zip(sender_email_ids) {
+        let emails: Vec<_> = ids
             .into_iter()
-            .map(|email| {
-                let received_at = email
-                    .received_at()
-                    .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
-                let summary = ScreenerEmail {
-                    email_id: email.id().unwrap_or_default().to_string(),
-                    subject: email.subject().unwrap_or_default().to_string(),
-                    preview: email.preview().unwrap_or_default().to_string(),
-                    received_at,
-                };
-                let preview = ScreenerLatestPreview {
-                    subject: summary.subject.clone(),
-                    preview: summary.preview.clone(),
-                    from: format_from(email.from()),
-                    received_at,
-                };
-                (summary, preview)
-            })
+            .filter_map(|id| emails_by_id.get(&id).cloned())
             .collect();
 
         sender.latest_preview = emails.first().map(|(_, preview)| preview.clone());
