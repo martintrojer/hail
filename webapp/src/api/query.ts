@@ -31,6 +31,7 @@ import {
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
+  type UndoDenyRequest,
   type UndoDenyResponse,
   type SearchParams,
   type SearchResponse,
@@ -368,14 +369,20 @@ export function useScreenerDecisionMutation(
   });
 }
 
+export interface UndoDenyMutationVariables {
+  address: string;
+  classify_as?: UndoDenyRequest['classify_as'];
+}
+
 export function useUndoDenyMutation(
   client = defaultApiClient,
-  options?: MutationConfig<string, UndoDenyResponse>,
+  options?: MutationConfig<UndoDenyMutationVariables, UndoDenyResponse>,
 ) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (address) => client.undoDeny(address),
+    mutationFn: ({ address, classify_as }) =>
+      client.undoDeny(address, { classify_as: classify_as ?? null }),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });

@@ -910,7 +910,11 @@ export interface components {
             subject: string;
             thread_id: string;
         };
+        UndoDenyRequest: {
+            classify_as?: string | null;
+        };
         UndoDenyResponse: {
+            classify_as: components["schemas"]["Classification"];
             status: string;
         };
         UndoResponse: {
@@ -1576,14 +1580,18 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Normalized sender address to return to pending screener. */
+                /** @description Normalized sender address to approve and route out of screened-out mail. */
                 address: string;
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UndoDenyRequest"];
+            };
+        };
         responses: {
-            /** @description Denied sender restored to pending screener. */
+            /** @description Denied sender approved and routed. */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -28,6 +28,7 @@ import { ScreenerPage } from './routes/ScreenerPage';
 import { SearchPage } from './routes/SearchPage';
 import { ThreadPage } from './routes/ThreadPage';
 import { TrashPage } from './routes/TrashPage';
+import { ScreenedOutPage } from './routes/ScreenedOutPage';
 
 function AppShell() {
   return (
@@ -467,6 +468,13 @@ const screenerRoute = createRoute({
   component: ScreenerPage,
 });
 
+const screenedOutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/screened-out',
+  beforeLoad: requireAuth,
+  component: ScreenedOutPage,
+});
+
 const setAsideRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/set-aside',
@@ -574,6 +582,7 @@ const routeTree = rootRoute.addChildren([
   paperTrailRoute,
   draftsRoute,
   screenerRoute,
+  screenedOutRoute,
   setAsideRoute,
   replyLaterRoute,
   bubbleUpRoute,
