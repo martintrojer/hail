@@ -16,7 +16,7 @@ use hail_db::provider_sync_audit::{
     NewProviderSyncAuditLog, ProviderSyncEventType, ProviderSyncOperationKind,
     ProviderSyncResultStatus, insert_provider_sync_audit_log,
 };
-use hail_test::{fixture_state, json_body, seed_session};
+use hail_test::{fixture_config, fixture_state, fresh_db_url, json_body, seed_session};
 use secrecy::{ExposeSecret, SecretString};
 use tower::ServiceExt;
 
@@ -83,6 +83,23 @@ impl GmailOAuthClient for FakeGmailOAuthClient {
 async fn app_state() -> (AppState, [u8; hail_core::KEY_LEN]) {
     let (mut state, key) = fixture_state().await;
     state.config.provider_import.gmail.oauth_client_id = Some("gmail-client-id".to_owned());
+    (state, key)
+}
+
+async fn file_app_state() -> (AppState, [u8; hail_core::KEY_LEN]) {
+    let (db_url, _guard) = fresh_db_url("provider-oauth-cas");
+    let db = hail_db::connect(&db_url).await.expect("open sqlite");
+    hail_db::migrate(&db).await.expect("migrate");
+    let key = [0x5Au8; hail_core::KEY_LEN];
+    let mut config = fixture_config(db_url, &key);
+    config.provider_import.gmail.oauth_client_id = Some("gmail-client-id".to_owned());
+    let state = AppState {
+        db,
+        config,
+        server_key: Arc::new(key),
+        auth_rate_limiter: Arc::new(hail_api::middleware::rate_limit::IpRateLimiter::default()),
+        events: hail_api::events::AppEventBus::default(),
+    };
     (state, key)
 }
 
@@ -234,6 +251,90 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
         redirect_location(replay.headers()),
         "/provider-accounts?error=invalid_oauth_state"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gmail_callback_concurrently_consumes_oauth_state_once() {
+    let (state, key) = file_app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+    let uri = Arc::new(format!(
+        "/api/provider-accounts/gmail/callback?state={state_token}&code=oauth-code"
+    ));
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+    let callback = |app: Router, barrier: Arc<tokio::sync::Barrier>, uri: Arc<String>| {
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            barrier.wait().await;
+            app.oneshot(auth_request(Method::GET, uri.as_str(), &session_id))
+                .await
+                .unwrap()
+        })
+    };
+    let first = callback(
+        app(state.clone(), client.clone()),
+        barrier.clone(),
+        uri.clone(),
+    );
+    let second = callback(
+        app(state.clone(), client.clone()),
+        barrier.clone(),
+        uri.clone(),
+    );
+    barrier.wait().await;
+
+    let first = first.await.unwrap();
+    let second = second.await.unwrap();
+    assert_eq!(first.status(), StatusCode::SEE_OTHER);
+    assert_eq!(second.status(), StatusCode::SEE_OTHER);
+    let locations = [
+        redirect_location(first.headers()).to_owned(),
+        redirect_location(second.headers()).to_owned(),
+    ];
+    assert_eq!(
+        locations
+            .iter()
+            .filter(|location| location.as_str() == "/provider-accounts?connected=gmail")
+            .count(),
+        1,
+        "exactly one callback should connect: {locations:?}"
+    );
+    assert_eq!(
+        locations
+            .iter()
+            .filter(|location| location.as_str() == "/provider-accounts?error=invalid_oauth_state")
+            .count(),
+        1,
+        "exactly one callback should lose the state CAS: {locations:?}"
+    );
+    assert_eq!(
+        client
+            .exchange_codes
+            .lock()
+            .expect("exchange codes")
+            .as_slice(),
+        ["oauth-code"]
+    );
+
+    let account_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_accounts WHERE user_id = ?1 AND provider_kind = 'gmail'",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(account_count, 1);
+    let consumed_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_oauth_states WHERE user_id = ?1 AND consumed_at IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(consumed_count, 1);
 }
 
 #[tokio::test]
