@@ -190,6 +190,31 @@ The skeleton is intentionally not wired into `supervisor` yet. Follow-up tasks
 should decide production OAuth adapter details after provider account schema and
 token encryption land.
 
+## Wrapper foundation notes
+
+`gmail-client-wrapper` promoted the compile-only skeleton into a foundation for
+later provider import without wiring it into the scheduler yet:
+
+- the `GmailTokenSource` trait remains the OAuth/storage boundary, so tests use
+  static fake tokens and production can later adapt encrypted refresh-token or
+  `yup-oauth2` handling;
+- Gmail JSON errors are mapped into stable categories (`Unauthorized`,
+  `PermissionDenied`, `NotFound`, `RateLimited`, `Transient`, `BadRequest`, and
+  `Other`) while retaining status, reason, message, and delta-seconds
+  `Retry-After` when present;
+- retryable request failures, 429/quota responses, and 5xx responses retry with
+  bounded exponential full-jitter backoff, honoring delta-seconds `Retry-After`
+  up to the configured maximum delay;
+- pagination helpers support both buffered `list_all_messages` and page callback
+  traversal, with repeated-page-token detection to avoid infinite loops;
+- fake HTTP tests cover request shape, bearer headers, query encoding,
+  pagination, retry, raw RFC822 decoding, and error mapping without Google
+  credentials.
+
+The wrapper still intentionally exposes only profile, message list, and
+`format=raw` fetch. Incremental history sync, label mapping, send, and scheduler
+integration should remain in their follow-up tasks.
+
 ## Recommended follow-up task adjustments
 
 Existing tasks are still directionally correct. Adjust implementation detail as

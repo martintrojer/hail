@@ -1,16 +1,20 @@
-//! Compile-only Gmail API request-shape spike.
+//! Gmail API provider-client wrapper foundation.
 #![allow(dead_code)]
 //!
 //! This module is intentionally not wired into the worker supervisor yet. It
-//! documents and compiles the narrow boundary provider import needs from Gmail:
-//! a token source, profile lookup, message listing, and raw RFC822 fetch.
-//! Production OAuth/token persistence should land with the provider-account
-//! schema and encrypted refresh-token tasks.
+//! keeps provider import behind a narrow, testable boundary: a token source,
+//! profile lookup, paginated message listing, and raw RFC822 fetch. Production
+//! OAuth/token persistence should adapt [`GmailTokenSource`] without leaking
+//! Google credentials into tests.
+
+use std::collections::HashSet;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
-use reqwest::Url;
+use reqwest::header::RETRY_AFTER;
+use reqwest::{StatusCode, Url};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use thiserror::Error;
@@ -31,10 +35,66 @@ pub enum GmailClientError {
     Request(#[from] reqwest::Error),
     #[error("invalid gmail api base url: {0}")]
     Url(#[from] url::ParseError),
+    #[error("gmail api returned {status}: {message}")]
+    Api {
+        status: StatusCode,
+        kind: GmailApiErrorKind,
+        reason: Option<String>,
+        message: String,
+        retry_after: Option<Duration>,
+    },
+    #[error("gmail pagination repeated page token {page_token:?}")]
+    PaginationLoop { page_token: String },
     #[error("gmail raw message response did not include raw RFC822 data")]
     MissingRawMessage,
     #[error("gmail raw message was not valid base64url: {0}")]
     RawDecode(#[from] base64::DecodeError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GmailApiErrorKind {
+    Unauthorized,
+    PermissionDenied,
+    NotFound,
+    RateLimited,
+    Transient,
+    BadRequest,
+    Other,
+}
+
+impl GmailClientError {
+    pub fn token_error(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Token(Box::new(error))
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Request(error) => error.is_timeout() || error.is_connect(),
+            Self::Api { kind, .. } => {
+                matches!(
+                    kind,
+                    GmailApiErrorKind::RateLimited | GmailApiErrorKind::Transient
+                )
+            }
+            Self::Token(_)
+            | Self::Url(_)
+            | Self::PaginationLoop { .. }
+            | Self::MissingRawMessage
+            | Self::RawDecode(_) => false,
+        }
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Api { retry_after, .. } => *retry_after,
+            Self::Token(_)
+            | Self::Request(_)
+            | Self::Url(_)
+            | Self::PaginationLoop { .. }
+            | Self::MissingRawMessage
+            | Self::RawDecode(_) => None,
+        }
+    }
 }
 
 /// Boundary between provider import and OAuth/token storage.
@@ -65,11 +125,65 @@ impl GmailTokenSource for StaticGmailTokenSource {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GmailRetryConfig {
+    /// Total attempts per HTTP request, including the first try.
+    pub max_attempts: u8,
+    /// Initial exponential-backoff delay for retryable failures.
+    pub base_delay: Duration,
+    /// Upper bound for exponential-backoff delay.
+    pub max_delay: Duration,
+}
+
+impl Default for GmailRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 4,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(30),
+        }
+    }
+}
+
+impl GmailRetryConfig {
+    #[must_use]
+    pub fn no_retries() -> Self {
+        Self {
+            max_attempts: 1,
+            ..Self::default()
+        }
+    }
+
+    fn attempts(self) -> u8 {
+        self.max_attempts.max(1)
+    }
+
+    fn delay_for_retry(self, retry_after: Option<Duration>, completed_attempts: u8) -> Duration {
+        if let Some(delay) = retry_after {
+            return delay.min(self.max_delay);
+        }
+        if self.base_delay.is_zero() {
+            return Duration::ZERO;
+        }
+
+        let shift = u32::from(completed_attempts.saturating_sub(1)).min(16);
+        let factor = 1_u32 << shift;
+        let base = self.base_delay.saturating_mul(factor).min(self.max_delay);
+        let max_millis = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
+        if max_millis == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(rand::random_range(0..=max_millis))
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GmailClient<T> {
     http: reqwest::Client,
     token_source: T,
     base_url: Url,
+    retry: GmailRetryConfig,
 }
 
 impl<T> GmailClient<T>
@@ -89,7 +203,14 @@ where
             http,
             token_source,
             base_url: Url::parse(base_url)?,
+            retry: GmailRetryConfig::default(),
         })
+    }
+
+    #[must_use]
+    pub fn with_retry_config(mut self, retry: GmailRetryConfig) -> Self {
+        self.retry = retry;
+        self
     }
 
     /// `GET /gmail/v1/users/me/profile`
@@ -125,6 +246,65 @@ where
         self.get_json("users/me/messages", &query).await
     }
 
+    /// Fetch all message ids by following `nextPageToken`.
+    pub async fn list_all_messages(
+        &self,
+        params: &ListMessagesParams,
+    ) -> Result<Vec<ListMessage>, GmailClientError> {
+        let mut params = params.clone();
+        let mut messages = Vec::new();
+        let mut seen_page_tokens = HashSet::new();
+
+        loop {
+            if let Some(page_token) = params.page_token.as_deref()
+                && !seen_page_tokens.insert(page_token.to_owned())
+            {
+                return Err(GmailClientError::PaginationLoop {
+                    page_token: page_token.to_owned(),
+                });
+            }
+
+            let response = self.list_messages(&params).await?;
+            messages.extend(response.messages);
+            match response.next_page_token {
+                Some(next_page_token) => params.page_token = Some(next_page_token),
+                None => return Ok(messages),
+            }
+        }
+    }
+
+    /// Stream pages to a callback without buffering every message id in memory.
+    pub async fn for_each_message_page<F, Fut>(
+        &self,
+        params: &ListMessagesParams,
+        mut handle_page: F,
+    ) -> Result<(), GmailClientError>
+    where
+        F: FnMut(ListMessagesResponse) -> Fut,
+        Fut: std::future::Future<Output = Result<(), GmailClientError>>,
+    {
+        let mut params = params.clone();
+        let mut seen_page_tokens = HashSet::new();
+
+        loop {
+            if let Some(page_token) = params.page_token.as_deref()
+                && !seen_page_tokens.insert(page_token.to_owned())
+            {
+                return Err(GmailClientError::PaginationLoop {
+                    page_token: page_token.to_owned(),
+                });
+            }
+
+            let response = self.list_messages(&params).await?;
+            let next_page_token = response.next_page_token.clone();
+            handle_page(response).await?;
+            match next_page_token {
+                Some(next_page_token) => params.page_token = Some(next_page_token),
+                None => return Ok(()),
+            }
+        }
+    }
+
     /// `GET /gmail/v1/users/me/messages/{id}?format=raw`
     pub async fn get_raw_message(
         &self,
@@ -150,15 +330,60 @@ where
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query.iter().copied());
         }
-        let token = self.token_source.bearer_token().await?;
+
+        let mut last_retryable_error = None;
+        for attempt in 1..=self.retry.attempts() {
+            let token = self.token_source.bearer_token().await?;
+            match self.send_json(url.clone(), token).await {
+                Ok(value) => return Ok(value),
+                Err(error) if attempt < self.retry.attempts() && error.is_retryable() => {
+                    let delay = self.retry.delay_for_retry(error.retry_after(), attempt);
+                    last_retryable_error = Some(error);
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_retryable_error.expect("retry loop always runs at least once"))
+    }
+
+    async fn send_json<R>(&self, url: Url, token: SecretString) -> Result<R, GmailClientError>
+    where
+        R: serde::de::DeserializeOwned,
+    {
         let response = self
             .http
             .get(url)
             .bearer_auth(token.expose_secret())
             .send()
-            .await?
-            .error_for_status()?;
-        Ok(response.json().await?)
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response.json().await?);
+        }
+
+        let retry_after = retry_after_duration(response.headers().get(RETRY_AFTER));
+        let error_body = response.text().await.unwrap_or_default();
+        let parsed = parse_gmail_error(&error_body);
+        Err(GmailClientError::Api {
+            status,
+            kind: classify_gmail_error(status, parsed.reason.as_deref()),
+            reason: parsed.reason,
+            message: parsed.message.unwrap_or_else(|| {
+                if error_body.is_empty() {
+                    status
+                        .canonical_reason()
+                        .unwrap_or("unknown error")
+                        .to_owned()
+                } else {
+                    error_body
+                }
+            }),
+            retry_after,
+        })
     }
 }
 
@@ -211,4 +436,75 @@ struct GetMessageResponse {
     thread_id: Option<String>,
     history_id: Option<String>,
     raw: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ParsedGmailError {
+    pub(super) reason: Option<String>,
+    pub(super) message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GmailErrorEnvelope {
+    error: GmailErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct GmailErrorBody {
+    message: Option<String>,
+    errors: Option<Vec<GmailErrorDetail>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GmailErrorDetail {
+    reason: Option<String>,
+    message: Option<String>,
+}
+
+pub(super) fn parse_gmail_error(body: &str) -> ParsedGmailError {
+    let Ok(envelope) = serde_json::from_str::<GmailErrorEnvelope>(body) else {
+        return ParsedGmailError::default();
+    };
+
+    let first_detail = envelope
+        .error
+        .errors
+        .as_deref()
+        .and_then(|errors| errors.first());
+
+    ParsedGmailError {
+        reason: first_detail.and_then(|detail| detail.reason.clone()),
+        message: envelope.error.message.or_else(|| {
+            first_detail.and_then(|detail| {
+                detail
+                    .message
+                    .as_deref()
+                    .map(std::borrow::ToOwned::to_owned)
+            })
+        }),
+    }
+}
+
+pub(super) fn classify_gmail_error(status: StatusCode, reason: Option<&str>) -> GmailApiErrorKind {
+    match status {
+        StatusCode::UNAUTHORIZED => GmailApiErrorKind::Unauthorized,
+        StatusCode::FORBIDDEN => match reason {
+            Some("rateLimitExceeded" | "userRateLimitExceeded" | "quotaExceeded") => {
+                GmailApiErrorKind::RateLimited
+            }
+            _ => GmailApiErrorKind::PermissionDenied,
+        },
+        StatusCode::NOT_FOUND => GmailApiErrorKind::NotFound,
+        StatusCode::TOO_MANY_REQUESTS => GmailApiErrorKind::RateLimited,
+        StatusCode::BAD_REQUEST => GmailApiErrorKind::BadRequest,
+        status if status.is_server_error() => GmailApiErrorKind::Transient,
+        _ => GmailApiErrorKind::Other,
+    }
+}
+
+pub(super) fn retry_after_duration(
+    value: Option<&reqwest::header::HeaderValue>,
+) -> Option<Duration> {
+    let seconds = value?.to_str().ok()?.parse::<u64>().ok()?;
+    Some(Duration::from_secs(seconds))
 }
