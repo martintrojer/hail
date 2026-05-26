@@ -1,0 +1,35 @@
+# Litestream config for optional hail.db backups.
+#
+# Default: local file replica under ./backups/litestream via the Compose overlay.
+# This is useful for local restore drills and does not require credentials.
+# For production, choose a remote object store such as S3 or Cloudflare R2.
+# Keep exactly one replica enabled unless you intentionally manage multiple
+# destinations and have tested restores from each.
+
+dbs:
+  - path: /var/lib/hail/hail.db
+    replicas:
+      - type: file
+        path: /backup/hail.db
+
+# Amazon S3 example:
+#
+# dbs:
+#   - path: /var/lib/hail/hail.db
+#     replicas:
+#       - type: s3
+#         bucket: YOUR_BUCKET_NAME
+#         path: hail.db
+#         region: us-east-1
+#
+# Cloudflare R2 example (S3-compatible API):
+#
+# dbs:
+#   - path: /var/lib/hail/hail.db
+#     replicas:
+#       - type: s3
+#         bucket: YOUR_R2_BUCKET_NAME
+#         path: hail.db
+#         endpoint: https://ACCOUNT_ID.r2.cloudflarestorage.com
+#         region: auto
+#         force-path-style: true

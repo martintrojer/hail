@@ -14,26 +14,66 @@ Litestream protects `hail.db`. A scheduled tarball protects `stalwart-data`.
 hail uses SQLite in WAL mode. That is enabled by `hail-db`; see
 `docs/design.md` §5, DD-7. Operators do not need to run SQLite pragmas.
 
-Add a Litestream sidecar:
+Litestream is shipped as an optional Compose overlay. It is off by default, so
+normal local development does not need backup credentials or a remote bucket.
 
-```yaml
-services:
-  litestream:
-    image: litestream/litestream:0.3
-    restart: unless-stopped
-    command: ["replicate", "-config", "/etc/litestream.yml"]
-    environment:
-      AWS_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
-      AWS_REGION: ${LITESTREAM_REGION:-us-east-1}
-    volumes:
-      - hail-data:/var/lib/hail
-      - ./litestream.yml:/etc/litestream.yml:ro
-    depends_on:
-      - hail-api
+### Enable the overlay
+
+From the repository root:
+
+```bash
+cp deploy/litestream.example.yml deploy/litestream.yml
 ```
 
+Start the canonical stack with the overlay:
+
+```bash
+podman compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.litestream.yml \
+  up -d
+```
+
+Docker equivalent:
+
+```bash
+docker compose \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.litestream.yml \
+  up -d
+```
+
+The checked-in example config uses a local file replica under
+`deploy/backups/litestream` (ignored by git) via `LITESTREAM_LOCAL_BACKUP_PATH`.
+That is useful for smoke tests and restore drills, but production hosts should
+use remote object storage such as S3 or Cloudflare R2.
+
+Check the sidecar:
+
+```bash
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml logs --tail=100 litestream
+# or: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml logs --tail=100 litestream
+```
+
+### Local file replica
+
+The default `deploy/litestream.example.yml` is:
+
+```yaml
+dbs:
+  - path: /var/lib/hail/hail.db
+    replicas:
+      - type: file
+        path: /backup/hail.db
+```
+
+`deploy/docker-compose.litestream.yml` mounts `${LITESTREAM_LOCAL_BACKUP_PATH}`
+at `/backup`; if unset, Compose uses `./backups/litestream` relative to the
+`deploy/` directory.
+
 ### S3 replica
+
+Edit `deploy/litestream.yml`:
 
 ```yaml
 dbs:
@@ -51,11 +91,13 @@ dbs:
 LITESTREAM_ACCESS_KEY_ID=AKIA...
 LITESTREAM_SECRET_ACCESS_KEY=...
 LITESTREAM_REGION=us-east-1
+LITESTREAM_BUCKET=my-hail-backups
+LITESTREAM_PATH=hail.db
 ```
 
 ### Cloudflare R2 replica
 
-R2 uses the S3 API with a custom endpoint:
+R2 uses the S3 API with a custom endpoint. Edit `deploy/litestream.yml`:
 
 ```yaml
 dbs:
@@ -69,23 +111,33 @@ dbs:
         force-path-style: true
 ```
 
+`.env`:
+
+```dotenv
+LITESTREAM_ACCESS_KEY_ID=R2_ACCESS_KEY_ID
+LITESTREAM_SECRET_ACCESS_KEY=R2_SECRET_ACCESS_KEY
+LITESTREAM_BUCKET=hail-backups
+LITESTREAM_PATH=hail.db
+LITESTREAM_REGION=auto
+LITESTREAM_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com
+```
+
 ### Local NFS replica
 
-Mount NFS on the host and bind it into Litestream:
+Mount NFS on the host and point the overlay's local backup path at it:
 
 ```bash
 sudo mkdir -p /mnt/backup/hail
 sudo mount nfs.example.com:/exports/hail /mnt/backup/hail
 ```
 
-```yaml
-services:
-  litestream:
-    volumes:
-      - hail-data:/var/lib/hail
-      - /mnt/backup/hail:/backup
-      - ./litestream.yml:/etc/litestream.yml:ro
+`.env`:
+
+```dotenv
+LITESTREAM_LOCAL_BACKUP_PATH=/mnt/backup/hail
 ```
+
+`deploy/litestream.yml`:
 
 ```yaml
 dbs:

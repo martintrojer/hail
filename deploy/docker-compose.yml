@@ -23,6 +23,8 @@
 #   stalwart-data -> /opt/stalwart   (Stalwart config/state/data)
 #   hail-data     -> /var/lib/hail   (hail SQLite sidecar: hail.db)
 #
+# Optional hail.db backups: add docker-compose.litestream.yml; see docs/backup.md.
+#
 # Reverse proxy users: add a caddy or traefik service in your own override file;
 # docs/reverse-proxy.md covers that and it is intentionally out of scope here.
 # Cloudflare Tunnel users: see docker-compose.cloudflare.yml overlay (separate task).
