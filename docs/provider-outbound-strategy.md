@@ -150,9 +150,24 @@ When the provider importer later sees a Sent message, dedupe in this order:
 4. conservative content-hash match within a send-time window.
 
 Matches should update the mapping/status and skip creating a visible duplicate.
-If the importer cannot prove a match, it may import the provider message as a
-normal message, but tests should cover the common Gmail SMTP/API sent-copy cases
-so this is rare and observable.
+Use `import_status='duplicate'` for proven provider Sent copies, with
+`error_class` reused as a safe reason-class field rather than an error. The
+standard reason classes are:
+
+- `provider_message_already_mapped` — this provider message id already has a
+  mapping, so importer replay is a no-op;
+- `local_sent_message_id_match` — the provider Sent copy's RFC822 `Message-ID`
+  matched a local Stalwart Sent object for the same provider account/user;
+- `existing_local_message_id_match` — another localized provider mapping already
+  points at the same local JMAP message for that RFC822 `Message-ID`;
+- `no_local_sent_match` — no safe local sent-copy match was proven, so normal
+  import may proceed.
+
+Reason messages must be UI/log safe and must not include raw RFC822, message
+bodies, tokens, SMTP credentials, or recipient lists. If the importer cannot
+prove a match, it may import the provider message as a normal message, but tests
+should cover the common Gmail SMTP/API sent-copy cases so this is rare and
+observable.
 
 ## Failure, retry, and idempotency
 

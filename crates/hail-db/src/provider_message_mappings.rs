@@ -55,6 +55,67 @@ impl ProviderImportStatus {
     }
 }
 
+pub const SENT_COPY_REASON_PROVIDER_MESSAGE_ALREADY_MAPPED: &str =
+    "provider_message_already_mapped";
+pub const SENT_COPY_REASON_LOCAL_SENT_MESSAGE_ID_MATCH: &str = "local_sent_message_id_match";
+pub const SENT_COPY_REASON_EXISTING_LOCAL_MESSAGE_ID_MATCH: &str =
+    "existing_local_message_id_match";
+pub const SENT_COPY_REASON_NO_LOCAL_SENT_MATCH: &str = "no_local_sent_match";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderSentCopyImportDecision {
+    /// The provider Sent copy is already represented in `provider_message_mappings`.
+    SkipAlreadyMapped {
+        existing: ProviderMessageMapping,
+        reason_class: &'static str,
+    },
+    /// The provider Sent copy corresponds to an existing local Stalwart sent
+    /// object and should be recorded as a duplicate mapping, not imported as a
+    /// visible second message.
+    DeduplicateToLocal {
+        jmap_email_id: String,
+        jmap_thread_id: Option<String>,
+        jmap_mailbox_ids_json: Option<String>,
+        reason_class: &'static str,
+    },
+    /// No safe local match exists. The caller may import the provider message
+    /// through the normal RFC822 import primitive and record it as imported.
+    ImportAsProviderMessage { reason_class: &'static str },
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalSentMessageRef<'a> {
+    pub rfc822_message_id: &'a str,
+    pub jmap_email_id: &'a str,
+    pub jmap_thread_id: Option<&'a str>,
+    pub jmap_mailbox_ids_json: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderSentCopyImportInput<'a> {
+    pub provider_account_id: i64,
+    pub provider_message_id: &'a str,
+    pub rfc822_message_id: Option<&'a str>,
+    /// Existing local Sent object found from Stalwart/JMAP by the same
+    /// account-scoped RFC822 Message-ID or future `X-Hail-Outbound-Id` lookup.
+    pub local_sent: Option<LocalSentMessageRef<'a>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DedupedProviderSentCopyMapping<'a> {
+    pub provider_account_id: i64,
+    pub provider_message_id: &'a str,
+    pub provider_thread_id: Option<&'a str>,
+    pub provider_history_id: Option<&'a str>,
+    pub rfc822_message_id: Option<&'a str>,
+    pub content_sha256: Option<&'a [u8]>,
+    pub duplicate_jmap_email_id: &'a str,
+    pub duplicate_jmap_thread_id: Option<&'a str>,
+    pub duplicate_jmap_mailbox_ids_json: Option<&'a str>,
+    pub reason_class: &'a str,
+    pub reason_message: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderMessageMapping {
     pub id: i64,
@@ -254,6 +315,96 @@ pub async fn mark_provider_message_duplicate(
     )
     .await?
     .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn mark_provider_sent_copy_deduped(
+    db: &SqlitePool,
+    deduped: DedupedProviderSentCopyMapping<'_>,
+) -> Result<ProviderMessageMapping, sqlx::Error> {
+    let now = now();
+    sqlx::query(
+        "INSERT INTO provider_message_mappings \
+         (provider_account_id, provider_message_id, provider_thread_id, provider_history_id, \
+          rfc822_message_id, content_sha256, jmap_email_id, jmap_thread_id, jmap_mailbox_ids_json, \
+          import_status, last_seen_at, error_class, error_message, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'duplicate', ?10, ?11, ?12, ?10, ?10) \
+         ON CONFLICT(provider_account_id, provider_message_id) DO UPDATE SET \
+           provider_thread_id = COALESCE(excluded.provider_thread_id, provider_message_mappings.provider_thread_id), \
+           provider_history_id = COALESCE(excluded.provider_history_id, provider_message_mappings.provider_history_id), \
+           rfc822_message_id = COALESCE(excluded.rfc822_message_id, provider_message_mappings.rfc822_message_id), \
+           content_sha256 = COALESCE(excluded.content_sha256, provider_message_mappings.content_sha256), \
+           jmap_email_id = excluded.jmap_email_id, jmap_thread_id = excluded.jmap_thread_id, \
+           jmap_mailbox_ids_json = excluded.jmap_mailbox_ids_json, \
+           import_status = 'duplicate', last_seen_at = excluded.last_seen_at, \
+           error_class = excluded.error_class, error_message = excluded.error_message, \
+           updated_at = excluded.updated_at",
+    )
+    .bind(deduped.provider_account_id)
+    .bind(deduped.provider_message_id)
+    .bind(deduped.provider_thread_id)
+    .bind(deduped.provider_history_id)
+    .bind(deduped.rfc822_message_id)
+    .bind(deduped.content_sha256)
+    .bind(deduped.duplicate_jmap_email_id)
+    .bind(deduped.duplicate_jmap_thread_id)
+    .bind(deduped.duplicate_jmap_mailbox_ids_json)
+    .bind(&now)
+    .bind(deduped.reason_class)
+    .bind(deduped.reason_message)
+    .execute(db)
+    .await?;
+
+    get_provider_message_mapping(db, deduped.provider_account_id, deduped.provider_message_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn decide_provider_sent_copy_import(
+    db: &SqlitePool,
+    input: ProviderSentCopyImportInput<'_>,
+) -> Result<ProviderSentCopyImportDecision, sqlx::Error> {
+    if let Some(existing) =
+        get_provider_message_mapping(db, input.provider_account_id, input.provider_message_id)
+            .await?
+    {
+        return Ok(ProviderSentCopyImportDecision::SkipAlreadyMapped {
+            existing,
+            reason_class: SENT_COPY_REASON_PROVIDER_MESSAGE_ALREADY_MAPPED,
+        });
+    }
+
+    if let (Some(provider_message_id), Some(local_sent)) =
+        (input.rfc822_message_id, input.local_sent.as_ref())
+    {
+        if provider_message_id == local_sent.rfc822_message_id {
+            return Ok(ProviderSentCopyImportDecision::DeduplicateToLocal {
+                jmap_email_id: local_sent.jmap_email_id.to_string(),
+                jmap_thread_id: local_sent.jmap_thread_id.map(str::to_string),
+                jmap_mailbox_ids_json: local_sent.jmap_mailbox_ids_json.map(str::to_string),
+                reason_class: SENT_COPY_REASON_LOCAL_SENT_MESSAGE_ID_MATCH,
+            });
+        }
+    }
+
+    if let Some(message_id) = input.rfc822_message_id {
+        if let Some(existing) =
+            find_local_mapping_by_rfc822_message_id(db, input.provider_account_id, message_id)
+                .await?
+        {
+            return Ok(ProviderSentCopyImportDecision::DeduplicateToLocal {
+                jmap_email_id: existing
+                    .jmap_email_id
+                    .expect("find_local_mapping_by_rfc822_message_id returns local ids"),
+                jmap_thread_id: existing.jmap_thread_id,
+                jmap_mailbox_ids_json: existing.jmap_mailbox_ids_json,
+                reason_class: SENT_COPY_REASON_EXISTING_LOCAL_MESSAGE_ID_MATCH,
+            });
+        }
+    }
+
+    Ok(ProviderSentCopyImportDecision::ImportAsProviderMessage {
+        reason_class: SENT_COPY_REASON_NO_LOCAL_SENT_MATCH,
+    })
 }
 
 pub async fn mark_provider_message_skipped(
