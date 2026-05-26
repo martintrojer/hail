@@ -17,6 +17,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_attachments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attachments/{blob_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["download_attachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/blobs": {
         parameters: {
             query?: never;
@@ -111,6 +143,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["update_draft"];
+        trace?: never;
+    };
+    "/api/invite/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_invite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invite/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["accept_invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/scheduled-sends": {
@@ -758,6 +822,9 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptInviteRequest: {
+            password: string;
+        };
         AdminStatsResponse: {
             stalwart_status: components["schemas"]["StalwartStatus"];
             users: components["schemas"]["AdminUserStats"][];
@@ -770,6 +837,37 @@ export interface components {
             total_emails: number;
             /** Format: int64 */
             total_size_bytes?: number | null;
+        };
+        AllowedSender: {
+            classify_as: components["schemas"]["MailClassification"];
+            /** Format: date-time */
+            decided_at?: string | null;
+            /** Format: date-time */
+            first_seen_at: string;
+            sender_address: string;
+        };
+        AllowedSendersResponse: {
+            allowed: components["schemas"]["AllowedSender"][];
+        };
+        AttachmentContext: {
+            email_id: string;
+            from: string;
+            preview: string;
+            /** Format: date-time */
+            received_at?: string | null;
+            subject: string;
+            thread_id: string;
+        };
+        AttachmentItem: {
+            blob_id: string;
+            context: components["schemas"]["AttachmentContext"];
+            download_url: string;
+            name: string;
+            size: number;
+            type: string;
+        };
+        AttachmentsResponse: {
+            items: components["schemas"]["AttachmentItem"][];
         };
         BlobUploadResponse: {
             blobs: components["schemas"]["UploadedBlob"][];
@@ -900,6 +998,15 @@ export interface components {
             new_for_you: components["schemas"]["MailViewItem"][];
             previously_seen: components["schemas"]["MailViewItem"][];
             previously_seen_total: number;
+        };
+        InviteAcceptResponse: {
+            user: components["schemas"]["UserView"];
+        };
+        InvitePreviewResponse: {
+            display_name?: string | null;
+            email: string;
+            /** Format: date-time */
+            expires_at: string;
         };
         /**
          * @description Canonical hail-owned routing classification for incoming mail.
@@ -1073,6 +1180,18 @@ export interface components {
             size: number;
             type: string;
         };
+        /**
+         * @description Public JSON representation of a user. Mirrors the v1 schema in
+         *     design.md §6.2. `jmap_account_id` and `created_at` are intentionally
+         *     NOT exposed — those are server-side bookkeeping.
+         */
+        UserView: {
+            display_name?: string | null;
+            email: string;
+            /** Format: int64 */
+            id: number;
+            is_admin: boolean;
+        };
         WorkflowAction: {
             add_label?: string | null;
             auto_reply?: string | null;
@@ -1111,17 +1230,6 @@ export interface components {
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
         };
-        AllowedSender: {
-            classify_as: components["schemas"]["MailClassification"];
-            /** Format: date-time */
-            decided_at?: string | null;
-            /** Format: date-time */
-            first_seen_at: string;
-            sender_address: string;
-        };
-        AllowedSendersResponse: {
-            allowed: components["schemas"]["AllowedSender"][];
-        };
     };
     responses: never;
     parameters: never;
@@ -1157,6 +1265,99 @@ export interface operations {
                 content?: never;
             };
             /** @description Failed to load local user or session state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_attachments: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of messages-with-attachments to inspect. */
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent attachments with thread/message context. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentsResponse"];
+                };
+            };
+            /** @description Invalid query. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attachment listing failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    download_attachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP blob id to download. */
+                blob_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attachment bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid blob id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Blob not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attachment download failed. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1584,6 +1785,91 @@ export interface operations {
             };
             /** @description JMAP draft store failure. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque invite token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invite can be accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePreviewResponse"];
+                };
+            };
+            /** @description Invite is missing, expired, or already used. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    accept_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque invite token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Invite accepted; session cookie has been set. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteAcceptResponse"];
+                };
+            };
+            /** @description Password failed validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invite is missing, expired, or already used. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upstream user provisioning failed. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

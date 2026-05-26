@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
+use crate::routes::invites;
 use crate::routes::management_http;
 use crate::routes::response::{bad_request, error_response, internal, not_found};
 use crate::routes::validation::valid_email;
@@ -184,6 +185,7 @@ where
     Router::new()
         .route("/api/admin/users", axum::routing::get(list_users::<M>))
         .route("/api/admin/users", axum::routing::post(create_user::<M>))
+        .route("/api/admin/invites", axum::routing::post(create_invite))
         .route(
             "/api/admin/users/{id}",
             axum::routing::delete(delete_user::<M>),
@@ -215,6 +217,17 @@ struct CreateUserRequest {
 #[derive(Debug, Deserialize)]
 struct ResetPasswordRequest {
     password: SecretString,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateInviteRequest {
+    email: String,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InviteEnvelope {
+    invite: invites::CreatedInviteResponse,
 }
 
 async fn list_users<M>(
@@ -306,6 +319,42 @@ where
         }
         Err(err) => {
             tracing::error!(error = %err, "admin users: local create failed");
+            internal()
+        }
+    }
+}
+
+async fn create_invite(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<CreateInviteRequest>,
+) -> Response {
+    if !user.is_admin {
+        return forbidden_admin();
+    }
+
+    let email = body.email.trim().to_lowercase();
+    let display_name = normalize_display_name(body.display_name.as_deref());
+    if !valid_email(&email) {
+        return invalid_input("email");
+    }
+
+    match invites::insert_invite(&state, user.id, &email, display_name.as_deref()).await {
+        Ok(invite) => {
+            if let Err(err) = audit::record(
+                &state.db,
+                user.id,
+                "admin.user.invite",
+                &serde_json::json!({ "email": email }),
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, error = %err, "audit log write failed");
+            }
+            (StatusCode::CREATED, Json(InviteEnvelope { invite })).into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "admin users: invite create failed");
             internal()
         }
     }

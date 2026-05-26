@@ -52,7 +52,7 @@ use crate::state::AppState;
 /// Public JSON representation of a user. Mirrors the v1 schema in
 /// design.md §6.2. `jmap_account_id` and `created_at` are intentionally
 /// NOT exposed — those are server-side bookkeeping.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct UserView {
     pub id: i64,
     pub email: String,

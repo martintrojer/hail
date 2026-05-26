@@ -21,6 +21,8 @@ import {
   type ComposeRequest,
   type ComposeResponse,
   type CreateAdminUserRequest,
+  type CreateInviteRequest,
+  type CreatedInviteEnvelope,
   type DeniedSendersResponse,
   type DestroyThreadResponse,
   type DraftDetails,
@@ -44,6 +46,9 @@ import {
   type SearchResponse,
   type SetupAdminRequest,
   type SetupState,
+  type AcceptInviteRequest,
+  type InviteAcceptResponse,
+  type InvitePreview,
   type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
@@ -155,6 +160,44 @@ export function useCreateAdminUserMutation(
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useCreateInviteMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<CreateInviteRequest, CreatedInviteEnvelope>,
+) {
+  return useMutation({
+    mutationFn: (body) => client.createInvite(body),
+    ...options,
+  });
+}
+
+export function useInvite(
+  token: string,
+  client = defaultApiClient,
+  options?: QueryConfig<InvitePreview>,
+) {
+  return useQuery({
+    queryKey: queryKeys.invite(token),
+    queryFn: () => client.getInvite(token),
+    ...options,
+  });
+}
+
+export function useAcceptInviteMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<{ token: string; body: AcceptInviteRequest }, InviteAcceptResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ token, body }) => client.acceptInvite(token, body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData(queryKeys.me(), data);
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });

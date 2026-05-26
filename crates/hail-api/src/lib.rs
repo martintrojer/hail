@@ -61,8 +61,9 @@ fn build_api_router(
     // OpenAPI-tracked public routes (health) are mounted directly. Protected
     // route specs are merged into the document below, but their routers are
     // mounted only in the auth-wrapped `protected` subtree.
-    let api_router: OpenApiRouter<AppState> =
-        OpenApiRouter::with_openapi(ApiDoc::openapi()).merge(routes::health::router());
+    let api_router: OpenApiRouter<AppState> = OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .merge(routes::health::router())
+        .merge(routes::invites::openapi_router());
     let (open_router, mut api) = api_router.with_state(state.clone()).split_for_parts();
     for protected_api in [
         routes::admin_stats::router()
