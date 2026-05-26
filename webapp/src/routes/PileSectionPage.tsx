@@ -10,12 +10,12 @@ import {
 } from '../api/query';
 import { defaultApiClient } from '../api/query';
 import { queryKeys } from '../api/queryKeys';
+import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
 import { Send, iconSizeProps } from '../components/icons';
 import { MailRow } from '../components/MailRow';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
-import { ListView } from '../components/ListView';
 import { AppShell } from '../layout/AppShell';
 import { pilePreview } from '../lib/pilePreview';
 
@@ -156,13 +156,17 @@ function PileRow({
   config,
   kind,
   selected,
+  active,
   onSelect,
+  onToggleSelect,
 }: {
   item: PileItem;
   config: SectionConfig;
   kind: string;
   selected?: boolean;
+  active?: boolean;
   onSelect?: () => void;
+  onToggleSelect?: () => void;
 }) {
   const preview = pilePreview(item);
   const queryClient = useQueryClient();
@@ -182,12 +186,14 @@ function PileRow({
       subject={preview.subject}
       preview={preview.snippet || 'No preview available.'}
       receivedAt={item.added_at}
+      selected={selected}
+      onToggleSelect={onToggleSelect}
     />
   );
 
   return (
     <div
-      className={`group flex items-stretch gap-3 border-b border-border-hairline hover:bg-bg-hover focus-within:bg-bg-selected ${selected ? 'bg-bg-selected' : ''}`}
+      className={`group flex items-stretch gap-3 border-b border-border-hairline hover:bg-bg-hover focus-within:bg-bg-selected ${active || selected ? 'bg-bg-selected' : ''}`}
     >
       {onSelect ? (
         // Reply Later: clicking selects the row to show reply panel
@@ -196,7 +202,9 @@ function PileRow({
           onClick={onSelect}
           className="block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 text-left outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5"
           aria-label={`Select ${preview.subject} from ${preview.sender} to reply`}
-          aria-pressed={selected}
+          aria-pressed={active}
+          data-hail-mail-list-item="true"
+          data-hail-thread-id={item.thread_id}
         >
           {rowContent}
         </button>
@@ -209,6 +217,7 @@ function PileRow({
           className="block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5"
           aria-label={`Open ${preview.subject} from ${preview.sender}`}
           data-hail-mail-list-item="true"
+          data-hail-thread-id={item.thread_id}
         >
           {rowContent}
         </Link>
@@ -267,21 +276,21 @@ function ReplyLaterList({
     <div className="flex min-h-[400px] gap-0">
       {/* Left: thread list */}
       <div className={`min-w-0 ${selectedItem ? 'w-2/5 border-r border-border-hairline' : 'w-full'}`}>
-        <ListView
+        <ActionableList
           items={data.items}
-          renderItem={(item) => (
+          actions={{ client, availableActions: ['archive', 'trash', 'classify'] }}
+          renderItem={(item, { selected, onToggleSelect }) => (
             <PileRow
               item={item}
               config={config}
               kind="reply-later"
-              selected={item.thread_id === selectedId}
+              selected={selected}
+              active={item.thread_id === selectedId}
               onSelect={() => setSelectedId(item.thread_id === selectedId ? null : item.thread_id)}
+              onToggleSelect={onToggleSelect}
             />
           )}
           keyExtractor={(item) => item.thread_id}
-          hasMore={false}
-          isLoadingMore={false}
-          onLoadMore={() => {}}
           emptyState={<StateCard title={config.emptyTitle} body={config.emptyBody} />}
         />
       </div>
@@ -335,13 +344,19 @@ function PileList({
   }
 
   return (
-    <ListView
+    <ActionableList
       items={data.items}
-      renderItem={(item) => <PileRow item={item} config={config} kind={kind} />}
+      actions={{ client: defaultApiClient, availableActions: ['archive', 'trash', 'classify'] }}
+      renderItem={(item, { selected, onToggleSelect }) => (
+        <PileRow
+          item={item}
+          config={config}
+          kind={kind}
+          selected={selected}
+          onToggleSelect={onToggleSelect}
+        />
+      )}
       keyExtractor={(item) => item.thread_id}
-      hasMore={false}
-      isLoadingMore={false}
-      onLoadMore={() => {}}
       emptyState={<StateCard title={config.emptyTitle} body={config.emptyBody} />}
     />
   );
