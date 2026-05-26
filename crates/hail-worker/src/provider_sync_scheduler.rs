@@ -15,7 +15,10 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::gmail_client::{GmailApiErrorKind, GmailClient, GmailClientError, GmailTokenSource};
+use crate::gmail_client::{
+    GmailApiErrorKind, GmailClient, GmailClientError, GmailTokenSource,
+    provider_worker_http_client,
+};
 use crate::gmail_incremental_sync::{
     GmailIncrementalSyncError, GmailIncrementalSyncOptions, run_gmail_incremental_sync,
 };
@@ -538,7 +541,8 @@ pub mod live {
         ) -> Result<Self> {
             Ok(Self {
                 db,
-                http: reqwest::Client::new(),
+                http: provider_worker_http_client()
+                    .map_err(|err| anyhow!("build provider sync HTTP client: {err}"))?,
                 server_key: hail_core::parse_server_key(server_key)
                     .map_err(|err| anyhow!("parse server key for provider sync: {err}"))?,
                 token_decryptor,

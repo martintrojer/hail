@@ -21,6 +21,24 @@ use thiserror::Error;
 
 const GMAIL_API_BASE_URL: &str = "https://gmail.googleapis.com/gmail/v1/";
 
+/// Maximum time allowed to establish provider-worker HTTP connections.
+pub const PROVIDER_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum total time allowed for each provider-worker HTTP request.
+pub const PROVIDER_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum idle gap allowed while reading provider-worker HTTP response bodies.
+pub const PROVIDER_HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Build the bounded HTTP client used by worker-side provider integrations.
+pub fn provider_worker_http_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .connect_timeout(PROVIDER_HTTP_CONNECT_TIMEOUT)
+        .timeout(PROVIDER_HTTP_REQUEST_TIMEOUT)
+        .read_timeout(PROVIDER_HTTP_READ_TIMEOUT)
+        .build()
+}
+
 /// OAuth scopes recommended for initial one-way Gmail import.
 pub const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
