@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useAuth } from '../auth/AuthProvider';
@@ -219,6 +220,18 @@ export function AppShell({
     onGoSetAside: () => void navigate({ to: '/set-aside' }),
     onGoReplyLater: () => void navigate({ to: '/reply-later' }),
     onGoBubbleUp: () => void navigate({ to: '/bubble-up' }),
+    onToggleMenu: () => {
+      setMenuOpen((prev) => {
+        const next = !prev;
+        if (next) {
+          requestAnimationFrame(() => {
+            const firstItem = document.querySelector<HTMLElement>('[role=menuitem]');
+            firstItem?.focus();
+          });
+        }
+        return next;
+      });
+    },
     onShowHelp: () => setShortcutHelpOpen(true),
     onEscape: () => {
       if (shortcutHelpOpen) {
@@ -255,6 +268,28 @@ export function AppShell({
 
   function closeMenu() {
     setMenuOpen(false);
+  }
+
+  function handleMenuKeyDown(event: ReactKeyboardEvent) {
+    const items = menuRef.current?.querySelectorAll<HTMLElement>('[role=menuitem]');
+    if (!items?.length) {
+      return;
+    }
+
+    const current = Array.from(items).indexOf(document.activeElement as HTMLElement);
+
+    if (event.key === 'ArrowDown' || event.key === 'j') {
+      event.preventDefault();
+      const next = current < items.length - 1 ? current + 1 : 0;
+      items[next]?.focus();
+    } else if (event.key === 'ArrowUp' || event.key === 'k') {
+      event.preventDefault();
+      const prev = current > 0 ? current - 1 : items.length - 1;
+      items[prev]?.focus();
+    } else if (event.key === 'Enter' && current >= 0) {
+      event.preventDefault();
+      items[current]?.click();
+    }
   }
 
   return (
@@ -302,6 +337,7 @@ export function AppShell({
                 ref={menuRef}
                 role="menu"
                 aria-label="Main menu"
+                onKeyDown={handleMenuKeyDown}
                 className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border"
               >
                 <nav className="space-y-1" aria-label="Primary navigation">
