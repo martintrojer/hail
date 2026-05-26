@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 secrecy = { version = "0.10", features = ["serde"] }
 thiserror = "2"
 url = { version = "2", features = ["serde"] }
+utoipa = "5"
 
 # Inbound mail render pipeline: parse unsafe fragments, strip tracking
 # images, then sanitize before thread panes render inside the SPA origin.
