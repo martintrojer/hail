@@ -147,6 +147,12 @@ the rationale is in `docs/design.md` §6.
   Stalwart-first, but operators without a public mail server may prefer Gmail or
   Cloudflare import-backed deployments. See `docs/provider-backed-modes.md` for
   the trade-offs and possible implementation paths.
+- **Provider import mode (v1.2) keeps this boundary after Gmail import.** Gmail
+  or another provider may be the public mailbox edge, but imported RFC822 lands
+  in Stalwart and the hail UI continues to treat Stalwart/JMAP as authoritative.
+  Provider cursors, encrypted OAuth tokens, and dedupe mappings live in
+  `hail.db`; provider mailbox state is not the hail UI source of truth. See
+  `docs/provider-import-architecture.md`.
 - **Alternate clients are expected later.** The planned Node/Ink TUI is
   deliberately a client of `hail-api`, not a parallel mail client that talks to
   Stalwart. That keeps one source of truth for Screener, Pile, search, and
@@ -387,7 +393,39 @@ for v1 realtime invalidation without making WebSocket correctness depend on
 process co-location. The bridge intentionally does not replay historical rows on
 API startup; offline tabs catch up by normal REST refetch after reconnect.
 
-### 6.13 Provider-backed modes are future deployment variants
+### 6.13 Provider import mode keeps Stalwart authoritative
+
+**Decision:** v1.2 provider import uses Gmail/provider as the public mailbox
+edge, but imports raw RFC822 into local Stalwart. After import, Stalwart remains
+the source of truth for hail UI mail state; the existing JMAP-backed API and SPA
+should behave as if the mail arrived normally.
+
+**Boundaries:**
+
+- import is one-way for v1.2: Gmail/provider -> Stalwart;
+- OAuth refresh tokens are encrypted in `hail.db`, and access tokens stay
+  server-side;
+- provider cursors, account metadata, dedupe mappings, retry state, and sync
+  status live in `hail.db`;
+- message bodies, threads, blobs, and visible mail state live in Stalwart;
+- outbound provider send/smarthost support is a later hook and must preserve
+  Stalwart sent-state and dedupe provider-created sent copies.
+
+**Rejected for v1.2:**
+
+- **Provider as hail UI source of truth.** That is Mode P1/P4a territory and
+  would require provider-label/read/archive/delete reconciliation in every mail
+  API.
+- **Bidirectional Gmail sync.** Useful later, but too easy to erase local hail
+  Screener/routing choices unless conflict rules are explicit.
+- **Hail-native imported archive.** Reimplements MIME/blob/search/threading work
+  that Stalwart already owns.
+
+**Why:** this gives existing Gmail users an "escape Gmail" backfill/incremental
+import path while keeping hail's core architecture stable. Detailed component
+rules live in `docs/provider-import-architecture.md`.
+
+### 6.14 Provider-backed modes are future deployment variants
 
 **Decision:** document provider-backed modes, but keep v1 Stalwart-first.
 
@@ -407,7 +445,7 @@ source-of-truth boundary. The safest incremental path is importer-into-Stalwart;
 hail-native storage is a major architecture change. Details live in
 `docs/provider-backed-modes.md`.
 
-### 6.14 Model/work orchestration choice (project process)
+### 6.15 Model/work orchestration choice (project process)
 
 **Decision:** implementation tasks live in `mu`, not in markdown checklists.
 Agents work in isolated git workspaces, produce one commit per task, and the

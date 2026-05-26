@@ -253,10 +253,17 @@ current architecture:
 
 For the current project, keep **Stalwart-first v1** as the mainline.
 
-If we add no-public-server support, the lowest-risk order is:
+For v1.2 provider import, hail chooses **Mode P2: provider importer into
+Stalwart**. Gmail/provider remains the public mailbox edge, but Stalwart remains
+the local source of truth for the hail UI after import. The detailed source of
+truth, OAuth, dedupe, scheduler, retry, and Gmail-to-Stalwart flow rules live in
+[provider-import-architecture.md](./provider-import-architecture.md).
 
-1. **Mode P2: provider importer into Stalwart** — preserves the current
-   architecture and gives existing Gmail users a practical path.
+If we add additional no-public-server support, the lowest-risk order is:
+
+1. **Mode P2: provider importer into Stalwart** — selected for v1.2 provider
+   import; preserves the current architecture and gives existing Gmail users a
+   practical path.
 2. **Mode P3: Cloudflare Email Routing import bridge** — useful for custom-domain
    users without Gmail-as-inbox, once a secure import queue exists.
 3. **Mode P1: provider-backed client/cache** — attractive for Gmail users, but it
@@ -273,15 +280,22 @@ P2 is the more incremental implementation path.
 
 ## Open implementation questions
 
-- Is Stalwart required in provider-backed deployments, or can it be optional?
-- Are Gmail labels mapped to hail views, or are hail views sidecar-only?
-- Does deleting/archive in hail mutate Gmail, or only local hail state?
-- How much raw RFC822/body/attachment data is cached locally?
+For P2 provider import, these are answered in
+[provider-import-architecture.md](./provider-import-architecture.md): Stalwart is
+required and remains the local source of truth; Gmail import is one-way in v1.2;
+OAuth refresh tokens are encrypted in `hail.db`; raw RFC822 is imported into
+Stalwart rather than stored as a hail-native archive. Open questions for other
+modes and future versions remain:
+
+- Can Stalwart become optional in a later P1/P4 deployment?
+- For non-P2 modes, are Gmail labels mapped to hail views, or are hail views sidecar-only?
+- For future bidirectional sync, does deleting/archive in hail mutate Gmail, or only local hail state?
+- For non-Stalwart modes, how much raw RFC822/body/attachment data is cached locally?
 - How are OAuth refresh tokens encrypted, rotated, and revoked?
 - How do multi-user deployments map provider accounts to hail users?
 - What is the minimum import API needed for both Gmail importer and Cloudflare
   Worker bridge?
-- What does export look like if hail stores provider-backed state locally?
+- What does export look like if hail stores provider-backed state outside Stalwart?
 - For P4a, which provider actions are mirrored back and which are local-only?
 - For P4b, does hail expose JMAP/IMAP/export so users are not trapped in a
   hail-only store?
