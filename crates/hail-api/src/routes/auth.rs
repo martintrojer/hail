@@ -346,14 +346,19 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 /// JSON view. We re-fetch `display_name` from the DB so it's always
 /// fresh (it's not part of `AuthUser`).
 async fn me(State(state): State<AppState>, Extension(user): Extension<AuthUser>) -> Response {
-    let display_name: Option<String> =
-        sqlx::query_scalar("SELECT display_name FROM users WHERE id = ?1")
-            .bind(user.id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+    let display_name: Option<String> = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT display_name FROM users WHERE id = ?1",
+    )
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(row) => row.flatten(),
+        Err(err) => {
+            tracing::error!(user_id = user.id, error = %err, "auth me: display_name lookup failed");
+            return internal();
+        }
+    };
 
     let view = UserView {
         id: user.id,
