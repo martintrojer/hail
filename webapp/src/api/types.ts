@@ -465,6 +465,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/imbox/sectioned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_imbox_sectioned"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/views/papertrail": {
         parameters: {
             query?: never;
@@ -767,6 +783,13 @@ export interface components {
             draft_id: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        ImboxSectionedResponse: {
+            bubbled_up: components["schemas"]["MailViewItem"][];
+            new_count: number;
+            new_for_you: components["schemas"]["MailViewItem"][];
+            previously_seen: components["schemas"]["MailViewItem"][];
+            previously_seen_total: number;
         };
         /** @enum {string} */
         MailClassification: "imbox" | "feed" | "papertrail" | "drafts" | "trash";
@@ -2589,6 +2612,43 @@ export interface operations {
                 content?: never;
             };
             /** @description JMAP mail view lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_imbox_sectioned: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Imbox mail view partitioned into Bubble Up, new, and seen sections. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImboxSectionedResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Imbox sectioned view lookup failed. */
             500: {
                 headers: {
                     [name: string]: unknown;

@@ -244,8 +244,18 @@ export function AppShell({
       ) : null}
 
       <header className="relative z-40 px-4 py-3 sm:px-6 sm:py-4">
-        <div className="flex items-center justify-between">
-          <div className="relative">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+          <div className="flex items-center">
+            <Link
+              to="/search"
+              aria-label="Search"
+              className="rounded-full p-2 text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
+            >
+              <Search {...iconSizeProps.lg} />
+            </Link>
+          </div>
+
+          <div className="relative flex justify-center">
             <button
               ref={logoButtonRef}
               type="button"
@@ -262,7 +272,7 @@ export function AppShell({
                 ref={menuRef}
                 role="menu"
                 aria-label="Main menu"
-                className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-0 sm:top-12 sm:w-80 sm:rounded-lg sm:border"
+                className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border"
               >
                 <nav className="space-y-1" aria-label="Primary navigation">
                   {navItems.map(({ to, label, Icon }) => (
@@ -319,7 +329,7 @@ export function AppShell({
             ) : null}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className="flex items-center justify-end gap-2 sm:gap-3">
             <Link
               to="/compose"
               search={{}}
@@ -337,13 +347,6 @@ export function AppShell({
             >
               <ThemeIcon theme={theme} />
             </button>
-            <Link
-              to="/search"
-              aria-label="Search"
-              className="rounded-full p-2 text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-            >
-              <Search {...iconSizeProps.lg} />
-            </Link>
             <div
               className="grid h-9 w-9 place-items-center rounded-full bg-bg-selected text-sm font-semibold text-ink-primary"
               title={user?.email ?? undefined}
