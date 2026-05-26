@@ -130,6 +130,7 @@ where
     let backfill: Arc<dyn ScreenerBackfill> = backfill;
     OpenApiRouter::new()
         .routes(routes!(get_screener))
+        .routes(routes!(get_allowed_senders))
         .routes(routes!(get_denied_senders))
         .routes(routes!(post_undo_deny).layer(Extension(backfill.clone())))
         .routes(routes!(post_decision).layer(Extension(backfill)))
@@ -174,6 +175,21 @@ struct DecisionRequest {
     decision: String,
     classify_as: Option<String>,
     apply_to_history: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct AllowedSendersResponse {
+    allowed: Vec<AllowedSender>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct AllowedSender {
+    sender_address: String,
+    classify_as: Classification,
+    #[schema(value_type = String, format = DateTime)]
+    first_seen_at: DateTime<Utc>,
+    #[schema(value_type = Option<String>, format = DateTime)]
+    decided_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -296,6 +312,62 @@ impl ScreenerSender {
             emails: Vec::new(),
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/screener/allowed",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Allowed screener senders and routing classifications.", body = AllowedSendersResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Allowed sender lookup failed."),
+    ),
+)]
+async fn get_allowed_senders(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    let rows = match sqlx::query_as::<_, (String, String, DateTime<Utc>, Option<DateTime<Utc>>)>(
+        "SELECT sender_address, classify_as, first_seen_at, decided_at \
+         FROM screener_rules \
+         WHERE user_id = ?1 AND decision = 'allow' AND classify_as IS NOT NULL \
+         ORDER BY COALESCE(decided_at, first_seen_at) DESC",
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(user_id = user.id, error = %err, "allowed screener lookup failed");
+            return internal();
+        }
+    };
+
+    let allowed = rows
+        .into_iter()
+        .filter_map(|(sender_address, classify_as, first_seen_at, decided_at)| {
+            let Some(classify_as) = Classification::parse(&classify_as) else {
+                tracing::warn!(
+                    user_id = user.id,
+                    sender = %sender_address,
+                    classify_as = %classify_as,
+                    "skipping allowed screener rule with invalid classification"
+                );
+                return None;
+            };
+
+            Some(AllowedSender {
+                sender_address: normalize_sender(&sender_address),
+                classify_as,
+                first_seen_at,
+                decided_at,
+            })
+        })
+        .collect();
+
+    Json(AllowedSendersResponse { allowed }).into_response()
 }
 
 #[utoipa::path(

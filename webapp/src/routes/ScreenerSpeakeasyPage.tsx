@@ -105,6 +105,7 @@ function AllowedSenderRow({
             <span className="rounded-full border border-border-menu px-2.5 py-1 font-semibold text-ink-secondary">
               Routed to {classificationLabel(sender.classify_as)}
             </span>
+            <span>First seen {formatDate(sender.first_seen_at)}</span>
             {sender.decided_at ? (
               <span>Approved {formatDate(sender.decided_at)}</span>
             ) : (

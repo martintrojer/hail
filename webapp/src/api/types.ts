@@ -577,6 +577,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/screener/allowed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_allowed_senders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/views/screener/denied": {
         parameters: {
             query?: never;
@@ -1094,6 +1110,17 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
+        };
+        AllowedSender: {
+            classify_as: components["schemas"]["MailClassification"];
+            /** Format: date-time */
+            decided_at?: string | null;
+            /** Format: date-time */
+            first_seen_at: string;
+            sender_address: string;
+        };
+        AllowedSendersResponse: {
+            allowed: components["schemas"]["AllowedSender"][];
         };
     };
     responses: never;
@@ -3033,6 +3060,40 @@ export interface operations {
                 content?: never;
             };
             /** @description Screener lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_allowed_senders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Allowed screener senders and routing classifications. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllowedSendersResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Allowed sender lookup failed. */
             500: {
                 headers: {
                     [name: string]: unknown;
