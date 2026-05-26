@@ -76,6 +76,8 @@ enum Call {
 struct FakeComposer {
     calls: Mutex<Vec<Call>>,
     context: Mutex<Option<ReplyContext>>,
+    fail_create_identity: Mutex<bool>,
+    fail_submit_identity: Mutex<bool>,
 }
 
 impl Default for FakeComposer {
@@ -88,6 +90,8 @@ impl Default for FakeComposer {
                 in_reply_to: vec!["m1@example.org".to_string()],
                 references: vec!["m0@example.org".to_string(), "m1@example.org".to_string()],
             })),
+            fail_create_identity: Mutex::new(false),
+            fail_submit_identity: Mutex::new(false),
         }
     }
 }
@@ -100,6 +104,14 @@ impl FakeComposer {
     fn set_not_found(&self) {
         *self.context.lock().expect("context mutex") = None;
     }
+
+    fn fail_create_identity(&self) {
+        *self.fail_create_identity.lock().expect("fail create mutex") = true;
+    }
+
+    fn fail_submit_identity(&self) {
+        *self.fail_submit_identity.lock().expect("fail submit mutex") = true;
+    }
 }
 
 impl Composer for FakeComposer {
@@ -111,6 +123,9 @@ impl Composer for FakeComposer {
         message: OutboundMessage,
     ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
+            if *self.fail_create_identity.lock().expect("fail create mutex") {
+                return Err(ComposeError::SenderIdentityUnavailable);
+            }
             self.calls.lock().expect("calls mutex").push(Call::Create {
                 from: from.to_string(),
                 to: message.to,
@@ -136,6 +151,9 @@ impl Composer for FakeComposer {
         email_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
+            if *self.fail_submit_identity.lock().expect("fail submit mutex") {
+                return Err(ComposeError::SenderIdentityUnavailable);
+            }
             self.calls.lock().expect("calls mutex").push(Call::Submit {
                 from: from.to_string(),
                 email_id: email_id.to_string(),
@@ -897,6 +915,66 @@ async fn reply_not_found_returns_404() {
         composer.calls(),
         vec![Call::ThreadContext {
             thread_id: "thread-1".to_string()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn compose_returns_clear_400_when_sender_identity_missing_on_draft_create() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "missing-compose@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    composer.fail_create_identity();
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(compose_body(None)),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "sender_identity_unavailable");
+    assert!(composer.calls().is_empty());
+}
+
+#[tokio::test]
+async fn compose_returns_clear_400_when_sender_identity_missing_on_submit() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "missing-submit@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+    composer.fail_submit_identity();
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(compose_body(None)),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "sender_identity_unavailable");
+    assert_eq!(
+        composer.calls(),
+        vec![Call::Create {
+            from: "missing-submit@example.org".to_string(),
+            to: vec!["bob@example.org".to_string()],
+            cc: vec!["carol@example.org".to_string()],
+            bcc: Vec::new(),
+            subject: "Hello".to_string(),
+            plain_text: "Hi Bob alert(1)".to_string(),
+            html: "<p>Hi <strong>Bob</strong></p>\n".to_string(),
+            reply: None,
         }]
     );
 }

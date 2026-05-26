@@ -97,6 +97,10 @@ impl FakeDraftStore {
         self.fail_next(DraftStoreError::Provider("boom".to_string()));
     }
 
+    fn fail_next_sender_identity(&self) {
+        self.fail_next(DraftStoreError::SenderIdentityUnavailable);
+    }
+
     fn should_fail(&self) -> Option<DraftStoreError> {
         self.fail.lock().expect("fail mutex").take()
     }
@@ -876,4 +880,28 @@ async fn delete_draft_requires_csrf_and_deletes_by_id() {
             draft_id: "draft-1".to_string()
         }]
     );
+}
+
+#[tokio::test]
+async fn create_returns_clear_400_when_sender_identity_missing() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "missing-draft-identity@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+    store.fail_next_sender_identity();
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(create_body()),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "sender_identity_unavailable");
+    assert!(store.calls().is_empty());
 }

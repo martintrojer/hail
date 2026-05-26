@@ -72,6 +72,13 @@ where
 
 pub trait ProviderError {
     fn provider(message: String) -> Self;
+
+    fn sender_identity_unavailable() -> Self
+    where
+        Self: Sized,
+    {
+        Self::provider("sender identity not available".to_string())
+    }
 }
 
 pub fn provider_error<E>(err: impl std::fmt::Display) -> E

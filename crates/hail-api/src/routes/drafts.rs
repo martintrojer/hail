@@ -193,12 +193,17 @@ impl DraftStore for JmapDraftStore {
 #[derive(Debug)]
 pub enum DraftStoreError {
     NotFound,
+    SenderIdentityUnavailable,
     Provider(String),
 }
 
 impl crate::routes::jmap_helpers::ProviderError for DraftStoreError {
     fn provider(message: String) -> Self {
         Self::Provider(message)
+    }
+
+    fn sender_identity_unavailable() -> Self {
+        Self::SenderIdentityUnavailable
     }
 }
 
@@ -314,6 +319,9 @@ async fn create_draft(
         )
             .into_response(),
         Err(DraftStoreError::NotFound) => not_found("not_found"),
+        Err(DraftStoreError::SenderIdentityUnavailable) => {
+            bad_request("sender_identity_unavailable")
+        }
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -347,6 +355,9 @@ async fn get_draft(
         Ok(Some(draft)) => Json(draft).into_response(),
         Ok(None) => not_found("not_found"),
         Err(DraftStoreError::NotFound) => not_found("not_found"),
+        Err(DraftStoreError::SenderIdentityUnavailable) => {
+            bad_request("sender_identity_unavailable")
+        }
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -395,6 +406,9 @@ async fn update_draft(
         })
         .into_response(),
         Err(DraftStoreError::NotFound) => not_found("not_found"),
+        Err(DraftStoreError::SenderIdentityUnavailable) => {
+            bad_request("sender_identity_unavailable")
+        }
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -430,6 +444,9 @@ async fn delete_draft(
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(DraftStoreError::NotFound) => not_found("not_found"),
+        Err(DraftStoreError::SenderIdentityUnavailable) => {
+            bad_request("sender_identity_unavailable")
+        }
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
