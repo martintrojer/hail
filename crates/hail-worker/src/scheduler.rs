@@ -479,10 +479,7 @@ pub async fn process_due_bubble_ups(
                 .await
                 .with_context(|| format!("mark bubble_up {} fired", row.id))?;
                 if result.rows_affected() > 0 {
-                    sqlx::query("DELETE FROM stack_positions WHERE user_id = ? AND thread_id = ?")
-                        .bind(row.user_id)
-                        .bind(&row.thread_id)
-                        .execute(db)
+                    hail_db::clear_thread_stack_positions(db, row.user_id, &row.thread_id)
                         .await
                         .with_context(|| {
                             format!(

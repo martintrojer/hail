@@ -1071,6 +1071,22 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
     .execute(&state.db)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, created_at) VALUES (?1, 'shared', ?2, ?2)",
+    )
+    .bind(alice_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) VALUES (?1, 'shared', ?2, ?2, ?2)",
+    )
+    .bind(alice_id)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
 
     let first = post(
         state.clone(),
@@ -1137,6 +1153,22 @@ async fn set_aside_inserts_and_updates_current_users_stack_position() {
     .unwrap();
     assert_eq!(alice_row.0, 8);
     assert_eq!(bob_row.0, 99);
+    let fired_bubble_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND thread_id = 'shared' AND fired_at IS NOT NULL",
+    )
+    .bind(alice_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(fired_bubble_count, 1);
+    let pending_bubble_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND thread_id = 'shared' AND fired_at IS NULL",
+    )
+    .bind(alice_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(pending_bubble_count, 0);
     assert_eq!(
         actions.calls(),
         vec![
