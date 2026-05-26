@@ -143,6 +143,10 @@ the rationale is in `docs/design.md` §6.
   generates Sieve scripts to embed routing into Stalwart. All product
   logic (Screener decisions, classification, the Pile, bubble-up) is
   hail-side. Operators can upgrade Stalwart independently.
+- **Provider-backed modes are documented separately.** The mainline product is
+  Stalwart-first, but operators without a public mail server may prefer Gmail or
+  Cloudflare import-backed deployments. See `docs/provider-backed-modes.md` for
+  the trade-offs and possible implementation paths.
 - **Alternate clients are expected later.** The planned Node/Ink TUI is
   deliberately a client of `hail-api`, not a parallel mail client that talks to
   Stalwart. That keeps one source of truth for Screener, Pile, search, and
@@ -383,7 +387,26 @@ for v1 realtime invalidation without making WebSocket correctness depend on
 process co-location. The bridge intentionally does not replay historical rows on
 API startup; offline tabs catch up by normal REST refetch after reconnect.
 
-### 6.13 Model/work orchestration choice (project process)
+### 6.13 Provider-backed modes are future deployment variants
+
+**Decision:** document provider-backed modes, but keep v1 Stalwart-first.
+
+**Alternatives captured:**
+
+- Gmail/provider-backed client/cache, where hail syncs from an existing mailbox
+  and provides the HEY-style UI over local sidecar/cache state.
+- Gmail/provider importer into Stalwart, where Stalwart remains the local mail
+  store and hail keeps its current JMAP integration.
+- Cloudflare Email Routing import bridge, where a Worker/import endpoint brings
+  raw messages into hail/Stalwart without a public server.
+- Hail-native mail store, where hail owns message/blob/search/thread storage.
+
+**Why:** these modes match real no-public-server operators, but they change the
+source-of-truth boundary. The safest incremental path is importer-into-Stalwart;
+hail-native storage is a major architecture change. Details live in
+`docs/provider-backed-modes.md`.
+
+### 6.14 Model/work orchestration choice (project process)
 
 **Decision:** implementation tasks live in `mu`, not in markdown checklists.
 Agents work in isolated git workspaces, produce one commit per task, and the
