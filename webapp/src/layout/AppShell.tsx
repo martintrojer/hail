@@ -272,15 +272,13 @@ export function AppShell({
         open={shortcutHelpOpen}
         onClose={() => setShortcutHelpOpen(false)}
       />
-      {menuOpen ? (
-        <button
-          type="button"
-          aria-label="Close main menu"
-          className="fixed inset-0 z-30 cursor-default bg-ink-primary/5"
-          onClick={closeMenu}
-          tabIndex={-1}
-        />
-      ) : null}
+      <button
+        type="button"
+        aria-label="Close main menu"
+        className={menuOpen ? 'fixed inset-0 z-30 cursor-default bg-ink-primary/5' : 'hidden'}
+        onClick={closeMenu}
+        tabIndex={-1}
+      />
 
       <header className="relative z-40 px-4 py-3 sm:px-6 sm:py-4">
         <div className="grid grid-cols-[1fr_auto_1fr] items-center">
@@ -306,13 +304,13 @@ export function AppShell({
               <img src="/logo-icon-transparent.png" alt="hail" className="h-7" />
             </button>
 
-            {menuOpen ? (
-              <div
-                ref={(node: HTMLDivElement | null) => { menuRef.current = node; navMenuRef.current = node; }}
-                role="menu"
-                aria-label="Main menu"
-                className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border"
-              >
+            <div
+              ref={(node: HTMLDivElement | null) => { menuRef.current = node; navMenuRef.current = node; }}
+              role="menu"
+              aria-label="Main menu"
+              aria-hidden={!menuOpen}
+              className={menuOpen ? 'fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border' : 'hidden'}
+            >
                 <nav className="space-y-1" aria-label="Primary navigation">
                   {navItems.map(({ to, label, Icon }) => (
                     <Link
@@ -364,8 +362,7 @@ export function AppShell({
                     <span>{logoutLoading ? 'Signing out…' : 'Sign Out'}</span>
                   </button>
                 </div>
-              </div>
-            ) : null}
+            </div>
           </div>
 
           <div className="flex items-center justify-end gap-2 sm:gap-3">
