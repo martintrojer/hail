@@ -1,4 +1,4 @@
-// This file is auto-generated from http://localhost:8080/api/openapi.json.
+// This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
     "/api/admin/stats": {
@@ -273,6 +273,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/threads/{thread_id}/not-spam": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["not_spam_thread"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/threads/{thread_id}/notes": {
         parameters: {
             query?: never;
@@ -363,6 +379,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["set_aside"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/{thread_id}/spam": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["spam_thread"];
         delete?: never;
         options?: never;
         head?: never;
@@ -710,10 +742,8 @@ export interface components {
         CancelBubbleUpResponse: {
             status: string;
         };
-        /** @enum {string} */
-        Classification: "imbox" | "feed" | "papertrail";
         ClassifyRequest: {
-            to: components["schemas"]["Classification"];
+            to: components["schemas"]["MailClassification"];
         };
         ComposePayload: {
             attachments?: unknown[] | null;
@@ -763,7 +793,7 @@ export interface components {
             sender: string;
         };
         DecisionResponse: {
-            classify_as?: null | components["schemas"]["Classification"];
+            classify_as?: null | components["schemas"]["MailClassification"];
             decision: string;
             sender: string;
             undo?: null | components["schemas"]["UndoToken"];
@@ -807,12 +837,20 @@ export interface components {
             previously_seen: components["schemas"]["MailViewItem"][];
             previously_seen_total: number;
         };
+        /**
+         * @description Canonical hail-owned routing classification for incoming mail.
+         *
+         *     These values are stored in sidecar rule rows as lowercase strings and are
+         *     represented in JMAP as hail-owned keywords.
+         * @enum {string}
+         */
+        MailClassification: "imbox" | "feed" | "papertrail";
         /** @enum {string} */
-        MailClassification: "imbox" | "feed" | "papertrail" | "drafts" | "trash" | "archive";
+        MailViewClassification: "imbox" | "feed" | "papertrail" | "drafts" | "trash" | "archive";
         MailViewItem: {
             bcc: string[];
             cc: string[];
-            classification: components["schemas"]["MailClassification"];
+            classification: components["schemas"]["MailViewClassification"];
             email_id: string;
             from: string;
             has_notes: boolean;
@@ -953,7 +991,7 @@ export interface components {
             classify_as?: string | null;
         };
         UndoDenyResponse: {
-            classify_as: components["schemas"]["Classification"];
+            classify_as: components["schemas"]["MailClassification"];
             status: string;
         };
         UndoResponse: {
@@ -2022,6 +2060,57 @@ export interface operations {
             };
         };
     };
+    not_spam_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thread marked as not spam and restored to Imbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadVerbResponse"];
+                };
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread not-spam failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_thread_notes: {
         parameters: {
             query?: never;
@@ -2367,6 +2456,57 @@ export interface operations {
                 content?: never;
             };
             /** @description Set Aside failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    spam_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thread marked as spam. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadVerbResponse"];
+                };
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Thread spam failed. */
             500: {
                 headers: {
                     [name: string]: unknown;

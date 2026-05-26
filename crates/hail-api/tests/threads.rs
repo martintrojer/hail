@@ -93,6 +93,24 @@ impl ThreadActions for FakeActions {
         Box::pin(async { Ok(()) })
     }
 
+    fn spam<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        _thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn not_spam<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        _thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn restore<'a>(
         &'a self,
         _state: &'a AppState,

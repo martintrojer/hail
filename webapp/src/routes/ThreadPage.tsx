@@ -14,6 +14,7 @@ import {
   useClassifyThreadMutation,
   useReplyLaterThreadMutation,
   useSetAsideThreadMutation,
+  useSpamThreadMutation,
   useThread,
   useTrashThreadMutation,
 } from '../api/query';
@@ -365,6 +366,7 @@ function ThreadDocument({
   const setAside = useSetAsideThreadMutation(client);
   const replyLater = useReplyLaterThreadMutation(client);
   const trash = useTrashThreadMutation(client);
+  const spam = useSpamThreadMutation(client);
   const archive = useArchiveThreadMutation(client);
   const classify = useClassifyThreadMutation(client);
   const bubbleUp = useBubbleUpMutation(client);
@@ -372,6 +374,7 @@ function ThreadDocument({
     setAside.isPending ||
     replyLater.isPending ||
     trash.isPending ||
+    spam.isPending ||
     archive.isPending ||
     classify.isPending ||
     bubbleUp.isPending;
@@ -521,9 +524,17 @@ function ThreadDocument({
         setBubbleUpAnchor(messagePopup?.anchorRect ?? null);
         setBubbleUpOpen(true);
         return;
-      case 'mark-spam':
-        showToast({ message: 'Spam reporting coming soon.' });
+      case 'mark-spam': {
+        const response = await runThreadAction(() =>
+          spam.mutateAsync({ threadId: thread.thread_id }),
+        );
+        if (!response) {
+          return;
+        }
+        showUndoToast('Thread marked as spam.', response, 'Spam action undone.');
+        goBack();
         return;
+      }
       default:
         return;
     }

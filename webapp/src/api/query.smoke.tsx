@@ -11,6 +11,7 @@ import {
   useLoginMutation,
   useLogoutMutation,
   useMe,
+  useNotSpamThreadMutation,
   usePapertrailView,
   useReplyLaterThreadMutation,
   useScreenerDecisionMutation,
@@ -18,6 +19,7 @@ import {
   useUndoDenyMutation,
   useSetAsideThreadMutation,
   useSetupState,
+  useSpamThreadMutation,
   useTrashThreadMutation,
   useTrashView,
 } from './query';
@@ -41,6 +43,8 @@ export function ApiHookSmoke() {
   void useClassifyThreadMutation();
   void useArchiveThreadMutation();
   void useTrashThreadMutation();
+  void useSpamThreadMutation();
+  void useNotSpamThreadMutation();
   void useSetAsideThreadMutation();
   void useReplyLaterThreadMutation();
   void useContactNoteMutation();

@@ -89,6 +89,20 @@ pub trait ThreadActions: Send + Sync + 'static {
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
 
+    fn spam<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
+
+    fn not_spam<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
+
     fn restore<'a>(
         &'a self,
         state: &'a AppState,
@@ -252,6 +266,57 @@ impl ThreadActions for JmapThreadActions {
         })
     }
 
+    fn spam<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
+            let junk_id = junk_mailbox_id(&session).await?;
+            set_thread_mailboxes(&session, thread_id, [junk_id])
+                .await
+                .map_err(provider_error)?;
+            set_thread_keyword(&session, thread_id, "$Junk", true)
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn not_spam<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let session = jmap_session(state, token).await.map_err(provider_error)?;
+            let inbox_id = hail_jmap::mailbox_id_by_role(
+                &session,
+                hail_jmap::jmap_client::mailbox::Role::Inbox,
+            )
+            .await
+            .map_err(provider_error)?
+            .ok_or_else(|| ThreadActionError::Provider("inbox mailbox not found".to_string()))?;
+
+            set_thread_keyword(&session, thread_id, "$Junk", false)
+                .await
+                .map_err(provider_error)?;
+            set_thread_keywords(
+                &session,
+                thread_id,
+                Classification::ALL
+                    .map(|candidate| (candidate.keyword(), candidate == Classification::Imbox)),
+            )
+            .await
+            .map_err(provider_error)?;
+            set_thread_mailboxes(&session, thread_id, [inbox_id])
+                .await
+                .map_err(provider_error)
+        })
+    }
+
     fn restore<'a>(
         &'a self,
         state: &'a AppState,
@@ -372,6 +437,8 @@ where
         .routes(routes!(reply_later).layer(Extension(actions.clone())))
         .routes(routes!(archive_thread).layer(Extension(actions.clone())))
         .routes(routes!(trash_thread).layer(Extension(actions.clone())))
+        .routes(routes!(spam_thread).layer(Extension(actions.clone())))
+        .routes(routes!(not_spam_thread).layer(Extension(actions.clone())))
         .routes(routes!(restore_thread).layer(Extension(actions.clone())))
         .routes(routes!(destroy_thread).layer(Extension(actions.clone())))
         .routes(routes!(mark_thread).layer(Extension(actions)))
@@ -815,6 +882,92 @@ async fn trash_thread(
 
 #[utoipa::path(
     post,
+    path = "/api/threads/{thread_id}/spam",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread marked as spam.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread spam failed."),
+    ),
+)]
+async fn spam_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    thread_action_response(&user, &thread_id, || async {
+        actions.spam(&state, user.jmap_token.clone(), &thread_id).await?;
+        clear_thread_state(
+            &state,
+            actions.as_ref(),
+            user.jmap_token.clone(),
+            user.id,
+            &thread_id,
+        )
+        .await;
+
+        tracing::debug!(user_id = user.id, thread_id = %thread_id, "spam undo unavailable: previous mailbox snapshot not captured");
+        Ok(None)
+    })
+    .await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/not-spam",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+    ),
+    responses(
+        (status = 200, description = "Thread marked as not spam and restored to Imbox.", body = ThreadVerbResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Thread not found."),
+        (status = 500, description = "Thread not-spam failed."),
+    ),
+)]
+async fn not_spam_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(actions): Extension<Arc<dyn ThreadActions>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    thread_action_response(&user, &thread_id, || async {
+        actions
+            .not_spam(&state, user.jmap_token.clone(), &thread_id)
+            .await?;
+        clear_thread_state(
+            &state,
+            actions.as_ref(),
+            user.jmap_token.clone(),
+            user.id,
+            &thread_id,
+        )
+        .await;
+        actions
+            .classify(
+                &state,
+                user.jmap_token.clone(),
+                &thread_id,
+                Classification::Imbox,
+            )
+            .await?;
+
+        tracing::debug!(user_id = user.id, thread_id = %thread_id, "not-spam undo unavailable: previous mailbox snapshot not captured");
+        Ok(None)
+    })
+    .await
+}
+
+#[utoipa::path(
+    post,
     path = "/api/threads/{thread_id}/restore",
     tag = TAG,
     params(
@@ -1038,6 +1191,31 @@ async fn email_ids_in_thread(
         return Err(ThreadActionError::NotFound);
     }
     Ok(ids)
+}
+
+async fn junk_mailbox_id(session: &hail_jmap::Session) -> Result<String, ThreadActionError> {
+    if let Some(id) = hail_jmap::mailbox_id_by_role(
+        session,
+        hail_jmap::jmap_client::mailbox::Role::Junk,
+    )
+    .await
+    .map_err(provider_error)?
+    {
+        return Ok(id);
+    }
+
+    let mailbox = session
+        .client()
+        .mailbox_create(
+            "Spam",
+            None::<String>,
+            hail_jmap::jmap_client::mailbox::Role::Junk,
+        )
+        .await
+        .map_err(provider_error)?;
+    mailbox.id().map(str::to_string).ok_or_else(|| {
+        ThreadActionError::Provider("mailbox_create returned mailbox without id".to_string())
+    })
 }
 
 #[derive(Clone, Copy)]

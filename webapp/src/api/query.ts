@@ -32,6 +32,8 @@ import {
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
+  type SpamThreadResponse,
+  type NotSpamThreadResponse,
   type UndoDenyRequest,
   type UndoDenyResponse,
   type SearchParams,
@@ -489,6 +491,44 @@ export function useTrashThreadMutation(
 
   return useMutation({
     mutationFn: ({ threadId }) => client.trashThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useSpamThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, SpamThreadResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.spamThread(threadId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.thread(variables.threadId),
+      });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useNotSpamThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<ThreadVerbMutationVariables, NotSpamThreadResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId }) => client.notSpamThread(threadId),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       void queryClient.invalidateQueries({

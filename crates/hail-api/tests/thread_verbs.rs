@@ -168,6 +168,12 @@ enum Call {
     Trash {
         thread_id: String,
     },
+    Spam {
+        thread_id: String,
+    },
+    NotSpam {
+        thread_id: String,
+    },
     Restore {
         thread_id: String,
     },
@@ -187,6 +193,8 @@ enum ActionKind {
     SetKeyword,
     Archive,
     Trash,
+    Spam,
+    NotSpam,
     Restore,
     Destroy,
     Mark,
@@ -349,6 +357,38 @@ impl ThreadActions for FakeActions {
         })
     }
 
+    fn spam<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.maybe_fail(ActionKind::Spam)?;
+            self.maybe_missing(thread_id)?;
+            self.calls.lock().expect("calls mutex").push(Call::Spam {
+                thread_id: thread_id.to_string(),
+            });
+            Ok(())
+        })
+    }
+
+    fn not_spam<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.maybe_fail(ActionKind::NotSpam)?;
+            self.maybe_missing(thread_id)?;
+            self.calls.lock().expect("calls mutex").push(Call::NotSpam {
+                thread_id: thread_id.to_string(),
+            });
+            Ok(())
+        })
+    }
+
     fn restore<'a>(
         &'a self,
         _state: &'a AppState,
@@ -482,6 +522,20 @@ async fn action_provider_failures_return_500_and_do_not_insert_sidecar_rows() {
             ActionKind::Trash,
             Method::POST,
             "/api/threads/thread-trash/trash",
+            None,
+            None,
+        ),
+        (
+            ActionKind::Spam,
+            Method::POST,
+            "/api/threads/thread-spam/spam",
+            None,
+            None,
+        ),
+        (
+            ActionKind::NotSpam,
+            Method::POST,
+            "/api/threads/thread-not-spam/not-spam",
             None,
             None,
         ),
@@ -866,7 +920,7 @@ async fn csrf_required_for_each_thread_verb_endpoint() {
     }
 }
 
-fn verb_requests() -> [(Method, &'static str, Option<&'static str>); 8] {
+fn verb_requests() -> [(Method, &'static str, Option<&'static str>); 10] {
     [
         (
             Method::POST,
@@ -877,6 +931,8 @@ fn verb_requests() -> [(Method, &'static str, Option<&'static str>); 8] {
         (Method::POST, "/api/threads/thread-1/reply-later", None),
         (Method::POST, "/api/threads/thread-1/archive", None),
         (Method::POST, "/api/threads/thread-1/trash", None),
+        (Method::POST, "/api/threads/thread-1/spam", None),
+        (Method::POST, "/api/threads/thread-1/not-spam", None),
         (Method::POST, "/api/threads/thread-1/restore", None),
         (Method::DELETE, "/api/threads/thread-1/destroy", None),
         (
@@ -1326,6 +1382,8 @@ async fn archive_trash_restore_destroy_and_mark_call_actions() {
     for (path, body, expected) in [
         ("/api/threads/thread-3/archive", None, StatusCode::OK),
         ("/api/threads/thread-3/trash", None, StatusCode::OK),
+        ("/api/threads/thread-3/spam", None, StatusCode::OK),
+        ("/api/threads/thread-3/not-spam", None, StatusCode::OK),
         ("/api/threads/thread-3/restore", None, StatusCode::OK),
         (
             "/api/threads/thread-3/mark",
@@ -1375,6 +1433,66 @@ async fn archive_trash_restore_destroy_and_mark_call_actions() {
                 thread_id: "thread-3".to_string(),
                 keyword: "$hail_replylater".to_string(),
                 enabled: false,
+            },
+            Call::Spam {
+                thread_id: "thread-3".to_string()
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_imbox".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_feed".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_papertrail".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_setaside".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_replylater".to_string(),
+                enabled: false,
+            },
+            Call::NotSpam {
+                thread_id: "thread-3".to_string()
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_imbox".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_feed".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_papertrail".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_setaside".to_string(),
+                enabled: false,
+            },
+            Call::SetKeyword {
+                thread_id: "thread-3".to_string(),
+                keyword: "$hail_replylater".to_string(),
+                enabled: false,
+            },
+            Call::Classify {
+                thread_id: "thread-3".to_string(),
+                classification: Classification::Imbox
             },
             Call::Restore {
                 thread_id: "thread-3".to_string()
@@ -1492,6 +1610,18 @@ async fn provider_missing_thread_returns_404_and_does_not_mutate_sidecar_state()
         (
             Method::POST,
             "/api/threads/missing-thread/trash",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/spam",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/threads/missing-thread/not-spam",
             None,
             None,
         ),
