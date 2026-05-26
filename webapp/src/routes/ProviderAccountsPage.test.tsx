@@ -162,11 +162,13 @@ function renderPage({
   client = new ProviderAccountsTestClient(),
   account = null,
   assign = vi.fn(),
+  search = '',
   confirm = vi.fn(() => true),
 }: {
   client?: ProviderAccountsTestClient;
   account?: ProviderAccount | null;
   assign?: (url: string) => void;
+  search?: string;
   confirm?: (message: string) => boolean;
 } = {}) {
   const queryClient = createTestQueryClient();
@@ -176,7 +178,7 @@ function renderPage({
       <ProviderAccountsPage
         client={client}
         initialAccount={account}
-        location={{ assign }}
+        location={{ assign, search }}
         confirmDisconnect={confirm}
       />
     </AuthProvider>
@@ -212,6 +214,24 @@ describe('ProviderAccountsPage', () => {
       expect(client.connectCalls).toBe(1);
       expect(assign).toHaveBeenCalledWith('https://accounts.google.test/oauth?state=abc');
     });
+  });
+
+  it('shows OAuth callback notices and refreshes Gmail import status', async () => {
+    const connectedClient = new ProviderAccountsTestClient();
+    connectedClient.syncStatuses = [sampleSyncStatus];
+    renderPage({ client: connectedClient, search: '?connected=gmail' });
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Gmail connected. Hail is refreshing import status now.');
+    await waitFor(() => {
+      expect(connectedClient.syncStatusCalls).toBeGreaterThanOrEqual(1);
+    });
+    expect(screen.getByText('Gmail import health')).toBeInTheDocument();
+
+    cleanup();
+
+    renderPage({ search: '?error=oauth_exchange_failed&state=secret-state&code=secret-code' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Gmail connection failed while exchanging authorization with Google. Please try again.');
+    expect(screen.queryByText(/secret-state|secret-code/)).not.toBeInTheDocument();
   });
 
   it('shows connected Gmail status and disconnects with confirmation', async () => {

@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
     extract::{Extension, Path, Query, State},
     http::{StatusCode, header},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use chrono::{Duration, Utc};
 use rand::TryRngCore;
@@ -23,7 +23,7 @@ use utoipa_axum::{
 
 use crate::{
     middleware::auth::{AuthSession, AuthUser},
-    routes::response::{bad_request, error_response, internal},
+    routes::response::{error_response, internal},
     state::AppState,
 };
 
@@ -360,7 +360,7 @@ pub struct ProviderAccountResponse {
 
 #[derive(Debug, Deserialize)]
 struct GmailCallbackQuery {
-    state: String,
+    state: Option<String>,
     code: Option<String>,
     error: Option<String>,
 }
@@ -419,8 +419,8 @@ async fn connect_gmail(
 }
 
 #[utoipa::path(get, path = "/api/provider-accounts/gmail/callback", tag = TAG,
-    params(("state" = String, Query), ("code" = Option<String>, Query), ("error" = Option<String>, Query)),
-    responses((status = 200, description = "Gmail account connected.", body = ProviderAccountResponse)))]
+    params(("state" = Option<String>, Query), ("code" = Option<String>, Query), ("error" = Option<String>, Query)),
+    responses((status = 303, description = "Redirects to provider accounts SPA route after Gmail OAuth callback.")))]
 async fn gmail_callback(
     State(state): State<AppState>,
     Query(query): Query<GmailCallbackQuery>,
@@ -429,34 +429,44 @@ async fn gmail_callback(
     Extension(client): Extension<Arc<dyn GmailOAuthClient>>,
 ) -> Response {
     if query.error.is_some() {
-        return bad_request("oauth_denied");
+        return provider_accounts_callback_redirect("error", "oauth_denied");
     }
-    let Some(code) = query.code.as_deref() else {
-        return bad_request("missing_code");
+    let Some(state_token) = query.state.as_deref() else {
+        return provider_accounts_callback_redirect("error", "missing_state");
     };
-    let oauth_state = match consume_oauth_state(&state.db, user.id, &session.id, &query.state).await
+    let Some(code) = query.code.as_deref() else {
+        return provider_accounts_callback_redirect("error", "missing_code");
+    };
+    let oauth_state = match consume_oauth_state(&state.db, user.id, &session.id, state_token).await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return bad_request("invalid_oauth_state"),
+        Ok(None) => return provider_accounts_callback_redirect("error", "invalid_oauth_state"),
         Err(err) => {
             tracing::error!(error = %err, user_id = user.id, "gmail oauth: state lookup failed");
-            return internal();
+            return provider_accounts_callback_redirect("error", "callback_failed");
         }
     };
     let exchange = match client.exchange_code(code, &oauth_state.redirect_uri).await {
         Ok(exchange) => exchange,
         Err(err) => {
             tracing::warn!(error = %err, user_id = user.id, "gmail oauth: exchange failed");
-            return error_response(StatusCode::BAD_GATEWAY, "oauth_exchange_failed");
+            return provider_accounts_callback_redirect("error", "oauth_exchange_failed");
         }
     };
     match upsert_provider_account(&state, &user, exchange).await {
-        Ok(account) => Json(account).into_response(),
+        Ok(_) => provider_accounts_callback_redirect("connected", GMAIL_PROVIDER_KIND),
         Err(err) => {
             tracing::error!(error = %err, user_id = user.id, "gmail oauth: account store failed");
-            internal()
+            provider_accounts_callback_redirect("error", "callback_failed")
         }
     }
+}
+
+fn provider_accounts_callback_redirect(key: &str, value: &str) -> Response {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair(key, value)
+        .finish();
+    Redirect::to(&format!("/provider-accounts?{query}")).into_response()
 }
 
 #[utoipa::path(post, path = "/api/provider-accounts/{id}/disconnect", tag = TAG,
