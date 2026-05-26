@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
 
 export type ScreenerRoutingDestination = 'imbox' | 'feed' | 'papertrail';
 
@@ -46,10 +46,7 @@ export function ScreenerRoutingDropdown({
 }: ScreenerRoutingDropdownProps) {
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
-  useKeyboardShortcuts(
-    { onEscape: onClose },
-    { enabled: open },
-  );
+  const navMenuRef = useMenuKeyboardNav({ open, onClose });
 
   useEffect(() => {
     if (!open) {
@@ -87,7 +84,7 @@ export function ScreenerRoutingDropdown({
 
   const dropdown = (
     <div
-      ref={dropdownRef}
+      ref={(node: HTMLDivElement | null) => { dropdownRef.current = node; navMenuRef.current = node; }}
       role="menu"
       aria-label="Screener routing destinations"
       className="absolute z-50 w-[180px] rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"

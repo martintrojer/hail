@@ -1,5 +1,6 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -222,16 +223,7 @@ export function AppShell({
     onGoBubbleUp: () => void navigate({ to: '/bubble-up' }),
     onGoArchive: () => void navigate({ to: '/archive' }),
     onToggleMenu: () => {
-      setMenuOpen((prev) => {
-        const next = !prev;
-        if (next) {
-          requestAnimationFrame(() => {
-            const firstItem = document.querySelector<HTMLElement>('[role=menuitem]');
-            firstItem?.focus();
-          });
-        }
-        return next;
-      });
+      setMenuOpen((prev) => !prev);
     },
     onShowHelp: () => setShortcutHelpOpen(true),
     onEscape: () => {
@@ -267,12 +259,12 @@ export function AppShell({
     };
   }, [menuOpen]);
 
-  function closeMenu() {
+  const closeMenu = useCallback(() => {
     setMenuOpen(false);
     logoButtonRef.current?.focus();
-  }
+  }, []);
 
-  useMenuKeyboardNav({ menuRef, open: menuOpen, onClose: closeMenu, autoFocus: false });
+  const navMenuRef = useMenuKeyboardNav({ open: menuOpen, onClose: closeMenu });
 
   return (
     <div className="min-h-screen bg-bg-page text-ink-primary">
@@ -316,7 +308,7 @@ export function AppShell({
 
             {menuOpen ? (
               <div
-                ref={menuRef}
+                ref={(node: HTMLDivElement | null) => { menuRef.current = node; navMenuRef.current = node; }}
                 role="menu"
                 aria-label="Main menu"
                 className="fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border"

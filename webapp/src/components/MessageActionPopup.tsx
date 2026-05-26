@@ -15,7 +15,6 @@ import {
   iconSizeProps,
   type LucideIcon,
 } from './icons';
-import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 export interface MessageActionPopupProps {
   open: boolean;
@@ -115,12 +114,7 @@ export function MessageActionPopup({
   const popupRef = useRef<HTMLDivElement | null>(null);
   const [moveOpen, setMoveOpen] = useState(true);
 
-  useKeyboardShortcuts(
-    { onEscape: onClose },
-    { enabled: open },
-  );
-
-  useMenuKeyboardNav({ menuRef: popupRef, open, onClose });
+  const navMenuRef = useMenuKeyboardNav({ open, onClose });
 
   useEffect(() => {
     if (!open) {
@@ -163,7 +157,7 @@ export function MessageActionPopup({
 
   const popup = (
     <div
-      ref={popupRef}
+      ref={(node: HTMLDivElement | null) => { popupRef.current = node; navMenuRef.current = node; }}
       role="menu"
       aria-label="Message actions"
       className="absolute z-50 w-60 rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"

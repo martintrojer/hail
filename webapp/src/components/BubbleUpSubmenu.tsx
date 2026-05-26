@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
 
 export interface BubbleUpSubmenuProps {
   open: boolean;
@@ -43,10 +43,7 @@ export function BubbleUpSubmenu({
 }: BubbleUpSubmenuProps) {
   const submenuRef = useRef<HTMLDivElement | null>(null);
 
-  useKeyboardShortcuts(
-    { onEscape: onClose },
-    { enabled: open },
-  );
+  const navMenuRef = useMenuKeyboardNav({ open, onClose });
 
   useEffect(() => {
     if (!open) {
@@ -84,7 +81,7 @@ export function BubbleUpSubmenu({
 
   const submenu = (
     <div
-      ref={submenuRef}
+      ref={(node: HTMLDivElement | null) => { submenuRef.current = node; navMenuRef.current = node; }}
       role="menu"
       aria-label="Bubble up time options"
       className="absolute z-50 w-[220px] rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
