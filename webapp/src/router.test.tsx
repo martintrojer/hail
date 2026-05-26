@@ -160,7 +160,7 @@ describe('SPA auth/router flows', () => {
 
     await expectLocation('/imbox');
     expect(await screen.findByRole('heading', { name: 'Imbox' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'hail' }));
+    fireEvent.click(screen.getByRole('button', { name: /hail/i }));
     expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
   });
 

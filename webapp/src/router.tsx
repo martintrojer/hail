@@ -47,11 +47,9 @@ function CenteredPage({ children }: { children: ReactNode }) {
   return (
     <main className="min-h-screen bg-bg-page px-6 py-12 text-ink-primary">
       <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-md flex-col justify-center">
-        <div className="mb-8 text-center">
-          <p className="text-sm font-medium uppercase tracking-[0.35em] text-accent-blue">
-            hail
-          </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">hail</h1>
+        <div className="mb-8 flex flex-col items-center">
+          <img src="/logo-icon-transparent.png" alt="hail" className="h-16" />
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-ink-primary">hail</h1>
         </div>
         {children}
       </section>
