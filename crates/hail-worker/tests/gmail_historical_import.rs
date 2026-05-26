@@ -7,6 +7,9 @@ use hail_db::provider_message_mappings::{
     mark_provider_message_imported,
 };
 use hail_db::provider_sync_audit::list_provider_sync_audit_logs;
+use hail_test::gmail_import_fixtures::{
+    GmailImportFixture, GmailImportScenario, gmail_import_fixture,
+};
 use hail_worker::gmail_client::{
     GmailClientError, ListMessage, ListMessagesParams, ListMessagesResponse, RawGmailMessage,
 };
@@ -259,27 +262,41 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
     }
 }
 
+fn raw_fixture_message(fixture: GmailImportFixture) -> RawGmailMessage {
+    RawGmailMessage {
+        id: fixture.gmail_id.to_owned(),
+        thread_id: Some(fixture.thread_id.to_owned()),
+        history_id: Some(fixture.history_id.to_owned()),
+        rfc822: fixture.raw_rfc822().to_vec(),
+    }
+}
+
+fn list_fixture_page(
+    fixtures: impl IntoIterator<Item = GmailImportFixture>,
+) -> ListMessagesResponse {
+    ListMessagesResponse {
+        messages: fixtures
+            .into_iter()
+            .map(|fixture| ListMessage {
+                id: fixture.gmail_id.to_owned(),
+                thread_id: Some(fixture.thread_id.to_owned()),
+            })
+            .collect(),
+        next_page_token: None,
+        result_size_estimate: None,
+    }
+}
+
 #[tokio::test]
 async fn imports_gmail_pages_into_stalwart_and_records_mapping_and_audit() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let first_fixture = gmail_import_fixture(GmailImportScenario::RawRfc822Import);
+    let second_fixture = gmail_import_fixture(GmailImportScenario::RoutingFeed);
     let gmail = FakeGmail::new(
-        vec![ListMessagesResponse {
-            messages: vec![
-                ListMessage {
-                    id: "gmail-1".to_owned(),
-                    thread_id: Some("thread-1".to_owned()),
-                },
-                ListMessage {
-                    id: "gmail-2".to_owned(),
-                    thread_id: Some("thread-2".to_owned()),
-                },
-            ],
-            next_page_token: None,
-            result_size_estimate: Some(2),
-        }],
+        vec![list_fixture_page([first_fixture, second_fixture])],
         vec![
-            raw_message("gmail-1", "thread-1", "history-1", "m1@example.com"),
-            raw_message("gmail-2", "thread-2", "history-2", "m2@example.com"),
+            raw_fixture_message(first_fixture),
+            raw_fixture_message(second_fixture),
         ],
     );
     let importer = FakeRfc822Importer::default();
@@ -311,20 +328,34 @@ async fn imports_gmail_pages_into_stalwart_and_records_mapping_and_audit() {
     assert_eq!(summary.duplicates, 0);
     assert!(summary.completed);
 
-    let first = get_provider_message_mapping(&pool, provider_account_id, "gmail-1")
+    let first = get_provider_message_mapping(&pool, provider_account_id, first_fixture.gmail_id)
         .await
         .expect("mapping lookup")
         .expect("mapping exists");
     assert_eq!(first.import_status, ProviderImportStatus::Imported);
-    assert_eq!(first.provider_thread_id.as_deref(), Some("thread-1"));
-    assert_eq!(first.provider_history_id.as_deref(), Some("history-1"));
-    assert_eq!(first.rfc822_message_id.as_deref(), Some("m1@example.com"));
+    assert_eq!(
+        first.provider_thread_id.as_deref(),
+        Some(first_fixture.thread_id)
+    );
+    assert_eq!(
+        first.provider_history_id.as_deref(),
+        Some(first_fixture.history_id)
+    );
+    assert_eq!(
+        first.rfc822_message_id.as_deref(),
+        Some(first_fixture.rfc822_message_id)
+    );
     assert_eq!(first.jmap_email_id.as_deref(), Some("email-1"));
 
     let imports = importer.imports();
     assert_eq!(imports.len(), 2);
     assert_eq!(imports[0].mailbox_ids, vec!["inbox"]);
     assert_eq!(imports[0].keywords, vec!["$seen"]);
+    assert_eq!(imports[0].raw_rfc822, first_fixture.raw_rfc822());
+    assert_eq!(
+        gmail.raw_gets(),
+        vec![first_fixture.gmail_id, second_fixture.gmail_id]
+    );
     assert_eq!(gmail.list_params()[0].label_ids, vec!["INBOX"]);
     assert_eq!(
         gmail.list_params()[0].query.as_deref(),
@@ -434,20 +465,17 @@ async fn provider_labels_are_only_import_hints_not_local_keywords() {
 #[tokio::test]
 async fn explicit_sent_copy_import_can_disable_default_sent_exclusion() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let sent_copy = gmail_import_fixture(GmailImportScenario::SentCopyOneWay);
     let gmail = FakeGmail::new(
-        vec![ListMessagesResponse {
-            messages: Vec::new(),
-            next_page_token: None,
-            result_size_estimate: Some(0),
-        }],
-        Vec::new(),
+        vec![list_fixture_page([sent_copy])],
+        vec![raw_fixture_message(sent_copy)],
     );
     let importer = FakeRfc822Importer::default();
     let mut options = GmailHistoricalImportOptions::into_mailboxes(["sent"]);
     options.exclude_sent = false;
     options.label_ids = vec!["SENT".to_owned()];
 
-    import_gmail_history(
+    let summary = import_gmail_history(
         &pool,
         GmailHistoricalImportAccount {
             provider_account_id,
@@ -461,8 +489,24 @@ async fn explicit_sent_copy_import_can_disable_default_sent_exclusion() {
     .await
     .expect("explicit sent import window");
 
+    assert_eq!(summary.imported, 1);
     assert_eq!(gmail.list_params()[0].label_ids, ["SENT"]);
     assert_eq!(gmail.list_params()[0].query, None);
+    let imports = importer.imports();
+    assert_eq!(imports.len(), 1);
+    assert_eq!(imports[0].mailbox_ids, vec!["sent"]);
+    assert!(imports[0].keywords.is_empty());
+    assert_eq!(imports[0].raw_rfc822, sent_copy.raw_rfc822());
+
+    let mapping = get_provider_message_mapping(&pool, provider_account_id, sent_copy.gmail_id)
+        .await
+        .expect("mapping lookup")
+        .expect("sent copy mapping");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Imported);
+    assert_eq!(
+        mapping.rfc822_message_id.as_deref(),
+        Some(sent_copy.rfc822_message_id)
+    );
 }
 
 #[tokio::test]
@@ -520,14 +564,16 @@ async fn rerun_skips_existing_provider_mapping_without_fetching_raw() {
 #[tokio::test]
 async fn dedupes_different_provider_id_by_rfc822_message_id() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let original = gmail_import_fixture(GmailImportScenario::RawRfc822Import);
+    let copy_fixture = gmail_import_fixture(GmailImportScenario::DedupeIdempotency);
     mark_provider_message_imported(
         &pool,
         ImportedProviderMessageMapping {
             provider_account_id,
-            provider_message_id: "gmail-original",
-            provider_thread_id: Some("thread-original"),
-            provider_history_id: Some("history-original"),
-            rfc822_message_id: Some("same@example.com"),
+            provider_message_id: original.gmail_id,
+            provider_thread_id: Some(original.thread_id),
+            provider_history_id: Some(original.history_id),
+            rfc822_message_id: Some(original.rfc822_message_id),
             content_sha256: None,
             jmap_email_id: "local-original",
             jmap_thread_id: Some("local-thread"),
@@ -537,20 +583,8 @@ async fn dedupes_different_provider_id_by_rfc822_message_id() {
     .await
     .expect("seed mapping");
     let gmail = FakeGmail::new(
-        vec![ListMessagesResponse {
-            messages: vec![ListMessage {
-                id: "gmail-copy".to_owned(),
-                thread_id: Some("thread-copy".to_owned()),
-            }],
-            next_page_token: None,
-            result_size_estimate: Some(1),
-        }],
-        vec![raw_message(
-            "gmail-copy",
-            "thread-copy",
-            "history-copy",
-            "same@example.com",
-        )],
+        vec![list_fixture_page([copy_fixture])],
+        vec![raw_fixture_message(copy_fixture)],
     );
     let importer = FakeRfc822Importer::default();
 
@@ -571,12 +605,16 @@ async fn dedupes_different_provider_id_by_rfc822_message_id() {
     assert_eq!(summary.fetched, 1);
     assert_eq!(summary.duplicates, 1);
     assert!(importer.imports().is_empty());
-    let copy = get_provider_message_mapping(&pool, provider_account_id, "gmail-copy")
+    let copy = get_provider_message_mapping(&pool, provider_account_id, copy_fixture.gmail_id)
         .await
         .expect("mapping lookup")
         .expect("copy mapping");
     assert_eq!(copy.import_status, ProviderImportStatus::Duplicate);
     assert_eq!(copy.jmap_email_id.as_deref(), Some("local-original"));
+    assert_eq!(
+        copy.rfc822_message_id.as_deref(),
+        Some(copy_fixture.rfc822_message_id)
+    );
 }
 
 #[tokio::test]
@@ -838,89 +876,82 @@ async fn retries_failed_import_mapping_without_duplicating_stalwart_mail() {
 }
 
 #[tokio::test]
-async fn routed_import_applies_allowed_sender_classification() {
-    let (pool, _guard, user_id, provider_account_id) = setup().await;
-    sqlx::query(
-        "INSERT INTO screener_rules \
-         (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
-         VALUES (?, 'allowed@example.com', 'allow', 'feed', ?, ?)",
-    )
-    .bind(user_id)
-    .bind("2026-01-01T00:00:00Z")
-    .bind("2026-01-01T00:00:00Z")
-    .execute(&pool)
-    .await
-    .expect("allow rule");
-    let gmail = FakeGmail::new(
-        vec![ListMessagesResponse {
-            messages: vec![ListMessage {
-                id: "gmail-allowed".to_owned(),
-                thread_id: Some("thread-allowed".to_owned()),
-            }],
-            next_page_token: None,
-            result_size_estimate: Some(1),
-        }],
-        vec![raw_from_message(
-            "gmail-allowed",
-            "thread-allowed",
-            "history-allowed",
-            "allowed-msg@example.com",
-            "Allowed Sender <allowed@example.com>",
-        )],
-    );
-    let importer = FakeRfc822Importer::default();
-    let jmap = FakeJmapOps::default();
-    let router = ScreenerRfc822ImportRouter::new(&jmap);
-    let routed_importer = RoutingRfc822Importer::new(&importer, &router);
-
-    let summary = import_gmail_history(
-        &pool,
-        GmailHistoricalImportAccount {
-            provider_account_id,
-            user_id,
-        },
-        &gmail,
-        &routed_importer,
-        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
-        &CancellationToken::new(),
-    )
-    .await
-    .expect("routed import");
-
-    assert_eq!(summary.imported, 1);
-    assert_eq!(
-        jmap.calls(),
-        vec![JmapCall::ApplyKeyword {
-            email_id: "email-1".to_string(),
-            keyword: "$hail_feed".to_string(),
-        }]
-    );
-    let event_type: String = sqlx::query_scalar("SELECT event_type FROM app_events")
-        .fetch_one(&pool)
+async fn routed_import_applies_allowed_sender_classifications() {
+    for scenario in [
+        GmailImportScenario::RoutingImbox,
+        GmailImportScenario::RoutingFeed,
+        GmailImportScenario::RoutingPapertrail,
+    ] {
+        let (pool, _guard, user_id, provider_account_id) = setup().await;
+        let fixture = gmail_import_fixture(scenario);
+        let route = fixture.intended_route.expect("fixture has route");
+        sqlx::query(
+            "INSERT INTO screener_rules \
+             (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+             VALUES (?, ?, 'allow', ?, ?, ?)",
+        )
+        .bind(user_id)
+        .bind(route.sender)
+        .bind(route.classify_as.expect("allowed fixture classify_as"))
+        .bind("2026-01-01T00:00:00Z")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
         .await
-        .expect("app event");
-    assert_eq!(event_type, "feed.new");
+        .expect("allow rule");
+        let gmail = FakeGmail::new(
+            vec![list_fixture_page([fixture])],
+            vec![raw_fixture_message(fixture)],
+        );
+        let importer = FakeRfc822Importer::default();
+        let jmap = FakeJmapOps::default();
+        let router = ScreenerRfc822ImportRouter::new(&jmap);
+        let routed_importer = RoutingRfc822Importer::new(&importer, &router);
+
+        let summary = import_gmail_history(
+            &pool,
+            GmailHistoricalImportAccount {
+                provider_account_id,
+                user_id,
+            },
+            &gmail,
+            &routed_importer,
+            GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("routed import");
+
+        assert_eq!(summary.imported, 1);
+        assert_eq!(
+            jmap.calls(),
+            vec![JmapCall::ApplyKeyword {
+                email_id: "email-1".to_string(),
+                keyword: route.keyword.expect("route keyword").to_string(),
+            }]
+        );
+        let event_type: String = sqlx::query_scalar("SELECT event_type FROM app_events")
+            .fetch_one(&pool)
+            .await
+            .expect("app event");
+        assert_eq!(
+            event_type,
+            match scenario {
+                GmailImportScenario::RoutingImbox => "imbox.new",
+                GmailImportScenario::RoutingFeed => "feed.new",
+                GmailImportScenario::RoutingPapertrail => "papertrail.new",
+                _ => unreachable!("only classified routing scenarios are tested here"),
+            }
+        );
+    }
 }
 
 #[tokio::test]
 async fn routed_import_sends_unknown_sender_to_screener_pending() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let fixture = gmail_import_fixture(GmailImportScenario::RoutingScreener);
     let gmail = FakeGmail::new(
-        vec![ListMessagesResponse {
-            messages: vec![ListMessage {
-                id: "gmail-unknown".to_owned(),
-                thread_id: Some("thread-unknown".to_owned()),
-            }],
-            next_page_token: None,
-            result_size_estimate: Some(1),
-        }],
-        vec![raw_from_message(
-            "gmail-unknown",
-            "thread-unknown",
-            "history-unknown",
-            "unknown-msg@example.com",
-            "Unknown <unknown@example.com>",
-        )],
+        vec![list_fixture_page([fixture])],
+        vec![raw_fixture_message(fixture)],
     );
     let importer = FakeRfc822Importer::default();
     let jmap = FakeJmapOps::default();
@@ -952,11 +983,12 @@ async fn routed_import_sends_unknown_sender_to_screener_pending() {
             },
         ]
     );
+    let route = fixture.intended_route.expect("fixture has route");
     let rule: (String, Option<String>) = sqlx::query_as(
         "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
     )
     .bind(user_id)
-    .bind("unknown@example.com")
+    .bind(route.sender)
     .fetch_one(&pool)
     .await
     .expect("pending rule");

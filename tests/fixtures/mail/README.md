@@ -32,6 +32,23 @@ raw bytes, and parses basic top-level headers.
   `javascript:` links, CSS `javascript:` URL, and a remote pixel. Use only for
   sanitizer and tracker tests.
 
+## Gmail import fixture set
+
+`crates/hail-test::gmail_import_fixtures` maps the raw RFC822 corpus into a
+provider-shaped Gmail catalog. It reuses the `.eml` files above and adds stable
+Gmail ids, thread ids, history ids, expected bare RFC822 `Message-ID` values,
+and optional routing expectations. The catalog covers:
+
+- raw RFC822 historical import and provider mapping persistence;
+- dedupe/idempotency when a second Gmail id exposes the same RFC822 `Message-ID`;
+- expired Gmail history cursor fallback to bounded full import;
+- routing outcomes for Screener, Imbox, Feed, and Paper Trail;
+- explicit sent-copy import as one-way/local state (Gmail labels are read-only
+  import bounds, not mirrored state).
+
+The helper also emits Gmail-shaped JSON for `messages.list`, `messages.get` raw
+responses, and `history.list` message-added records for protocol/client tests.
+
 ## Conventions
 
 - Keep every fixture valid UTF-8 unless a test explicitly requires binary body

@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hail_db::provider_message_mappings::{ProviderImportStatus, get_provider_message_mapping};
 use hail_db::provider_sync_audit::list_provider_sync_audit_logs;
+use hail_test::gmail_import_fixtures::{
+    GmailImportFixture, GmailImportScenario, gmail_import_fixture,
+};
 use hail_worker::gmail_client::{
     GmailApiErrorKind, GmailClientError, GmailHistoryMessage, GmailHistoryMessageRef,
     GmailHistoryRecord, ListHistoryParams, ListHistoryResponse, ListMessage, ListMessagesParams,
@@ -203,20 +206,6 @@ fn history_page(
     }
 }
 
-fn message_page(ids: Vec<(&str, &str)>) -> ListMessagesResponse {
-    ListMessagesResponse {
-        messages: ids
-            .into_iter()
-            .map(|(id, thread_id)| ListMessage {
-                id: id.to_owned(),
-                thread_id: Some(thread_id.to_owned()),
-            })
-            .collect(),
-        next_page_token: None,
-        result_size_estimate: None,
-    }
-}
-
 fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) -> RawGmailMessage {
     RawGmailMessage {
         id: id.to_owned(),
@@ -226,6 +215,31 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
             "From: sender@example.com\r\nTo: user@example.com\r\nMessage-ID: <{message_id}>\r\nSubject: hi\r\n\r\nBody"
         )
         .into_bytes(),
+    }
+}
+
+fn raw_fixture_message(fixture: GmailImportFixture) -> RawGmailMessage {
+    RawGmailMessage {
+        id: fixture.gmail_id.to_owned(),
+        thread_id: Some(fixture.thread_id.to_owned()),
+        history_id: Some(fixture.history_id.to_owned()),
+        rfc822: fixture.raw_rfc822().to_vec(),
+    }
+}
+
+fn message_page_from_fixtures(
+    fixtures: impl IntoIterator<Item = GmailImportFixture>,
+) -> ListMessagesResponse {
+    ListMessagesResponse {
+        messages: fixtures
+            .into_iter()
+            .map(|fixture| ListMessage {
+                id: fixture.gmail_id.to_owned(),
+                thread_id: Some(fixture.thread_id.to_owned()),
+            })
+            .collect(),
+        next_page_token: None,
+        result_size_estimate: None,
     }
 }
 
@@ -316,6 +330,7 @@ async fn incremental_history_imports_new_messages_and_advances_cursor() {
 #[tokio::test]
 async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
     let (pool, _guard, user_id, provider_account_id) = setup(Some("expired-100")).await;
+    let fallback = gmail_import_fixture(GmailImportScenario::ExpiredCursorFallback);
     let gmail = FakeGmail::new(
         vec![Err(GmailClientError::Api {
             status: StatusCode::NOT_FOUND,
@@ -324,13 +339,8 @@ async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
             message: "HistoryId not found".to_owned(),
             retry_after: None,
         })],
-        vec![message_page(vec![("gmail-fallback", "thread-fallback")])],
-        vec![raw_message(
-            "gmail-fallback",
-            "thread-fallback",
-            "250",
-            "fallback@example.com",
-        )],
+        vec![message_page_from_fixtures([fallback])],
+        vec![raw_fixture_message(fallback)],
     );
     let importer = FakeRfc822Importer::default();
     let mut options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
@@ -353,7 +363,7 @@ async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
 
     assert!(summary.fallback_full_sync);
     assert_eq!(summary.imported, 1);
-    assert_eq!(summary.end_history_id.as_deref(), Some("250"));
+    assert_eq!(summary.end_history_id.as_deref(), Some(fallback.history_id));
 
     let stored_cursor: Option<String> =
         sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
@@ -361,7 +371,19 @@ async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
             .fetch_one(&pool)
             .await
             .expect("cursor");
-    assert_eq!(stored_cursor.as_deref(), Some("250"));
+    assert_eq!(stored_cursor.as_deref(), Some(fallback.history_id));
+
+    let mapping = get_provider_message_mapping(&pool, provider_account_id, fallback.gmail_id)
+        .await
+        .expect("mapping lookup")
+        .expect("fallback mapping");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Imported);
+    assert_eq!(
+        mapping.rfc822_message_id.as_deref(),
+        Some(fallback.rfc822_message_id)
+    );
+    assert_eq!(gmail.raw_gets(), vec![fallback.gmail_id]);
+    assert_eq!(importer.imports()[0].raw_rfc822, fallback.raw_rfc822());
 
     let audit = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 20)
         .await

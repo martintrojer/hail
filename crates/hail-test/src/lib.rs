@@ -4,6 +4,7 @@
 //! corpus and a minimal header parser that is sufficient for fixture smoke
 //! tests and for future local/E2E testbeds to inject raw messages.
 
+pub mod gmail_import_fixtures;
 pub mod local_mail_testbed;
 pub mod stalwart;
 
