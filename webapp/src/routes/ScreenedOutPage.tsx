@@ -82,7 +82,7 @@ function ScreenedOutSenderCard({
   client?: HailApiClient;
 }) {
   return (
-    <article className="rounded-lg border border-border-subtle bg-bg-surface p-4">
+    <article className="rounded-lg bg-bg-surface p-4">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-ink-primary">
@@ -111,7 +111,7 @@ function BlockedSenderRow({
   client?: HailApiClient;
 }) {
   return (
-    <div className="grid gap-3 rounded-lg border border-border-subtle bg-bg-surface px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    <div className="grid gap-3 rounded-lg bg-bg-surface px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-ink-primary">
           {sender.sender_address}
