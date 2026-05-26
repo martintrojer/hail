@@ -12,7 +12,7 @@ import {
   useArchiveThreadMutation,
   useClassifyThreadMutation,
   useFeedView,
-  useImboxView,
+  useImboxSectioned,
   usePapertrailView,
   useReplyLaterThreadMutation,
   useScreenerView,
@@ -67,7 +67,7 @@ const emptyStates: Record<MailViewKind, { title: string; body: string }> = {
 function useMailView(view: MailViewKind, client?: HailApiClient) {
   switch (view) {
     case 'imbox':
-      return useImboxView(client);
+      return useImboxSectioned(client);
     case 'feed':
       return useFeedView(client);
     case 'papertrail':
@@ -545,7 +545,7 @@ function PowerThroughMode({
   );
 }
 
-function PowerThroughButton({ onClick }: { onClick: () => void }) {
+function PowerThroughButton({ onClick, count }: { onClick: () => void; count?: number }) {
   return (
     <button
       type="button"
@@ -553,8 +553,171 @@ function PowerThroughButton({ onClick }: { onClick: () => void }) {
       className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
     >
       <ArrowUpCircle {...iconSizeProps.sm} aria-hidden="true" />
-      Power through
+      {count === undefined ? 'Power through' : `Power through new (${count})`}
     </button>
+  );
+}
+
+function isSectionedImboxData(data: unknown): data is {
+  bubbled_up: MailViewItem[];
+  new_for_you: MailViewItem[];
+  previously_seen: MailViewItem[];
+  new_count: number;
+  previously_seen_total: number;
+} {
+  return Boolean(
+    data &&
+      typeof data === 'object' &&
+      'bubbled_up' in data &&
+      'new_for_you' in data &&
+      'previously_seen' in data,
+  );
+}
+
+function flattenImboxSections(data: ReturnType<typeof useMailView>['data']): MailViewItem[] {
+  if (!isSectionedImboxData(data)) {
+    return [];
+  }
+
+  return [...data.bubbled_up, ...data.new_for_you, ...data.previously_seen];
+}
+
+function getFlatViewItems(data: ReturnType<typeof useMailView>['data']): MailViewItem[] {
+  if (!data || isSectionedImboxData(data)) {
+    return [];
+  }
+
+  return data.items;
+}
+
+function MailRows({
+  items,
+  view,
+  client,
+  selected,
+  onToggleSelect,
+}: {
+  items: MailViewItem[];
+  view: MailViewKind;
+  client?: HailApiClient;
+  selected: Set<string>;
+  onToggleSelect: (threadId: string) => void;
+}) {
+  return (
+    <>
+      {items.map((item) => (
+        <MailListRow
+          key={`${item.thread_id}:${item.email_id}`}
+          item={item}
+          view={view}
+          client={client}
+          selected={selected.has(item.thread_id)}
+          onToggleSelect={() => onToggleSelect(item.thread_id)}
+        />
+      ))}
+    </>
+  );
+}
+
+function ImboxSectionedList({
+  data,
+  client,
+  selected,
+  onToggleSelect,
+}: {
+  data: {
+    bubbled_up: MailViewItem[];
+    new_for_you: MailViewItem[];
+    previously_seen: MailViewItem[];
+    new_count: number;
+    previously_seen_total: number;
+  };
+  client?: HailApiClient;
+  selected: Set<string>;
+  onToggleSelect: (threadId: string) => void;
+}) {
+  const bubbledUp = data.bubbled_up;
+  const newForYou = data.new_for_you;
+  const previouslySeen = data.previously_seen;
+  const newCount = data.new_count;
+  const previouslySeenTotal = data.previously_seen_total;
+  const hiddenPreviouslySeen = Math.max(previouslySeenTotal - previouslySeen.length, 0);
+
+  return (
+    <div className="space-y-6">
+      {bubbledUp.length > 0 ? (
+        <section aria-labelledby="imbox-bubbled-up-heading">
+          <div className="mb-3 flex items-center gap-2 px-1">
+            <ArrowUpCircle size={16} className="text-accent-yellow" aria-hidden="true" />
+            <h2
+              id="imbox-bubbled-up-heading"
+              className="text-sm font-semibold uppercase tracking-wider text-ink-secondary"
+            >
+              Bubbled Up
+            </h2>
+          </div>
+          <MailRows
+            items={bubbledUp}
+            view="imbox"
+            client={client}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+          />
+        </section>
+      ) : null}
+
+      <section aria-labelledby="imbox-new-for-you-heading">
+        <div className="mb-3 flex items-center justify-between px-1">
+          <div className="flex items-center gap-2">
+            <h2
+              id="imbox-new-for-you-heading"
+              className="text-sm font-semibold uppercase tracking-wider text-ink-secondary"
+            >
+              New for you
+            </h2>
+            {newCount > 0 ? (
+              <span className="rounded-full bg-accent-blue px-2 py-0.5 text-xs font-bold text-white">
+                {newCount}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {newForYou.length === 0 ? (
+          <StateCard title="You're all caught up." body="New mail will appear here." />
+        ) : (
+          <MailRows
+            items={newForYou}
+            view="imbox"
+            client={client}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+          />
+        )}
+      </section>
+
+      {previouslySeen.length > 0 ? (
+        <section aria-labelledby="imbox-previously-seen-heading">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <h2
+              id="imbox-previously-seen-heading"
+              className="text-sm font-semibold uppercase tracking-wider text-ink-tertiary"
+            >
+              Previously seen
+            </h2>
+            {hiddenPreviouslySeen > 0 ? (
+              <span className="text-xs text-ink-tertiary">{hiddenPreviouslySeen} more</span>
+            ) : null}
+          </div>
+          <MailRows
+            items={previouslySeen}
+            view="imbox"
+            client={client}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+          />
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -608,10 +771,15 @@ export function MailViewPage({
     });
   }
 
-  const items = useMemo(
-    () => (query.isSuccess ? query.data.items : []),
-    [query.data?.items, query.isSuccess],
-  );
+  const items = useMemo(() => {
+    if (!query.isSuccess) {
+      return [];
+    }
+
+    return view === 'imbox'
+      ? flattenImboxSections(query.data)
+      : getFlatViewItems(query.data);
+  }, [query.data, query.isSuccess, view]);
 
   useEffect(() => {
     if (view !== 'imbox') {
@@ -658,7 +826,7 @@ export function MailViewPage({
   } else if (view === 'imbox' && powerThroughOpen) {
     list = (
       <PowerThroughMode
-        items={query.data.items}
+        items={isSectionedImboxData(query.data) ? query.data.new_for_you : []}
         client={client}
         onDone={() => setPowerThroughOpen(false)}
       />
@@ -698,23 +866,32 @@ export function MailViewPage({
             }
           />
         ) : null}
-        <ListView
-          items={query.data.items}
-          renderItem={(item) => (
-            <MailListRow
-              item={item}
-              view={view}
-              client={client}
-              selected={selected.has(item.thread_id)}
-              onToggleSelect={() => toggleSelect(item.thread_id)}
-            />
-          )}
-          keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
-          hasMore={false}
-          isLoadingMore={false}
-          onLoadMore={() => {}}
-          emptyState={<StateCard title={emptyState.title} body={emptyState.body} />}
-        />
+        {view === 'imbox' && isSectionedImboxData(query.data) ? (
+          <ImboxSectionedList
+            data={query.data}
+            client={client}
+            selected={selected}
+            onToggleSelect={toggleSelect}
+          />
+        ) : (
+          <ListView
+            items={getFlatViewItems(query.data)}
+            renderItem={(item) => (
+              <MailListRow
+                item={item}
+                view={view}
+                client={client}
+                selected={selected.has(item.thread_id)}
+                onToggleSelect={() => toggleSelect(item.thread_id)}
+              />
+            )}
+            keyExtractor={(item) => `${item.thread_id}:${item.email_id}`}
+            hasMore={false}
+            isLoadingMore={false}
+            onLoadMore={() => {}}
+            emptyState={<StateCard title={emptyState.title} body={emptyState.body} />}
+          />
+        )}
       </div>
     );
   }
@@ -724,8 +901,15 @@ export function MailViewPage({
       title={title}
       description={description}
       actions={
-        view === 'imbox' && !query.isPending && !query.isError && query.data.items.length > 0 ? (
-          <PowerThroughButton onClick={() => setPowerThroughOpen(true)} />
+        view === 'imbox' &&
+        !query.isPending &&
+        !query.isError &&
+        isSectionedImboxData(query.data) &&
+        query.data.new_for_you.length > 0 ? (
+          <PowerThroughButton
+            count={query.data.new_count}
+            onClick={() => setPowerThroughOpen(true)}
+          />
         ) : undefined
       }
       list={list}

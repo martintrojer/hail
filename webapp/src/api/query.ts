@@ -25,6 +25,7 @@ import {
   type DraftDetails,
   type DraftRequest,
   type DraftResponse,
+  type ImboxSectionedResponse,
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
@@ -253,6 +254,17 @@ export function useDeniedSenders(
 }
 
 export const useImboxView = createViewHook('imbox', (client) => client.getImbox());
+
+export function useImboxSectioned(
+  client = defaultApiClient,
+  options?: QueryConfig<ImboxSectionedResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.imboxSectioned(),
+    queryFn: () => client.getImboxSectioned(),
+    ...options,
+  });
+}
 
 export const useFeedView = createViewHook('feed', (client) => client.getFeed());
 

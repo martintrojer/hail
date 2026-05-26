@@ -148,6 +148,13 @@ export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
+export interface ImboxSectionedResponse {
+  bubbled_up: MailViewItem[];
+  new_for_you: MailViewItem[];
+  previously_seen: MailViewItem[];
+  new_count: number;
+  previously_seen_total: number;
+}
 export type TrashViewResponse = TrashGetSuccess;
 export type SearchResult = components['schemas']['SearchResult'];
 export type MailSearchResult = Extract<SearchResult, { type: 'mail' }>;
@@ -403,6 +410,13 @@ export class HailApiClient {
   async getImbox(): Promise<MailViewResponse> {
     return this.#json<MailViewResponse>(
       await this.#request('/api/views/imbox'),
+      200,
+    );
+  }
+
+  async getImboxSectioned(): Promise<ImboxSectionedResponse> {
+    return this.#json<ImboxSectionedResponse>(
+      await this.#request('/api/views/imbox/sectioned'),
       200,
     );
   }
