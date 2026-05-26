@@ -68,6 +68,12 @@ type BubbleUpDeleteSuccess = ResponseBody<
 type ThreadVerbPostSuccess = ResponseBody<
   paths['/api/threads/{thread_id}/classify']['post']['responses']['200']
 >;
+type SpamThreadPostSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/spam']['post']['responses']['200']
+>;
+type NotSpamThreadPostSuccess = ResponseBody<
+  paths['/api/threads/{thread_id}/not-spam']['post']['responses']['200']
+>;
 type RestoreThreadPostSuccess = ResponseBody<
   paths['/api/threads/{thread_id}/restore']['post']['responses']['200']
 >;
@@ -212,7 +218,7 @@ export type BlobUploadPart =
     };
 
 export type ScreenerDecision = 'approve' | 'deny';
-export type ScreenerClassification = components['schemas']['Classification'];
+export type ScreenerClassification = components['schemas']['MailClassification'];
 export type ScreenerPendingSender = components['schemas']['ScreenerSender'];
 export type DeniedSender = components['schemas']['DeniedSender'];
 export type DeniedSendersResponse = DeniedSendersGetSuccess;
@@ -229,6 +235,8 @@ export type UndoableResponse = {
 };
 export type ScreenerDecisionResponse = ScreenerDecisionPostSuccess;
 export type ThreadVerbResponse = ThreadVerbPostSuccess;
+export type SpamThreadResponse = SpamThreadPostSuccess;
+export type NotSpamThreadResponse = NotSpamThreadPostSuccess;
 export type RestoreThreadResponse = RestoreThreadPostSuccess;
 export type DestroyThreadResponse = DestroyThreadDeleteSuccess;
 
@@ -605,6 +613,26 @@ export class HailApiClient {
   async trashThread(threadId: string): Promise<ThreadVerbResponse> {
     return this.#json<ThreadVerbResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}/trash`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async spamThread(threadId: string): Promise<SpamThreadResponse> {
+    return this.#json<SpamThreadResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/spam`, {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async notSpamThread(threadId: string): Promise<NotSpamThreadResponse> {
+    return this.#json<NotSpamThreadResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/not-spam`, {
         method: 'POST',
         mutating: true,
       }),
