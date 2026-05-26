@@ -34,6 +34,7 @@ import { ScreenerPage } from './routes/ScreenerPage';
 import { ScreenerSpeakeasyPage } from './routes/ScreenerSpeakeasyPage';
 import { SearchPage } from './routes/SearchPage';
 import { ScheduledSendsPage } from './routes/ScheduledSendsPage';
+import { ProviderAccountsPage } from './routes/ProviderAccountsPage';
 import { ThreadPage } from './routes/ThreadPage';
 import { TrashPage } from './routes/TrashPage';
 import { SpamPage } from './routes/SpamPage';
@@ -562,6 +563,13 @@ const scheduledRoute = createRoute({
   component: ScheduledRoutePage,
 });
 
+const providerAccountsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/provider-accounts',
+  beforeLoad: requireAuth,
+  component: ProviderAccountsPage,
+});
+
 const allFilesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/files',
@@ -719,6 +727,7 @@ const routeTree = rootRoute.addChildren([
   paperTrailRoute,
   draftsRoute,
   scheduledRoute,
+  providerAccountsRoute,
   allFilesRoute,
   screenerRoute,
   screenedOutRoute,

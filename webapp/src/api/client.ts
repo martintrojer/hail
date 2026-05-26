@@ -110,6 +110,12 @@ type InvitePreviewSuccess = ResponseBody<
 type InviteAcceptSuccess = ResponseBody<
   paths['/api/invite/{token}/accept']['post']['responses']['201']
 >;
+type GmailConnectSuccess = ResponseBody<
+  paths['/api/provider-accounts/gmail/connect']['post']['responses']['200']
+>;
+type ProviderAccountSuccess = ResponseBody<
+  paths['/api/provider-accounts/{id}/disconnect']['post']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -154,6 +160,9 @@ export interface CreatedInviteEnvelope {
 
 export type InvitePreview = InvitePreviewSuccess;
 export type InviteAcceptResponse = InviteAcceptSuccess;
+export type GmailConnectResponse = GmailConnectSuccess;
+export type ProviderAccount = components['schemas']['ProviderAccountResponse'];
+export type ProviderAccountResponse = ProviderAccountSuccess;
 
 export interface AcceptInviteRequest {
   password: string;
@@ -452,6 +461,31 @@ export class HailApiClient {
         mutating: true,
       }),
       201,
+    );
+  }
+
+  async connectGmail(): Promise<GmailConnectResponse> {
+    return this.#json<GmailConnectResponse>(
+      await this.#request('/api/provider-accounts/gmail/connect', {
+        method: 'POST',
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async disconnectProviderAccount(
+    id: number,
+  ): Promise<ProviderAccountResponse> {
+    return this.#json<ProviderAccountResponse>(
+      await this.#request(
+        `/api/provider-accounts/${encodeURIComponent(String(id))}/disconnect`,
+        {
+          method: 'POST',
+          mutating: true,
+        },
+      ),
+      200,
     );
   }
 

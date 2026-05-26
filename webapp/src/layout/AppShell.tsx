@@ -16,18 +16,19 @@ import {
   Check,
   Clock,
   FileText,
+  KeyRound,
   LogOut,
   Mail,
   Moon,
   Monitor,
   PenSquare,
   Search,
+  Send,
   Settings,
   ShieldAlert,
-  Send,
+  ShieldOff,
   SlidersHorizontal,
   Sun,
-  ShieldOff,
   Trash2,
   UserPlus,
   iconSizeProps,
@@ -354,6 +355,19 @@ export function AppShell({
                     <span>Admin</span>
                   </Link>
                 ) : null}
+
+                <Link
+                  to="/provider-accounts"
+                  role="menuitem"
+                  onClick={closeMenu}
+                  className="mt-2 flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
+                  activeProps={{
+                    className: 'bg-bg-selected font-semibold text-ink-primary',
+                  }}
+                >
+                  <KeyRound className="shrink-0" {...iconSizeProps.sm} />
+                  <span>Provider Accounts</span>
+                </Link>
 
                 <div className="mt-3 border-t border-border-hairline pt-3">
                   <p className="truncate px-3 hail-preview text-ink-secondary">

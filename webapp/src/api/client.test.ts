@@ -165,6 +165,52 @@ describe('HailApiClient GET request contract', () => {
   });
 });
 
+describe('HailApiClient provider account contract', () => {
+  it('starts Gmail OAuth with a mutating no-body request', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse(200, {
+        authorization_url: 'https://accounts.google.test/oauth',
+        scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      }),
+    );
+
+    await expect(client.connectGmail()).resolves.toMatchObject({
+      authorization_url: 'https://accounts.google.test/oauth',
+    });
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/provider-accounts/gmail/connect'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
+  });
+
+  it('disconnects provider accounts with encoded ids', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse(200, {
+        id: 42,
+        provider_kind: 'gmail',
+        provider_account_id: 'reader@gmail.com',
+        provider_email: 'reader@gmail.com',
+        display_email: 'reader@gmail.com',
+        granted_scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+        sync_status: 'disconnected',
+        cached_access_token_expires_at: null,
+        last_profile_history_id: '12345',
+      }),
+    );
+
+    await expect(client.disconnectProviderAccount(42)).resolves.toMatchObject({
+      id: 42,
+      sync_status: 'disconnected',
+    });
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/provider-accounts/42/disconnect'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
+  });
+});
+
 describe('HailApiClient blob upload contract', () => {
   it('uploads blobs as FormData without forcing a JSON content type', async () => {
     const response: BlobUploadResponse = {

@@ -49,6 +49,8 @@ import {
   type AcceptInviteRequest,
   type InviteAcceptResponse,
   type InvitePreview,
+  type GmailConnectResponse,
+  type ProviderAccountResponse,
   type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
@@ -200,6 +202,26 @@ export function useAcceptInviteMutation(
       queryClient.setQueryData(queryKeys.me(), data);
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
+  });
+}
+
+export function useConnectGmailMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<void, GmailConnectResponse>,
+) {
+  return useMutation({
+    mutationFn: () => client.connectGmail(),
+    ...options,
+  });
+}
+
+export function useDisconnectProviderAccountMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, ProviderAccountResponse>,
+) {
+  return useMutation({
+    mutationFn: (id) => client.disconnectProviderAccount(id),
+    ...options,
   });
 }
 
