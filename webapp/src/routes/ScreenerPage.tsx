@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { ShieldOff } from 'lucide-react';
+import { CheckCircle, ShieldOff } from 'lucide-react';
 import type { HailApiClient } from '../api/client';
 import {
   type ScreenerClassification,
@@ -283,6 +283,13 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
       actions={
         <div className="flex items-center gap-4">
           <ScreenerBanner pendingCount={pendingCount} />
+          <Link
+            to="/screener/speakeasy"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-secondary hover:text-ink-primary"
+          >
+            <CheckCircle size={14} />
+            Speakeasy
+          </Link>
           <Link
             to="/screened-out"
             className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-secondary hover:text-ink-primary"

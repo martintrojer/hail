@@ -31,6 +31,7 @@ import {
   type RestoreThreadResponse,
   type ScheduledSend,
   type ScheduledSendsResponse,
+  type ScreenerAllowedView,
   type ScreenerDecisionRequest,
   type ScreenerDecisionResponse,
   type ScreenerView,
@@ -243,6 +244,17 @@ export function useScreenerView(
   return useQuery({
     queryKey: queryKeys.screener(),
     queryFn: () => client.getScreenerView(),
+    ...options,
+  });
+}
+
+export function useScreenerAllowedView(
+  client = defaultApiClient,
+  options?: QueryConfig<ScreenerAllowedView>,
+) {
+  return useQuery({
+    queryKey: queryKeys.screenerAllowed(),
+    queryFn: () => client.getScreenerAllowedView(),
     ...options,
   });
 }
