@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Stalwart spam verdict keyword for mail classified as junk.
+pub const SPAM_KEYWORD: &str = "$Junk";
+/// Hail-owned marker applied after spam-flagged mail is routed to Junk.
+pub const HAIL_SPAM_KEYWORD: &str = "$hail_spam";
+
 /// Canonical hail-owned routing classification for incoming mail.
 ///
 /// These values are stored in sidecar rule rows as lowercase strings and are
