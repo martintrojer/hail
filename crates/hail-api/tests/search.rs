@@ -10,7 +10,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
     MailSearchResult, MailView, MailViewError, MailViewItem, MailViewProvider, SearchError,
-    SearchProvider,
+    SearchMailbox, SearchProvider,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -68,7 +68,7 @@ impl MailViewProvider for EmptyMailViewProvider {
 struct FakeSearchProvider {
     items: Vec<MailSearchResult>,
     error: Option<String>,
-    calls: Mutex<Vec<(String, usize)>>,
+    calls: Mutex<Vec<(String, Option<SearchMailbox>, usize)>>,
 }
 
 impl FakeSearchProvider {
@@ -88,7 +88,7 @@ impl FakeSearchProvider {
         }
     }
 
-    fn calls(&self) -> Vec<(String, usize)> {
+    fn calls(&self) -> Vec<(String, Option<SearchMailbox>, usize)> {
         self.calls.lock().expect("calls lock").clone()
     }
 }
@@ -99,13 +99,14 @@ impl SearchProvider for FakeSearchProvider {
         _state: &'a AppState,
         _token: SecretString,
         q: &'a str,
+        mailbox: Option<SearchMailbox>,
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls
                 .lock()
                 .expect("calls lock")
-                .push((q.to_string(), limit));
+                .push((q.to_string(), mailbox, limit));
             if let Some(message) = &self.error {
                 return Err(SearchError::provider(message.clone()));
             }
@@ -186,7 +187,7 @@ async fn trims_query_before_validation_and_mail_provider_search() {
     .await;
 
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(search.calls(), vec![("needle".to_string(), None, 50)]);
 }
 
 #[tokio::test]
@@ -204,7 +205,7 @@ async fn mail_provider_error_returns_stable_internal_json() {
     .await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(search.calls(), vec![("needle".to_string(), None, 50)]);
     assert_eq!(
         json_body(resp).await,
         serde_json::json!({"error": "internal"})
@@ -228,7 +229,7 @@ async fn required_identifier_provider_error_returns_stable_internal_json() {
     .await;
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(search.calls(), vec![("needle".to_string(), None, 50)]);
     assert_eq!(
         json_body(resp).await,
         serde_json::json!({"error": "internal"})
@@ -437,7 +438,7 @@ async fn scope_filters_notes_mail_and_all() {
     let json = json_body(resp).await;
     assert_eq!(json["results"].as_array().unwrap().len(), 1);
     assert_eq!(json["results"][0]["type"], "mail");
-    assert_eq!(mail_only.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(mail_only.calls(), vec![("needle".to_string(), None, 50)]);
 
     let notes_only = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
     let resp = request_search(
@@ -466,7 +467,7 @@ async fn scope_filters_notes_mail_and_all() {
     assert_eq!(json["results"].as_array().unwrap().len(), 2);
     assert_eq!(json["results"][0]["type"], "mail");
     assert_eq!(json["results"][1]["type"], "contact_note");
-    assert_eq!(all.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(all.calls(), vec![("needle".to_string(), None, 50)]);
 }
 
 #[tokio::test]
@@ -508,6 +509,64 @@ async fn unknown_scope_returns_400_invalid_scope() {
 }
 
 #[tokio::test]
+async fn mailbox_filter_is_passed_to_mail_provider() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=mail&mailbox=papertrail",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        search.calls(),
+        vec![("needle".to_string(), Some(SearchMailbox::Papertrail), 50)]
+    );
+}
+
+#[tokio::test]
+async fn mailbox_all_is_default_and_not_passed_to_mail_provider() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=mail&mailbox=all",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(search.calls(), vec![("needle".to_string(), None, 50)]);
+}
+
+#[tokio::test]
+async fn unknown_mailbox_returns_400_invalid_mailbox() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=mail&mailbox=bogus",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = json_body(resp).await;
+    assert_eq!(json["error"], "invalid_mailbox");
+    assert!(search.calls().is_empty());
+}
+
+#[tokio::test]
 async fn default_all_scope_calls_fake_mail_provider() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
@@ -524,5 +583,5 @@ async fn default_all_scope_calls_fake_mail_provider() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = json_body(resp).await;
     assert_eq!(json["results"][0]["thread_id"], "thread-1");
-    assert_eq!(search.calls(), vec![("needle".to_string(), 50)]);
+    assert_eq!(search.calls(), vec![("needle".to_string(), None, 50)]);
 }

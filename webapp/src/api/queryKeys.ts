@@ -12,8 +12,8 @@ export const queryKeys = {
   view: (view: 'imbox' | 'feed' | 'papertrail' | 'drafts' | 'trash' | 'archive' | 'set-aside' | 'reply-later' | 'bubble-up') =>
     [...queryKeys.views(), view] as const,
   imboxSectioned: () => [...queryKeys.view('imbox'), 'sectioned'] as const,
-  search: (q: string, scope: 'all' | 'mail' | 'notes' | 'clips') =>
-    [...queryKeys.views(), 'search', scope, q] as const,
+  search: (q: string, scope: 'all' | 'mail' | 'notes' | 'clips', mailbox: string) =>
+    [...queryKeys.views(), 'search', scope, mailbox, q] as const,
   screener: () => [...queryKeys.views(), 'screener'] as const,
   screenerDenied: () => [...queryKeys.screener(), 'denied'] as const,
   contacts: () => [...queryKeys.all, 'contacts'] as const,

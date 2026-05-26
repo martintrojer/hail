@@ -1,4 +1,4 @@
-// This file is auto-generated from http://localhost:8080/api/openapi.json.
+// This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
     "/api/admin/stats": {
@@ -401,6 +401,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_archive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/views/bubble-up": {
         parameters: {
             query?: never;
@@ -634,22 +650,6 @@ export interface paths {
          *     session; that's wired in by the `jmap-eventsource` task.
          */
         get: operations["readyz"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/views/archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["get_archive"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2491,6 +2491,43 @@ export interface operations {
             };
         };
     };
+    get_archive: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archive mail view. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailViewResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JMAP mail view lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_bubble_up: {
         parameters: {
             query?: never;
@@ -2815,8 +2852,10 @@ export interface operations {
     get_search: {
         parameters: {
             query?: {
-                q?: string | null;
-                scope?: string | null;
+                q?: string;
+                scope?: string;
+                /** @example imbox */
+                mailbox?: string;
             };
             header?: never;
             path?: never;
@@ -2963,43 +3002,6 @@ export interface operations {
             };
             /** @description A dependency is unhealthy. */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_archive: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Archive mail view. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MailViewResponse"];
-                };
-            };
-            /** @description Missing or invalid session. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description JMAP mail view lookup failed. */
-            500: {
                 headers: {
                     [name: string]: unknown;
                 };

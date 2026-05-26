@@ -150,6 +150,7 @@ export type TrashViewKind = 'trash';
 export type ArchiveViewKind = 'archive';
 export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
+export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
 export interface ImboxSectionedResponse {
@@ -169,6 +170,7 @@ export type SearchResponse = SearchGetSuccess;
 export interface SearchParams {
   q: string;
   scope?: SearchScope;
+  mailbox?: SearchMailbox;
 }
 
 export type BlockedTracker = components['schemas']['BlockedTrackerResponse'];
@@ -465,6 +467,9 @@ export class HailApiClient {
     const query = new URLSearchParams({ q: params.q });
     if (params.scope) {
       query.set('scope', params.scope);
+    }
+    if (params.mailbox && params.mailbox !== 'all') {
+      query.set('mailbox', params.mailbox);
     }
 
     return this.#json<SearchResponse>(

@@ -55,6 +55,7 @@ pub trait SearchProvider: Send + Sync + 'static {
         state: &'a AppState,
         token: SecretString,
         q: &'a str,
+        mailbox: Option<SearchMailbox>,
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>>;
 }
@@ -244,6 +245,7 @@ impl SearchProvider for JmapSearchProvider {
         state: &'a AppState,
         token: SecretString,
         q: &'a str,
+        mailbox: Option<SearchMailbox>,
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
         Box::pin(async move {
@@ -254,10 +256,64 @@ impl SearchProvider for JmapSearchProvider {
                 .await
                 .map_err(SearchError::provider)?;
 
+            let text_filter = Filter::from(email_query::Filter::text(q.to_string()));
+            let mailbox_filter = match mailbox {
+                Some(SearchMailbox::Imbox) => Some(Filter::from(email_query::Filter::has_keyword(
+                    MailView::Imbox.keyword().to_string(),
+                ))),
+                Some(SearchMailbox::Feed) => Some(Filter::from(email_query::Filter::has_keyword(
+                    MailView::Feed.keyword().to_string(),
+                ))),
+                Some(SearchMailbox::Papertrail) => Some(Filter::from(
+                    email_query::Filter::has_keyword(MailView::Papertrail.keyword().to_string()),
+                )),
+                Some(SearchMailbox::Archive) => {
+                    let Some(mailbox_id) = hail_jmap::mailbox_id_by_role(
+                        &session,
+                        hail_jmap::jmap_client::mailbox::Role::Archive,
+                    )
+                    .await
+                    .map_err(|err| SearchError::provider(err.to_string()))?
+                    else {
+                        return Ok(Vec::new());
+                    };
+                    Some(Filter::from(email_query::Filter::in_mailbox(mailbox_id)))
+                }
+                Some(SearchMailbox::Trash) => {
+                    let Some(mailbox_id) = hail_jmap::mailbox_id_by_role(
+                        &session,
+                        hail_jmap::jmap_client::mailbox::Role::Trash,
+                    )
+                    .await
+                    .map_err(|err| SearchError::provider(err.to_string()))?
+                    else {
+                        return Ok(Vec::new());
+                    };
+                    Some(Filter::from(email_query::Filter::in_mailbox(mailbox_id)))
+                }
+                Some(SearchMailbox::Drafts) => {
+                    let Some(mailbox_id) = hail_jmap::mailbox_id_by_role(
+                        &session,
+                        hail_jmap::jmap_client::mailbox::Role::Drafts,
+                    )
+                    .await
+                    .map_err(|err| SearchError::provider(err.to_string()))?
+                    else {
+                        return Ok(Vec::new());
+                    };
+                    Some(Filter::from(email_query::Filter::in_mailbox(mailbox_id)))
+                }
+                None => None,
+            };
+            let filter = match mailbox_filter {
+                Some(mailbox_filter) => Filter::and([text_filter, mailbox_filter]),
+                None => text_filter,
+            };
+
             let mut request = session.client().build();
             request
                 .query_email()
-                .filter(Filter::from(email_query::Filter::text(q.to_string())))
+                .filter(filter)
                 .sort([email_query::Comparator::received_at().descending()])
                 .limit(limit);
             let mut query = request
@@ -370,6 +426,7 @@ impl SearchProvider for EmptySearchProvider {
         _state: &'a AppState,
         _token: SecretString,
         _q: &'a str,
+        _mailbox: Option<SearchMailbox>,
         _limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
         Box::pin(async { Ok(Vec::new()) })
@@ -502,9 +559,37 @@ struct ViewQuery {
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct SearchQuery {
     q: Option<String>,
     scope: Option<String>,
+    #[param(example = "imbox")]
+    mailbox: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchMailbox {
+    Imbox,
+    Feed,
+    Papertrail,
+    Archive,
+    Trash,
+    Drafts,
+}
+
+impl SearchMailbox {
+    fn parse(value: Option<&str>) -> Result<Option<Self>, ()> {
+        match value.unwrap_or("all") {
+            "all" => Ok(None),
+            "imbox" => Ok(Some(Self::Imbox)),
+            "feed" => Ok(Some(Self::Feed)),
+            "papertrail" => Ok(Some(Self::Papertrail)),
+            "archive" => Ok(Some(Self::Archive)),
+            "trash" => Ok(Some(Self::Trash)),
+            "drafts" => Ok(Some(Self::Drafts)),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -774,11 +859,16 @@ async fn get_search(
         None => return bad_request("invalid_scope"),
     };
 
+    let mailbox = match SearchMailbox::parse(query.mailbox.as_deref()) {
+        Ok(mailbox) => mailbox,
+        Err(()) => return bad_request("invalid_mailbox"),
+    };
+
     let mut results = Vec::new();
 
     if scope.includes_mail() {
         let mail = match provider
-            .search(&state, user.jmap_token.clone(), q, SEARCH_LIMIT)
+            .search(&state, user.jmap_token.clone(), q, mailbox, SEARCH_LIMIT)
             .await
         {
             Ok(mail) => mail,
