@@ -282,7 +282,7 @@ fn jmap_error(error: hail_jmap::jmap_client::Error) -> Rfc822ImportError {
     Rfc822ImportError::Jmap(error.to_string())
 }
 
-fn first_message_id(raw_rfc822: &[u8]) -> Option<String> {
+pub(crate) fn first_message_id(raw_rfc822: &[u8]) -> Option<String> {
     let headers = String::from_utf8_lossy(raw_rfc822);
     let header_block = headers
         .split("\r\n\r\n")

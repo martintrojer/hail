@@ -1,0 +1,763 @@
+//! Historical Gmail import orchestration.
+//!
+//! This module is the worker-side foundation for provider import mode. It keeps
+//! Gmail API access, Stalwart/JMAP RFC822 creation, and hail.db idempotency
+//! behind narrow traits so tests can use in-memory fakes and production can wire
+//! the real Gmail wrapper plus [`crate::rfc822_import::StalwartJmapRfc822Importer`].
+
+use async_trait::async_trait;
+use hail_db::provider_message_mappings::{
+    DuplicateProviderMessageMapping, FailedProviderMessageMapping, ImportedProviderMessageMapping,
+    ProviderImportStatus, ProviderMessageSeen, find_local_mapping_by_rfc822_message_id,
+    get_provider_message_mapping, mark_provider_message_duplicate, mark_provider_message_failed,
+    mark_provider_message_imported, record_provider_message_seen,
+};
+use hail_db::provider_sync_audit::{
+    NewProviderSyncAuditLog, ProviderSyncEventType, ProviderSyncOperationKind,
+    ProviderSyncResultStatus, insert_provider_sync_audit_log,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+
+use crate::gmail_client::{
+    GmailClient, GmailClientError, GmailTokenSource, ListMessage, ListMessagesParams,
+    ListMessagesResponse, RawGmailMessage,
+};
+use crate::rfc822_import::{Rfc822ImportRequest, Rfc822Importer};
+
+const DEFAULT_PAGE_SIZE: u16 = 100;
+const MAX_PAGE_SIZE: u16 = 500;
+const CURSOR_KIND: &str = "gmail_historical_v1";
+const SKIP_REASON_ALREADY_MAPPED: &str = "provider_message_already_mapped";
+const SKIP_REASON_RFC822_DUPLICATE: &str = "rfc822_message_id_duplicate";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GmailHistoricalImportOptions {
+    pub label_ids: Vec<String>,
+    pub query: Option<String>,
+    pub max_messages: Option<usize>,
+    pub page_size: u16,
+    pub include_spam_trash: bool,
+    pub target_mailbox_ids: Vec<String>,
+    pub keywords: Vec<String>,
+    pub resume: bool,
+}
+
+impl GmailHistoricalImportOptions {
+    #[must_use]
+    pub fn into_mailboxes(target_mailbox_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            label_ids: Vec::new(),
+            query: None,
+            max_messages: None,
+            page_size: DEFAULT_PAGE_SIZE,
+            include_spam_trash: false,
+            target_mailbox_ids: target_mailbox_ids.into_iter().map(Into::into).collect(),
+            keywords: Vec::new(),
+            resume: true,
+        }
+    }
+
+    #[must_use]
+    fn normalized_page_size(&self, remaining: Option<usize>) -> u16 {
+        let mut page_size = self.page_size.clamp(1, MAX_PAGE_SIZE);
+        if let Some(remaining) = remaining {
+            page_size = page_size.min(remaining.clamp(1, usize::from(MAX_PAGE_SIZE)) as u16);
+        }
+        page_size
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GmailHistoricalImportSummary {
+    pub listed: usize,
+    pub fetched: usize,
+    pub imported: usize,
+    pub duplicates: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub pages: usize,
+    pub completed: bool,
+    pub next_page_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GmailHistoricalImportAccount {
+    pub provider_account_id: i64,
+    pub user_id: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct GmailHistoricalBackfillCursor {
+    kind: String,
+    label_ids: Vec<String>,
+    query: Option<String>,
+    include_spam_trash: bool,
+    next_page_token: Option<String>,
+    processed: usize,
+    completed: bool,
+}
+
+impl GmailHistoricalBackfillCursor {
+    fn new(options: &GmailHistoricalImportOptions) -> Self {
+        Self {
+            kind: CURSOR_KIND.to_string(),
+            label_ids: options.label_ids.clone(),
+            query: options.query.clone(),
+            include_spam_trash: options.include_spam_trash,
+            next_page_token: None,
+            processed: 0,
+            completed: false,
+        }
+    }
+
+    fn matches_options(&self, options: &GmailHistoricalImportOptions) -> bool {
+        self.kind == CURSOR_KIND
+            && self.label_ids == options.label_ids
+            && self.query == options.query
+            && self.include_spam_trash == options.include_spam_trash
+    }
+}
+
+#[async_trait]
+pub trait GmailHistoricalSource: Send + Sync {
+    async fn list_messages(
+        &self,
+        params: &ListMessagesParams,
+    ) -> Result<ListMessagesResponse, GmailClientError>;
+
+    async fn get_raw_message(&self, message_id: &str) -> Result<RawGmailMessage, GmailClientError>;
+}
+
+#[async_trait]
+impl<T> GmailHistoricalSource for GmailClient<T>
+where
+    T: GmailTokenSource,
+{
+    async fn list_messages(
+        &self,
+        params: &ListMessagesParams,
+    ) -> Result<ListMessagesResponse, GmailClientError> {
+        self.list_messages(params).await
+    }
+
+    async fn get_raw_message(&self, message_id: &str) -> Result<RawGmailMessage, GmailClientError> {
+        self.get_raw_message(message_id).await
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum GmailHistoricalImportError {
+    #[error("Gmail historical import requires at least one target Stalwart mailbox")]
+    NoTargetMailbox,
+    #[error("Gmail historical import was cancelled")]
+    Cancelled,
+    #[error("database error during Gmail historical import: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("failed to serialize Gmail historical import cursor: {0}")]
+    CursorSerialize(#[from] serde_json::Error),
+    #[error("gmail list failed: {0}")]
+    GmailList(#[source] GmailClientError),
+}
+
+pub async fn import_gmail_history<C, I>(
+    db: &SqlitePool,
+    account: GmailHistoricalImportAccount,
+    gmail: &C,
+    importer: &I,
+    options: GmailHistoricalImportOptions,
+    cancel: &CancellationToken,
+) -> Result<GmailHistoricalImportSummary, GmailHistoricalImportError>
+where
+    C: GmailHistoricalSource,
+    I: Rfc822Importer,
+{
+    if options.target_mailbox_ids.is_empty() {
+        return Err(GmailHistoricalImportError::NoTargetMailbox);
+    }
+
+    let mut summary = GmailHistoricalImportSummary::default();
+    let mut cursor = if options.resume {
+        load_cursor(db, account.provider_account_id)
+            .await?
+            .filter(|cursor| cursor.matches_options(&options) && !cursor.completed)
+            .unwrap_or_else(|| GmailHistoricalBackfillCursor::new(&options))
+    } else {
+        GmailHistoricalBackfillCursor::new(&options)
+    };
+
+    audit_sync_started(db, &account, &options, cursor.next_page_token.as_deref()).await?;
+    mark_sync_attempt_started(db, account.provider_account_id).await?;
+
+    loop {
+        if cancel.is_cancelled() {
+            mark_sync_error(
+                db,
+                account.provider_account_id,
+                "cancelled",
+                "import cancelled",
+            )
+            .await?;
+            return Err(GmailHistoricalImportError::Cancelled);
+        }
+        if let Some(max_messages) = options.max_messages
+            && summary.listed >= max_messages
+        {
+            summary.completed = false;
+            summary.next_page_token = cursor.next_page_token.clone();
+            save_cursor(db, account.provider_account_id, &cursor).await?;
+            audit_sync_completed(db, &account, &summary).await?;
+            mark_sync_succeeded(db, account.provider_account_id, &summary).await?;
+            return Ok(summary);
+        }
+
+        let remaining = options.max_messages.map(|max| max - summary.listed);
+        let params = ListMessagesParams {
+            max_results: Some(options.normalized_page_size(remaining)),
+            page_token: cursor.next_page_token.clone(),
+            query: options.query.clone(),
+            label_ids: options.label_ids.clone(),
+            include_spam_trash: options.include_spam_trash,
+        };
+
+        let response = match gmail.list_messages(&params).await {
+            Ok(response) => response,
+            Err(error) => {
+                let message = safe_error_message(&error);
+                audit_sync_failed(db, &account, "gmail_list", &message).await?;
+                mark_sync_error(db, account.provider_account_id, "gmail_list", &message).await?;
+                return Err(GmailHistoricalImportError::GmailList(error));
+            }
+        };
+        summary.pages += 1;
+
+        let next_page_token = response.next_page_token.clone();
+        for listed in limit_page_messages(response.messages, options.max_messages, summary.listed) {
+            if cancel.is_cancelled() {
+                mark_sync_error(
+                    db,
+                    account.provider_account_id,
+                    "cancelled",
+                    "import cancelled",
+                )
+                .await?;
+                return Err(GmailHistoricalImportError::Cancelled);
+            }
+            summary.listed += 1;
+            import_one_message(
+                db,
+                &account,
+                gmail,
+                importer,
+                &options,
+                listed,
+                &mut summary,
+            )
+            .await?;
+            cursor.processed += 1;
+        }
+
+        cursor.next_page_token = next_page_token;
+        cursor.completed = cursor.next_page_token.is_none();
+        save_cursor(db, account.provider_account_id, &cursor).await?;
+
+        if cursor.completed {
+            summary.completed = true;
+            summary.next_page_token = None;
+            audit_sync_completed(db, &account, &summary).await?;
+            mark_sync_succeeded(db, account.provider_account_id, &summary).await?;
+            return Ok(summary);
+        }
+        summary.next_page_token = cursor.next_page_token.clone();
+    }
+}
+
+async fn import_one_message<C, I>(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    gmail: &C,
+    importer: &I,
+    options: &GmailHistoricalImportOptions,
+    listed: ListMessage,
+    summary: &mut GmailHistoricalImportSummary,
+) -> Result<(), GmailHistoricalImportError>
+where
+    C: GmailHistoricalSource,
+    I: Rfc822Importer,
+{
+    if let Some(existing) =
+        get_provider_message_mapping(db, account.provider_account_id, &listed.id).await?
+        && matches!(
+            existing.import_status,
+            ProviderImportStatus::Imported
+                | ProviderImportStatus::Duplicate
+                | ProviderImportStatus::Skipped
+        )
+    {
+        summary.skipped += 1;
+        audit_message_skipped(
+            db,
+            account,
+            &listed.id,
+            SKIP_REASON_ALREADY_MAPPED,
+            Some(existing.import_status.as_str()),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let raw = match gmail.get_raw_message(&listed.id).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            let message = safe_error_message(&error);
+            summary.failed += 1;
+            mark_message_failed(
+                db,
+                account.provider_account_id,
+                &listed,
+                None,
+                None,
+                "gmail_get_raw",
+                &message,
+            )
+            .await?;
+            audit_message_failed(db, account, &listed.id, "gmail_get_raw", &message).await?;
+            return Ok(());
+        }
+    };
+    summary.fetched += 1;
+
+    let rfc822_message_id = crate::rfc822_import::first_message_id(&raw.rfc822);
+    let provider_thread_id = raw.thread_id.as_deref().or(listed.thread_id.as_deref());
+    let provider_history_id = raw.history_id.as_deref();
+
+    record_provider_message_seen(
+        db,
+        ProviderMessageSeen {
+            provider_account_id: account.provider_account_id,
+            provider_message_id: &raw.id,
+            provider_thread_id,
+            provider_history_id,
+            rfc822_message_id: rfc822_message_id.as_deref(),
+            content_sha256: None,
+        },
+    )
+    .await?;
+
+    if let Some(message_id) = rfc822_message_id.as_deref()
+        && let Some(existing) =
+            find_local_mapping_by_rfc822_message_id(db, account.provider_account_id, message_id)
+                .await?
+        && existing.provider_message_id != raw.id
+    {
+        mark_provider_message_duplicate(
+            db,
+            DuplicateProviderMessageMapping {
+                provider_account_id: account.provider_account_id,
+                provider_message_id: &raw.id,
+                provider_thread_id,
+                provider_history_id,
+                rfc822_message_id: Some(message_id),
+                content_sha256: None,
+                duplicate_jmap_email_id: existing.jmap_email_id.as_deref(),
+                duplicate_jmap_thread_id: existing.jmap_thread_id.as_deref(),
+                duplicate_jmap_mailbox_ids_json: existing.jmap_mailbox_ids_json.as_deref(),
+            },
+        )
+        .await?;
+        summary.duplicates += 1;
+        audit_message_skipped(
+            db,
+            account,
+            &raw.id,
+            SKIP_REASON_RFC822_DUPLICATE,
+            Some(message_id),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let request = Rfc822ImportRequest {
+        raw_rfc822: raw.rfc822,
+        mailbox_ids: options.target_mailbox_ids.clone(),
+        keywords: options.keywords.clone(),
+        received_at: None,
+        provider_message_id: Some(raw.id.clone()),
+    };
+
+    let imported = match importer.import_rfc822(request).await {
+        Ok(imported) => imported,
+        Err(error) => {
+            let message = safe_error_message(&error);
+            summary.failed += 1;
+            mark_message_failed(
+                db,
+                account.provider_account_id,
+                &listed,
+                provider_history_id,
+                rfc822_message_id.as_deref(),
+                "stalwart_import",
+                &message,
+            )
+            .await?;
+            audit_message_failed(db, account, &raw.id, "stalwart_import", &message).await?;
+            return Ok(());
+        }
+    };
+
+    let mailbox_ids_json = serde_json::to_string(&imported.jmap_mailbox_ids)?;
+    let stored_message_id = imported
+        .rfc822_message_ids
+        .first()
+        .cloned()
+        .or(rfc822_message_id);
+
+    if imported.duplicate {
+        mark_provider_message_duplicate(
+            db,
+            DuplicateProviderMessageMapping {
+                provider_account_id: account.provider_account_id,
+                provider_message_id: &raw.id,
+                provider_thread_id,
+                provider_history_id,
+                rfc822_message_id: stored_message_id.as_deref(),
+                content_sha256: None,
+                duplicate_jmap_email_id: Some(&imported.jmap_email_id),
+                duplicate_jmap_thread_id: imported.jmap_thread_id.as_deref(),
+                duplicate_jmap_mailbox_ids_json: Some(&mailbox_ids_json),
+            },
+        )
+        .await?;
+        summary.duplicates += 1;
+        audit_message_imported(db, account, &raw.id, &imported.jmap_email_id, true).await?;
+    } else {
+        mark_provider_message_imported(
+            db,
+            ImportedProviderMessageMapping {
+                provider_account_id: account.provider_account_id,
+                provider_message_id: &raw.id,
+                provider_thread_id,
+                provider_history_id,
+                rfc822_message_id: stored_message_id.as_deref(),
+                content_sha256: None,
+                jmap_email_id: &imported.jmap_email_id,
+                jmap_thread_id: imported.jmap_thread_id.as_deref(),
+                jmap_mailbox_ids_json: Some(&mailbox_ids_json),
+            },
+        )
+        .await?;
+        summary.imported += 1;
+        audit_message_imported(db, account, &raw.id, &imported.jmap_email_id, false).await?;
+    }
+
+    Ok(())
+}
+
+fn limit_page_messages(
+    messages: Vec<ListMessage>,
+    max_messages: Option<usize>,
+    already_listed: usize,
+) -> Vec<ListMessage> {
+    let Some(max_messages) = max_messages else {
+        return messages;
+    };
+    messages
+        .into_iter()
+        .take(max_messages.saturating_sub(already_listed))
+        .collect()
+}
+
+async fn mark_message_failed(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    listed: &ListMessage,
+    provider_history_id: Option<&str>,
+    rfc822_message_id: Option<&str>,
+    class: &str,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    mark_provider_message_failed(
+        db,
+        FailedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: &listed.id,
+            provider_thread_id: listed.thread_id.as_deref(),
+            provider_history_id,
+            rfc822_message_id,
+            content_sha256: None,
+            error_class: class,
+            error_message: Some(message),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn load_cursor(
+    db: &SqlitePool,
+    provider_account_id: i64,
+) -> Result<Option<GmailHistoricalBackfillCursor>, sqlx::Error> {
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT backfill_cursor_json FROM provider_accounts WHERE id = ?1")
+            .bind(provider_account_id)
+            .fetch_one(db)
+            .await?;
+    Ok(value.and_then(|value| serde_json::from_str(&value).ok()))
+}
+
+async fn save_cursor(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    cursor: &GmailHistoricalBackfillCursor,
+) -> Result<(), GmailHistoricalImportError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let cursor_json = serde_json::to_string(cursor)?;
+    sqlx::query(
+        "UPDATE provider_accounts SET backfill_cursor_json = ?1, updated_at = ?2 WHERE id = ?3",
+    )
+    .bind(cursor_json)
+    .bind(now)
+    .bind(provider_account_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn mark_sync_attempt_started(
+    db: &SqlitePool,
+    provider_account_id: i64,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE provider_accounts SET sync_status = 'initial_sync', last_sync_attempted_at = ?1, last_error_class = NULL, last_error_message = NULL, updated_at = ?1 WHERE id = ?2",
+    )
+    .bind(now)
+    .bind(provider_account_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn mark_sync_succeeded(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    summary: &GmailHistoricalImportSummary,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let status = if summary.completed {
+        "active"
+    } else {
+        "initial_sync"
+    };
+    sqlx::query(
+        "UPDATE provider_accounts SET sync_status = ?1, last_sync_succeeded_at = ?2, last_error_class = NULL, last_error_message = NULL, updated_at = ?2 WHERE id = ?3",
+    )
+    .bind(status)
+    .bind(now)
+    .bind(provider_account_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn mark_sync_error(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    class: &str,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE provider_accounts SET sync_status = 'error', last_error_class = ?1, last_error_message = ?2, updated_at = ?3 WHERE id = ?4",
+    )
+    .bind(class)
+    .bind(message)
+    .bind(now)
+    .bind(provider_account_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn audit_sync_started(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    options: &GmailHistoricalImportOptions,
+    page_token: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let metadata = serde_json::json!({
+        "labels": options.label_ids,
+        "query": options.query,
+        "maxMessages": options.max_messages,
+        "pageSize": options.page_size,
+        "resuming": page_token.is_some(),
+    })
+    .to_string();
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::Sync,
+            event_type: ProviderSyncEventType::SyncStarted,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Started,
+            safe_error_code: None,
+            safe_error_class: None,
+            safe_error_message: None,
+            metadata_json: Some(&metadata),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn audit_sync_completed(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    summary: &GmailHistoricalImportSummary,
+) -> Result<(), sqlx::Error> {
+    let metadata = serde_json::json!({
+        "listed": summary.listed,
+        "fetched": summary.fetched,
+        "imported": summary.imported,
+        "duplicates": summary.duplicates,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+        "completed": summary.completed,
+    })
+    .to_string();
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::Sync,
+            event_type: ProviderSyncEventType::SyncCompleted,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Succeeded,
+            safe_error_code: None,
+            safe_error_class: None,
+            safe_error_message: None,
+            metadata_json: Some(&metadata),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn audit_sync_failed(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    class: &str,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::Failure,
+            event_type: ProviderSyncEventType::SyncFailed,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Failed,
+            safe_error_code: Some(class),
+            safe_error_class: Some(class),
+            safe_error_message: Some(message),
+            metadata_json: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn audit_message_imported(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    provider_message_id: &str,
+    jmap_email_id: &str,
+    duplicate: bool,
+) -> Result<(), sqlx::Error> {
+    let metadata = serde_json::json!({
+        "jmapEmailId": jmap_email_id,
+        "duplicate": duplicate,
+    })
+    .to_string();
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::MessageImport,
+            event_type: ProviderSyncEventType::MessageImported,
+            provider_message_id: Some(provider_message_id),
+            result_status: ProviderSyncResultStatus::Succeeded,
+            safe_error_code: None,
+            safe_error_class: None,
+            safe_error_message: None,
+            metadata_json: Some(&metadata),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn audit_message_skipped(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    provider_message_id: &str,
+    reason: &str,
+    detail: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let metadata = serde_json::json!({ "reason": reason, "detail": detail }).to_string();
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::MessageSkip,
+            event_type: ProviderSyncEventType::MessageSkipped,
+            provider_message_id: Some(provider_message_id),
+            result_status: ProviderSyncResultStatus::Skipped,
+            safe_error_code: Some(reason),
+            safe_error_class: Some(reason),
+            safe_error_message: None,
+            metadata_json: Some(&metadata),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn audit_message_failed(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    provider_message_id: &str,
+    class: &str,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::Failure,
+            event_type: ProviderSyncEventType::MessageFailed,
+            provider_message_id: Some(provider_message_id),
+            result_status: ProviderSyncResultStatus::Failed,
+            safe_error_code: Some(class),
+            safe_error_class: Some(class),
+            safe_error_message: Some(message),
+            metadata_json: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+fn safe_error_message(error: &impl std::fmt::Display) -> String {
+    let message = error.to_string();
+    message.chars().take(240).collect()
+}
