@@ -596,7 +596,7 @@ function ThreadDocument({
   }
 
   return (
-    <div className="mx-auto w-full max-w-[720px] space-y-8">
+    <div className="mx-auto w-full max-w-3xl space-y-8 lg:max-w-4xl xl:max-w-5xl">
       <button
         type="button"
         onClick={goBack}

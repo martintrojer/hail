@@ -362,7 +362,7 @@ export function AppShell({
         </div>
       </header>
 
-      <main className={`mx-auto w-full px-4 pb-16 pt-2 sm:px-6 ${wide ? 'max-w-5xl' : 'max-w-center-column'}`}>
+      <main className={`mx-auto w-full px-4 pb-16 pt-2 sm:px-6 ${wide ? 'max-w-5xl' : 'max-w-3xl lg:max-w-4xl xl:max-w-5xl'}`}>
         <h1 className="mb-1 text-2xl font-bold tracking-tight text-ink-primary sm:text-3xl">
           {title}
         </h1>
