@@ -243,6 +243,50 @@ async fn compose_send_now_creates_draft_and_submits() {
 }
 
 #[tokio::test]
+async fn provider_smarthost_mode_keeps_compose_on_existing_jmap_submit_path() {
+    let (mut state, key) = fixture_state().await;
+    state.config.provider_import.gmail.oauth_client_id = Some("gmail-client-id".to_string());
+    let (_user_id, sid) = seed_session(&state, &key, "alice@gmail.example").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(compose_body(None)),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "sent");
+    assert_eq!(json["email_id"], "draft-1");
+    assert_eq!(json["submission_id"], "submission-1");
+    assert_eq!(
+        composer.calls(),
+        vec![
+            Call::Create {
+                from: "alice@gmail.example".to_string(),
+                to: vec!["bob@example.org".to_string()],
+                cc: vec!["carol@example.org".to_string()],
+                bcc: Vec::new(),
+                subject: "Hello".to_string(),
+                plain_text: "Hi Bob alert(1)".to_string(),
+                html: "<p>Hi <strong>Bob</strong></p>\n".to_string(),
+                reply: None,
+            },
+            Call::Submit {
+                from: "alice@gmail.example".to_string(),
+                email_id: "draft-1".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
 async fn compose_send_later_inserts_pending_row_without_submit() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
