@@ -116,6 +116,12 @@ type GmailConnectSuccess = ResponseBody<
 type ProviderAccountSuccess = ResponseBody<
   paths['/api/provider-accounts/{id}/disconnect']['post']['responses']['200']
 >;
+type ProviderSyncStatusListSuccess = ResponseBody<
+  paths['/api/provider-accounts/sync-status']['get']['responses']['200']
+>;
+type ProviderSyncTriggerSuccess = ResponseBody<
+  paths['/api/provider-accounts/{id}/sync']['post']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -163,6 +169,10 @@ export type InviteAcceptResponse = InviteAcceptSuccess;
 export type GmailConnectResponse = GmailConnectSuccess;
 export type ProviderAccount = components['schemas']['ProviderAccountResponse'];
 export type ProviderAccountResponse = ProviderAccountSuccess;
+export type ProviderSyncEventSummary = components['schemas']['ProviderSyncEventSummary'];
+export type ProviderSyncStatus = components['schemas']['ProviderSyncStatusResponse'];
+export type ProviderSyncStatusListResponse = ProviderSyncStatusListSuccess;
+export type ProviderSyncTriggerResponse = ProviderSyncTriggerSuccess;
 
 export interface AcceptInviteRequest {
   password: string;
@@ -480,6 +490,26 @@ export class HailApiClient {
     return this.#json<ProviderAccountResponse>(
       await this.#request(
         `/api/provider-accounts/${encodeURIComponent(String(id))}/disconnect`,
+        {
+          method: 'POST',
+          mutating: true,
+        },
+      ),
+      200,
+    );
+  }
+
+  async listProviderSyncStatuses(): Promise<ProviderSyncStatusListResponse> {
+    return this.#json<ProviderSyncStatusListResponse>(
+      await this.#request('/api/provider-accounts/sync-status'),
+      200,
+    );
+  }
+
+  async triggerProviderSync(id: number): Promise<ProviderSyncTriggerResponse> {
+    return this.#json<ProviderSyncTriggerResponse>(
+      await this.#request(
+        `/api/provider-accounts/${encodeURIComponent(String(id))}/sync`,
         {
           method: 'POST',
           mutating: true,

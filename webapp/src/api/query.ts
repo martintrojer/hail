@@ -51,6 +51,8 @@ import {
   type InvitePreview,
   type GmailConnectResponse,
   type ProviderAccountResponse,
+  type ProviderSyncStatusListResponse,
+  type ProviderSyncTriggerResponse,
   type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
@@ -219,9 +221,55 @@ export function useDisconnectProviderAccountMutation(
   client = defaultApiClient,
   options?: MutationConfig<number, ProviderAccountResponse>,
 ) {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: (id) => client.disconnectProviderAccount(id),
     ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useProviderSyncStatuses(
+  client = defaultApiClient,
+  options?: QueryConfig<ProviderSyncStatusListResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.providerSyncStatuses(),
+    queryFn: () => client.listProviderSyncStatuses(),
+    ...options,
+  });
+}
+
+export function useTriggerProviderSyncMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, ProviderSyncTriggerResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id) => client.triggerProviderSync(id),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ProviderSyncStatusListResponse>(
+        queryKeys.providerSyncStatuses(),
+        (current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            accounts: current.accounts.map((account) =>
+              account.id === data.account.id ? data.account : account,
+            ),
+          };
+        },
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
 }
 

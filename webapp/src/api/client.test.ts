@@ -209,6 +209,40 @@ describe('HailApiClient provider account contract', () => {
     );
     expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
   });
+
+  it('lists provider sync status with credentials', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse(200, {
+        accounts: [providerSyncStatusResponse()],
+      }),
+    );
+
+    await expect(client.listProviderSyncStatuses()).resolves.toMatchObject({
+      accounts: [{ id: 42, sync_status: 'failed' }],
+    });
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/provider-accounts/sync-status'),
+    );
+    expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
+  });
+
+  it('triggers provider sync with encoded ids and CSRF header', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse(200, {
+        account: { ...providerSyncStatusResponse(), id: 43, sync_status: 'active' },
+      }),
+    );
+
+    await expect(client.triggerProviderSync(43)).resolves.toMatchObject({
+      account: { id: 43, sync_status: 'active' },
+    });
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/provider-accounts/43/sync'),
+    );
+    expectMutatingNoBodyRequest(fetchSpy.mock.calls[0]?.[1], 'POST');
+  });
 });
 
 describe('HailApiClient blob upload contract', () => {
@@ -764,6 +798,33 @@ function draftRequest(overrides: Partial<DraftRequest> = {}): DraftRequest {
     subject: 'Draft subject',
     body_markdown: 'Draft body',
     ...overrides,
+  };
+}
+
+function providerSyncStatusResponse() {
+  return {
+    id: 42,
+    provider_kind: 'gmail',
+    provider_account_id: 'reader@gmail.com',
+    provider_email: 'reader@gmail.com',
+    display_email: 'Reader <reader@gmail.com>',
+    sync_status: 'failed',
+    last_sync_attempted_at: '2026-05-26T17:00:00Z',
+    last_sync_succeeded_at: '2026-05-26T16:30:00Z',
+    next_sync_after: '2026-05-26T17:15:00Z',
+    sync_backoff_secs: 900,
+    last_error_class: 'gmail_rate_limit',
+    last_error_message: 'Gmail asked hail to slow down',
+    last_profile_history_id: '12345',
+    profile_synced_at: '2026-05-26T16:00:00Z',
+    last_sync_event: null,
+    last_error_event: {
+      event_type: 'history_import',
+      result_status: 'failed',
+      safe_error_class: 'gmail_rate_limit',
+      safe_error_message: 'Gmail asked hail to slow down',
+      created_at: '2026-05-26T17:00:00Z',
+    },
   };
 }
 
