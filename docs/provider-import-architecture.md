@@ -150,6 +150,36 @@ already has the same provider message or RFC822 `Message-ID`, the importer shoul
 recover the existing local identity or classify the item as an intentional
 skip/duplicate rather than creating another visible copy.
 
+### Stalwart RFC822 import primitive
+
+The import primitive lives in `crates/hail-worker/src/rfc822_import.rs` and is
+modeled as a small trait:
+
+- `Rfc822Importer::import_rfc822(request)` accepts raw RFC822 bytes, target JMAP
+  mailbox ids, optional keywords, optional `receivedAt`, and an optional provider
+  message id hint.
+- `StalwartJmapRfc822Importer` is the concrete local-Stalwart implementation.
+  It uses `jmap-client` against the authenticated user's Stalwart JMAP session:
+  first query by RFC822 `Message-ID` as a best-effort duplicate guard, then
+  `Blob/upload` + JMAP `Email/import` via `email_import_account`, then
+  `Email/get` to hydrate stable local ids.
+- `FakeRfc822Importer` is an in-memory test implementation for Gmail sync,
+  dedupe, and retry orchestration tests. It returns stable fake JMAP email and
+  thread ids and dedupes by provider message id or RFC822 `Message-ID`.
+
+The concrete Stalwart path is therefore standard JMAP Mail, not a Stalwart-only
+CLI: authenticate with the local Stalwart account, locate the target mailbox
+(usually Inbox), upload the raw RFC822 as a blob, call `Email/import` with that
+blob id and mailbox ids, then read back `Email.id`, `Email.threadId`,
+`Email.mailboxIds`, and `Email.messageId`. The current code does not rely on an
+unmodified Stalwart management API or filesystem injection path.
+
+The primitive is idempotent from the caller's perspective only as far as this
+boundary can know: the fake is fully idempotent for tests, and production checks
+existing local `Message-ID` before import. Durable provider idempotency remains
+owned by `provider_message_mappings` because Stalwart does not persist Gmail's
+provider message id.
+
 ### Dedupe mapping
 
 `hail.db` should record a durable mapping from provider identity to local
