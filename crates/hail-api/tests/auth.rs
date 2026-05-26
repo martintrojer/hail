@@ -466,7 +466,33 @@ async fn me_returns_user_with_valid_session() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["user"]["email"], "alice@example.org");
+    assert_eq!(json["user"]["display_name"], serde_json::Value::Null);
     assert_eq!(json["user"]["is_admin"], false);
+}
+
+#[tokio::test]
+async fn me_surfaces_display_name_lookup_errors() {
+    let (state, key) = fixture_state().await;
+    let sid = seed_session(&state, &key, "schema-drift@example.org", Duration::days(30)).await;
+
+    sqlx::query("ALTER TABLE users DROP COLUMN display_name")
+        .execute(&state.db)
+        .await
+        .expect("remove display_name column");
+
+    let app = hail_api::build_router(state, true);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/auth/me")
+        .header(header::COOKIE, format!("hail_session={sid}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "internal");
 }
 
 #[tokio::test]
