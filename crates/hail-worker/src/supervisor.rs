@@ -27,6 +27,8 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::provider_sync_scheduler::live::LiveProviderSyncRunner;
+use crate::provider_sync_scheduler::{ProviderSyncSchedulerOptions, process_provider_sync_tick};
 use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
 use crate::scheduler::live::{LiveBubbleJmapOps, LiveSendSubmitter};
 use crate::scheduler::{
@@ -101,6 +103,21 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
         state.config.stalwart.jmap_url.clone(),
         state.token_decryptor.clone(),
     );
+    let provider_sync_runner = LiveProviderSyncRunner::new(
+        state.db.clone(),
+        &state.config.secrets.server_key,
+        state.token_decryptor.clone(),
+        state.config.provider_import.gmail.oauth_client_id.clone(),
+        state
+            .config
+            .provider_import
+            .gmail
+            .oauth_client_secret
+            .clone(),
+        state.config.provider_import.gmail.oauth_token_url.clone(),
+        state.config.provider_import.gmail.api_base_url.clone(),
+        state.config.stalwart.jmap_url.clone(),
+    )?;
     let trash_retention_days = trash_retention_days();
     let mut next_trash_purge_at = chrono::Utc::now();
     let mut next_spam_purge_at = chrono::Utc::now();
@@ -122,6 +139,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
             &state,
             &bubble_jmap,
             &send_submitter,
+            &provider_sync_runner,
             &mut next_trash_purge_at,
             &mut next_spam_purge_at,
             trash_retention_days,
@@ -164,6 +182,7 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
                     &state,
                     &bubble_jmap,
                     &send_submitter,
+                    &provider_sync_runner,
                     &mut next_trash_purge_at,
                     &mut next_spam_purge_at,
                     trash_retention_days,
@@ -236,6 +255,7 @@ async fn run_scheduler_tick(
     state: &AppState,
     bubble_jmap: &LiveBubbleJmapOps,
     send_submitter: &LiveSendSubmitter,
+    provider_sync_runner: &LiveProviderSyncRunner,
     next_trash_purge_at: &mut chrono::DateTime<chrono::Utc>,
     next_spam_purge_at: &mut chrono::DateTime<chrono::Utc>,
     trash_retention_days: u16,
@@ -263,6 +283,34 @@ async fn run_scheduler_tick(
         Some(Err(e)) => warn!(error = %e, "scheduler: scheduled-send tick failed"),
         None => {
             info!("scheduler: scheduled-send tick cancelled");
+            return false;
+        }
+    }
+
+    match cancel_or_complete(
+        cancel,
+        process_provider_sync_tick(
+            &state.db,
+            provider_sync_runner,
+            now,
+            ProviderSyncSchedulerOptions::default(),
+            cancel,
+        ),
+    )
+    .await
+    {
+        Some(Ok(provider)) if provider.succeeded > 0 || provider.failed > 0 => info!(
+            considered = provider.considered,
+            initial_runs = provider.initial_runs,
+            incremental_runs = provider.incremental_runs,
+            succeeded = provider.succeeded,
+            failed = provider.failed,
+            "scheduler: provider sync processed"
+        ),
+        Some(Ok(_)) => {}
+        Some(Err(e)) => warn!(error = %e, "scheduler: provider sync tick failed"),
+        None => {
+            info!("scheduler: provider sync tick cancelled");
             return false;
         }
     }

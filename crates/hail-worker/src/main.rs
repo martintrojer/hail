@@ -11,8 +11,14 @@ mod catchup;
 mod changes;
 mod crypto;
 mod gmail_client;
+mod gmail_historical_import;
+mod gmail_incremental_sync;
+mod gmail_initial_sync;
 mod jmap_helpers;
+mod provider_sync_scheduler;
 mod reconcile;
+#[allow(dead_code)]
+mod rfc822_import;
 mod scheduler;
 mod screener;
 mod state;

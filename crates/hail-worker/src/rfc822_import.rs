@@ -92,7 +92,7 @@ impl StalwartJmapRfc822Importer {
         ))
     }
 
-    async fn inbox_id(&self) -> Result<String, Rfc822ImportError> {
+    pub async fn inbox_id(&self) -> Result<String, Rfc822ImportError> {
         let mut query = self
             .session
             .client()
