@@ -8,7 +8,8 @@ use sqlx::{Connection, SqliteConnection};
 mod screener;
 
 use screener::{
-    Classification, EmailEnvelope, JmapOps, RouteError, RouteOutcome, normalize_sender, route_email,
+    Classification, EmailEnvelope, JmapOps, RouteError, RouteOutcome, is_spam_flagged,
+    normalize_sender, route_email,
 };
 
 #[derive(Debug, Default)]
@@ -16,6 +17,8 @@ struct FakeJmapOps {
     calls: Mutex<Vec<Call>>,
     screener_id: String,
     trash_id: String,
+    junk_id: String,
+    junk_role_exists: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +41,8 @@ impl FakeJmapOps {
             calls: Mutex::new(Vec::new()),
             screener_id: "screener-id".to_string(),
             trash_id: "trash-id".to_string(),
+            junk_id: "junk-id".to_string(),
+            junk_role_exists: true,
         }
     }
 
@@ -53,7 +58,11 @@ impl JmapOps for FakeJmapOps {
             .lock()
             .expect("calls mutex")
             .push(Call::GetOrCreateMailbox(name.to_string()));
-        Ok(self.screener_id.clone())
+        Ok(if name == "Junk" {
+            self.junk_id.clone()
+        } else {
+            self.screener_id.clone()
+        })
     }
 
     async fn get_mailbox_by_role(&self, role: &str) -> Result<Option<String>, RouteError> {
@@ -61,10 +70,10 @@ impl JmapOps for FakeJmapOps {
             .lock()
             .expect("calls mutex")
             .push(Call::GetMailboxByRole(role.to_string()));
-        Ok(if role == "trash" {
-            Some(self.trash_id.clone())
-        } else {
-            None
+        Ok(match role {
+            "trash" => Some(self.trash_id.clone()),
+            "junk" if self.junk_role_exists => Some(self.junk_id.clone()),
+            _ => None,
         })
     }
 
@@ -173,6 +182,83 @@ fn normalize_sender_cases() {
     for (input, expected) in cases {
         assert_eq!(normalize_sender(input), expected);
     }
+}
+
+#[test]
+fn spam_flagged_keywords_detect_stalwart_junk_verdict() {
+    assert!(is_spam_flagged(&["$Junk".to_string()]));
+    assert!(is_spam_flagged(&["Junk".to_string()]));
+    assert!(is_spam_flagged(&["$seen".to_string(), "$Junk".to_string()]));
+    assert!(!is_spam_flagged(&["$NotJunk".to_string()]));
+    assert!(!is_spam_flagged(&[]));
+}
+
+#[tokio::test]
+async fn stalwart_spam_flag_moves_to_junk_and_bypasses_screener() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    let jmap = Arc::new(FakeJmapOps::new());
+    let mut env = envelope("new@example.com");
+    env.keywords.push("$Junk".to_string());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route spam");
+
+    assert_eq!(outcome, RouteOutcome::Spam);
+    assert_eq!(
+        jmap.calls(),
+        vec![
+            Call::GetMailboxByRole("junk".to_string()),
+            Call::MoveToMailbox {
+                email_id: "email-1".to_string(),
+                mailbox_id: "junk-id".to_string()
+            },
+            Call::ApplyKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_spam".to_string()
+            }
+        ]
+    );
+    let pending_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("new@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("pending count");
+    assert_eq!(pending_count, 0, "spam must not create a pending rule");
+}
+
+#[tokio::test]
+async fn stalwart_spam_flag_falls_back_to_junk_mailbox_by_name() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    let mut fake = FakeJmapOps::new();
+    fake.junk_role_exists = false;
+    let jmap = Arc::new(fake);
+    let mut env = envelope("new@example.com");
+    env.keywords.push("Junk".to_string());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route spam");
+
+    assert_eq!(outcome, RouteOutcome::Spam);
+    assert_eq!(
+        jmap.calls(),
+        vec![
+            Call::GetMailboxByRole("junk".to_string()),
+            Call::GetOrCreateMailbox("Junk".to_string()),
+            Call::MoveToMailbox {
+                email_id: "email-1".to_string(),
+                mailbox_id: "junk-id".to_string()
+            },
+            Call::ApplyKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_spam".to_string()
+            }
+        ]
+    );
 }
 
 #[tokio::test]
@@ -284,7 +370,10 @@ async fn rule_lookup_normalizes_envelope_sender_before_matching() {
     .fetch_one(&mut conn)
     .await
     .expect("pending count");
-    assert_eq!(pending_count, 0, "normalized match must not create a pending rule");
+    assert_eq!(
+        pending_count, 0,
+        "normalized match must not create a pending rule"
+    );
 }
 
 #[tokio::test]

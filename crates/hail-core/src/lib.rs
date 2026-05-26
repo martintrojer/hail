@@ -14,7 +14,7 @@ pub use config::{
     AdminConfig, Config, ConfigError, SecretsConfig, ServerConfig, SetupConfig, StalwartConfig,
 };
 pub use crypto::{CryptoError, KEY_LEN, NONCE_LEN, TAG_LEN, open, parse_server_key, seal};
-pub use mail_classification::MailClassification;
+pub use mail_classification::{HAIL_SPAM_KEYWORD, MailClassification, SPAM_KEYWORD};
 pub use mail_render::{BlockedTracker, SanitizedHtml, sanitize_and_strip_trackers};
 pub use screener::{
     Classification, ScreenerDecision, ScreenerRule, ScreenerRuleParseError, lookup_rule,

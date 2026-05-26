@@ -328,6 +328,7 @@ fn app_event_for_route_outcome(outcome: &RouteOutcome) -> Option<WorkerAppEvent>
         }),
         RouteOutcome::ScreenerPending { .. } => Some(WorkerAppEvent::ScreenerPending),
         RouteOutcome::Trashed => Some(WorkerAppEvent::ThreadUpdated),
+        RouteOutcome::Spam => Some(WorkerAppEvent::ThreadUpdated),
         RouteOutcome::AlreadyScreened => Some(WorkerAppEvent::ThreadUpdated),
     }
 }

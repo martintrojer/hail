@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use hail_core::screener::{Classification, normalize_sender};
 use hail_core::screener::{ScreenerDecision, ScreenerRule, ScreenerRuleParseError, lookup_rule};
+use hail_core::{HAIL_SPAM_KEYWORD, SPAM_KEYWORD};
 use hail_jmap::jmap_client;
 use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
 use sqlx::SqliteConnection;
@@ -25,6 +26,7 @@ pub enum RouteOutcome {
     Classified { classification: Classification },
     Trashed,
     ScreenerPending { sender: String },
+    Spam,
     AlreadyScreened,
 }
 
@@ -129,12 +131,33 @@ fn is_system_sender(from: &str) -> bool {
     ) || lower.is_empty()
 }
 
+#[must_use]
+pub fn is_spam_flagged(keywords: &[String]) -> bool {
+    keywords
+        .iter()
+        .any(|keyword| keyword == SPAM_KEYWORD || keyword == "Junk")
+}
+
 pub async fn route_email(
     conn: &mut SqliteConnection,
     jmap: &dyn JmapOps,
     user_id: i64,
     env: &EmailEnvelope,
 ) -> Result<RouteOutcome, RouteError> {
+    if env.keywords.iter().any(|kw| kw == HAIL_SPAM_KEYWORD) {
+        return Ok(RouteOutcome::AlreadyScreened);
+    }
+
+    if is_spam_flagged(&env.keywords) {
+        let junk_id = match jmap.get_mailbox_by_role("junk").await? {
+            Some(id) => id,
+            None => jmap.get_or_create_mailbox("Junk").await?,
+        };
+        jmap.move_to_mailbox(&env.id, &junk_id).await?;
+        jmap.apply_keyword(&env.id, HAIL_SPAM_KEYWORD).await?;
+        return Ok(RouteOutcome::Spam);
+    }
+
     if env.keywords.iter().any(|kw| kw.starts_with("$hail_")) {
         return Ok(RouteOutcome::AlreadyScreened);
     }
