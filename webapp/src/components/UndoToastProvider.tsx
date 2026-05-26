@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { defaultApiClient } from '../api/query';
+import { useApiClient } from '../api/ApiClientProvider';
 import { queryClient } from '../lib/queryClient';
 
 interface UndoToastAction {
@@ -41,6 +41,7 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [isShown, setIsShown] = useState(false);
   const nextId = useRef(1);
+  const apiClient = useApiClient();
   const exitTimeout = useRef<number | null>(null);
 
   const clearExitTimeout = useCallback(() => {
@@ -131,7 +132,7 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
     );
 
     try {
-      await defaultApiClient.undo(toast.undo.id);
+      await apiClient.undo(toast.undo.id);
       await queryClient.invalidateQueries({ queryKey: ['hail'] });
       setToast((current) =>
         current?.toastId === toastId

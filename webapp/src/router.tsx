@@ -8,6 +8,7 @@ import {
   redirect,
   useNavigate,
 } from '@tanstack/react-router';
+import { useApiClient } from './api/ApiClientProvider';
 import {
   defaultApiClient,
   useLoginMutation,
@@ -111,9 +112,10 @@ function ErrorMessage({ message }: { message: string | null }) {
 
 function LoginPage() {
   const navigate = useNavigate();
+  const apiClient = useApiClient();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const login = useLoginMutation(defaultApiClient, {
+  const login = useLoginMutation(apiClient, {
     onSuccess: () => {
       void navigate({ to: '/imbox' });
     },
@@ -183,13 +185,14 @@ function setupInactiveMessage(reason: string | undefined) {
 
 function SetupPage() {
   const navigate = useNavigate();
-  const setupState = useSetupState();
+  const apiClient = useApiClient();
+  const setupState = useSetupState(apiClient);
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [domain, setDomain] = useState('');
   const [password, setPassword] = useState('');
   const [bootstrapToken, setBootstrapToken] = useState('');
-  const setupAdmin = useSetupAdminMutation(defaultApiClient, {
+  const setupAdmin = useSetupAdminMutation(apiClient, {
     onSuccess: () => {
       void navigate({ to: '/imbox' });
     },

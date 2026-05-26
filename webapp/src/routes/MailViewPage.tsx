@@ -13,8 +13,8 @@ import {
   useScreenerView,
   useSetAsideThreadMutation,
   useTrashThreadMutation,
-  defaultApiClient,
 } from '../api/query';
+import { useApiClient } from '../api/ApiClientProvider';
 import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle } from '../components/icons';
@@ -508,10 +508,11 @@ export function MailViewPage({
   description,
   client,
 }: MailViewPageProps) {
-  const query = useMailView(view, client);
-  const apiClient = client ?? defaultApiClient;
+  const contextClient = useApiClient();
+  const apiClient = client ?? contextClient;
+  const query = useMailView(view, apiClient);
   const undoToast = useUndoToast();
-  const screenerQuery = useScreenerView(client);
+  const screenerQuery = useScreenerView(apiClient);
   const pendingCount = screenerQuery.data?.senders?.length ?? 0;
   const [powerThrough, setPowerThrough] = useState(false);
   const [ptIndex, setPtIndex] = useState(0);
@@ -526,9 +527,9 @@ export function MailViewPage({
   }, [view]);
 
 
-  const classifyPowerThrough = useClassifyThreadMutation(client);
-  const setAsidePowerThrough = useSetAsideThreadMutation(client);
-  const trashPowerThrough = useTrashThreadMutation(client);
+  const classifyPowerThrough = useClassifyThreadMutation(apiClient);
+  const setAsidePowerThrough = useSetAsideThreadMutation(apiClient);
+  const trashPowerThrough = useTrashThreadMutation(apiClient);
   const [markSeenPowerThrough, setMarkSeenPowerThrough] = useState<PowerThroughStatus>({
     busy: false,
     error: null,
@@ -722,7 +723,7 @@ export function MailViewPage({
         {view === 'imbox' && isSectionedImboxData(query.data) ? (
           <ImboxSectionedList
             data={query.data}
-            client={client}
+            client={apiClient}
             powerThrough={powerThrough}
             ptIndex={ptIndex}
             powerThroughStatus={powerThroughStatus}
@@ -734,7 +735,7 @@ export function MailViewPage({
           <ActionableList
             items={getFlatViewItems(query.data)}
             actions={{
-              client,
+              client: apiClient,
               availableActions: ['archive', 'trash', 'set-aside', 'reply-later', 'classify'],
             }}
             renderItem={(item, { selected, onToggleSelect }) => (

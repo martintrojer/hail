@@ -2,13 +2,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { type FormEvent, useState } from 'react';
 import type { ComposeRequest, HailApiClient, PileItem, PileViewResponse } from '../api/client';
+import { useApiClient } from '../api/ApiClientProvider';
 import {
   useClassifyThreadMutation,
   useReplyLaterView,
   useSendComposeMutation,
   useSetAsideView,
 } from '../api/query';
-import { defaultApiClient } from '../api/query';
 import { queryKeys } from '../api/queryKeys';
 import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
@@ -29,7 +29,7 @@ interface SectionConfig {
   emptyTitle: string;
   emptyBody: string;
   actionLabel: string;
-  useView: () => ReturnType<typeof useSetAsideView> | ReturnType<typeof useReplyLaterView>;
+  useView: (client: HailApiClient) => ReturnType<typeof useSetAsideView> | ReturnType<typeof useReplyLaterView>;
 }
 
 const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
@@ -39,7 +39,7 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     emptyTitle: 'Nothing set aside.',
     emptyBody: 'Set threads aside when you want to come back to them.',
     actionLabel: 'Move back to Imbox',
-    useView: useSetAsideView,
+    useView: (client) => useSetAsideView(client),
   },
   'reply-later': {
     title: 'Reply Later',
@@ -47,7 +47,7 @@ const configs: Record<PileSectionPageProps['kind'], SectionConfig> = {
     emptyTitle: 'Nothing to reply to later.',
     emptyBody: 'Mark threads for reply when you are ready.',
     actionLabel: 'Move back to Imbox',
-    useView: useReplyLaterView,
+    useView: (client) => useReplyLaterView(client),
   },
 };
 
@@ -159,6 +159,7 @@ function PileRow({
   active,
   onSelect,
   onToggleSelect,
+  client,
 }: {
   item: PileItem;
   config: SectionConfig;
@@ -167,10 +168,11 @@ function PileRow({
   active?: boolean;
   onSelect?: () => void;
   onToggleSelect?: () => void;
+  client: HailApiClient;
 }) {
   const preview = pilePreview(item);
   const queryClient = useQueryClient();
-  const moveBack = useClassifyThreadMutation(undefined, {
+  const moveBack = useClassifyThreadMutation(client, {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
     },
@@ -286,6 +288,7 @@ function ReplyLaterList({
               kind="reply-later"
               selected={selected}
               active={item.thread_id === selectedId}
+              client={client}
               onSelect={() => setSelectedId(item.thread_id === selectedId ? null : item.thread_id)}
               onToggleSelect={onToggleSelect}
             />
@@ -320,10 +323,12 @@ function PileList({
   query,
   config,
   kind,
+  client,
 }: {
   query: ReturnType<SectionConfig['useView']>;
   config: SectionConfig;
   kind: PileSectionPageProps['kind'];
+  client: HailApiClient;
 }) {
   if (query.isPending) {
     return <LoadingState />;
@@ -346,13 +351,14 @@ function PileList({
   return (
     <ActionableList
       items={data.items}
-      actions={{ client: defaultApiClient, availableActions: ['archive', 'trash', 'classify'] }}
+      actions={{ client, availableActions: ['archive', 'trash', 'classify'] }}
       renderItem={(item, { selected, onToggleSelect }) => (
         <PileRow
           item={item}
           config={config}
           kind={kind}
           selected={selected}
+          client={client}
           onToggleSelect={onToggleSelect}
         />
       )}
@@ -368,14 +374,14 @@ function PileList({
 
 export function PileSectionPage({ kind }: PileSectionPageProps) {
   const config = configs[kind];
-  const query = config.useView();
-  const client = defaultApiClient;
+  const client = useApiClient();
+  const query = config.useView(client);
 
   const list =
     kind === 'reply-later' ? (
       <ReplyLaterList query={query} config={config} client={client} />
     ) : (
-      <PileList query={query} config={config} kind={kind} />
+      <PileList query={query} config={config} kind={kind} client={client} />
     );
 
   return (

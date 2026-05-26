@@ -7,7 +7,8 @@ import {
 } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useHailEvents } from '../api/events';
-import { defaultApiClient, useLogoutMutation, useMe } from '../api/query';
+import { useLogoutMutation, useMe } from '../api/query';
+import { useApiClient } from '../api/ApiClientProvider';
 import type { UserView } from '../api/client';
 
 interface AuthContextValue {
@@ -22,12 +23,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: PropsWithChildren) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const meQuery = useMe(defaultApiClient, {
+  const apiClient = useApiClient();
+  const meQuery = useMe(apiClient, {
     retry: false,
   });
   const authenticated = meQuery.data?.user !== undefined;
   useHailEvents({ enabled: authenticated, queryClient });
-  const logoutMutation = useLogoutMutation(defaultApiClient, {
+  const logoutMutation = useLogoutMutation(apiClient, {
     onSuccess: () => {
       void navigate({ to: '/login' });
     },

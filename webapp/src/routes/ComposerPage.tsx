@@ -14,8 +14,8 @@ import {
   type ThreadParticipant,
   type ThreadViewResponse,
 } from '../api/client';
+import { useApiClient } from '../api/ApiClientProvider';
 import {
-  defaultApiClient,
   useCreateDraftMutation,
   useDraft,
   useSendComposeMutation,
@@ -176,7 +176,9 @@ function placeCaretAtStart(element: HTMLTextAreaElement | null) {
   });
 }
 
-export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initialDraftId, initialTo = [], initialSubject = '', client = defaultApiClient }: ComposerPageProps) {
+export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initialDraftId, initialTo = [], initialSubject = '', client }: ComposerPageProps) {
+  const contextClient = useApiClient();
+  const apiClient = client ?? contextClient;
   const closeComposer = useGoBack();
   const { user } = useAuth();
   const [form, setForm] = useState<ComposerForm>({
@@ -199,12 +201,12 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   const replyPrefillKeyRef = useRef<string | null>(null);
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
-  const createDraft = useCreateDraftMutation(client);
-  const draftQuery = useDraft(initialDraftId, client, { enabled: Boolean(initialDraftId) && !replyToThreadId });
-  const replyThreadQuery = useThread(replyToThreadId ?? '', client, { enabled: Boolean(replyToThreadId) });
-  const updateDraft = useUpdateDraftMutation(client);
+  const createDraft = useCreateDraftMutation(apiClient);
+  const draftQuery = useDraft(initialDraftId, apiClient, { enabled: Boolean(initialDraftId) && !replyToThreadId });
+  const replyThreadQuery = useThread(replyToThreadId ?? '', apiClient, { enabled: Boolean(replyToThreadId) });
+  const updateDraft = useUpdateDraftMutation(apiClient);
   const hasUnsupportedAttachments = attachments.length > 0;
-  const sendCompose = useSendComposeMutation(client, {
+  const sendCompose = useSendComposeMutation(apiClient, {
     onSuccess: (response) => {
       setDirty(false);
       setSendError(null);

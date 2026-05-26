@@ -1,10 +1,11 @@
 import { Link } from '@tanstack/react-router';
 import { useMemo } from 'react';
+import { useApiClient } from '../api/ApiClientProvider';
 import {
   type HailApiClient,
   type MailViewItem,
 } from '../api/client';
-import { defaultApiClient, useDeleteDraftMutation, useDraftsView } from '../api/query';
+import { useDeleteDraftMutation, useDraftsView } from '../api/query';
 import { ActionableList } from '../components/ActionableList';
 import { Trash2, iconSizeProps } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
@@ -68,8 +69,10 @@ function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient 
   );
 }
 
-export function DraftsPage({ client = defaultApiClient }: DraftsPageProps) {
-  const query = useDraftsView(client);
+export function DraftsPage({ client }: DraftsPageProps) {
+  const contextClient = useApiClient();
+  const apiClient = client ?? contextClient;
+  const query = useDraftsView(apiClient);
   const items = useMemo(
     () => (query.isSuccess ? query.data.items : []),
     [query.data?.items, query.isSuccess],
@@ -89,8 +92,8 @@ export function DraftsPage({ client = defaultApiClient }: DraftsPageProps) {
     list = (
       <ActionableList
         items={items}
-        actions={{ client, availableActions: ['delete'] }}
-        renderItem={(item) => <DraftRow item={item} client={client} />}
+        actions={{ client: apiClient, availableActions: ['delete'] }}
+        renderItem={(item) => <DraftRow item={item} client={apiClient} />}
         keyExtractor={(item) => item.email_id}
         emptyState={<StateCard title="No drafts." />}
       />

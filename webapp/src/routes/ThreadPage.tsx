@@ -7,6 +7,7 @@ import {
   type ThreadVerbResponse,
   type ThreadViewResponse,
 } from '../api/client';
+import { useApiClient } from '../api/ApiClientProvider';
 import {
   useArchiveThreadMutation,
   useBubbleUpMutation,
@@ -15,7 +16,6 @@ import {
   useSetAsideThreadMutation,
   useThread,
   useTrashThreadMutation,
-  defaultApiClient,
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
 import { BubbleUpSubmenu } from '../components/BubbleUpSubmenu';
@@ -674,8 +674,9 @@ function ThreadDocument({
 }
 
 export function ThreadPage({ threadId, client, sourceView }: ThreadPageProps) {
-  const query = useThread(threadId, client);
-  const apiClient = client ?? defaultApiClient;
+  const contextClient = useApiClient();
+  const apiClient = client ?? contextClient;
+  const query = useThread(threadId, apiClient);
 
   // Mark thread as read when it loads successfully
   useEffect(() => {
