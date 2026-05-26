@@ -28,8 +28,11 @@ database_url = "sqlite:///var/lib/hail/hail.db"
 [stalwart]
 # JMAP HTTP endpoint. In Compose this is the service name + JMAP port.
 jmap_url = "http://stalwart:8080"
-# Stalwart management API. Optional — only used by admin surfaces.
-# management_url = "http://stalwart:8080/manage"
+# Stalwart management API. Optional, but enable it for /setup and /admin
+# provisioning to create domains and users in Stalwart without editing config
+# files or restarting Stalwart. In the shipped Compose stack this should be the
+# same internal HTTP listener as JMAP.
+management_url = "http://stalwart:8080"
 
 # --- HTTP server (hail-api) -------------------------------------------------
 # hail-worker parses this section too (so a single TOML serves both bins) but

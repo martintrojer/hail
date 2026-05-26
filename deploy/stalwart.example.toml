@@ -129,10 +129,20 @@ depth = 2
 #   storage.directory = "internal"
 #   [directory."internal"] type = "internal"; store = <store id>
 #
-# Use Stalwart's WebUI or CLI to create domains and user accounts in this
-# internal directory. For hail, those accounts are the source of truth for mail
-# credentials; hail-api will proxy user login to Stalwart/JMAP and store only an
-# encrypted JMAP token in hail.db sessions.
+# Use Stalwart's WebUI, CLI, or hail's admin/setup pages to create domains and
+# user accounts in this internal directory. For hail, those accounts are the
+# source of truth for mail credentials; hail-api will proxy user login to
+# Stalwart/JMAP and store only an encrypted JMAP token in hail.db sessions.
+#
+# Hail provisioning path:
+# - /setup with `stalwart.management_url` configured first calls Stalwart
+#   management `POST /api/domain/{domain}` and then `POST /api/principal`, then
+#   verifies the new mailbox via JMAP. If management_url is unset, /setup only
+#   verifies a pre-created account with JMAP.
+# - /admin Domains calls the same domain endpoint for create/delete.
+# - /admin Create user ensures the user's email domain exists before creating
+#   the principal, so one shared domain can host many mailboxes without editing
+#   this file or restarting Stalwart.
 [directory."internal"]
 type = "internal"
 store = "sqlite"

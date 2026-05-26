@@ -267,8 +267,12 @@ function SetupPage() {
       >
         <h2 className="text-2xl font-semibold">First-run setup</h2>
         <p className="mt-2 text-sm text-ink-secondary">
-          Create the first admin account for this hail instance. You need the
-          operator bootstrap token from the server environment/config.
+          Create the first admin mailbox for this hail instance. If Stalwart
+          management is configured, hail first provisions the mail domain in
+          Stalwart and then creates the admin principal; otherwise the domain
+          and account must already exist in Stalwart and the wizard verifies
+          them with a JMAP login. You need the operator bootstrap token from
+          the server environment/config.
         </p>
         <div className="mt-6 space-y-4">
           <TextInput
@@ -316,7 +320,8 @@ function SetupPage() {
           />
           <p className="text-xs text-ink-tertiary">
             Password must be at least 12 characters. The email must belong to
-            the mail domain.
+            the mail domain. The wizard accepts domains with or without a
+            trailing dot; the API normalizes to lowercase before provisioning.
           </p>
           <ErrorMessage
             message={

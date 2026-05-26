@@ -95,6 +95,7 @@ fn session_cookie_value(set_cookie: &str) -> String {
 struct ProvisionCall {
     email: String,
     display_name: Option<String>,
+    domain: String,
 }
 
 #[derive(Default)]
@@ -140,6 +141,7 @@ impl UserProvisioner for FakeProvisioner {
         email: &'a str,
         _password: SecretString,
         _display_name: Option<&'a str>,
+        domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.observed
@@ -148,6 +150,7 @@ impl UserProvisioner for FakeProvisioner {
             .push(ProvisionCall {
                 email: email.to_string(),
                 display_name: _display_name.map(str::to_string),
+                domain: domain.to_string(),
             });
         Box::pin(async move {
             if let Some(delay) = self.delay {
@@ -641,7 +644,6 @@ async fn post_setup_admin_rejects_invalid_domain() {
         "",
         "localhost",
         ".example.org",
-        "example.org.",
         "exa mple.org",
         "example..org",
         "-bad.example",
@@ -668,6 +670,28 @@ async fn post_setup_admin_rejects_invalid_domain() {
         assert_eq!(json["error"], "invalid_input", "domain={domain:?}");
         assert_eq!(json["detail"], "domain", "domain={domain:?}");
     }
+}
+
+#[tokio::test]
+async fn post_setup_admin_normalizes_trailing_dot_domain() {
+    let (state, _key) = fixture_state(None).await;
+    let provisioner = Arc::new(FakeProvisioner::default());
+
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"Example.ORG."}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        provisioner.observed_calls(),
+        vec![ProvisionCall {
+            email: "alice@example.org".to_string(),
+            display_name: None,
+            domain: "example.org".to_string(),
+        }]
+    );
 }
 
 #[tokio::test]
@@ -705,6 +729,7 @@ async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
         vec![ProvisionCall {
             email: "alice@example.org".to_string(),
             display_name: Some("Alice Example".to_string()),
+            domain: "example.org".to_string(),
         }]
     );
     let stored_display_name: Option<String> =
@@ -729,6 +754,7 @@ async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
         vec![ProvisionCall {
             email: "bob@example.org".to_string(),
             display_name: None,
+            domain: "example.org".to_string(),
         }]
     );
     let stored_display_name: Option<String> =
@@ -757,6 +783,7 @@ async fn post_setup_admin_passes_lowercased_email_to_provisioner() {
         vec![ProvisionCall {
             email: "alice@example.org".to_string(),
             display_name: None,
+            domain: "example.org".to_string(),
         }]
     );
 }

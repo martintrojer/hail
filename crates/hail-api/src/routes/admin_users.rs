@@ -26,6 +26,15 @@ pub trait StalwartUserManagement: Send + Sync + 'static {
         state: &'a AppState,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ManagedUser>, UserManagementError>> + Send + 'a>>;
 
+    fn ensure_domain<'a>(
+        &'a self,
+        state: &'a AppState,
+        domain: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
+        let _ = (state, domain);
+        Box::pin(async { Ok(()) })
+    }
+
     fn create_user<'a>(
         &'a self,
         state: &'a AppState,
@@ -98,6 +107,17 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
                 jmap_account_id: session.account_id().to_string(),
                 display_name: display_name.map(str::to_owned),
             })
+        })
+    }
+
+    fn ensure_domain<'a>(
+        &'a self,
+        state: &'a AppState,
+        domain: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
+        Box::pin(async move {
+            let base = management_base(state)?;
+            create_stalwart_domain(&base, domain).await
         })
     }
 
@@ -249,6 +269,13 @@ where
     }
     if !valid_password(&body.password) {
         return invalid_input("password");
+    }
+    let Some(domain) = email_domain(&email) else {
+        return invalid_input("email");
+    };
+
+    if let Err(err) = management.ensure_domain(&state, domain).await {
+        return management_error(err);
     }
 
     let managed = match management
@@ -511,6 +538,23 @@ async fn create_or_update_principal(
     }
 }
 
+async fn create_stalwart_domain(base: &str, domain: &str) -> Result<(), UserManagementError> {
+    let response = management_http::client()
+        .post(management_path(&base, &["api", "domain", domain]))
+        .json(&serde_json::json!({ "domain": domain }))
+        .send()
+        .await
+        .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
+    if response.status().is_success() || response.status() == StatusCode::CONFLICT {
+        Ok(())
+    } else {
+        Err(UserManagementError::Upstream(format!(
+            "POST /api/domain/{domain} returned HTTP {}",
+            response.status()
+        )))
+    }
+}
+
 async fn decode_user_list(
     response: reqwest::Response,
 ) -> Result<Vec<ManagedUser>, UserManagementError> {
@@ -565,6 +609,10 @@ fn managed_user_from_value(value: &serde_json::Value) -> Result<ManagedUser, Use
     })
 }
 
+fn email_domain(email: &str) -> Option<&str> {
+    email.rsplit_once('@').map(|(_, domain)| domain)
+}
+
 fn normalize_display_name(display_name: Option<&str>) -> Option<String> {
     display_name
         .map(str::trim)
@@ -602,6 +650,11 @@ fn management_error(err: UserManagementError) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_domain_from_valid_email() {
+        assert_eq!(email_domain("user+tag@example.org"), Some("example.org"));
+    }
 
     #[test]
     fn management_path_percent_encodes_email_path_segment() {
