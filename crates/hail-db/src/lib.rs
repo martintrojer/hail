@@ -5,6 +5,7 @@
 
 pub mod app_events;
 
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -46,4 +47,50 @@ pub async fn connect(url: &str) -> Result<SqlitePool, Error> {
 pub async fn migrate(pool: &SqlitePool) -> Result<(), Error> {
     sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())
+}
+
+/// Mark a thread as seen by a user, updating `seen_at` when it was already seen.
+pub async fn mark_thread_seen(
+    pool: &SqlitePool,
+    user_id: i64,
+    thread_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO thread_seen (user_id, thread_id) VALUES (?, ?) \
+         ON CONFLICT DO UPDATE SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+    )
+    .bind(user_id)
+    .bind(thread_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Return whether a user has seen a thread.
+pub async fn is_thread_seen(
+    pool: &SqlitePool,
+    user_id: i64,
+    thread_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM thread_seen WHERE user_id = ? AND thread_id = ?",
+    )
+    .bind(user_id)
+    .bind(thread_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row > 0)
+}
+
+/// Return all thread ids a user has seen for batch filtering.
+pub async fn seen_thread_ids(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<HashSet<String>, sqlx::Error> {
+    let rows =
+        sqlx::query_scalar::<_, String>("SELECT thread_id FROM thread_seen WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
 }
