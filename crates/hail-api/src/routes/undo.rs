@@ -14,6 +14,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
+use hail_core::MailClassification;
 use rand::TryRngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -283,13 +284,13 @@ impl ThreadUndoRestorer for JmapThreadUndoRestorer {
         thread_id: &str,
         previous_classification: &str,
     ) -> Result<(), UndoError> {
-        let previous = ClassificationKeyword::parse(previous_classification)
+        let previous = MailClassification::parse(previous_classification)
             .ok_or_else(|| UndoError::bad_request("invalid_previous_classification"))?;
         let session = jmap_session(state, user.jmap_token.clone())
             .await
             .map_err(UndoError::internal)?;
         for email_id in email_ids_in_thread(&session, thread_id).await? {
-            for candidate in ClassificationKeyword::ALL {
+            for candidate in MailClassification::ALL {
                 session
                     .client()
                     .email_set_keyword(&email_id, candidate.keyword(), candidate == previous)
@@ -434,34 +435,6 @@ struct ScreenerRuleSnapshot {
     first_seen_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClassificationKeyword {
-    Imbox,
-    Feed,
-    Papertrail,
-}
-
-impl ClassificationKeyword {
-    const ALL: [Self; 3] = [Self::Imbox, Self::Feed, Self::Papertrail];
-
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "imbox" => Some(Self::Imbox),
-            "feed" => Some(Self::Feed),
-            "papertrail" => Some(Self::Papertrail),
-            _ => None,
-        }
-    }
-
-    const fn keyword(self) -> &'static str {
-        match self {
-            Self::Imbox => "$hail_imbox",
-            Self::Feed => "$hail_feed",
-            Self::Papertrail => "$hail_papertrail",
-        }
-    }
-}
-
 async fn restore_screener_decision(
     state: &AppState,
     user: &AuthUser,
@@ -574,9 +547,9 @@ fn validate_thread_classify_payload(payload: &ThreadClassifyUndoPayload) -> Resu
     if !looks_like_jmap_id(&payload.thread_id) {
         return Err(UndoError::bad_request("invalid_thread_id"));
     }
-    let previous = ClassificationKeyword::parse(&payload.previous_classification)
+    let previous = MailClassification::parse(&payload.previous_classification)
         .ok_or_else(|| UndoError::bad_request("invalid_previous_classification"))?;
-    let new = ClassificationKeyword::parse(&payload.new_classification)
+    let new = MailClassification::parse(&payload.new_classification)
         .ok_or_else(|| UndoError::bad_request("invalid_new_classification"))?;
     if previous == new {
         return Err(UndoError::bad_request("noop_classify_undo"));
@@ -609,8 +582,12 @@ fn validate_screener_rule(rule: &ScreenerRuleSnapshot) -> Result<(), UndoError> 
                 return Err(UndoError::bad_request("invalid_previous_rule"));
             }
         }
-        "allow" => match rule.classify_as.as_deref() {
-            Some("imbox" | "feed" | "papertrail") => {}
+        "allow" => match rule
+            .classify_as
+            .as_deref()
+            .and_then(MailClassification::parse)
+        {
+            Some(_) => {}
             _ => return Err(UndoError::bad_request("invalid_previous_rule")),
         },
         _ => return Err(UndoError::bad_request("invalid_previous_rule")),

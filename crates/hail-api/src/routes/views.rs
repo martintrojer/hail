@@ -18,6 +18,7 @@ use axum::extract::{Extension, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
+use hail_core::MailClassification;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -259,14 +260,16 @@ impl SearchProvider for JmapSearchProvider {
             let text_filter = Filter::from(email_query::Filter::text(q.to_string()));
             let mailbox_filter = match mailbox {
                 Some(SearchMailbox::Imbox) => Some(Filter::from(email_query::Filter::has_keyword(
-                    MailView::Imbox.keyword().to_string(),
+                    MailClassification::Imbox.keyword().to_string(),
                 ))),
                 Some(SearchMailbox::Feed) => Some(Filter::from(email_query::Filter::has_keyword(
-                    MailView::Feed.keyword().to_string(),
+                    MailClassification::Feed.keyword().to_string(),
                 ))),
-                Some(SearchMailbox::Papertrail) => Some(Filter::from(
-                    email_query::Filter::has_keyword(MailView::Papertrail.keyword().to_string()),
-                )),
+                Some(SearchMailbox::Papertrail) => {
+                    Some(Filter::from(email_query::Filter::has_keyword(
+                        MailClassification::Papertrail.keyword().to_string(),
+                    )))
+                }
                 Some(SearchMailbox::Archive) => {
                     let Some(mailbox_id) = hail_jmap::mailbox_id_by_role(
                         &session,
@@ -443,39 +446,49 @@ pub enum MailView {
     Archive,
 }
 
-impl MailView {
-    pub const fn keyword(self) -> &'static str {
-        match self {
-            Self::Imbox => "$hail_imbox",
-            Self::Feed => "$hail_feed",
-            Self::Papertrail => "$hail_papertrail",
-            Self::Drafts => "$draft",
-            Self::Trash => "$deleted",
-            Self::Archive => "$hail_archive",
-        }
-    }
-
-    pub const fn classification(self) -> MailClassification {
-        match self {
-            Self::Imbox => MailClassification::Imbox,
-            Self::Feed => MailClassification::Feed,
-            Self::Papertrail => MailClassification::Papertrail,
-            Self::Drafts => MailClassification::Drafts,
-            Self::Trash => MailClassification::Trash,
-            Self::Archive => MailClassification::Archive,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum MailClassification {
+pub enum MailViewClassification {
     Imbox,
     Feed,
     Papertrail,
     Drafts,
     Trash,
     Archive,
+}
+
+impl From<MailClassification> for MailViewClassification {
+    fn from(value: MailClassification) -> Self {
+        match value {
+            MailClassification::Imbox => Self::Imbox,
+            MailClassification::Feed => Self::Feed,
+            MailClassification::Papertrail => Self::Papertrail,
+        }
+    }
+}
+
+impl MailView {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Imbox => MailClassification::Imbox.keyword(),
+            Self::Feed => MailClassification::Feed.keyword(),
+            Self::Papertrail => MailClassification::Papertrail.keyword(),
+            Self::Drafts => "$draft",
+            Self::Trash => "$deleted",
+            Self::Archive => "$hail_archive",
+        }
+    }
+
+    pub const fn classification(self) -> MailViewClassification {
+        match self {
+            Self::Imbox => MailViewClassification::Imbox,
+            Self::Feed => MailViewClassification::Feed,
+            Self::Papertrail => MailViewClassification::Papertrail,
+            Self::Drafts => MailViewClassification::Drafts,
+            Self::Trash => MailViewClassification::Trash,
+            Self::Archive => MailViewClassification::Archive,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -491,7 +504,7 @@ pub struct MailViewItem {
     #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
     pub unread: bool,
-    pub classification: MailClassification,
+    pub classification: MailViewClassification,
     pub has_notes: bool,
 }
 

@@ -4,8 +4,7 @@
 //! helpers keep normalization and DB decision parsing consistent everywhere
 //! rules are written or consumed.
 
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use crate::MailClassification;
 
 /// Normalize a user- or JMAP-provided sender into the sidecar rule key.
 ///
@@ -21,44 +20,8 @@ pub fn normalize_sender(sender: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
-/// Hail's destination classes for approved screener senders.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Classification {
-    Imbox,
-    Feed,
-    Papertrail,
-}
-
-impl Classification {
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "imbox" => Some(Self::Imbox),
-            "feed" => Some(Self::Feed),
-            "papertrail" => Some(Self::Papertrail),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn keyword(self) -> &'static str {
-        match self {
-            Self::Imbox => "$hail_imbox",
-            Self::Feed => "$hail_feed",
-            Self::Papertrail => "$hail_papertrail",
-        }
-    }
-
-    #[must_use]
-    pub const fn db_value(self) -> &'static str {
-        match self {
-            Self::Imbox => "imbox",
-            Self::Feed => "feed",
-            Self::Papertrail => "papertrail",
-        }
-    }
-}
+/// Alias for backward compatibility.
+pub type Classification = MailClassification;
 
 /// Parsed DB-level screener decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
