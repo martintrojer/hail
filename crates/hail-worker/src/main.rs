@@ -10,6 +10,7 @@ mod backoff;
 mod catchup;
 mod changes;
 mod crypto;
+mod gmail_client;
 mod jmap_helpers;
 mod reconcile;
 mod scheduler;
