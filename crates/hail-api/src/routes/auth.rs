@@ -74,7 +74,8 @@ struct UserEnvelope {
 /// Build the *public* auth subrouter (login + logout). These two routes
 /// MUST NOT sit behind the auth middleware: login is how you get auth in
 /// the first place, and logout has to work even with a stale/missing
-/// cookie.
+/// cookie. Logout still enforces the mutating-request CSRF header in its
+/// handler because it accepts ambient session cookies.
 pub fn public_router() -> Router<AppState> {
     Router::new()
         .route("/api/auth/login", post(login))
@@ -307,10 +308,20 @@ pub async fn test_login_with_provider(
     .await
 }
 
-/// `POST /api/auth/logout`. Always 204. We delete the row if the cookie
-/// matches one we know; we always clear the cookie client-side so a stale
-/// or attacker-supplied cookie can't keep coming back.
+/// `POST /api/auth/logout`. Always 204 once the CSRF header is present.
+/// We delete the row if the cookie matches one we know; we always clear
+/// the cookie client-side so a stale or attacker-supplied cookie can't
+/// keep coming back.
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if headers
+        .get(crate::middleware::auth::CSRF_HEADER)
+        .map(|v| v.as_bytes())
+        != Some(b"1")
+    {
+        tracing::debug!("logout: csrf header missing");
+        return error_response(StatusCode::FORBIDDEN, "csrf_required");
+    }
+
     if let Some(value) = session_cookie_value(&headers) {
         // Best-effort delete. We deliberately don't expose whether the
         // session existed.

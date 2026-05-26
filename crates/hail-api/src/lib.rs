@@ -34,10 +34,11 @@ use crate::state::AppState;
 ///
 /// Layout (security boundary called out per design.md §10):
 ///
-/// * **Public** (no auth, no CSRF): `/healthz`, `/readyz`,
+/// * **Public** (no auth middleware): `/healthz`, `/readyz`,
 ///   `/api/openapi.json`, `POST /api/auth/login`, `POST /api/auth/logout`.
 ///   Logout is public because a stale cookie should still be able to
-///   clear itself.
+///   clear itself, but its handler still requires `X-Hail-Request: 1`
+///   because it is a mutating endpoint that accepts ambient cookies.
 ///
 /// * **Protected** (auth middleware + CSRF on mutations): everything else
 ///   under `/api/*`, including `GET /api/auth/me` and any downstream
