@@ -16,7 +16,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use hail_jmap::jmap_client::core::set::SetObject;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -24,15 +23,13 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{
-    jmap_session, looks_like_jmap_id, provider_error, required_drafts_mailbox_id,
+use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id, provider_error};
+use crate::routes::outbound::{
+    MAX_BODY_BYTES, OutboundHeaders, create_draft_email, set_text_body, validate_attachments,
+    validate_body, validate_recipients, validate_subject,
 };
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
-
-const MAX_SUBJECT_CHARS: usize = 998;
-const MAX_BODY_BYTES: usize = 1024 * 1024;
-const MAX_RECIPIENTS_PER_FIELD: usize = 200;
 
 /// OpenAPI tag for draft autosave endpoints.
 pub const TAG: &str = "drafts";
@@ -81,41 +78,12 @@ impl DraftStore for JmapDraftStore {
     ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>> {
         Box::pin(async move {
             let session = jmap_session(state, token).await.map_err(provider_error)?;
-            let drafts_mailbox_id = required_drafts_mailbox_id(&session)
-                .await
-                .map_err(provider_error)?;
-
-            let mut request = session.client().build();
-            let create_id = {
-                let email = request.set_email().create();
-                email
-                    .mailbox_ids([drafts_mailbox_id])
-                    .keywords(["$draft"])
-                    .from([from])
-                    .to(draft.to.iter().map(String::as_str))
-                    .subject(draft.subject);
-                if !draft.cc.is_empty() {
-                    email.cc(draft.cc.iter().map(String::as_str));
-                }
-                if !draft.bcc.is_empty() {
-                    email.bcc(draft.bcc.iter().map(String::as_str));
-                }
-                set_text_body(email, draft.body_markdown);
-                email.create_id().ok_or_else(|| {
-                    DraftStoreError::Provider("Email/set create id missing".to_string())
-                })?
-            };
-
-            let mut response = request.send_set_email().await.map_err(provider_error)?;
-            let mut created = response.created(&create_id).map_err(provider_error)?;
-            let id = created.take_id();
-            if id.is_empty() {
-                Err(DraftStoreError::Provider(
-                    "Email/set created draft without id".to_string(),
-                ))
-            } else {
-                Ok(id)
-            }
+            create_draft_email::<DraftStoreError, _>(
+                &session,
+                OutboundHeaders::new(from, &draft.to, &draft.cc, &draft.bcc, &draft.subject),
+                |email| set_text_body(email, draft.body_markdown),
+            )
+            .await
         })
     }
 
@@ -475,9 +443,9 @@ impl DraftPayload {
         let subject = self.subject.unwrap_or_default();
         let body_markdown = self.body_markdown.unwrap_or_default();
 
-        validate_recipients("to", &to)?;
-        validate_recipients("cc", &cc)?;
-        validate_recipients("bcc", &bcc)?;
+        validate_recipients("to", &to, false)?;
+        validate_recipients("cc", &cc, false)?;
+        validate_recipients("bcc", &bcc, false)?;
         validate_subject(&subject)?;
         validate_body(&body_markdown)?;
 
@@ -493,13 +461,13 @@ impl DraftPayload {
     fn into_update(self) -> Result<DraftUpdate, &'static str> {
         validate_attachments(&self.attachments)?;
         if let Some(to) = &self.to {
-            validate_recipients("to", to)?;
+            validate_recipients("to", to, false)?;
         }
         if let Some(cc) = &self.cc {
-            validate_recipients("cc", cc)?;
+            validate_recipients("cc", cc, false)?;
         }
         if let Some(bcc) = &self.bcc {
-            validate_recipients("bcc", bcc)?;
+            validate_recipients("bcc", bcc, false)?;
         }
         if let Some(subject) = &self.subject {
             validate_subject(subject)?;
@@ -527,69 +495,6 @@ impl DraftPayload {
     }
 }
 
-fn validate_attachments(attachments: &Option<Vec<serde_json::Value>>) -> Result<(), &'static str> {
-    match attachments {
-        Some(attachments) if !attachments.is_empty() => Err("attachments_not_supported"),
-        _ => Ok(()),
-    }
-}
-
-fn validate_recipients(field: &'static str, recipients: &[String]) -> Result<(), &'static str> {
-    if recipients.len() > MAX_RECIPIENTS_PER_FIELD {
-        return Err(match field {
-            "to" => "too_many_to",
-            "cc" => "too_many_cc",
-            "bcc" => "too_many_bcc",
-            _ => "too_many_recipients",
-        });
-    }
-    if recipients.iter().any(|address| !looks_like_email(address)) {
-        return Err(match field {
-            "to" => "invalid_to",
-            "cc" => "invalid_cc",
-            "bcc" => "invalid_bcc",
-            _ => "invalid_recipient",
-        });
-    }
-    Ok(())
-}
-
-fn validate_subject(subject: &str) -> Result<(), &'static str> {
-    if subject.chars().count() > MAX_SUBJECT_CHARS || subject.contains(['\r', '\n']) {
-        Err("invalid_subject")
-    } else {
-        Ok(())
-    }
-}
-
-fn validate_body(body: &str) -> Result<(), &'static str> {
-    if body.len() > MAX_BODY_BYTES {
-        Err("body_too_large")
-    } else {
-        Ok(())
-    }
-}
-
-fn looks_like_email(address: &str) -> bool {
-    let address = address.trim();
-    if address.is_empty()
-        || address.len() > 320
-        || address.contains(char::is_whitespace)
-        || address.contains(['\r', '\n'])
-    {
-        return false;
-    }
-    let Some((local, domain)) = address.split_once('@') else {
-        return false;
-    };
-    !local.is_empty()
-        && !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-        && !domain.contains("..")
-}
-
 async fn ensure_draft_email(
     session: &hail_jmap::Session,
     draft_id: &str,
@@ -612,21 +517,6 @@ async fn ensure_draft_email(
     } else {
         Err(DraftStoreError::NotFound)
     }
-}
-
-fn set_text_body(
-    email: &mut hail_jmap::jmap_client::email::Email<hail_jmap::jmap_client::Set>,
-    body: String,
-) {
-    use hail_jmap::jmap_client::email::EmailBodyPart;
-
-    email
-        .text_body(
-            EmailBodyPart::new()
-                .part_id("text")
-                .content_type("text/plain"),
-        )
-        .body_value("text".to_string(), body);
 }
 
 fn addresses_from_jmap(

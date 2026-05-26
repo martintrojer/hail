@@ -10,8 +10,6 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use hail_core::mail_render::sanitize_and_strip_trackers;
-use hail_jmap::jmap_client::core::set::SetObject;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -20,13 +18,15 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::{AuthSession, AuthUser};
-use crate::routes::jmap_helpers::{jmap_session, provider_error, required_drafts_mailbox_id};
+use crate::routes::jmap_helpers::{jmap_session, provider_error};
+use crate::routes::outbound::{
+    OutboundHeaders, create_draft_email, looks_like_email, render_markdown, reply_subject,
+    set_rendered_body, submit_email, validate_attachments, validate_body, validate_recipients,
+    validate_subject,
+};
+pub use crate::routes::outbound::{OutboundMessage, ReplyHeaders};
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
-
-const MAX_SUBJECT_CHARS: usize = 998;
-const MAX_BODY_BYTES: usize = 1024 * 1024;
-const MAX_RECIPIENTS_PER_FIELD: usize = 200;
 
 /// OpenAPI tag for outbound compose/reply endpoints.
 pub const TAG: &str = "compose";
@@ -68,47 +68,19 @@ impl Composer for JmapComposer {
     ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
             let session = jmap_session(state, token).await.map_err(provider_error)?;
-            let drafts_mailbox_id = required_drafts_mailbox_id(&session)
-                .await
-                .map_err(provider_error)?;
-            let mut request = session.client().build();
-            let create_id = {
-                let email = request.set_email().create();
-                email
-                    .mailbox_ids([drafts_mailbox_id])
-                    .keywords(["$draft"])
-                    .from([from])
-                    .to(message.to.iter().map(String::as_str))
-                    .subject(message.subject.clone());
-                if !message.cc.is_empty() {
-                    email.cc(message.cc.iter().map(String::as_str));
-                }
-                if !message.bcc.is_empty() {
-                    email.bcc(message.bcc.iter().map(String::as_str));
-                }
-                if let Some(reply) = &message.reply {
-                    if !reply.in_reply_to.is_empty() {
-                        email.in_reply_to(reply.in_reply_to.iter().map(String::as_str));
-                    }
-                    if !reply.references.is_empty() {
-                        email.references(reply.references.iter().map(String::as_str));
-                    }
-                }
-                set_body_values(email, &message.body);
-                email.create_id().ok_or_else(|| {
-                    ComposeError::Provider("Email/set create id missing".to_string())
-                })?
-            };
-            let mut response = request.send_set_email().await.map_err(provider_error)?;
-            let mut created = response.created(&create_id).map_err(provider_error)?;
-            let id = created.take_id();
-            if id.is_empty() {
-                Err(ComposeError::Provider(
-                    "Email/set created draft without id".to_string(),
-                ))
-            } else {
-                Ok(id)
-            }
+            create_draft_email::<ComposeError, _>(
+                &session,
+                OutboundHeaders::new(
+                    from,
+                    &message.to,
+                    &message.cc,
+                    &message.bcc,
+                    &message.subject,
+                )
+                .with_reply(message.reply.as_ref()),
+                |email| set_rendered_body(email, &message.body),
+            )
+            .await
         })
     }
 
@@ -121,24 +93,7 @@ impl Composer for JmapComposer {
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
             let session = jmap_session(state, token).await.map_err(provider_error)?;
-            let identity_id = identity_id_for(&session, from).await?;
-            let mut request = session.client().build();
-            let create_id = request
-                .set_email_submission()
-                .create()
-                .email_id(email_id)
-                .identity_id(identity_id)
-                .create_id()
-                .ok_or_else(|| {
-                    ComposeError::Provider("EmailSubmission/set create id missing".to_string())
-                })?;
-            let mut response = request
-                .send_set_email_submission()
-                .await
-                .map_err(provider_error)?;
-            let mut created = response.created(&create_id).map_err(provider_error)?;
-            let submission_id = created.take_id();
-            Ok((!submission_id.is_empty()).then_some(submission_id))
+            submit_email::<ComposeError>(&session, from, email_id).await
         })
     }
 
@@ -223,25 +178,6 @@ impl Composer for JmapComposer {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct OutboundMessage {
-    pub to: Vec<String>,
-    pub cc: Vec<String>,
-    pub bcc: Vec<String>,
-    pub subject: String,
-    pub body: RenderedBody,
-    pub reply: Option<ReplyHeaders>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderedBody {
-    pub plain_text: String,
-    pub html: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplyHeaders {
-    pub in_reply_to: Vec<String>,
-    pub references: Vec<String>,
-}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplyContext {
     pub to: Vec<String>,
@@ -692,14 +628,14 @@ async fn create_and_maybe_send(
 impl ComposePayload {
     fn into_message(self, reply: Option<ReplyHeaders>) -> Result<OutboundMessage, &'static str> {
         validate_attachments(&self.attachments)?;
-        validate_recipients("to", &self.to)?;
+        validate_recipients("to", &self.to, true)?;
         let cc = self.cc.unwrap_or_default();
         if !cc.is_empty() {
-            validate_recipients("cc", &cc)?;
+            validate_recipients("cc", &cc, true)?;
         }
         let bcc = self.bcc.unwrap_or_default();
         if !bcc.is_empty() {
-            validate_recipients("bcc", &bcc)?;
+            validate_recipients("bcc", &bcc, true)?;
         }
         validate_subject(&self.subject)?;
         validate_body(&self.body_markdown)?;
@@ -721,7 +657,7 @@ impl ReplyPayload {
         if context.to.is_empty() {
             return Err("reply_recipient_not_found");
         }
-        validate_recipients("to", &context.to)?;
+        validate_recipients("to", &context.to, true)?;
         validate_subject(&context.subject)?;
         Ok(OutboundMessage {
             to: context.to,
@@ -741,138 +677,6 @@ fn validate_send_at(send_at: Option<DateTime<Utc>>) -> Result<Option<DateTime<Ut
     match send_at {
         Some(send_at) if send_at <= Utc::now() => Err("invalid_send_at"),
         other => Ok(other),
-    }
-}
-
-fn render_markdown(markdown: &str) -> RenderedBody {
-    let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new(markdown));
-    RenderedBody {
-        plain_text: markdown_to_plain_text(markdown),
-        html: sanitize_and_strip_trackers(&html).html,
-    }
-}
-
-fn markdown_to_plain_text(markdown: &str) -> String {
-    let mut text = String::new();
-    let mut need_space = false;
-    for event in pulldown_cmark::Parser::new(markdown) {
-        match event {
-            pulldown_cmark::Event::Text(value) | pulldown_cmark::Event::Code(value) => {
-                if need_space && !text.ends_with([' ', '\n']) {
-                    text.push(' ');
-                }
-                text.push_str(&value);
-                need_space = false;
-            }
-            pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {
-                text.push('\n');
-                need_space = false;
-            }
-            pulldown_cmark::Event::End(
-                pulldown_cmark::TagEnd::Paragraph | pulldown_cmark::TagEnd::Heading(_),
-            ) => {
-                text.push_str("\n\n");
-                need_space = false;
-            }
-            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Item) => {
-                if !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str("- ");
-                need_space = false;
-            }
-            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Item) => {
-                text.push('\n');
-                need_space = false;
-            }
-            pulldown_cmark::Event::End(_) => need_space = true,
-            _ => {}
-        }
-    }
-    text.trim().to_string()
-}
-
-fn validate_attachments(attachments: &Option<Vec<serde_json::Value>>) -> Result<(), &'static str> {
-    match attachments {
-        Some(attachments) if !attachments.is_empty() => Err("attachments_not_supported"),
-        _ => Ok(()),
-    }
-}
-
-fn validate_recipients(field: &'static str, recipients: &[String]) -> Result<(), &'static str> {
-    if recipients.is_empty() {
-        return Err(match field {
-            "to" => "to_required",
-            "cc" => "cc_required",
-            "bcc" => "bcc_required",
-            _ => "recipients_required",
-        });
-    }
-    if recipients.len() > MAX_RECIPIENTS_PER_FIELD {
-        return Err(match field {
-            "to" => "too_many_to",
-            "cc" => "too_many_cc",
-            "bcc" => "too_many_bcc",
-            _ => "too_many_recipients",
-        });
-    }
-    if recipients.iter().any(|address| !looks_like_email(address)) {
-        return Err(match field {
-            "to" => "invalid_to",
-            "cc" => "invalid_cc",
-            "bcc" => "invalid_bcc",
-            _ => "invalid_recipient",
-        });
-    }
-    Ok(())
-}
-
-fn validate_subject(subject: &str) -> Result<(), &'static str> {
-    if subject.chars().count() > MAX_SUBJECT_CHARS || subject.contains(['\r', '\n']) {
-        Err("invalid_subject")
-    } else {
-        Ok(())
-    }
-}
-
-fn validate_body(body: &str) -> Result<(), &'static str> {
-    if body.len() > MAX_BODY_BYTES {
-        Err("body_too_large")
-    } else {
-        Ok(())
-    }
-}
-
-fn looks_like_email(address: &str) -> bool {
-    let address = address.trim();
-    if address.is_empty()
-        || address.len() > 320
-        || address.contains(char::is_whitespace)
-        || address.contains(['\r', '\n'])
-    {
-        return false;
-    }
-    let Some((local, domain)) = address.split_once('@') else {
-        return false;
-    };
-    !local.is_empty()
-        && !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-        && !domain.contains("..")
-}
-
-fn reply_subject(subject: &str) -> String {
-    if subject
-        .trim_start()
-        .get(..3)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("re:"))
-    {
-        subject.to_string()
-    } else {
-        format!("Re: {subject}")
     }
 }
 
@@ -951,49 +755,6 @@ fn scheduled_send_response_from_row(
         error,
         created_at,
     }
-}
-
-async fn identity_id_for(session: &hail_jmap::Session, from: &str) -> Result<String, ComposeError> {
-    let mut request = session.client().build();
-    request.get_identity().properties([
-        hail_jmap::jmap_client::identity::Property::Id,
-        hail_jmap::jmap_client::identity::Property::Email,
-    ]);
-    let mut response = request.send_get_identity().await.map_err(provider_error)?;
-    let mut identities = response.take_list();
-    if let Some(index) = identities.iter().position(|identity| {
-        identity
-            .email()
-            .is_some_and(|email| email.eq_ignore_ascii_case(from))
-    }) {
-        return Ok(identities[index].take_id());
-    }
-    identities
-        .first_mut()
-        .map(|identity| identity.take_id())
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| ComposeError::Provider("identity not found".to_string()))
-}
-
-fn set_body_values(
-    email: &mut hail_jmap::jmap_client::email::Email<hail_jmap::jmap_client::Set>,
-    body: &RenderedBody,
-) {
-    use hail_jmap::jmap_client::email::EmailBodyPart;
-
-    email
-        .text_body(
-            EmailBodyPart::new()
-                .part_id("text")
-                .content_type("text/plain"),
-        )
-        .html_body(
-            EmailBodyPart::new()
-                .part_id("html")
-                .content_type("text/html"),
-        )
-        .body_value("text".to_string(), body.plain_text.clone())
-        .body_value("html".to_string(), body.html.clone());
 }
 
 fn provider_failed(user_id: i64, err: String) -> Response {
