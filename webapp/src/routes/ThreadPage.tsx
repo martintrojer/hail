@@ -573,11 +573,21 @@ function ThreadDocument({
     void handlePopupAction(message, action);
   }
 
+  function openActionMenuShortcut() {
+    // Find the last message's ··· button and click it
+    const buttons = document.querySelectorAll<HTMLButtonElement>('[aria-label="Message actions"]');
+    const lastButton = buttons[buttons.length - 1];
+    if (lastButton) {
+      lastButton.click();
+    }
+  }
+
   useKeyboardShortcuts({
     onReply: handleReplyShortcut,
     onReplyAll: handleReplyAllShortcut,
     onForward: handleForwardShortcut,
     onAddNote: handleAddNoteShortcut,
+    onOpenActionMenu: openActionMenuShortcut,
     onArchive: () => handleThreadShortcut('archive'),
     onTrash: () => handleThreadShortcut('trash'),
     onSetAside: () => handleThreadShortcut('set-aside'),

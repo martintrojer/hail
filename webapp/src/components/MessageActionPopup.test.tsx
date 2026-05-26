@@ -39,19 +39,19 @@ describe('MessageActionPopup', () => {
     expect(document.body).toContainElement(popup);
     expect(popup).toHaveStyle({ top: '80px' });
 
-    expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reply All' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Forward' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Set Aside' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reply Later' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Bubble Up' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Move to' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Reply' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Reply All' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Forward' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Set Aside' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Reply Later' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Bubble Up' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Move to' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Imbox' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Feed' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Paper Trail' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add a Note' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mark as spam' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Trash' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Add a Note' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Mark as spam' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Trash' })).toBeInTheDocument();
   });
 
   it('calls action callbacks and closes when an action is selected', () => {
@@ -67,7 +67,7 @@ describe('MessageActionPopup', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reply All' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply All' }));
     expect(onAction).toHaveBeenCalledWith('reply-all', undefined);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
