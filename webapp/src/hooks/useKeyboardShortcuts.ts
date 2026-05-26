@@ -33,6 +33,7 @@ export interface KeyboardShortcutHandlers {
   onToggleSelect?: () => void;
   onSelectAll?: () => void;
   onDeselectAll?: () => void;
+  onToggleMenu?: () => void;
   onShowHelp?: () => void;
 }
 
@@ -211,6 +212,7 @@ export function useKeyboardShortcuts(
         o: handlers.onOpenThread,  // vim open
         x: handlers.onToggleSelect,
         c: handlers.onCompose,
+        m: handlers.onToggleMenu,
         '/': handlers.onFocusSearch,
         '?': handlers.onShowHelp,
       };

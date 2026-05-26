@@ -17,6 +17,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { keys: ['Ctrl', 'd'], description: 'Half page down', combo: true },
       { keys: ['Ctrl', 'u'], description: 'Half page up', combo: true },
       { keys: ['o'], description: 'Open thread' },
+      { keys: ['m'], description: 'Toggle menu' },
       { keys: ['g', 'i'], description: 'Go to Imbox' },
       { keys: ['g', 'f'], description: 'Go to Feed' },
       { keys: ['g', 'p'], description: 'Go to Paper Trail' },
