@@ -56,12 +56,13 @@ const labels: Record<ListAction, string> = {
   'reply-later': 'Reply Later',
   classify: 'Classify',
   restore: 'Restore',
+  'not-spam': 'Not Spam',
   delete: 'Delete',
   'delete-forever': 'Delete forever',
 };
 
 function shortcutAction(action: ListAction) {
-  if (action === 'restore') {
+  if (action === 'restore' || action === 'not-spam') {
     return 'archive';
   }
 
@@ -80,6 +81,7 @@ function handlerName(action: ListAction) {
   if (action === 'set-aside') return 'setAside';
   if (action === 'reply-later') return 'replyLater';
   if (action === 'delete-forever') return 'deleteForever';
+  if (action === 'not-spam') return 'notSpam';
   return action;
 }
 

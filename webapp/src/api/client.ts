@@ -464,6 +464,13 @@ export class HailApiClient {
     );
   }
 
+  async getSpamView(): Promise<MailViewResponse> {
+    return this.#json<MailViewResponse>(
+      await this.#request('/api/views/spam'),
+      200,
+    );
+  }
+
   async getTrash(): Promise<TrashViewResponse> {
     return this.#json<TrashViewResponse>(
       await this.#request('/api/views/trash'),

@@ -24,9 +24,26 @@ async function loadSpec() {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
+    const fetchedSpec = await response.json();
+    try {
+      const fixtureSpec = await readJson(fixturePath);
+      const fixturePaths = Object.keys(fixtureSpec.paths ?? {});
+      const fetchedPaths = new Set(Object.keys(fetchedSpec.paths ?? {}));
+      const missingFixturePaths = fixturePaths.filter((path) => !fetchedPaths.has(path));
+      if (missingFixturePaths.length > 0) {
+        return {
+          source: path.relative(webappRoot, fixturePath),
+          spec: fixtureSpec,
+          warning: `${openapiUrl} appears stale; missing fixture paths: ${missingFixturePaths.join(', ')}`,
+        };
+      }
+    } catch {
+      // If the local fixture is absent or malformed, trust the fetched OpenAPI document.
+    }
+
     return {
       source: openapiUrl,
-      spec: await response.json(),
+      spec: fetchedSpec,
     };
   } catch (fetchError) {
     try {

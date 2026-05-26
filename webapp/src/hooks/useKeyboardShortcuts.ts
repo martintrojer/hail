@@ -21,6 +21,7 @@ export interface KeyboardShortcutHandlers {
   onGoPaperTrail?: () => void;
   onGoScreener?: () => void;
   onGoDrafts?: () => void;
+  onGoSpam?: () => void;
   onGoTrash?: () => void;
   onGoSetAside?: () => void;
   onGoReplyLater?: () => void;
@@ -176,6 +177,7 @@ export function useKeyboardShortcuts(
           p: handlers.onGoPaperTrail,
           s: handlers.onGoScreener,
           d: handlers.onGoDrafts,
+          j: handlers.onGoSpam,
           t: handlers.onGoTrash,
           a: handlers.onGoSetAside,
           l: handlers.onGoReplyLater,
