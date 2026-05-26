@@ -242,6 +242,17 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
     let decrypted = hail_core::open_provider_oauth_token(&encrypted, &key, &context).unwrap();
     assert_eq!(decrypted.expose_secret(), "1//refresh-token-secret");
 
+    let token_len: i64 =
+        sqlx::query_scalar("SELECT length(refresh_token_enc) FROM provider_accounts WHERE id = ?1")
+            .bind(account_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert!(
+        token_len >= 29,
+        "active account must never persist placeholder token ciphertext"
+    );
+
     let replay = app(state.clone(), client.clone())
         .oneshot(auth_request(Method::GET, &uri, &session_id))
         .await
@@ -400,15 +411,16 @@ async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
-          granted_scopes_json, refresh_token_ref, last_profile_history_id, profile_synced_at, sync_status, \
+          granted_scopes_json, refresh_token_enc, last_profile_history_id, profile_synced_at, sync_status, \
           last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, sync_backoff_secs, \
           last_error_class, last_error_message, created_at, updated_at) \
          VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', 'Alice Gmail', '[]', \
-                 'kms://token/alice', 'history-9', ?2, 'error', ?2, ?2, ?3, 120, \
-                 'gmail_rate_limit', 'rate limited', ?2, ?2) \
+                 ?2, 'history-9', ?3, 'error', ?3, ?3, ?4, 120, \
+                 'gmail_rate_limit', 'rate limited', ?3, ?3) \
          RETURNING id",
     )
     .bind(user_id)
+    .bind(vec![1_u8; 29])
     .bind(now)
     .bind(next_sync)
     .fetch_one(&state.db)
@@ -417,11 +429,12 @@ async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
     sqlx::query(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_ref, sync_status, created_at, updated_at) \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
          VALUES (?1, 'acct-b', 'gmail', 'gmail-bob', 'bob@gmail.example', '[]', \
-                 'kms://token/bob', 'active', ?2, ?2)",
+                 ?2, 'active', ?3, ?3)",
     )
     .bind(other_user_id)
+    .bind(vec![2_u8; 29])
     .bind(now)
     .execute(&state.db)
     .await
@@ -485,13 +498,14 @@ async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_ref, sync_status, next_sync_after, sync_backoff_secs, \
+          granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, sync_backoff_secs, \
           last_error_class, last_error_message, created_at, updated_at) \
          VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
-                 'kms://token/alice', 'error', ?2, 300, 'network', 'timeout', ?3, ?3) \
+                 ?2, 'error', ?3, 300, 'network', 'timeout', ?4, ?4) \
          RETURNING id",
     )
     .bind(user_id)
+    .bind(vec![3_u8; 29])
     .bind(next_sync)
     .bind(now)
     .fetch_one(&state.db)
@@ -500,12 +514,13 @@ async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
     let other_account_id: i64 = sqlx::query_scalar(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_ref, sync_status, next_sync_after, created_at, updated_at) \
+          granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, created_at, updated_at) \
          VALUES (?1, 'acct-b', 'gmail', 'gmail-bob', 'bob@gmail.example', '[]', \
-                 'kms://token/bob', 'active', ?2, ?3, ?3) \
+                 ?2, 'active', ?3, ?4, ?4) \
          RETURNING id",
     )
     .bind(other_user_id)
+    .bind(vec![4_u8; 29])
     .bind(next_sync)
     .bind(now)
     .fetch_one(&state.db)

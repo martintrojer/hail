@@ -120,13 +120,14 @@ async fn insert_provider(
 ) -> i64 {
     sqlx::query(
         "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, refresh_token_ref, \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, refresh_token_enc, \
           last_profile_history_id, sync_status, last_sync_attempted_at, next_sync_after, created_at, updated_at) \
-         VALUES (?, 'acct-provider', 'gmail', ?, ?, 'kms://hail/provider-token/1', ?, ?, ?, ?, ?, ?)",
+         VALUES (?, 'acct-provider', 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(format!("gmail-{status}-{history_id:?}-{next_sync_after:?}"))
     .bind(format!("{status}@gmail.example"))
+    .bind(vec![1_u8; 29])
     .bind(history_id)
     .bind(status)
     .bind(last_attempt)
@@ -272,6 +273,46 @@ async fn next_sync_after_prevents_early_retry() {
     assert_eq!(summary.considered, 1);
     assert_eq!(runner.calls(), vec![(due, "incremental")]);
     assert_eq!(provider_state(&pool, future).await.0, "error");
+}
+
+#[tokio::test]
+async fn tick_ignores_accounts_with_unresolved_external_token_refs() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let id = sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, refresh_token_ref, \
+          sync_status, created_at, updated_at) \
+         VALUES (?, 'acct-provider', 'gmail', 'gmail-ref-disabled', 'ref-disabled@gmail.example', \
+                 'kms://hail/provider-token/1', 'disabled', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("disabled provider ref insert")
+    .last_insert_rowid();
+    sqlx::query("UPDATE provider_accounts SET sync_status = 'active' WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect_err("constraint must reject active unresolved token refs");
+
+    let runner = FakeRunner::default();
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now,
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.considered, 0);
+    assert!(runner.calls().is_empty());
+    assert_eq!(provider_state(&pool, id).await.0, "disabled");
 }
 
 #[tokio::test]

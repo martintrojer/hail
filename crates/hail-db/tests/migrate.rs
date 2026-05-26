@@ -419,7 +419,7 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .bind("Gmail User <gmail-user@gmail.com>")
     .bind(r#"["https://www.googleapis.com/auth/gmail.readonly"]"#)
     .bind("2026-01-01T00:00:00Z")
-    .bind(vec![1_u8, 2, 3, 4])
+    .bind(vec![1_u8; 29])
     .bind("server-key-v1")
     .bind("2026-01-01T01:00:00Z")
     .bind("2026-01-01T00:30:00Z")
@@ -442,7 +442,7 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     )
     .bind(user_id)
     .bind("acct-gmail-user")
-    .bind(vec![9_u8])
+    .bind(vec![9_u8; 29])
     .bind("2026-01-01T00:00:00Z")
     .bind("2026-01-01T00:00:00Z")
     .execute(&pool)
@@ -463,7 +463,43 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .await;
     assert!(
         missing_token.is_err(),
-        "active provider account must have encrypted token material or reference"
+        "active provider account must have encrypted token material"
+    );
+
+    let short_token = sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?, ?, 'gmail', 'gmail-provider-short-token', 'short-token@gmail.com', ?, 'active', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("acct-gmail-user")
+    .bind(vec![7_u8; 28])
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        short_token.is_err(),
+        "active provider account must reject empty/too-short encrypted token material"
+    );
+
+    let token_ref = sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          refresh_token_ref, sync_status, created_at, updated_at) \
+         VALUES (?, ?, 'gmail', 'gmail-provider-ref-token', 'ref-token@gmail.com', ?, 'active', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("acct-gmail-user")
+    .bind("kms://hail/provider-token/1")
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        token_ref.is_err(),
+        "active provider account must reject unresolved external token references"
     );
 
     let duplicate = sqlx::query(
@@ -474,7 +510,7 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     )
     .bind(user_id)
     .bind("acct-gmail-user")
-    .bind(vec![5_u8])
+    .bind(vec![5_u8; 29])
     .bind("2026-01-01T00:00:00Z")
     .bind("2026-01-01T00:00:00Z")
     .execute(&pool)
@@ -506,12 +542,12 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     sqlx::query(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          refresh_token_ref, sync_status, created_at, updated_at) \
+          refresh_token_enc, sync_status, created_at, updated_at) \
          VALUES (?, ?, 'gmail', 'gmail-provider-id-1', 'mapping@gmail.com', ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-mapping-user")
-    .bind("kms://hail/provider-token/1")
+    .bind(vec![8_u8; 29])
     .bind("2026-01-01T00:00:00Z")
     .bind("2026-01-01T00:00:00Z")
     .execute(&pool)

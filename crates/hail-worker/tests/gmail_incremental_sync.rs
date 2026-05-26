@@ -91,12 +91,13 @@ async fn insert_provider_account(
     sqlx::query(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          refresh_token_ref, last_profile_history_id, sync_status, created_at, updated_at) \
-         VALUES (?, 'acct-sync', 'gmail', ?, ?, 'kms://hail/provider-token/1', ?, 'active', ?, ?)",
+          refresh_token_enc, last_profile_history_id, sync_status, created_at, updated_at) \
+         VALUES (?, 'acct-sync', 'gmail', ?, ?, ?, ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind(format!("gmail-provider-{user_id}"))
     .bind(format!("user-{user_id}@gmail.example"))
+    .bind(vec![1_u8; 29])
     .bind(history_id)
     .bind("2026-01-01T00:00:00Z")
     .bind("2026-01-01T00:00:00Z")
