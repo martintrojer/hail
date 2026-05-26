@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
@@ -24,7 +24,7 @@ use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id};
-use crate::routes::response::{internal, not_found};
+use crate::routes::response::{bad_request, error_response, internal, not_found};
 use crate::state::AppState;
 
 const UNDO_TTL_SECONDS: i64 = 10;
@@ -723,7 +723,7 @@ async fn post_undo(
     Path(id): Path<String>,
 ) -> Response {
     if !looks_like_undo_id(&id) {
-        return not_found();
+        return not_found("not_found");
     }
 
     let mut tx = match state.db.begin().await {
@@ -745,7 +745,7 @@ async fn post_undo(
     .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return not_found(),
+        Ok(None) => return not_found("not_found"),
         Err(err) => {
             tracing::error!(user_id = user.id, undo_id = %id, error = %err, "undo lookup failed");
             return internal();
@@ -835,28 +835,15 @@ fn looks_like_undo_id(id: &str) -> bool {
 }
 
 fn gone(error: &'static str) -> Response {
-    (
-        StatusCode::GONE,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
+    error_response(StatusCode::GONE, error)
 }
 
 fn undo_error_response(status: UndoErrorStatus) -> Response {
     match status {
-        UndoErrorStatus::BadRequest => (
-            StatusCode::BAD_REQUEST,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"bad_request"}"#,
-        )
-            .into_response(),
-        UndoErrorStatus::NotImplemented => (
-            StatusCode::NOT_IMPLEMENTED,
-            [(header::CONTENT_TYPE, "application/json")],
-            r#"{"error":"not_implemented"}"#,
-        )
-            .into_response(),
+        UndoErrorStatus::BadRequest => bad_request("bad_request"),
+        UndoErrorStatus::NotImplemented => {
+            error_response(StatusCode::NOT_IMPLEMENTED, "not_implemented")
+        }
         UndoErrorStatus::Internal => internal(),
     }
 }

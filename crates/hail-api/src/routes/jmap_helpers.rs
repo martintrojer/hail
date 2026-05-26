@@ -61,7 +61,7 @@ where
     match action().await {
         Ok(undo) => Json(crate::routes::threads::ThreadVerbResponse { undo }).into_response(),
         Err(crate::routes::threads::ThreadActionError::NotFound) => {
-            crate::routes::response::not_found()
+            crate::routes::response::not_found("not_found")
         }
         Err(crate::routes::threads::ThreadActionError::Provider(err)) => {
             tracing::warn!(user_id = user.id, thread_id, error = %err, "thread action failed");

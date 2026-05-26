@@ -525,7 +525,7 @@ async fn bubble_up(
         }
     };
     if !visible {
-        return not_found();
+        return not_found("not_found");
     }
 
     let now = Utc::now();
@@ -1068,7 +1068,7 @@ async fn destroy_thread(
             })
             .into_response()
         }
-        Err(ThreadActionError::NotFound) => not_found(),
+        Err(ThreadActionError::NotFound) => not_found("not_found"),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
 }
@@ -1107,7 +1107,7 @@ async fn mark_thread(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(ThreadActionError::NotFound) => not_found(),
+        Err(ThreadActionError::NotFound) => not_found("not_found"),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
 }

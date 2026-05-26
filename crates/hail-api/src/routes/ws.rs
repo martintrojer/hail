@@ -8,7 +8,7 @@
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::{Extension, Router, routing::get};
 use chrono::Utc;
 use tokio::sync::broadcast;
@@ -41,12 +41,7 @@ async fn ws_handler(
 }
 
 fn forbidden_origin() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"origin_forbidden"}"#,
-    )
-        .into_response()
+    crate::routes::response::error_response(StatusCode::FORBIDDEN, "origin_forbidden")
 }
 
 fn origin_matches_public_url(headers: &HeaderMap, public_url: &str) -> bool {

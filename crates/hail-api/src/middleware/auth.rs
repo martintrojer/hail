@@ -22,7 +22,7 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use chrono::Utc;
 use secrecy::SecretString;
 use subtle::ConstantTimeEq;
@@ -65,22 +65,12 @@ pub struct AuthSession {
 /// caller can't fingerprint "bad cookie" vs "expired" vs "decrypt
 /// failed". Specifics go to tracing only.
 fn unauthorized() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"unauthorized"}"#.to_string(),
-    )
-        .into_response()
+    crate::routes::response::error_response(StatusCode::UNAUTHORIZED, "unauthorized")
 }
 
 /// Generic 403 for missing CSRF header.
 fn forbidden_csrf() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"csrf_required"}"#.to_string(),
-    )
-        .into_response()
+    crate::routes::response::error_response(StatusCode::FORBIDDEN, "csrf_required")
 }
 
 /// Constant-time string compare. Returns true iff the strings are equal

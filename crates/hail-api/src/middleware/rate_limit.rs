@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 
 /// Max successful + failed attempts per window.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 5;
@@ -113,12 +113,7 @@ pub fn client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> Option<IpAddr
 
 /// Standard JSON 429 response for throttled public auth attempts.
 pub fn too_many_requests() -> Response {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"rate_limited"}"#,
-    )
-        .into_response()
+    crate::routes::response::error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited")
 }
 
 impl Default for IpRateLimiter {

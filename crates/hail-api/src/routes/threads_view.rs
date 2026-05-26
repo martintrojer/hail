@@ -244,7 +244,7 @@ async fn get_thread(
         .await
     {
         Ok(Some(thread)) => thread,
-        Ok(None) => return not_found(),
+        Ok(None) => return not_found("not_found"),
         Err(err) => {
             tracing::warn!(user_id = user.id, thread_id = %thread_id, error = %err.0, "thread assembly failed");
             return internal();

@@ -313,7 +313,7 @@ async fn create_draft(
             }),
         )
             .into_response(),
-        Err(DraftStoreError::NotFound) => not_found(),
+        Err(DraftStoreError::NotFound) => not_found("not_found"),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -345,8 +345,8 @@ async fn get_draft(
 
     match store.get(&state, user.jmap_token.clone(), &draft_id).await {
         Ok(Some(draft)) => Json(draft).into_response(),
-        Ok(None) => not_found(),
-        Err(DraftStoreError::NotFound) => not_found(),
+        Ok(None) => not_found("not_found"),
+        Err(DraftStoreError::NotFound) => not_found("not_found"),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -394,7 +394,7 @@ async fn update_draft(
             updated_at: Utc::now(),
         })
         .into_response(),
-        Err(DraftStoreError::NotFound) => not_found(),
+        Err(DraftStoreError::NotFound) => not_found("not_found"),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }
@@ -429,7 +429,7 @@ async fn delete_draft(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(DraftStoreError::NotFound) => not_found(),
+        Err(DraftStoreError::NotFound) => not_found("not_found"),
         Err(DraftStoreError::Provider(err)) => provider_failed(user.id, err),
     }
 }

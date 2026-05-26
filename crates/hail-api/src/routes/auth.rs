@@ -46,7 +46,7 @@ use crate::middleware::session::{
     SESSION_TTL_DAYS, basic_bearer, build_session_cookie, clear_session_cookie, new_session_id,
     session_cookie_value,
 };
-use crate::routes::response::internal;
+use crate::routes::response::{bad_request, error_response, internal};
 use crate::state::AppState;
 
 /// Public JSON representation of a user. Mirrors the v1 schema in
@@ -270,14 +270,7 @@ async fn parse_login_request(request: Request, state: &AppState) -> Result<Login
     Json::<LoginRequest>::from_request(request, state)
         .await
         .map(|Json(body)| body)
-        .map_err(|_rejection| {
-            (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                r#"{"error":"bad_request"}"#,
-            )
-                .into_response()
-        })
+        .map_err(|_rejection| bad_request("bad_request"))
 }
 
 #[cfg(feature = "__test-stubs")]
@@ -417,12 +410,7 @@ fn should_promote_to_admin(
 }
 
 fn invalid_credentials() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"error":"invalid_credentials"}"#,
-    )
-        .into_response()
+    error_response(StatusCode::UNAUTHORIZED, "invalid_credentials")
 }
 
 #[cfg(test)]

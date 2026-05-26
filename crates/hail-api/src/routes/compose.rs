@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
@@ -25,7 +25,7 @@ use crate::routes::outbound::{
     validate_subject,
 };
 pub use crate::routes::outbound::{OutboundMessage, ReplyHeaders};
-use crate::routes::response::{bad_request, internal, not_found};
+use crate::routes::response::{bad_request, error_response, internal, not_found};
 use crate::state::AppState;
 
 /// OpenAPI tag for outbound compose/reply endpoints.
@@ -361,7 +361,7 @@ async fn reply(
         .await
     {
         Ok(Some(context)) => context,
-        Ok(None) => return not_found(),
+        Ok(None) => return not_found("not_found"),
         Err(ComposeError::Provider(err)) => return provider_failed(user.id, err),
     };
     let message = match payload.into_message(context) {
@@ -449,7 +449,7 @@ async fn get_scheduled_send(
 ) -> Response {
     match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
         Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => not_found(),
+        Ok(None) => not_found("not_found"),
         Err(err) => {
             tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup failed");
             internal()
@@ -479,7 +479,7 @@ async fn cancel_scheduled_send(
 ) -> Response {
     let row = match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
         Ok(Some(row)) => row,
-        Ok(None) => return not_found(),
+        Ok(None) => return not_found("not_found"),
         Err(err) => {
             tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup failed");
             return internal();
@@ -514,7 +514,7 @@ async fn cancel_scheduled_send(
         return match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
             Ok(Some(row)) if row.status == "cancelled" => Json(row).into_response(),
             Ok(Some(_)) => conflict("scheduled_send_not_cancellable"),
-            Ok(None) => not_found(),
+            Ok(None) => not_found("not_found"),
             Err(err) => {
                 tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup after cancel race failed");
                 internal()
@@ -538,7 +538,7 @@ async fn cancel_scheduled_send(
 
     match scheduled_send_for_user(&state, user.id, scheduled_send_id).await {
         Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => not_found(),
+        Ok(None) => not_found("not_found"),
         Err(err) => {
             tracing::warn!(user_id = user.id, scheduled_send_id, error = %err, "scheduled send lookup after cancel failed");
             internal()
@@ -763,10 +763,5 @@ fn provider_failed(user_id: i64, err: String) -> Response {
 }
 
 fn conflict(error: &'static str) -> Response {
-    (
-        StatusCode::CONFLICT,
-        [(header::CONTENT_TYPE, "application/json")],
-        format!(r#"{{"error":"{error}"}}"#),
-    )
-        .into_response()
+    error_response(StatusCode::CONFLICT, error)
 }
