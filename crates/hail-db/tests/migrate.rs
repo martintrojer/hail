@@ -52,6 +52,8 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_provider_message_mappings_status",
     "idx_provider_sync_events_account_time",
     "idx_provider_sync_events_type",
+    "idx_provider_sync_events_user_account_time",
+    "idx_provider_sync_events_account_result",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
@@ -572,10 +574,11 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
 
     sqlx::query(
         "INSERT INTO provider_sync_events \
-         (provider_account_id, event_type, provider_message_id, metadata_json, created_at) \
-         VALUES (?, 'message_imported', 'gmail-msg-1', ?, ?)",
+         (provider_account_id, user_id, operation_kind, event_type, provider_message_id, result_status, metadata_json, created_at) \
+         VALUES (?, ?, 'message_import', 'message_imported', 'gmail-msg-1', 'succeeded', ?, ?)",
     )
     .bind(account_id)
+    .bind(user_id)
     .bind(r#"{"jmapEmailId":"jmap-email-1"}"#)
     .bind("2026-01-01T00:10:01Z")
     .execute(&pool)
@@ -595,12 +598,13 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     .fetch_one(&pool)
     .await
     .expect("mapping count");
-    let events: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM provider_sync_events WHERE provider_account_id = ?")
-            .bind(account_id)
-            .fetch_one(&pool)
-            .await
-            .expect("event count");
+    let events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_sync_events WHERE provider_account_id = ?",
+    )
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("event count");
     assert_eq!(mappings, 0, "mappings must cascade with provider account");
     assert_eq!(events, 0, "sync events must cascade with provider account");
 }

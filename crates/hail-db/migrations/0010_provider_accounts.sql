@@ -78,10 +78,18 @@ CREATE INDEX idx_provider_message_mappings_status
 CREATE TABLE provider_sync_events (
   id                    INTEGER PRIMARY KEY,
   provider_account_id   INTEGER NOT NULL REFERENCES provider_accounts(id) ON DELETE CASCADE,
+  user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  operation_kind        TEXT NOT NULL CHECK (
+    operation_kind IN ('oauth','sync','message_import','message_skip','retry','failure','token','disconnect')
+  ),
   event_type            TEXT NOT NULL CHECK (
-    event_type IN ('oauth_connected','sync_started','sync_completed','sync_failed','message_imported','message_skipped','token_revoked','disconnected')
+    event_type IN ('oauth_connected','sync_started','sync_completed','sync_failed','message_imported','message_skipped','message_retry_scheduled','message_failed','token_revoked','disconnected')
   ),
   provider_message_id   TEXT,
+  result_status         TEXT NOT NULL CHECK (
+    result_status IN ('started','succeeded','skipped','retrying','failed','info')
+  ),
+  safe_error_code       TEXT,
   safe_error_class      TEXT,
   safe_error_message    TEXT,
   metadata_json         TEXT,
@@ -91,3 +99,21 @@ CREATE INDEX idx_provider_sync_events_account_time
   ON provider_sync_events(provider_account_id, created_at);
 CREATE INDEX idx_provider_sync_events_type
   ON provider_sync_events(event_type);
+CREATE INDEX idx_provider_sync_events_user_account_time
+  ON provider_sync_events(user_id, provider_account_id, created_at);
+CREATE INDEX idx_provider_sync_events_account_result
+  ON provider_sync_events(provider_account_id, result_status, created_at);
+CREATE TRIGGER provider_sync_events_account_user_insert
+BEFORE INSERT ON provider_sync_events
+FOR EACH ROW
+WHEN (SELECT user_id FROM provider_accounts WHERE id = NEW.provider_account_id) IS NOT NEW.user_id
+BEGIN
+  SELECT RAISE(ABORT, 'provider_sync_events user_id must match provider_accounts.user_id');
+END;
+CREATE TRIGGER provider_sync_events_account_user_update
+BEFORE UPDATE OF provider_account_id, user_id ON provider_sync_events
+FOR EACH ROW
+WHEN (SELECT user_id FROM provider_accounts WHERE id = NEW.provider_account_id) IS NOT NEW.user_id
+BEGIN
+  SELECT RAISE(ABORT, 'provider_sync_events user_id must match provider_accounts.user_id');
+END;
