@@ -189,7 +189,7 @@ export function useKeyboardShortcuts(
         }
       }
 
-      if (key === 'g') {
+      if (event.key === 'g') {
         event.preventDefault();
         startPrefix('g');
         return;
