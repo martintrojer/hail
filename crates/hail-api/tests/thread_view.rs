@@ -403,6 +403,29 @@ async fn messages_preserve_assembler_order() {
 }
 
 #[tokio::test]
+async fn response_includes_remote_image_variant_without_tracking_pixels() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "remote-images@example.org").await;
+    let thread = sample_thread(vec![sample_message(
+        "email-a",
+        r#"<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo"><img src="https://track.example/open.gif" width="1" height="1" alt="tracker">"#,
+    )]);
+
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let message = &json["messages"][0];
+    let html = message["html"].as_str().unwrap();
+    let remote_html = message["html_with_remote_images"].as_str().unwrap();
+    assert!(!html.contains("cdn.example/logo.png"));
+    assert!(remote_html.contains("cdn.example/logo.png"));
+    assert!(!remote_html.contains("track.example/open.gif"));
+    let trackers = message["blocked_trackers"].as_array().unwrap();
+    assert_eq!(trackers.len(), 2);
+}
+
+#[tokio::test]
 async fn cid_inline_image_sources_are_rewritten_to_authenticated_blob_downloads() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "cid-owner@example.org").await;

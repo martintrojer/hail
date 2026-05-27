@@ -211,6 +211,9 @@ function MessageCard({
   hiddenActions?: string[];
 }) {
   const sender = firstSender(message);
+  const remoteImagesAvailable = message.html_with_remote_images !== message.html;
+  const [showRemoteImages, setShowRemoteImages] = useState(false);
+  const renderedHtml = showRemoteImages ? message.html_with_remote_images : message.html;
 
   function togglePopup(event: MouseEvent<HTMLButtonElement>) {
     onTogglePopup(message.email_id, event.currentTarget.getBoundingClientRect());
@@ -261,13 +264,26 @@ function MessageCard({
             </div>
           </div>
 
-          {message.html.trim().length > 0 ? (
+          {remoteImagesAvailable ? (
+            <div className="mt-4 rounded-lg border border-accent-yellow/30 bg-bg-banner px-3 py-2 text-sm text-ink-secondary">
+              Remote images are hidden by default. Tracking pixels stay blocked.{' '}
+              <button
+                type="button"
+                className="font-semibold text-accent-blue underline"
+                onClick={() => setShowRemoteImages((value) => !value)}
+              >
+                {showRemoteImages ? 'Hide remote images' : 'Show remote images'}
+              </button>
+            </div>
+          ) : null}
+
+          {renderedHtml.trim().length > 0 ? (
             <div
               className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-ink-primary [&_a]:text-accent-blue [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border-hairline [&_blockquote]:pl-4 [&_blockquote]:text-ink-secondary [&_code]:rounded [&_code]:bg-bg-hover [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border-hairline [&_td]:p-2 [&_th]:border [&_th]:border-border-hairline [&_th]:p-2"
               // Server owns the mail-render trust boundary: hail-api strips quoted
               // history, removes trackers, and sanitizes HTML before this field is
               // exposed to the SPA. The client renders only that sanitized fragment.
-              dangerouslySetInnerHTML={{ __html: message.html }}
+              dangerouslySetInnerHTML={{ __html: renderedHtml }}
             />
           ) : (
             <p className="mt-5 whitespace-pre-wrap text-base leading-relaxed text-ink-primary">
