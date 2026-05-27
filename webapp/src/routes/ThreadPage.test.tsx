@@ -151,6 +151,7 @@ afterEach(() => {
   restoreThreadRoute?.();
   restoreThreadRoute = null;
   window.history.pushState({}, '', '/');
+  window.localStorage.clear();
   cleanup();
 });
 
@@ -291,6 +292,26 @@ describe('ThreadPage', () => {
     expect(image).not.toBeNull();
     expect(image).toHaveAttribute('src', 'https://cdn.example/logo.png');
     expect(screen.getByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
+
+    cleanup();
+    renderThread(
+      sampleThread({
+        messages: [
+          {
+            email_id: 'message-remote',
+            from: [{ name: 'Alice Sender', email: 'alice@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T12:00:00Z',
+            html: '<p>Logo</p>',
+            html_with_remote_images: '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
+            preview: 'Logo',
+            blocked_trackers: [],
+          },
+        ],
+      }),
+    );
+    expect(await screen.findByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
+    expect(document.querySelector('article img')).toHaveAttribute('src', 'https://cdn.example/logo.png');
   });
 
 

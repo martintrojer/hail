@@ -71,7 +71,7 @@ impl SecurityHeaders {
              frame-ancestors 'none'; \
              script-src 'self'; \
              style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data: blob:; \
+             img-src 'self' data: blob: https: http:; \
              font-src 'self' data:; \
              connect-src 'self'{websocket_source}; \
              form-action 'self'"
@@ -106,5 +106,13 @@ mod tests {
 
         assert!(!headers.hsts);
         assert!(csp.contains("connect-src 'self' ws://localhost:8080"));
+    }
+
+    #[test]
+    fn csp_allows_remote_images_after_user_opt_in() {
+        let headers = SecurityHeaders::from_public_url("https://mail.example.test");
+        let csp = headers.content_security_policy.to_str().unwrap();
+
+        assert!(csp.contains("img-src 'self' data: blob: https: http:"));
     }
 }
