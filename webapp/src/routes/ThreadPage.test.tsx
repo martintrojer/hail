@@ -209,6 +209,7 @@ function sampleThread(
         to: [{ name: 'Reader', email: 'reader@example.com' }],
         received_at: '2026-05-23T12:00:00Z',
         html: '<p><strong>Sanitized receipt</strong> ready.</p>',
+        html_with_remote_images: '<p><strong>Sanitized receipt</strong> ready.</p>',
         preview: 'Sanitized receipt ready.',
         blocked_trackers: [
           {
@@ -223,6 +224,7 @@ function sampleThread(
         to: [],
         received_at: null,
         html: '   ',
+        html_with_remote_images: '   ',
         preview: 'Plaintext fallback line one.\nPlaintext fallback line two.',
         blocked_trackers: [],
       },
@@ -250,6 +252,47 @@ describe('ThreadPage', () => {
       '<p><strong>Sanitized receipt</strong> ready.</p>',
     );
   });
+
+
+
+  it('shows remote images on demand while keeping the sanitized default', async () => {
+    const { container } = renderThread(
+      sampleThread({
+        messages: [
+          {
+            email_id: 'message-remote',
+            from: [{ name: 'Alice Sender', email: 'alice@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T12:00:00Z',
+            html: '<p>Logo</p>',
+            html_with_remote_images: '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
+            preview: 'Logo',
+            blocked_trackers: [
+              {
+                src: 'https://cdn.example/logo.png',
+                reason: 'remote image blocked by default',
+              },
+              {
+                src: 'https://tracker.example/open.gif',
+                reason: 'image dimensions are 2x2 or smaller',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText(/Remote images are hidden by default\./)).toBeInTheDocument();
+    expect(container.querySelector('article img')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show remote images' }));
+
+    const image = container.querySelector('article img');
+    expect(image).not.toBeNull();
+    expect(image).toHaveAttribute('src', 'https://cdn.example/logo.png');
+    expect(screen.getByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
+  });
+
 
   it('renders plaintext fallback content when no sanitized HTML is available', async () => {
     renderThread(sampleThread());

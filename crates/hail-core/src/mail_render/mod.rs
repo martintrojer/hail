@@ -22,6 +22,7 @@ use regex::Regex;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SanitizedHtml {
     pub html: String,
+    pub html_with_remote_images: String,
     pub blocked_trackers: Vec<BlockedTracker>,
 }
 
@@ -37,11 +38,14 @@ pub struct BlockedTracker {
 /// This function is intentionally route-agnostic so both API thread assembly and
 /// any future worker-side render/cache job can share exactly the same policy.
 pub fn sanitize_and_strip_trackers(input_html: &str) -> SanitizedHtml {
-    let (stripped_html, blocked_trackers) = strip_tracking_images(input_html);
+    let (stripped_html, blocked_trackers) = strip_tracking_images(input_html, true);
+    let (remote_image_html, _) = strip_tracking_images(input_html, false);
     let html = sanitizer().clean(&stripped_html).to_string();
+    let html_with_remote_images = sanitizer().clean(&remote_image_html).to_string();
 
     SanitizedHtml {
         html,
+        html_with_remote_images,
         blocked_trackers,
     }
 }
@@ -105,7 +109,10 @@ fn sanitizer() -> Builder<'static> {
     builder
 }
 
-fn strip_tracking_images(input_html: &str) -> (String, Vec<BlockedTracker>) {
+fn strip_tracking_images(
+    input_html: &str,
+    block_remote_images: bool,
+) -> (String, Vec<BlockedTracker>) {
     let dom = parse_fragment(
         RcDom::default(),
         Default::default(),
@@ -116,7 +123,7 @@ fn strip_tracking_images(input_html: &str) -> (String, Vec<BlockedTracker>) {
     .one(input_html);
 
     let mut blocked_trackers = Vec::new();
-    strip_tracking_images_from(&dom.document, &mut blocked_trackers);
+    strip_tracking_images_from(&dom.document, block_remote_images, &mut blocked_trackers);
 
     let mut bytes = Vec::new();
     serialize(
@@ -135,16 +142,20 @@ fn strip_tracking_images(input_html: &str) -> (String, Vec<BlockedTracker>) {
     )
 }
 
-fn strip_tracking_images_from(handle: &Handle, blocked_trackers: &mut Vec<BlockedTracker>) {
+fn strip_tracking_images_from(
+    handle: &Handle,
+    block_remote_images: bool,
+    blocked_trackers: &mut Vec<BlockedTracker>,
+) {
     let children = handle.children.borrow().clone();
     let mut remove_indices = Vec::new();
 
     for (index, child) in children.iter().enumerate() {
-        if let Some(blocked) = blocked_tracker_for(child) {
+        if let Some(blocked) = blocked_tracker_for(child, block_remote_images) {
             blocked_trackers.push(blocked);
             remove_indices.push(index);
         } else {
-            strip_tracking_images_from(child, blocked_trackers);
+            strip_tracking_images_from(child, block_remote_images, blocked_trackers);
         }
     }
 
@@ -157,7 +168,7 @@ fn strip_tracking_images_from(handle: &Handle, blocked_trackers: &mut Vec<Blocke
     }
 }
 
-fn blocked_tracker_for(handle: &Handle) -> Option<BlockedTracker> {
+fn blocked_tracker_for(handle: &Handle, block_remote_images: bool) -> Option<BlockedTracker> {
     let NodeData::Element { name, attrs, .. } = &handle.data else {
         return None;
     };
@@ -180,7 +191,7 @@ fn blocked_tracker_for(handle: &Handle) -> Option<BlockedTracker> {
         Some("image is hidden by inline style")
     } else if tracking_url(&src) {
         Some("image URL looks like a tracking beacon")
-    } else if is_remote_http_image(&src) {
+    } else if block_remote_images && is_remote_http_image(&src) {
         Some("remote image blocked by default")
     } else {
         None

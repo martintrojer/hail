@@ -218,6 +218,7 @@ struct ThreadMessageResponse {
     #[schema(value_type = Option<String>, format = DateTime)]
     received_at: Option<DateTime<Utc>>,
     html: String,
+    html_with_remote_images: String,
     preview: String,
     blocked_trackers: Vec<BlockedTrackerResponse>,
 }
@@ -304,13 +305,17 @@ fn render_message(message: AssembledMessage) -> ThreadMessageResponse {
     };
     let stripped = strip_quoted_history(&body_html);
     let mut sanitized = sanitize_and_strip_trackers(&stripped.html);
+    let mut html_with_remote_images = sanitized.html_with_remote_images.clone();
     sanitized.html = rewrite_inline_image_sources(&sanitized.html, &message.inline_images);
+    html_with_remote_images =
+        rewrite_inline_image_sources(&html_with_remote_images, &message.inline_images);
     ThreadMessageResponse {
         email_id: message.email_id,
         from: message.from,
         to: message.to,
         received_at: message.received_at,
         html: sanitized.html,
+        html_with_remote_images,
         preview: message.preview,
         blocked_trackers: sanitized
             .blocked_trackers

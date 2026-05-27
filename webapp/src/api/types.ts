@@ -1268,6 +1268,7 @@ export interface components {
             email_id: string;
             from: components["schemas"]["Participant"][];
             html: string;
+            html_with_remote_images: string;
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
@@ -2014,8 +2015,8 @@ export interface operations {
     };
     gmail_callback: {
         parameters: {
-            query: {
-                state: string;
+            query?: {
+                state?: string;
                 code?: string;
                 error?: string;
             };
@@ -2025,14 +2026,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Gmail account connected. */
-            200: {
+            /** @description Redirects to provider accounts SPA route after Gmail OAuth callback. */
+            303: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ProviderAccountResponse"];
-                };
+                content?: never;
             };
         };
     };
