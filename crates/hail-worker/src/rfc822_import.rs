@@ -82,6 +82,11 @@ impl StalwartJmapRfc822Importer {
         Self { session }
     }
 
+    #[must_use]
+    pub fn session(&self) -> &hail_jmap::Session {
+        &self.session
+    }
+
     pub async fn inbox_request(
         &self,
         raw_rfc822: Vec<u8>,

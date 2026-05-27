@@ -8,9 +8,11 @@ use hail_db::provider_message_mappings::{
     mark_provider_message_imported,
 };
 use hail_db::provider_sync_audit::list_provider_sync_audit_logs;
+use hail_jmap::jmap_client::email::{Property as EmailProperty, query as email_query};
 use hail_test::gmail_import_fixtures::{
     GmailImportFixture, GmailImportScenario, gmail_import_fixture,
 };
+use hail_test::stalwart::{stalwart_tests_enabled, start_stalwart_fixture};
 use hail_worker::gmail_client::{
     GmailClientError, GmailLabel, ListMessage, ListMessagesParams, ListMessagesResponse,
     RawGmailMessage,
@@ -24,7 +26,7 @@ use hail_worker::provider_import_routing::{
 };
 use hail_worker::rfc822_import::{
     FakeRfc822Importer, ImportedRfc822Message, Rfc822ImportError, Rfc822ImportRequest,
-    Rfc822Importer,
+    Rfc822Importer, StalwartJmapRfc822Importer,
 };
 use hail_worker::screener::{JmapOps, RouteError};
 use tokio::sync::Barrier;
@@ -1484,6 +1486,198 @@ async fn dedupes_different_provider_id_by_rfc822_message_id() {
         copy.rfc822_message_id.as_deref(),
         Some(copy_fixture.rfc822_message_id)
     );
+}
+
+#[tokio::test]
+async fn real_stalwart_boundary_imports_fake_gmail_once_and_dedupes_by_message_id_when_enabled() {
+    if !stalwart_tests_enabled() {
+        eprintln!(
+            "skipping real Stalwart provider import boundary test; set HAIL_RUN_STALWART_TESTS=1 to run it"
+        );
+        return;
+    }
+
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let fixture = start_stalwart_fixture()
+        .await
+        .expect("Stalwart fixture should start");
+    let session = fixture
+        .login_seeded_user()
+        .await
+        .expect("seeded Stalwart user should login");
+    let importer = StalwartJmapRfc822Importer::new(session);
+    let inbox_id = importer.inbox_id().await.expect("fixture inbox id");
+    let source_fixture = gmail_import_fixture(GmailImportScenario::RawRfc822Import);
+    let gmail = FakeGmail::new(
+        vec![list_fixture_page([source_fixture])],
+        vec![raw_fixture_message(source_fixture)],
+    );
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes([inbox_id.clone()]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("historical import through real Stalwart importer");
+
+    assert_eq!(summary.imported, 1);
+    assert_eq!(summary.duplicates, 0);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(gmail.raw_gets(), vec![source_fixture.gmail_id]);
+
+    let first_mapping =
+        get_provider_message_mapping(&pool, provider_account_id, source_fixture.gmail_id)
+            .await
+            .expect("mapping lookup")
+            .expect("imported mapping");
+    assert_eq!(first_mapping.import_status, ProviderImportStatus::Imported);
+    assert_eq!(
+        first_mapping.rfc822_message_id.as_deref(),
+        Some(source_fixture.rfc822_message_id)
+    );
+    let email_id = first_mapping
+        .jmap_email_id
+        .as_deref()
+        .expect("mapping stores JMAP email id");
+    let thread_id = first_mapping
+        .jmap_thread_id
+        .as_deref()
+        .expect("mapping stores JMAP thread id");
+    assert!(!thread_id.is_empty());
+
+    let imported_email = fetch_stalwart_email(&importer, email_id).await;
+    assert_eq!(imported_email.id(), Some(email_id));
+    assert_eq!(imported_email.thread_id(), Some(thread_id));
+    assert!(imported_email.mailbox_ids().contains(&inbox_id.as_str()));
+    assert_eq!(
+        imported_email.message_id().unwrap_or_default(),
+        &[source_fixture.rfc822_message_id.to_owned()]
+    );
+    assert_eq!(
+        visible_message_count_by_message_id(&importer, &inbox_id, source_fixture.rfc822_message_id)
+            .await,
+        1
+    );
+
+    let rerun_gmail = FakeGmail::new(
+        vec![list_fixture_page([source_fixture])],
+        vec![raw_fixture_message(source_fixture)],
+    );
+    let rerun = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &rerun_gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes([inbox_id.clone()]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("rerun skips provider mapping without importing");
+    assert_eq!(rerun.skipped, 1);
+    assert_eq!(rerun.fetched, 0);
+    assert!(rerun_gmail.raw_gets().is_empty());
+    assert_eq!(
+        visible_message_count_by_message_id(&importer, &inbox_id, source_fixture.rfc822_message_id)
+            .await,
+        1
+    );
+
+    let duplicate_fixture = gmail_import_fixture(GmailImportScenario::DedupeIdempotency);
+    let duplicate_gmail = FakeGmail::new(
+        vec![list_fixture_page([duplicate_fixture])],
+        vec![raw_fixture_message(duplicate_fixture)],
+    );
+    let duplicate = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &duplicate_gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes([inbox_id.clone()]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("same RFC822 via a different provider id dedupes before Stalwart import");
+    assert_eq!(duplicate.fetched, 1);
+    assert_eq!(duplicate.duplicates, 1);
+    assert_eq!(duplicate.imported, 0);
+    assert_eq!(
+        visible_message_count_by_message_id(&importer, &inbox_id, source_fixture.rfc822_message_id)
+            .await,
+        1
+    );
+    let duplicate_mapping =
+        get_provider_message_mapping(&pool, provider_account_id, duplicate_fixture.gmail_id)
+            .await
+            .expect("duplicate mapping lookup")
+            .expect("duplicate mapping");
+    assert_eq!(
+        duplicate_mapping.import_status,
+        ProviderImportStatus::Duplicate
+    );
+    assert_eq!(duplicate_mapping.jmap_email_id.as_deref(), Some(email_id));
+    assert_eq!(duplicate_mapping.jmap_thread_id.as_deref(), Some(thread_id));
+}
+
+async fn fetch_stalwart_email(
+    importer: &StalwartJmapRfc822Importer,
+    email_id: &str,
+) -> hail_jmap::jmap_client::email::Email {
+    importer
+        .session()
+        .client()
+        .email_get(
+            email_id,
+            Some([
+                EmailProperty::Id,
+                EmailProperty::ThreadId,
+                EmailProperty::MailboxIds,
+                EmailProperty::MessageId,
+            ]),
+        )
+        .await
+        .expect("Email/get should succeed")
+        .expect("imported Email should exist")
+}
+
+async fn visible_message_count_by_message_id(
+    importer: &StalwartJmapRfc822Importer,
+    mailbox_id: &str,
+    message_id: &str,
+) -> usize {
+    let mut query = importer
+        .session()
+        .client()
+        .email_query(
+            Some(email_query::Filter::in_mailbox(mailbox_id.to_owned())),
+            None::<Vec<_>>,
+        )
+        .await
+        .expect("Email/query by mailbox should succeed");
+    let email_ids = query.take_ids();
+    let mut matching = 0;
+    for email_id in email_ids {
+        let email = fetch_stalwart_email(importer, &email_id).await;
+        if email
+            .message_id()
+            .is_some_and(|message_ids| message_ids.iter().any(|candidate| candidate == message_id))
+        {
+            matching += 1;
+        }
+    }
+    matching
 }
 
 #[tokio::test]
