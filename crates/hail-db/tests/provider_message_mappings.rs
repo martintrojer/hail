@@ -348,6 +348,72 @@ async fn route_failed_mapping_keeps_local_ids_and_terminal_import_status() {
 }
 
 #[tokio::test]
+async fn failed_post_import_mapping_can_converge_without_changing_local_ids() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "crash-window@example.com", "acct-crash-window").await;
+    let provider_account_id = insert_provider_account(
+        &pool,
+        user_id,
+        "acct-crash-window",
+        "gmail-provider-crash-window",
+    )
+    .await;
+
+    let failed = mark_provider_message_failed(
+        &pool,
+        FailedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: "gmail-crash-window",
+            provider_thread_id: Some("thread-crash-window"),
+            provider_history_id: Some("history-before-crash"),
+            rfc822_message_id: Some("crash-window@example.com"),
+            content_sha256: Some(&[42_u8; 32]),
+            error_class: "stalwart_import",
+            error_message: Some("simulated crash after local Stalwart import"),
+        },
+    )
+    .await
+    .expect("record failed crash-window mapping");
+    assert_eq!(failed.import_status, ProviderImportStatus::Failed);
+    assert!(failed.jmap_email_id.is_none());
+
+    let imported = mark_provider_message_imported(
+        &pool,
+        ImportedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: "gmail-crash-window",
+            provider_thread_id: Some("thread-crash-window"),
+            provider_history_id: Some("history-after-retry"),
+            rfc822_message_id: Some("crash-window@example.com"),
+            content_sha256: Some(&[42_u8; 32]),
+            jmap_email_id: "jmap-email-crash-window",
+            jmap_thread_id: Some("jmap-thread-crash-window"),
+            jmap_mailbox_ids_json: Some(r#"["mailbox-inbox"]"#),
+        },
+    )
+    .await
+    .expect("retry converges mapping");
+
+    assert_eq!(imported.id, failed.id);
+    assert_eq!(imported.import_status, ProviderImportStatus::Imported);
+    assert_eq!(
+        imported.provider_history_id.as_deref(),
+        Some("history-after-retry")
+    );
+    assert_eq!(
+        imported.rfc822_message_id.as_deref(),
+        Some("crash-window@example.com")
+    );
+    assert_eq!(imported.content_sha256.as_deref(), Some(&[42_u8; 32][..]));
+    assert_eq!(
+        imported.jmap_email_id.as_deref(),
+        Some("jmap-email-crash-window")
+    );
+    assert!(imported.error_class.is_none());
+    assert!(imported.error_message.is_none());
+}
+
+#[tokio::test]
 async fn content_sha256_must_be_32_bytes() {
     let (pool, _guard) = setup().await;
     let user_id = insert_user(&pool, "hash-user@example.com", "acct-hash-user").await;

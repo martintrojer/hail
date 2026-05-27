@@ -12,12 +12,15 @@ use hail_worker::gmail_client::{
     GmailHistoryRecord, ListHistoryParams, ListHistoryResponse, ListMessage, ListMessagesParams,
     ListMessagesResponse, RawGmailMessage,
 };
-use hail_worker::gmail_historical_import::GmailHistoricalSource;
+use hail_worker::gmail_historical_import::{GmailHistoricalImporter, GmailHistoricalSource};
 use hail_worker::gmail_incremental_sync::{
     GmailIncrementalSource, GmailIncrementalSyncAccount, GmailIncrementalSyncError,
     GmailIncrementalSyncOptions, run_gmail_incremental_sync,
 };
-use hail_worker::rfc822_import::FakeRfc822Importer;
+use hail_worker::provider_import_routing::RoutedImportedRfc822Message;
+use hail_worker::rfc822_import::{
+    FakeRfc822Importer, Rfc822ImportError, Rfc822ImportRequest, Rfc822Importer,
+};
 use reqwest::StatusCode;
 use tokio::sync::Barrier;
 use tokio_util::sync::CancellationToken;
@@ -310,6 +313,65 @@ fn message_page_from_fixtures(
         next_page_token: None,
         result_size_estimate: None,
     }
+}
+
+#[derive(Debug)]
+struct PostImportCrashImporter<'a> {
+    inner: &'a FakeRfc822Importer,
+    fail_next_for_provider_id: Mutex<Option<String>>,
+}
+
+impl<'a> PostImportCrashImporter<'a> {
+    fn new(inner: &'a FakeRfc822Importer, provider_message_id: impl Into<String>) -> Self {
+        Self {
+            inner,
+            fail_next_for_provider_id: Mutex::new(Some(provider_message_id.into())),
+        }
+    }
+}
+
+#[async_trait]
+impl GmailHistoricalImporter for PostImportCrashImporter<'_> {
+    async fn import_gmail_rfc822(
+        &self,
+        _db: &sqlx::SqlitePool,
+        _user_id: i64,
+        request: Rfc822ImportRequest,
+    ) -> Result<
+        RoutedImportedRfc822Message,
+        hail_worker::gmail_historical_import::GmailHistoricalImportError,
+    > {
+        let imported = self.inner.import_rfc822(request.clone()).await?;
+        let mut fail_next = self
+            .fail_next_for_provider_id
+            .lock()
+            .expect("post import crash flag");
+        if fail_next.as_deref() == request.provider_message_id.as_deref() {
+            *fail_next = None;
+            return Err(
+                hail_worker::gmail_historical_import::GmailHistoricalImportError::Rfc822Import(
+                    Rfc822ImportError::Jmap(
+                        "simulated crash after local incremental import".to_owned(),
+                    ),
+                ),
+            );
+        }
+        Ok(RoutedImportedRfc822Message {
+            imported,
+            route_outcome: None,
+        })
+    }
+}
+
+async fn profile_history_cursor(
+    pool: &sqlx::SqlitePool,
+    provider_account_id: i64,
+) -> Option<String> {
+    sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
+        .bind(provider_account_id)
+        .fetch_one(pool)
+        .await
+        .expect("history cursor")
 }
 
 #[tokio::test]
@@ -625,4 +687,136 @@ async fn rerunning_same_incremental_history_page_does_not_duplicate_stalwart_mai
     assert_eq!(rerun.imported, 0);
     assert!(rerun_gmail.raw_gets().is_empty());
     assert_eq!(importer.imports().len(), 1);
+}
+
+#[tokio::test]
+async fn retry_after_incremental_crash_after_local_import_advances_cursor_without_duplicate_mail() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let importer = FakeRfc822Importer::default();
+    let crashing_importer = PostImportCrashImporter::new(&importer, "gmail-incremental-crash");
+    let options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::new(
+        vec![Ok(history_page(
+            vec![(
+                "101",
+                vec![("gmail-incremental-crash", "thread-incremental-crash")],
+            )],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        vec![raw_message(
+            "gmail-incremental-crash",
+            "thread-incremental-crash",
+            "101",
+            "incremental-crash@example.com",
+        )],
+    );
+    let first = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &first_gmail,
+        &crashing_importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first incremental pass records failed post-import window");
+
+    assert_eq!(first.messages_seen, 1);
+    assert_eq!(first.failed, 1);
+    assert_eq!(first.imported, 0);
+    assert_eq!(
+        profile_history_cursor(&pool, provider_account_id)
+            .await
+            .as_deref(),
+        Some("102")
+    );
+    assert_eq!(importer.local_message_count(), 1);
+    let failed =
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-incremental-crash")
+            .await
+            .expect("failed mapping lookup")
+            .expect("failed mapping");
+    assert_eq!(failed.import_status, ProviderImportStatus::Failed);
+    assert_eq!(failed.error_class.as_deref(), Some("stalwart_import"));
+    assert!(failed.jmap_email_id.is_none());
+
+    let retry_gmail = FakeGmail::new(
+        vec![Ok(history_page(
+            vec![(
+                "101",
+                vec![("gmail-incremental-crash", "thread-incremental-crash")],
+            )],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        vec![raw_message(
+            "gmail-incremental-crash",
+            "thread-incremental-crash",
+            "101-retry",
+            "incremental-crash@example.com",
+        )],
+    );
+    let retry = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &retry_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("retry same incremental history page");
+
+    assert_eq!(retry.messages_seen, 1);
+    assert_eq!(retry.failed, 0);
+    assert_eq!(retry.imported, 0);
+    assert_eq!(retry.duplicates, 1);
+    assert_eq!(
+        profile_history_cursor(&pool, provider_account_id)
+            .await
+            .as_deref(),
+        Some("102")
+    );
+    assert_eq!(importer.local_message_count(), 1);
+    let mapping =
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-incremental-crash")
+            .await
+            .expect("mapping lookup")
+            .expect("mapping converged");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Duplicate);
+    assert_eq!(mapping.jmap_email_id.as_deref(), Some("email-1"));
+    assert_eq!(
+        mapping.rfc822_message_id.as_deref(),
+        Some("incremental-crash@example.com")
+    );
+    assert!(mapping.error_class.is_none());
+
+    let audit = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 20)
+        .await
+        .expect("audit logs");
+    assert!(audit.iter().any(|log| {
+        log.event_type == "message_failed"
+            && log.provider_message_id.as_deref() == Some("gmail-incremental-crash")
+            && log.safe_error_class.as_deref() == Some("stalwart_import")
+    }));
+    assert!(audit.iter().any(|log| {
+        log.event_type == "message_imported"
+            && log.provider_message_id.as_deref() == Some("gmail-incremental-crash")
+            && log
+                .metadata_json
+                .as_deref()
+                .is_some_and(|metadata| metadata.contains("\"duplicate\":true"))
+    }));
 }

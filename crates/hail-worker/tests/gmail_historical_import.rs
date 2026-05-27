@@ -22,6 +22,7 @@ use hail_worker::provider_import_routing::{
 };
 use hail_worker::rfc822_import::{
     FakeRfc822Importer, ImportedRfc822Message, Rfc822ImportError, Rfc822ImportRequest,
+    Rfc822Importer,
 };
 use hail_worker::screener::{JmapOps, RouteError};
 use tokio::sync::Barrier;
@@ -1340,6 +1341,211 @@ async fn retries_failed_import_mapping_without_duplicating_stalwart_mail() {
     assert_eq!(
         imported.provider_history_id.as_deref(),
         Some("history-retry-2")
+    );
+}
+
+#[derive(Debug)]
+struct PostImportCrashImporter<'a> {
+    inner: &'a FakeRfc822Importer,
+    fail_next_for_provider_id: Mutex<Option<String>>,
+}
+
+impl<'a> PostImportCrashImporter<'a> {
+    fn new(inner: &'a FakeRfc822Importer, provider_message_id: impl Into<String>) -> Self {
+        Self {
+            inner,
+            fail_next_for_provider_id: Mutex::new(Some(provider_message_id.into())),
+        }
+    }
+}
+
+#[async_trait]
+impl GmailHistoricalImporter for PostImportCrashImporter<'_> {
+    async fn import_gmail_rfc822(
+        &self,
+        _db: &sqlx::SqlitePool,
+        _user_id: i64,
+        request: Rfc822ImportRequest,
+    ) -> Result<RoutedImportedRfc822Message, GmailHistoricalImportError> {
+        let imported = self.inner.import_rfc822(request.clone()).await?;
+        let mut fail_next = self
+            .fail_next_for_provider_id
+            .lock()
+            .expect("post import crash flag");
+        if fail_next.as_deref() == request.provider_message_id.as_deref() {
+            *fail_next = None;
+            return Err(GmailHistoricalImportError::Rfc822Import(
+                Rfc822ImportError::Jmap("simulated crash after local import".to_owned()),
+            ));
+        }
+        Ok(RoutedImportedRfc822Message {
+            imported,
+            route_outcome: None,
+        })
+    }
+}
+
+async fn backfill_cursor_json(
+    pool: &sqlx::SqlitePool,
+    provider_account_id: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT backfill_cursor_json FROM provider_accounts WHERE id = ?1")
+        .bind(provider_account_id)
+        .fetch_one(pool)
+        .await
+}
+
+async fn audit_event_count(
+    pool: &sqlx::SqlitePool,
+    provider_account_id: i64,
+    event_type: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_sync_events WHERE provider_account_id = ?1 AND event_type = ?2",
+    )
+    .bind(provider_account_id)
+    .bind(event_type)
+    .fetch_one(pool)
+    .await
+}
+
+#[tokio::test]
+async fn crash_after_stalwart_import_before_mapping_retries_without_duplicate_local_mail() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let importer = FakeRfc822Importer::default();
+    let crashing_importer = PostImportCrashImporter::new(&importer, "gmail-post-import-crash");
+    let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-post-import-crash".to_owned(),
+                thread_id: Some("thread-post-import-crash".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-post-import-crash",
+            "thread-post-import-crash",
+            "history-post-import-crash-1",
+            "post-import-crash@example.com",
+        )],
+    );
+    let first = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &first_gmail,
+        &crashing_importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first pass records failure after local import");
+
+    assert_eq!(first.failed, 1);
+    assert_eq!(first.imported, 0);
+    assert_eq!(importer.imports().len(), 1);
+    assert_eq!(importer.local_message_count(), 1);
+    let failed =
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-post-import-crash")
+            .await
+            .expect("failed mapping lookup")
+            .expect("failed mapping");
+    assert_eq!(failed.import_status, ProviderImportStatus::Failed);
+    assert_eq!(failed.error_class.as_deref(), Some("stalwart_import"));
+    assert!(failed.jmap_email_id.is_none());
+    let cursor_after_failure = backfill_cursor_json(&pool, provider_account_id)
+        .await
+        .expect("cursor query");
+    assert!(
+        cursor_after_failure
+            .as_deref()
+            .is_some_and(|cursor| cursor.contains("\"completed\":true")),
+        "the failed pass still persists page progress: {cursor_after_failure:?}"
+    );
+
+    let second_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-post-import-crash".to_owned(),
+                thread_id: Some("thread-post-import-crash".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-post-import-crash",
+            "thread-post-import-crash",
+            "history-post-import-crash-2",
+            "post-import-crash@example.com",
+        )],
+    );
+    let second = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &second_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("retry after crash window");
+
+    assert_eq!(second.failed, 0);
+    assert_eq!(second.imported, 0);
+    assert_eq!(second.duplicates, 1);
+    assert_eq!(importer.local_message_count(), 1);
+    assert_eq!(
+        importer.imports().len(),
+        2,
+        "retry may call import, but fake Stalwart must dedupe it"
+    );
+    let mapping =
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-post-import-crash")
+            .await
+            .expect("mapping lookup")
+            .expect("mapping converged");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Duplicate);
+    assert_eq!(mapping.jmap_email_id.as_deref(), Some("email-1"));
+    assert_eq!(
+        mapping.rfc822_message_id.as_deref(),
+        Some("post-import-crash@example.com")
+    );
+    assert_eq!(
+        mapping.provider_history_id.as_deref(),
+        Some("history-post-import-crash-2")
+    );
+    assert!(mapping.error_class.is_none());
+
+    let audit = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 20)
+        .await
+        .expect("audit logs");
+    assert!(audit.iter().any(|log| {
+        log.event_type == "message_failed"
+            && log.provider_message_id.as_deref() == Some("gmail-post-import-crash")
+            && log.safe_error_class.as_deref() == Some("stalwart_import")
+    }));
+    assert!(audit.iter().any(|log| {
+        log.event_type == "message_imported"
+            && log.provider_message_id.as_deref() == Some("gmail-post-import-crash")
+            && log.result_status == "succeeded"
+            && log
+                .metadata_json
+                .as_deref()
+                .is_some_and(|metadata| metadata.contains("\"duplicate\":true"))
+    }));
+    assert_eq!(
+        audit_event_count(&pool, provider_account_id, "message_imported")
+            .await
+            .expect("audit count"),
+        1
     );
 }
 
