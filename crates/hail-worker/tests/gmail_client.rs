@@ -16,9 +16,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig, GmailTokenSource,
-    ListHistoryParams, ListMessagesParams, StaticGmailTokenSource, classify_gmail_error,
-    parse_gmail_error, provider_worker_http_client, retry_after_duration,
+    CachedGmailTokenSource, GmailAccessToken, GmailAccessTokenProvider, GmailApiErrorKind,
+    GmailClient, GmailClientError, GmailRetryConfig, GmailTokenSource, ListHistoryParams,
+    ListMessagesParams, StaticGmailTokenSource, classify_gmail_error, parse_gmail_error,
+    provider_worker_http_client, retry_after_duration,
 };
 use reqwest::header::{AUTHORIZATION, HeaderValue, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
@@ -56,6 +57,46 @@ impl GmailTokenSource for CountingTokenSource {
     async fn bearer_token(&self) -> Result<SecretString, GmailClientError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.token.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CountingAccessTokenProvider {
+    tokens: Arc<tokio::sync::Mutex<VecDeque<SecretString>>>,
+    expires_in: Duration,
+    refreshes: Arc<AtomicUsize>,
+}
+
+impl CountingAccessTokenProvider {
+    fn new(tokens: impl IntoIterator<Item = &'static str>, expires_in: Duration) -> Self {
+        Self {
+            tokens: Arc::new(tokio::sync::Mutex::new(
+                tokens.into_iter().map(SecretString::from).collect(),
+            )),
+            expires_in,
+            refreshes: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn refresh_count(&self) -> usize {
+        self.refreshes.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl GmailAccessTokenProvider for CountingAccessTokenProvider {
+    async fn refresh_access_token(&self) -> Result<GmailAccessToken, GmailClientError> {
+        self.refreshes.fetch_add(1, Ordering::SeqCst);
+        let token = self
+            .tokens
+            .lock()
+            .await
+            .pop_front()
+            .expect("test token available");
+        Ok(GmailAccessToken {
+            token,
+            expires_in: self.expires_in,
+        })
     }
 }
 
@@ -485,6 +526,64 @@ async fn profile_honors_retry_after_delay_before_next_attempt() {
     assert_eq!(token_calls.load(Ordering::SeqCst), 2);
     let requests = state.requests.lock().await;
     assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
+async fn cached_token_source_reuses_token_until_near_expiry() {
+    let (base_url, state) =
+        fake_server_with_profile_responses(vec![ok_profile(), ok_profile()]).await;
+    let provider = CountingAccessTokenProvider::new(
+        ["cached-token-1", "cached-token-2"],
+        Duration::from_millis(500),
+    );
+    let token_source =
+        CachedGmailTokenSource::with_expiry_skew(provider.clone(), Duration::from_millis(100));
+    let client = GmailClient::with_base_url(
+        provider_worker_http_client().expect("provider worker http client"),
+        token_source,
+        &base_url,
+    )
+    .expect("client")
+    .with_retry_config(zero_delay_retries(1));
+
+    client.profile().await.expect("first profile");
+    client
+        .list_messages(&ListMessagesParams::default())
+        .await
+        .expect("list messages");
+
+    assert_eq!(provider.refresh_count(), 1);
+    {
+        let requests = state.requests.lock().await;
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.authorization.as_deref() == Some("Bearer cached-token-1"))
+        );
+    }
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    client
+        .get_raw_message("msg-1")
+        .await
+        .expect("raw before skew window");
+    assert_eq!(provider.refresh_count(), 1);
+
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    client.profile().await.expect("profile after skew window");
+
+    assert_eq!(provider.refresh_count(), 2);
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[2].authorization.as_deref(),
+        Some("Bearer cached-token-1")
+    );
+    assert_eq!(
+        requests[3].authorization.as_deref(),
+        Some("Bearer cached-token-2")
+    );
 }
 
 #[tokio::test]

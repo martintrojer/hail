@@ -17,7 +17,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailTokenSource, provider_worker_http_client,
+    GmailAccessToken, GmailAccessTokenProvider, GmailApiErrorKind, GmailClient, GmailClientError,
+    provider_worker_http_client,
 };
 use crate::gmail_incremental_sync::{
     GmailIncrementalSyncError, GmailIncrementalSyncOptions, run_gmail_incremental_sync,
@@ -521,6 +522,7 @@ fn safe_error_message(error: &impl std::fmt::Display) -> String {
 
 pub mod live {
     use super::*;
+    use crate::gmail_client::CachedGmailTokenSource;
     use hail_core::{ProviderOAuthTokenKind, ProviderTokenContext, open_provider_oauth_token};
 
     pub struct LiveProviderSyncRunner {
@@ -566,7 +568,10 @@ pub mod live {
         async fn gmail_client(
             &self,
             account: &ProviderSyncAccount,
-        ) -> std::result::Result<GmailClient<DbGmailTokenSource>, ProviderSyncRunError> {
+        ) -> std::result::Result<
+            GmailClient<CachedGmailTokenSource<DbGmailTokenSource>>,
+            ProviderSyncRunError,
+        > {
             let token_source = DbGmailTokenSource::load(
                 &self.db,
                 self.http.clone(),
@@ -578,6 +583,7 @@ pub mod live {
             )
             .await
             .map_err(|err| ProviderSyncRunError::permanent("provider_token", err))?;
+            let token_source = CachedGmailTokenSource::new(token_source);
             GmailClient::with_base_url(self.http.clone(), token_source, &self.gmail_api_base_url)
                 .map_err(|err| ProviderSyncRunError::permanent("gmail_client", err))
         }
@@ -748,8 +754,10 @@ pub mod live {
     }
 
     #[async_trait]
-    impl GmailTokenSource for DbGmailTokenSource {
-        async fn bearer_token(&self) -> std::result::Result<SecretString, GmailClientError> {
+    impl GmailAccessTokenProvider for DbGmailTokenSource {
+        async fn refresh_access_token(
+            &self,
+        ) -> std::result::Result<GmailAccessToken, GmailClientError> {
             use secrecy::ExposeSecret;
 
             let client_id = self.client_id.as_deref().ok_or_else(|| {
@@ -786,7 +794,10 @@ pub mod live {
                 .json()
                 .await
                 .map_err(GmailClientError::Request)?;
-            Ok(token.access_token)
+            Ok(GmailAccessToken {
+                token: token.access_token,
+                expires_in: std::time::Duration::from_secs(token.expires_in.unwrap_or(3600)),
+            })
         }
     }
 
@@ -794,6 +805,8 @@ pub mod live {
     struct GoogleRefreshTokenResponse {
         #[serde(deserialize_with = "deserialize_secret")]
         access_token: SecretString,
+        #[serde(default)]
+        expires_in: Option<u64>,
     }
 
     fn deserialize_secret<'de, D>(deserializer: D) -> std::result::Result<SecretString, D::Error>

@@ -8,7 +8,9 @@
 //! Google credentials into tests.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::Instant;
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -122,6 +124,94 @@ impl GmailClientError {
 #[async_trait]
 pub trait GmailTokenSource: Send + Sync {
     async fn bearer_token(&self) -> Result<SecretString, GmailClientError>;
+}
+
+#[derive(Clone, Debug)]
+pub struct GmailAccessToken {
+    pub token: SecretString,
+    pub expires_in: Duration,
+}
+
+/// Boundary for refreshing short-lived Gmail OAuth access tokens.
+#[async_trait]
+pub trait GmailAccessTokenProvider: Send + Sync {
+    async fn refresh_access_token(&self) -> Result<GmailAccessToken, GmailClientError>;
+}
+
+#[derive(Clone, Debug)]
+struct CachedBearerToken {
+    token: SecretString,
+    usable_until: Instant,
+}
+
+/// Gmail token source that reuses a refreshed OAuth access token until it is
+/// near expiry.
+///
+/// The token itself stays in memory as [`SecretString`]. The wrapper never logs
+/// or serializes token material; production providers should continue to keep
+/// long-lived refresh tokens encrypted at rest.
+#[derive(Debug)]
+pub struct CachedGmailTokenSource<P> {
+    provider: P,
+    expiry_skew: Duration,
+    cached: Arc<tokio::sync::Mutex<Option<CachedBearerToken>>>,
+}
+
+impl<P> CachedGmailTokenSource<P> {
+    pub const DEFAULT_EXPIRY_SKEW: Duration = Duration::from_secs(60);
+
+    #[must_use]
+    pub fn new(provider: P) -> Self {
+        Self::with_expiry_skew(provider, Self::DEFAULT_EXPIRY_SKEW)
+    }
+
+    #[must_use]
+    pub fn with_expiry_skew(provider: P, expiry_skew: Duration) -> Self {
+        Self {
+            provider,
+            expiry_skew,
+            cached: Arc::new(tokio::sync::Mutex::new(None)),
+        }
+    }
+}
+
+impl<P> Clone for CachedGmailTokenSource<P>
+where
+    P: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            provider: self.provider.clone(),
+            expiry_skew: self.expiry_skew,
+            cached: self.cached.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl<P> GmailTokenSource for CachedGmailTokenSource<P>
+where
+    P: GmailAccessTokenProvider,
+{
+    async fn bearer_token(&self) -> Result<SecretString, GmailClientError> {
+        let now = Instant::now();
+        let mut cached = self.cached.lock().await;
+        if let Some(token) = cached.as_ref()
+            && token.usable_until > now
+        {
+            return Ok(token.token.clone());
+        }
+
+        let refreshed = self.provider.refresh_access_token().await?;
+        let usable_for = refreshed.expires_in.saturating_sub(self.expiry_skew);
+        let usable_until = Instant::now() + usable_for;
+        let token = refreshed.token;
+        *cached = Some(CachedBearerToken {
+            token: token.clone(),
+            usable_until,
+        });
+        Ok(token)
+    }
 }
 
 #[derive(Clone, Debug)]
