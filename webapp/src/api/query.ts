@@ -56,6 +56,7 @@ import {
   type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
+  type ViewCountsResponse,
   type CancelScheduledSendResponse,
   type WorkflowRuleListResponse,
   type WorkflowRulePayload,
@@ -397,6 +398,17 @@ export function useScreenerView(
   return useQuery({
     queryKey: queryKeys.screener(),
     queryFn: () => client.getScreenerView(),
+    ...options,
+  });
+}
+
+export function useViewCounts(
+  client = defaultApiClient,
+  options?: QueryConfig<ViewCountsResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.viewCounts(),
+    queryFn: () => client.getViewCounts(),
     ...options,
   });
 }

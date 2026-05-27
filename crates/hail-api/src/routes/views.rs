@@ -48,6 +48,14 @@ pub trait MailViewProvider: Send + Sync + 'static {
         view: MailView,
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>>;
+
+    fn count<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        view: MailView,
+        unread_only: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<usize, MailViewError>> + Send + 'a>>;
 }
 
 pub trait SearchProvider: Send + Sync + 'static {
@@ -72,60 +80,16 @@ impl MailViewProvider for JmapMailViewProvider {
         limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
-            use hail_jmap::jmap_client::core::query::Filter;
             use hail_jmap::jmap_client::email::query as email_query;
 
             let session = jmap_session(state, token)
                 .await
                 .map_err(MailViewError::provider)?;
+            let Some(filter) = mail_view_filter(&session, view).await? else {
+                return Ok(Vec::new());
+            };
 
             let mut request = session.client().build();
-            let mut filter = Filter::from(email_query::Filter::has_keyword(view.keyword()));
-            if view == MailView::Spam {
-                let junk_mailbox_id = hail_jmap::mailbox_id_by_role(
-                    &session,
-                    hail_jmap::jmap_client::mailbox::Role::Junk,
-                )
-                .await
-                .map_err(|err| MailViewError::provider(err.to_string()))?;
-                let mut conditions = vec![
-                    Filter::from(email_query::Filter::has_keyword(SPAM_KEYWORD.to_string())),
-                    Filter::from(email_query::Filter::has_keyword(
-                        HAIL_SPAM_KEYWORD.to_string(),
-                    )),
-                ];
-                if let Some(junk_mailbox_id) = junk_mailbox_id {
-                    conditions.push(Filter::from(email_query::Filter::in_mailbox(junk_mailbox_id)));
-                }
-                filter = Filter::or(conditions);
-            } else if view == MailView::Drafts {
-                if let Some(drafts_mailbox_id) = hail_jmap::mailbox_id_by_role(
-                    &session,
-                    hail_jmap::jmap_client::mailbox::Role::Drafts,
-                )
-                .await
-                .map_err(|err| MailViewError::provider(err.to_string()))?
-                {
-                    filter = Filter::from(email_query::Filter::in_mailbox(drafts_mailbox_id));
-                }
-            } else if view == MailView::Trash {
-                let Some(trash_mailbox_id) = trash_mailbox_id(&session)
-                    .await
-                    .map_err(MailViewError::provider)?
-                else {
-                    return Ok(Vec::new());
-                };
-                filter = Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id));
-            } else if view == MailView::Archive {
-                let Some(archive_mailbox_id) =
-                    hail_jmap::mailbox_id_by_role(&session, MailboxRole::Archive.jmap())
-                        .await
-                        .map_err(|err| MailViewError::provider(err.to_string()))?
-                else {
-                    return Ok(Vec::new());
-                };
-                filter = Filter::from(email_query::Filter::in_mailbox(archive_mailbox_id));
-            }
             request
                 .query_email()
                 .filter(filter)
@@ -180,6 +144,108 @@ impl MailViewProvider for JmapMailViewProvider {
                 .collect()
         })
     }
+
+    fn count<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        view: MailView,
+        unread_only: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<usize, MailViewError>> + Send + 'a>> {
+        Box::pin(async move {
+            use hail_jmap::jmap_client::core::query::Filter;
+            use hail_jmap::jmap_client::email::query as email_query;
+
+            let session = jmap_session(state, token)
+                .await
+                .map_err(MailViewError::provider)?;
+            let Some(filter) = mail_view_filter(&session, view).await? else {
+                return Ok(0);
+            };
+
+            let mut filter = filter;
+            if unread_only {
+                filter = Filter::and([
+                    filter,
+                    Filter::not([email_query::Filter::has_keyword("$seen".to_string())]),
+                ]);
+            }
+
+            let mut request = session.client().build();
+            request
+                .query_email()
+                .filter(filter)
+                .limit(0)
+                .calculate_total(true);
+            let query = request
+                .send_query_email()
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))?;
+            query.total().ok_or_else(|| {
+                MailViewError::provider(format!("JMAP Email/query omitted total for {view:?}"))
+            })
+        })
+    }
+}
+
+async fn mail_view_filter(
+    session: &hail_jmap::Session,
+    view: MailView,
+) -> Result<
+    Option<
+        hail_jmap::jmap_client::core::query::Filter<hail_jmap::jmap_client::email::query::Filter>,
+    >,
+    MailViewError,
+> {
+    use hail_jmap::jmap_client::core::query::Filter;
+    use hail_jmap::jmap_client::email::query as email_query;
+
+    let mut filter = Filter::from(email_query::Filter::has_keyword(view.keyword()));
+    if view == MailView::Spam {
+        let junk_mailbox_id =
+            hail_jmap::mailbox_id_by_role(session, hail_jmap::jmap_client::mailbox::Role::Junk)
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))?;
+        let mut conditions = vec![
+            Filter::from(email_query::Filter::has_keyword(SPAM_KEYWORD.to_string())),
+            Filter::from(email_query::Filter::has_keyword(
+                HAIL_SPAM_KEYWORD.to_string(),
+            )),
+        ];
+        if let Some(junk_mailbox_id) = junk_mailbox_id {
+            conditions.push(Filter::from(email_query::Filter::in_mailbox(
+                junk_mailbox_id,
+            )));
+        }
+        filter = Filter::or(conditions);
+    } else if view == MailView::Drafts {
+        if let Some(drafts_mailbox_id) =
+            hail_jmap::mailbox_id_by_role(session, hail_jmap::jmap_client::mailbox::Role::Drafts)
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))?
+        {
+            filter = Filter::from(email_query::Filter::in_mailbox(drafts_mailbox_id));
+        }
+    } else if view == MailView::Trash {
+        let Some(trash_mailbox_id) = trash_mailbox_id(session)
+            .await
+            .map_err(MailViewError::provider)?
+        else {
+            return Ok(None);
+        };
+        filter = Filter::from(email_query::Filter::in_mailbox(trash_mailbox_id));
+    } else if view == MailView::Archive {
+        let Some(archive_mailbox_id) =
+            hail_jmap::mailbox_id_by_role(session, MailboxRole::Archive.jmap())
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))?
+        else {
+            return Ok(None);
+        };
+        filter = Filter::from(email_query::Filter::in_mailbox(archive_mailbox_id));
+    }
+
+    Ok(Some(filter))
 }
 
 #[derive(Debug)]
@@ -427,6 +493,7 @@ where
     let mail_provider: Arc<dyn MailViewProvider> = mail_provider;
     let search_provider: Arc<dyn SearchProvider> = search_provider;
     OpenApiRouter::new()
+        .routes(routes!(get_view_counts).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_imbox).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_imbox_sectioned).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
@@ -452,6 +519,21 @@ impl SearchProvider for EmptySearchProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct ViewCountsResponse {
+    imbox_new: usize,
+    feed_unread: usize,
+    papertrail_unread: usize,
+    screener_pending: usize,
+    drafts: usize,
+    scheduled: usize,
+    set_aside: usize,
+    reply_later: usize,
+    bubble_up: usize,
+    spam: usize,
+    trash: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ToSchema)]
@@ -682,6 +764,30 @@ struct BubbleUpViewResponse {
 #[derive(Debug, Serialize, ToSchema)]
 struct SearchResponse {
     results: Vec<SearchResult>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/counts",
+    tag = TAG,
+    responses(
+        (status = 200, description = "Cheap sidebar navigation counts for the current user.", body = ViewCountsResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "View count lookup failed."),
+    ),
+)]
+async fn get_view_counts(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+) -> Response {
+    match load_view_counts(&state, &user, provider).await {
+        Ok(counts) => Json(counts).into_response(),
+        Err(err) => {
+            tracing::warn!(user_id = user.id, error = %err, "view count lookup failed");
+            internal()
+        }
+    }
 }
 
 #[utoipa::path(
@@ -1008,6 +1114,114 @@ async fn list_bubble_ups(
             )
             .collect()
     })
+}
+
+async fn load_view_counts(
+    state: &AppState,
+    user: &AuthUser,
+    provider: Arc<dyn MailViewProvider>,
+) -> Result<ViewCountsResponse, String> {
+    let imbox_items = provider
+        .list(state, user.jmap_token.clone(), MailView::Imbox, MAX_LIMIT)
+        .await
+        .map_err(|err| err.0)?;
+    let imbox_new = count_imbox_new(state, user.id, imbox_items).await?;
+    let feed_unread = provider
+        .count(state, user.jmap_token.clone(), MailView::Feed, true)
+        .await
+        .map_err(|err| err.0)?;
+    let papertrail_unread = provider
+        .count(state, user.jmap_token.clone(), MailView::Papertrail, true)
+        .await
+        .map_err(|err| err.0)?;
+    let drafts = provider
+        .count(state, user.jmap_token.clone(), MailView::Drafts, false)
+        .await
+        .map_err(|err| err.0)?;
+    let spam = provider
+        .count(state, user.jmap_token.clone(), MailView::Spam, false)
+        .await
+        .map_err(|err| err.0)?;
+    let trash = provider
+        .count(state, user.jmap_token.clone(), MailView::Trash, false)
+        .await
+        .map_err(|err| err.0)?;
+    let screener_pending = scalar_count(
+        state,
+        user.id,
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ?1 AND decision = 'pending'",
+    )
+    .await?;
+    let scheduled = scalar_count(
+        state,
+        user.id,
+        "SELECT COUNT(*) FROM scheduled_sends WHERE user_id = ?1 AND status = 'pending'",
+    )
+    .await?;
+    let set_aside = stack_count(state, user.id, "set_aside").await?;
+    let reply_later = stack_count(state, user.id, "reply_later").await?;
+    let bubble_up = scalar_count(
+        state,
+        user.id,
+        "SELECT COUNT(*) FROM bubble_ups WHERE user_id = ?1 AND datetime(surface_at) > datetime('now') AND fired_at IS NULL",
+    )
+    .await?;
+
+    Ok(ViewCountsResponse {
+        imbox_new,
+        feed_unread,
+        papertrail_unread,
+        screener_pending,
+        drafts,
+        scheduled,
+        set_aside,
+        reply_later,
+        bubble_up,
+        spam,
+        trash,
+    })
+}
+
+async fn count_imbox_new(
+    state: &AppState,
+    user_id: i64,
+    items: Vec<MailViewItem>,
+) -> Result<usize, String> {
+    let seen_thread_ids = hail_db::seen_thread_ids(&state.db, user_id)
+        .await
+        .map_err(|err| err.to_string())?;
+    let fired_bubble_up_thread_ids = hail_db::fired_bubble_up_thread_ids(&state.db, user_id)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    Ok(items
+        .into_iter()
+        .filter(|item| {
+            !seen_thread_ids.contains(&item.thread_id)
+                && !fired_bubble_up_thread_ids.contains(&item.thread_id)
+        })
+        .count())
+}
+
+async fn stack_count(state: &AppState, user_id: i64, stack: &str) -> Result<usize, String> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM stack_positions WHERE user_id = ?1 AND stack = ?2",
+    )
+    .bind(user_id)
+    .bind(stack)
+    .fetch_one(&state.db)
+    .await
+    .map(|count| count as usize)
+    .map_err(|err| err.to_string())
+}
+
+async fn scalar_count(state: &AppState, user_id: i64, sql: &'static str) -> Result<usize, String> {
+    sqlx::query_scalar::<_, i64>(sql)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map(|count| count as usize)
+        .map_err(|err| err.to_string())
 }
 
 fn escape_like(value: &str) -> String {

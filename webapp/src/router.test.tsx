@@ -120,6 +120,22 @@ beforeEach(() => {
       });
     }
 
+    if (url.pathname === '/api/views/counts' && method === 'GET') {
+      return jsonResponse({
+        imbox_new: 4,
+        feed_unread: 3,
+        papertrail_unread: 2,
+        screener_pending: 2,
+        drafts: 1,
+        scheduled: 5,
+        set_aside: 6,
+        reply_later: 7,
+        bubble_up: 8,
+        spam: 9,
+        trash: 10,
+      });
+    }
+
     if (url.pathname === '/api/views/imbox' && method === 'GET') {
       return jsonResponse(imbox);
     }
@@ -198,15 +214,28 @@ describe('SPA auth/router flows', () => {
     expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
   });
 
-  it('shows cached sidebar counter pills for available view data', async () => {
+  it('shows sidebar counter pills from the nav count endpoint', async () => {
     api.user = adminUser;
 
     renderRouterAt('/imbox');
 
-    expect(
-      await screen.findByRole('link', { name: 'The Screener, 2 pending' }),
-    ).toBeInTheDocument();
-    expect(screen.getAllByText('2').length).toBeGreaterThan(0);
+    for (const [name, count] of [
+      ['Imbox', 4],
+      ['The Feed', 3],
+      ['Paper Trail', 2],
+      ['The Screener', 2],
+      ['Drafts', 1],
+      ['Scheduled', 5],
+      ['Set Aside', 6],
+      ['Reply Later', 7],
+      ['Bubble Up', 8],
+      ['Spam', 9],
+      ['Trash', 10],
+    ] as const) {
+      expect(
+        await screen.findByRole('link', { name: `${name}, ${count} items` }),
+      ).toBeInTheDocument();
+    }
   });
 
   it('keeps logout available from the sidebar controls', async () => {

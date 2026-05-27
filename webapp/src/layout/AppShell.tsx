@@ -1,8 +1,7 @@
-import { useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import { type ComponentType, type ReactNode, useState } from 'react';
-import type { ScreenerView } from '../api/client';
-import { queryKeys } from '../api/queryKeys';
+import type { ViewCountsResponse } from '../api/client';
+import { useViewCounts } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
 import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
@@ -89,12 +88,10 @@ interface NavItem {
   label: string;
   description: string;
   Icon: ComponentType<{ className?: string }>;
-  countKey?: 'screener-pending';
+  countKey?: keyof ViewCountsResponse;
 }
 
-interface SidebarCounts {
-  screenerPending?: number;
-}
+type SidebarCounts = Partial<ViewCountsResponse>;
 
 const primaryNavItems: NavItem[] = [
   {
@@ -102,25 +99,28 @@ const primaryNavItems: NavItem[] = [
     label: 'Imbox',
     description: 'Important mail from approved people lands here.',
     Icon: Inbox,
+    countKey: 'imbox_new',
   },
   {
     to: '/feed',
     label: 'The Feed',
     description: 'Newsletters and recurring reading can collect here.',
     Icon: Rss,
+    countKey: 'feed_unread',
   },
   {
     to: '/papertrail',
     label: 'Paper Trail',
     description: 'Receipts, statements, and reference mail will land here.',
     Icon: ReceiptText,
+    countKey: 'papertrail_unread',
   },
   {
     to: '/screener',
     label: 'The Screener',
     description: 'New senders end up here. Decide if they get in.',
     Icon: UserRoundPlus,
-    countKey: 'screener-pending',
+    countKey: 'screener_pending',
   },
 ];
 
@@ -130,18 +130,21 @@ const pileNavItems: NavItem[] = [
     label: 'Set Aside',
     description: 'Threads you want to keep handy without leaving them in the Imbox.',
     Icon: Bookmark,
+    countKey: 'set_aside',
   },
   {
     to: '/reply-later',
     label: 'Reply Later',
     description: 'Threads waiting for a response when you have time.',
     Icon: Clock3,
+    countKey: 'reply_later',
   },
   {
     to: '/bubble-up',
     label: 'Bubble Up',
     description: 'Threads scheduled to return to your attention.',
     Icon: ArrowUpCircle,
+    countKey: 'bubble_up',
   },
 ];
 
@@ -151,12 +154,14 @@ const mailboxNavItems: NavItem[] = [
     label: 'Drafts',
     description: 'Resume messages you started but have not sent yet.',
     Icon: FilePenLine,
+    countKey: 'drafts',
   },
   {
     to: '/scheduled',
     label: 'Scheduled',
     description: 'Messages waiting for scheduled delivery.',
     Icon: Send,
+    countKey: 'scheduled',
   },
   {
     to: '/archive',
@@ -169,12 +174,14 @@ const mailboxNavItems: NavItem[] = [
     label: 'Spam',
     description: 'Mail identified as spam collects here until you restore or delete it.',
     Icon: ShieldAlert,
+    countKey: 'spam',
   },
   {
     to: '/trash',
     label: 'Trash',
     description: 'Deleted mail stays here until it is permanently removed.',
     Icon: Trash2,
+    countKey: 'trash',
   },
   {
     to: '/files',
@@ -312,11 +319,7 @@ function ThemeIcon({ theme }: { theme: ThemePreference }) {
 }
 
 function itemCount(item: NavItem, counts: SidebarCounts) {
-  if (item.countKey === 'screener-pending') {
-    return counts.screenerPending;
-  }
-
-  return undefined;
+  return item.countKey ? counts[item.countKey] : undefined;
 }
 
 function CountPill({ count }: { count: number }) {
@@ -357,7 +360,7 @@ function NavMenuItem({
   const isActive = activePath === item.to || activePath.startsWith(`${item.to}/`);
   const count = itemCount(item, counts);
   const showCount = count !== undefined && count > 0;
-  const label = showCount ? `${item.label}, ${count} pending` : item.label;
+  const label = showCount ? `${item.label}, ${count} items` : item.label;
 
   return (
     <SidebarMenuItem>
@@ -597,11 +600,8 @@ export function AppShell({
   const location = useLocation();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const { theme, setTheme } = useTheme();
-  const queryClient = useQueryClient();
-  const screenerData = queryClient.getQueryData<ScreenerView>(queryKeys.screener());
-  const sidebarCounts: SidebarCounts = {
-    screenerPending: screenerData?.senders.length,
-  };
+  const viewCounts = useViewCounts();
+  const sidebarCounts: SidebarCounts = viewCounts.data ?? {};
   const hasContent = Boolean(list || reading);
 
   useKeyboardShortcuts({
