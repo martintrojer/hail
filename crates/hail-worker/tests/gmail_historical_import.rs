@@ -36,6 +36,10 @@ enum JmapCall {
         email_id: String,
         keyword: String,
     },
+    RemoveKeyword {
+        email_id: String,
+        keyword: String,
+    },
     MoveToMailbox {
         email_id: String,
         mailbox_id: String,
@@ -92,6 +96,17 @@ impl JmapOps for FakeJmapOps {
             .lock()
             .expect("jmap calls")
             .push(JmapCall::ApplyKeyword {
+                email_id: email_id.to_string(),
+                keyword: keyword.to_string(),
+            });
+        Ok(())
+    }
+
+    async fn remove_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::RemoveKeyword {
                 email_id: email_id.to_string(),
                 keyword: keyword.to_string(),
             });
@@ -1598,6 +1613,17 @@ impl JmapOps for FailingThenOkJmapOps {
         Ok(())
     }
 
+    async fn remove_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::RemoveKeyword {
+                email_id: email_id.to_string(),
+                keyword: keyword.to_string(),
+            });
+        Ok(())
+    }
+
     async fn move_to_mailbox(&self, email_id: &str, mailbox_id: &str) -> Result<(), RouteError> {
         self.calls
             .lock()
@@ -1837,7 +1863,24 @@ async fn routed_import_sends_unknown_sender_to_screener_pending() {
                 email_id: "email-1".to_string(),
                 mailbox_id: "screener-id".to_string(),
             },
+            JmapCall::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_imbox".to_string(),
+            },
+            JmapCall::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_feed".to_string(),
+            },
+            JmapCall::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_papertrail".to_string(),
+            },
         ]
+    );
+    assert_eq!(
+        importer.imports()[0].keywords,
+        Vec::<String>::new(),
+        "provider imports must not pre-classify unknown senders into Imbox before screener routing"
     );
     let route = fixture.intended_route.expect("fixture has route");
     let rule: (String, Option<String>) = sqlx::query_as(
