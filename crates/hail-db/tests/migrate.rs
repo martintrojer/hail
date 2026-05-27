@@ -29,6 +29,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "provider_sync_events",
     "labels",
     "thread_labels",
+    "speakeasy_passphrases",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -64,6 +65,7 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_labels_provider_identity",
     "idx_labels_user_name",
     "idx_thread_labels_label",
+    "idx_speakeasy_passphrases_rotates_at",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
@@ -1003,6 +1005,77 @@ async fn labels_schema_rejects_invalid_shape_values() {
         partial_provider_identity.is_err(),
         "provider_kind and provider_label_id must be present or absent together"
     );
+}
+
+#[tokio::test]
+async fn speakeasy_schema_is_per_user_secret_with_rotation_metadata() {
+    let (pool, _guard) = setup().await;
+
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("speakeasy-schema@example.com")
+        .bind("acct-speakeasy-schema")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
+
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("speakeasy-schema@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
+
+    sqlx::query(
+        "INSERT INTO speakeasy_passphrases \
+         (user_id, passphrase, period, rotates_at, generated_at, updated_at) \
+         VALUES (?, ?, '2026-05', ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("amber-basil-coral-delta")
+    .bind("2026-06-01T00:00:00Z")
+    .bind("2026-05-27T12:00:00Z")
+    .bind("2026-05-27T12:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("speakeasy insert");
+
+    let duplicate = sqlx::query(
+        "INSERT INTO speakeasy_passphrases \
+         (user_id, passphrase, period, rotates_at, generated_at, updated_at) \
+         VALUES (?, ?, '2026-05', ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("copper-ember-forest-harbor")
+    .bind("2026-06-01T00:00:00Z")
+    .bind("2026-05-27T12:01:00Z")
+    .bind("2026-05-27T12:01:00Z")
+    .execute(&pool)
+    .await;
+    assert!(duplicate.is_err(), "only one current phrase row per user");
+
+    let bad_period = sqlx::query(
+        "INSERT INTO speakeasy_passphrases \
+         (user_id, passphrase, period, rotates_at, generated_at, updated_at) \
+         VALUES (999, ?, 'May 2026', ?, ?, ?)",
+    )
+    .bind("juniper-lagoon-maple-olive")
+    .bind("2026-06-01T00:00:00Z")
+    .bind("2026-05-27T12:00:00Z")
+    .bind("2026-05-27T12:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(bad_period.is_err(), "period must be normalized YYYY-MM");
+
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("delete user");
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM speakeasy_passphrases")
+        .fetch_one(&pool)
+        .await
+        .expect("count speakeasy rows");
+    assert_eq!(remaining, 0, "speakeasy rows cascade with user deletion");
 }
 
 #[tokio::test]
