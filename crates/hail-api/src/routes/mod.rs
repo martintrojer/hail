@@ -15,6 +15,7 @@ pub mod drafts;
 pub mod health;
 pub mod invites;
 pub mod jmap_helpers;
+pub mod labels;
 pub mod management_http;
 pub mod notes;
 pub mod outbound;
