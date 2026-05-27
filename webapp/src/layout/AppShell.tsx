@@ -1,12 +1,5 @@
-import { Link, useNavigate } from '@tanstack/react-router';
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-} from 'react';
+import { Link, useLocation, useNavigate } from '@tanstack/react-router';
+import { type ComponentType, type ReactNode, useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
@@ -14,11 +7,13 @@ import {
   ArrowUpCircle,
   Bookmark,
   Check,
+  ChevronDown,
   Clock,
   FileText,
   KeyRound,
   LogOut,
   Mail,
+  Menu,
   Moon,
   Monitor,
   PenSquare,
@@ -31,10 +26,44 @@ import {
   Sun,
   Trash2,
   UserPlus,
-  iconSizeProps,
 } from '../components/icons';
+import { Button } from '../components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '../components/ui/collapsible';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../components/ui/dropdown-menu';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarSeparator,
+  SidebarTrigger,
+} from '../components/ui/sidebar';
+import { TooltipProvider } from '../components/ui/tooltip';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { Pile } from './Pile';
 
@@ -48,37 +77,45 @@ interface AppShellProps {
   wide?: boolean;
 }
 
-interface MenuItem {
+interface NavItem {
   to: string;
   label: string;
-  Icon: ComponentType<{ className?: string; size?: number; strokeWidth?: number }>;
+  Icon: ComponentType<{ className?: string }>;
 }
 
-const navItems: MenuItem[] = [
+const primaryNavItems: NavItem[] = [
   { to: '/imbox', label: 'Imbox', Icon: Mail },
   { to: '/feed', label: 'The Feed', Icon: Mail },
   { to: '/papertrail', label: 'Paper Trail', Icon: Mail },
-  { to: '/drafts', label: 'Drafts', Icon: PenSquare },
-  { to: '/scheduled', label: 'Scheduled', Icon: Send },
-  { to: '/files', label: 'All Files', Icon: FileText },
   { to: '/screener', label: 'The Screener', Icon: UserPlus },
-  { to: '/screener/speakeasy', label: 'Speakeasy', Icon: Check },
-  { to: '/workflows', label: 'Workflows', Icon: SlidersHorizontal },
-  { to: '/screened-out', label: 'Screened Out', Icon: ShieldOff },
+];
+
+const pileNavItems: NavItem[] = [
   { to: '/set-aside', label: 'Set Aside', Icon: Bookmark },
   { to: '/reply-later', label: 'Reply Later', Icon: Clock },
   { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
+];
+
+const mailboxNavItems: NavItem[] = [
+  { to: '/drafts', label: 'Drafts', Icon: PenSquare },
+  { to: '/scheduled', label: 'Scheduled', Icon: Send },
   { to: '/archive', label: 'Archive', Icon: Archive },
-  { to: '/search', label: 'Search', Icon: Search },
   { to: '/spam', label: 'Spam', Icon: ShieldAlert },
   { to: '/trash', label: 'Trash', Icon: Trash2 },
+  { to: '/files', label: 'All Files', Icon: FileText },
+];
+
+const workflowNavItems: NavItem[] = [
+  { to: '/screener/speakeasy', label: 'Speakeasy', Icon: Check },
+  { to: '/screened-out', label: 'Screened Out', Icon: ShieldOff },
+  { to: '/workflows', label: 'Workflows', Icon: SlidersHorizontal },
 ];
 
 function EmptyList({ title }: { title: string }) {
   return (
     <div className="flex min-h-64 flex-col items-center justify-center p-8 text-center">
-      <p className="text-base font-semibold text-ink-primary">No mail here yet</p>
-      <p className="mt-2 max-w-sm hail-preview">
+      <p className="text-base font-semibold text-foreground">No mail here yet</p>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
         The {title} list will render here once the mail view endpoints are wired
         to the SPA.
       </p>
@@ -175,17 +212,164 @@ const themeLabels: Record<ThemePreference, string> = {
 };
 
 function ThemeIcon({ theme }: { theme: ThemePreference }) {
-  const props = { ...iconSizeProps.lg, 'aria-hidden': true };
-
   if (theme === 'light') {
-    return <Sun {...props} />;
+    return <Sun />;
   }
 
   if (theme === 'dark') {
-    return <Moon {...props} />;
+    return <Moon />;
   }
 
-  return <Monitor {...props} />;
+  return <Monitor />;
+}
+
+function NavMenuItem({ item, activePath }: { item: NavItem; activePath: string }) {
+  const isActive = activePath === item.to || activePath.startsWith(`${item.to}/`);
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
+        <Link to={item.to}>
+          <item.Icon />
+          <span>{item.label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function SidebarNavGroup({
+  label,
+  items,
+  activePath,
+}: {
+  label: string;
+  items: NavItem[];
+  activePath: string;
+}) {
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {items.map((item) => (
+            <NavMenuItem key={item.to} item={item} activePath={activePath} />
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+function LabelsNavPlaceholder() {
+  return (
+    <SidebarGroup>
+      <Collapsible defaultOpen>
+        <SidebarGroupLabel asChild>
+          <CollapsibleTrigger className="group/labels w-full justify-between">
+            <span>Labels</span>
+            <ChevronDown className="transition-transform group-data-[state=open]/labels:rotate-180" />
+          </CollapsibleTrigger>
+        </SidebarGroupLabel>
+        <CollapsibleContent>
+          <SidebarMenuSub>
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton asChild>
+                <Link to="/search" search={{}}>All labels</Link>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </Collapsible>
+    </SidebarGroup>
+  );
+}
+
+function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: boolean }) {
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild size="lg" tooltip="hail">
+              <Link to="/imbox" className="font-semibold">
+                <span className="grid size-7 shrink-0 place-items-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+                  <img src="/logo-icon-transparent.png" alt="" className="h-5" aria-hidden="true" />
+                </span>
+                <span className="truncate">hail</span>
+                <span className="sr-only"> menu</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarNavGroup label="Mail" items={primaryNavItems} activePath={activePath} />
+        <SidebarNavGroup label="Pile" items={pileNavItems} activePath={activePath} />
+        <SidebarNavGroup label="Folders" items={mailboxNavItems} activePath={activePath} />
+        <LabelsNavPlaceholder />
+        <SidebarNavGroup label="Tools" items={workflowNavItems} activePath={activePath} />
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarSeparator />
+        <SidebarMenu>
+          <NavMenuItem
+            item={{ to: '/provider-accounts', label: 'Provider Accounts', Icon: KeyRound }}
+            activePath={activePath}
+          />
+          {isAdmin ? (
+            <NavMenuItem
+              item={{ to: '/admin', label: 'Admin', Icon: Settings }}
+              activePath={activePath}
+            />
+          ) : null}
+        </SidebarMenu>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
+  );
+}
+
+function UserMenu({
+  email,
+  logout,
+  logoutLoading,
+}: {
+  email: string | undefined;
+  logout: () => void;
+  logoutLoading: boolean;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label="hail account menu" title={email}>
+          <span className="grid size-7 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+            {userInitial(email)}
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel className="truncate">
+          {email ?? 'Signed in'}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            disabled={logoutLoading}
+            onSelect={() => {
+              logout();
+            }}
+          >
+            <LogOut />
+            <span>{logoutLoading ? 'Signing out…' : 'Sign Out'}</span>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+      {email ? <span className="sr-only">{email}</span> : null}
+    </DropdownMenu>
+  );
 }
 
 export function AppShell({
@@ -198,11 +382,9 @@ export function AppShell({
 }: AppShellProps) {
   const { user, logout, logoutLoading } = useAuth();
   const navigate = useNavigate();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const { theme, setTheme } = useTheme();
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const logoButtonRef = useRef<HTMLButtonElement | null>(null);
   const hasContent = Boolean(list || reading);
 
   useKeyboardShortcuts({
@@ -235,210 +417,87 @@ export function AppShell({
     onGoBubbleUp: () => void navigate({ to: '/bubble-up' }),
     onGoArchive: () => void navigate({ to: '/archive' }),
     onToggleMenu: () => {
-      setMenuOpen((prev) => !prev);
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }),
+      );
     },
     onShowHelp: () => setShortcutHelpOpen(true),
     onEscape: () => {
       if (shortcutHelpOpen) {
         setShortcutHelpOpen(false);
-      } else if (menuOpen) {
-        setMenuOpen(false);
-        logoButtonRef.current?.focus();
       }
     },
   });
 
-  useEffect(() => {
-    if (!menuOpen) {
-      return undefined;
-    }
-
-    function onPointerDown(event: PointerEvent) {
-      const target = event.target as Node;
-      if (
-        menuRef.current?.contains(target) ||
-        logoButtonRef.current?.contains(target)
-      ) {
-        return;
-      }
-      setMenuOpen(false);
-    }
-
-    document.addEventListener('pointerdown', onPointerDown);
-
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-    };
-  }, [menuOpen]);
-
-  const closeMenu = useCallback(() => {
-    setMenuOpen(false);
-    logoButtonRef.current?.focus();
-  }, []);
-
-  const navMenuRef = useMenuKeyboardNav({ open: menuOpen, onClose: closeMenu });
-
   return (
-    <div className="min-h-screen bg-bg-page text-ink-primary">
-      <KeyboardShortcutHelp
-        open={shortcutHelpOpen}
-        onClose={() => setShortcutHelpOpen(false)}
-      />
-      <button
-        type="button"
-        aria-label="Close main menu"
-        className={menuOpen ? 'fixed inset-0 z-30 cursor-default bg-ink-primary/5' : 'hidden'}
-        onClick={closeMenu}
-        tabIndex={-1}
-      />
-
-      <header className="relative z-40 px-4 py-3 sm:px-6 sm:py-4">
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center">
-          <div className="flex items-center">
-            <Link
-              to="/search"
-              aria-label="Search"
-              className="rounded-full p-2 text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-            >
-              <Search {...iconSizeProps.lg} />
-            </Link>
-          </div>
-
-          <div className="relative flex justify-center">
-            <button
-              ref={logoButtonRef}
+    <TooltipProvider>
+      <SidebarProvider>
+        <KeyboardShortcutHelp
+          open={shortcutHelpOpen}
+          onClose={() => setShortcutHelpOpen(false)}
+        />
+        <AppSidebar activePath={location.pathname} isAdmin={Boolean(user?.is_admin)} />
+        <SidebarInset>
+            <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-backdrop-filter:bg-background/80">
+            <SidebarTrigger aria-label="Toggle navigation">
+              <Menu />
+            </SidebarTrigger>
+            <Button variant="ghost" size="sm" asChild className="hidden sm:inline-flex">
+              <Link to="/search">
+                <Search data-icon="inline-start" />
+                Search
+              </Link>
+            </Button>
+            <div className="min-w-0 flex-1" />
+            <Button size="sm" asChild>
+              <Link to="/compose" search={{}}>
+                <PenSquare data-icon="inline-start" />
+                <span className="hidden sm:inline">Compose</span>
+              </Link>
+            </Button>
+            <Button
               type="button"
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-              className="rounded-md px-1 py-1 focus-ring outline-none"
-            >
-              <img src="/logo-icon-transparent.png" alt="hail" className="h-7" />
-            </button>
-
-            <div
-              ref={(node: HTMLDivElement | null) => { menuRef.current = node; navMenuRef.current = node; }}
-              role="menu"
-              aria-label="Main menu"
-              aria-hidden={!menuOpen}
-              className={menuOpen ? 'fixed inset-x-0 top-16 z-50 rounded-none border-y border-border-menu bg-bg-surface p-3 shadow-md shadow-ink-primary/15 sm:absolute sm:inset-x-auto sm:left-1/2 sm:top-12 sm:-translate-x-1/2 sm:w-80 sm:rounded-lg sm:border' : 'hidden'}
-            >
-                <nav className="space-y-1" aria-label="Primary navigation">
-                  {navItems.map(({ to, label, Icon }) => (
-                    <Link
-                      key={to}
-                      to={to}
-                      role="menuitem"
-                      onClick={closeMenu}
-                      className="flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-                      activeProps={{
-                        className: 'bg-bg-selected font-semibold text-ink-primary',
-                      }}
-                    >
-                      <Icon className="shrink-0" {...iconSizeProps.sm} />
-                      <span>{label}</span>
-                    </Link>
-                  ))}
-                </nav>
-
-                {user?.is_admin ? (
-                  <Link
-                    to="/admin"
-                    role="menuitem"
-                    onClick={closeMenu}
-                    className="mt-2 flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-                    activeProps={{
-                      className: 'bg-bg-selected font-semibold text-ink-primary',
-                    }}
-                  >
-                    <Settings className="shrink-0" {...iconSizeProps.sm} />
-                    <span>Admin</span>
-                  </Link>
-                ) : null}
-
-                <Link
-                  to="/provider-accounts"
-                  role="menuitem"
-                  onClick={closeMenu}
-                  className="mt-2 flex items-center gap-3 rounded-md px-3 py-2.5 hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-                  activeProps={{
-                    className: 'bg-bg-selected font-semibold text-ink-primary',
-                  }}
-                >
-                  <KeyRound className="shrink-0" {...iconSizeProps.sm} />
-                  <span>Provider Accounts</span>
-                </Link>
-
-                <div className="mt-3 border-t border-border-hairline pt-3">
-                  <p className="truncate px-3 hail-preview text-ink-secondary">
-                    {user?.email ?? 'Signed in'}
-                  </p>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      closeMenu();
-                      logout();
-                    }}
-                    disabled={logoutLoading}
-                    className="mt-1 flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left hail-chrome text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <LogOut className="shrink-0" {...iconSizeProps.sm} />
-                    <span>{logoutLoading ? 'Signing out…' : 'Sign Out'}</span>
-                  </button>
-                </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end gap-2 sm:gap-3">
-            <Link
-              to="/compose"
-              search={{}}
-              className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover"
-            >
-              <PenSquare {...iconSizeProps.sm} aria-hidden="true" />
-              <span className="hidden sm:inline">Compose</span>
-            </Link>
-            <button
-              type="button"
+              variant="ghost"
+              size="icon-sm"
               aria-label={`${themeLabels[theme]}; switch to ${themeLabels[nextTheme[theme]].toLowerCase()}`}
               title={themeLabels[theme]}
               onClick={() => setTheme(nextTheme[theme])}
-              className="rounded-full p-2 text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
             >
               <ThemeIcon theme={theme} />
-            </button>
-            <div
-              className="grid h-9 w-9 place-items-center rounded-full bg-bg-selected text-sm font-semibold text-ink-primary"
-              title={user?.email ?? undefined}
-            >
-              <span aria-hidden="true">{userInitial(user?.email)}</span>
-              <span className="sr-only">
-                {user?.email ? `Signed in as ${user.email}` : 'Signed in'}
-              </span>
+            </Button>
+            <UserMenu
+              email={user?.email}
+              logout={logout}
+              logoutLoading={logoutLoading}
+            />
+          </header>
+
+          <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8">
+            <div className={wide ? 'mx-auto w-full max-w-6xl' : 'mx-auto w-full max-w-4xl'}>
+              <div className="mb-5 flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
+                <div className="min-w-0">
+                  <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+                    {title}
+                  </h1>
+                  {description ? (
+                    <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                      {description}
+                    </p>
+                  ) : null}
+                </div>
+                {actions ? <div className="shrink-0">{actions}</div> : null}
+              </div>
+
+              <div className="flex flex-col gap-8">
+                {list}
+                {reading}
+                {!hasContent ? <EmptyList title={title} /> : null}
+              </div>
             </div>
-          </div>
-        </div>
-      </header>
-
-      <main className={`mx-auto w-full px-4 pb-16 pt-2 sm:px-6 ${wide ? 'max-w-5xl' : 'max-w-3xl lg:max-w-4xl xl:max-w-5xl'}`}>
-        <h1 className="mb-1 text-2xl font-bold tracking-tight text-ink-primary sm:text-3xl">
-          {title}
-        </h1>
-        {description ? (
-          <p className="mb-6 max-w-2xl text-sm text-ink-secondary">
-            {description}
-          </p>
-        ) : null}
-        {actions ? <div className="mb-6">{actions}</div> : null}
-
-        <div className="space-y-8">
-          {list}
-          {reading}
-          {!hasContent ? <EmptyList title={title} /> : null}
-        </div>
-      </main>
-      <Pile />
-    </div>
+          </main>
+        </SidebarInset>
+        <Pile />
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }
