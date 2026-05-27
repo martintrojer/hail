@@ -377,6 +377,36 @@ pub async fn list_label_thread_ids(
     Ok(rows)
 }
 
+pub async fn assigned_thread_ids_for_label(
+    db: &SqlitePool,
+    user_id: i64,
+    label_id: i64,
+    thread_ids: &[String],
+) -> Result<Vec<String>, LabelDbError> {
+    if thread_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    for thread_id in thread_ids {
+        validate_thread_id(thread_id)?;
+    }
+
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT tl.thread_id FROM thread_labels tl WHERE tl.user_id = ",
+    );
+    builder.push_bind(user_id);
+    builder.push(" AND tl.label_id = ");
+    builder.push_bind(label_id);
+    builder.push(" AND tl.thread_id IN (");
+    let mut separated = builder.separated(", ");
+    for thread_id in thread_ids {
+        separated.push_bind(thread_id);
+    }
+    separated.push_unseparated(")");
+
+    let rows = builder.build_query_scalar().fetch_all(db).await?;
+    Ok(rows)
+}
+
 pub async fn assign_label_to_threads(
     db: &SqlitePool,
     user_id: i64,

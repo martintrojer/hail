@@ -30,7 +30,7 @@ use crate::routes::jmap_helpers::{
     MAIL_VIEW_PROPERTIES, hydrate_thread_previews, jmap_session, trash_mailbox_id,
 };
 use crate::routes::labels::LabelResponse;
-use crate::routes::response::{bad_request, internal};
+use crate::routes::response::{bad_request, internal, not_found};
 use crate::routes::threads::MailboxRole;
 use crate::state::AppState;
 
@@ -689,6 +689,8 @@ struct SearchQuery {
     scope: Option<String>,
     #[param(example = "imbox")]
     mailbox: Option<String>,
+    #[param(example = 12)]
+    label_id: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1032,6 +1034,23 @@ async fn get_search(
         Err(()) => return bad_request("invalid_mailbox"),
     };
 
+    let label_id = match query.label_id {
+        Some(label_id) if label_id <= 0 => return not_found("label"),
+        label_id => label_id,
+    };
+    if let Some(label_id) = label_id {
+        match hail_db::labels::get_label(&state.db, user.id, label_id).await {
+            Ok(_) => {}
+            Err(hail_db::labels::LabelDbError::Sqlx(sqlx::Error::RowNotFound)) => {
+                return not_found("label");
+            }
+            Err(err) => {
+                tracing::error!(user_id = user.id, label_id, error = %err, "search label lookup failed");
+                return internal();
+            }
+        }
+    }
+
     let mut results = Vec::new();
 
     if scope.includes_mail() {
@@ -1045,6 +1064,15 @@ async fn get_search(
                 return internal();
             }
         };
+        if let Some(label_id) = label_id {
+            mail = match filter_search_by_label(&state, user.id, label_id, mail).await {
+                Ok(mail) => mail,
+                Err(err) => {
+                    tracing::error!(user_id = user.id, label_id, error = %err, "search label filter lookup failed");
+                    return internal();
+                }
+            };
+        }
         if let Err(err) = annotate_search_labels(&state, user.id, &mut mail).await {
             tracing::error!(user_id = user.id, error = %err, "search result label lookup failed");
             return internal();
@@ -1052,7 +1080,7 @@ async fn get_search(
         results.extend(mail.into_iter().map(SearchResult::from));
     }
 
-    if scope.includes_notes() {
+    if scope.includes_notes() && label_id.is_none() {
         let notes = match search_notes(&state, user.id, q).await {
             Ok(notes) => notes,
             Err(err) => {
@@ -1442,6 +1470,29 @@ async fn annotate_search_labels(
             .unwrap_or_default();
     }
     Ok(())
+}
+
+async fn filter_search_by_label(
+    state: &AppState,
+    user_id: i64,
+    label_id: i64,
+    items: Vec<MailSearchResult>,
+) -> Result<Vec<MailSearchResult>, hail_db::labels::LabelDbError> {
+    let thread_ids: Vec<String> = items
+        .iter()
+        .map(|item| item.thread_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let assigned_thread_ids =
+        hail_db::labels::assigned_thread_ids_for_label(&state.db, user_id, label_id, &thread_ids)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+    Ok(items
+        .into_iter()
+        .filter(|item| assigned_thread_ids.contains(&item.thread_id))
+        .collect())
 }
 
 async fn labels_by_thread_id<'a>(
