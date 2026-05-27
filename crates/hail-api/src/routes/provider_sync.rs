@@ -112,7 +112,7 @@ async fn list_statuses(
     let rows = sqlx::query(
         "SELECT id, provider_kind, provider_account_id, provider_email, display_email, \
                 sync_status, last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, \
-                sync_backoff_secs, last_error_class, last_error_message, last_profile_history_id, \
+                sync_backoff_secs, last_error_class, last_profile_history_id, \
                 profile_synced_at \
          FROM provider_accounts \
          WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync') \
@@ -175,7 +175,7 @@ async fn load_status(
     let row = sqlx::query(
         "SELECT id, provider_kind, provider_account_id, provider_email, display_email, \
                 sync_status, last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, \
-                sync_backoff_secs, last_error_class, last_error_message, last_profile_history_id, \
+                sync_backoff_secs, last_error_class, last_profile_history_id, \
                 profile_synced_at \
          FROM provider_accounts \
          WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail'",
@@ -205,9 +205,7 @@ async fn row_to_status(
         next_sync_after: row.get("next_sync_after"),
         sync_backoff_secs: row.get("sync_backoff_secs"),
         last_error_class: row.get("last_error_class"),
-        last_error_message: row
-            .get::<Option<String>, _>("last_error_message")
-            .map(|message| safe_provider_error_message(&message)),
+        last_error_message: None,
         last_profile_history_id: row.get("last_profile_history_id"),
         profile_synced_at: row.get("profile_synced_at"),
         last_sync_event: load_event_summary(db, user_id, id, None).await?,

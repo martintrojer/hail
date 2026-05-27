@@ -61,7 +61,7 @@ function providerSyncStatus(
     next_sync_after: '2026-05-26T17:15:00Z',
     sync_backoff_secs: 900,
     last_error_class: 'gmail_rate_limit',
-    last_error_message: 'Gmail asked hail to slow down',
+    last_error_message: null,
     last_profile_history_id: '12345',
     profile_synced_at: '2026-05-26T16:00:00Z',
     last_sync_event: {
@@ -378,6 +378,45 @@ describe('ProviderAccountsPage', () => {
     expect(
       await screen.findByText('Disconnect Gmail failed with HTTP 500.'),
     ).toBeInTheDocument();
+  });
+
+  it('renders only audited safe sync failure event text', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({
+        last_error_class: 'raw_leak_class',
+        last_error_message: 'Bearer raw-token body should not render',
+        last_error_event: {
+          event_type: 'sync_failed',
+          result_status: 'failed',
+          safe_error_class: 'gmail_rate_limit',
+          safe_error_message: 'Gmail asked hail to slow down',
+          created_at: '2026-05-26T17:00:00Z',
+        },
+      }),
+    ];
+    renderPage({ client });
+
+    expect(
+      await screen.findByText('gmail_rate_limit: Gmail asked hail to slow down'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/raw-token/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/raw_leak_class/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to safe error class when no safe sync failure message exists', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({
+        last_error_class: 'gmail_auth_revoked',
+        last_error_message: 'Bearer raw-token body should not render',
+        last_error_event: null,
+      }),
+    ];
+    renderPage({ client });
+
+    expect(await screen.findByText('gmail_auth_revoked')).toBeInTheDocument();
+    expect(screen.queryByText(/raw-token/)).not.toBeInTheDocument();
   });
 
   it('shows Gmail sync health and triggers a manual sync', async () => {
@@ -704,7 +743,10 @@ describe('ProviderAccountsPage', () => {
           }),
         );
       }
-      return Promise.resolve(jsonResponse(200, { accounts: [] }));
+      if (url.endsWith('/api/provider-accounts/sync-status')) {
+        return Promise.resolve(jsonResponse(200, { accounts: [] }));
+      }
+      return Promise.resolve(jsonResponse(200, { items: [] }));
     });
     const assign = vi.fn();
 

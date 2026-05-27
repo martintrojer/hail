@@ -74,8 +74,8 @@ function formatBackoff(value: number | null | undefined) {
 }
 
 function failureText(status: ProviderSyncStatus) {
-  const className = status.last_error_class || status.last_error_event?.safe_error_class;
-  const message = status.last_error_message || status.last_error_event?.safe_error_message;
+  const className = status.last_error_event?.safe_error_class || status.last_error_class;
+  const message = status.last_error_event?.safe_error_message;
   if (className && message) return `${className}: ${message}`;
   return className || message || 'No recent failure recorded';
 }
