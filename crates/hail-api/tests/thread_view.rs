@@ -9,7 +9,8 @@ use axum::http::{Method, Request, StatusCode, header};
 use chrono::{TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::threads_view::{
-    AssembledMessage, AssembledThread, Participant, ThreadAssembleError, ThreadAssembler,
+    AssembledMessage, AssembledThread, InlineImage, Participant, ThreadAssembleError,
+    ThreadAssembler,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, seed_session};
@@ -89,6 +90,7 @@ fn sample_message(email_id: &str, html: &str) -> AssembledMessage {
         html: html.to_string(),
         text: String::new(),
         preview: "preview text".to_string(),
+        inline_images: Vec::new(),
     }
 }
 
@@ -398,4 +400,55 @@ async fn messages_preserve_assembler_order() {
         .map(|message| message["email_id"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["email-c", "email-a", "email-b"]);
+}
+
+#[tokio::test]
+async fn cid_inline_image_sources_are_rewritten_to_authenticated_blob_downloads() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "cid-owner@example.org").await;
+    let mut message = sample_message(
+        "email-a",
+        r#"<p>Logo</p><img src="cid:logo.123@example" alt="Logo"><img src="cid:missing@example" alt="Missing">"#,
+    );
+    message.inline_images = vec![InlineImage {
+        cid: "logo.123@example".to_string(),
+        blob_id: "blob/logo 1".to_string(),
+        type_: "image/png".to_string(),
+    }];
+    let thread = sample_thread(vec![message]);
+
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let html = json["messages"][0]["html"].as_str().unwrap();
+    assert!(html.contains(
+        r#"src="/api/attachments/blob%2Flogo+1/download?disposition=inline&type=image%2Fpng""#
+    ));
+    assert!(html.contains(r#"src="cid:missing@example""#));
+}
+
+#[tokio::test]
+async fn percent_encoded_cid_sources_are_rewritten() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "cid-encoded@example.org").await;
+    let mut message = sample_message(
+        "email-a",
+        r#"<img src="cid:logo%2E123%40example" alt="Logo">"#,
+    );
+    message.inline_images = vec![InlineImage {
+        cid: "logo.123@example".to_string(),
+        blob_id: "blob-image".to_string(),
+        type_: "image/jpeg".to_string(),
+    }];
+    let thread = sample_thread(vec![message]);
+
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let html = json["messages"][0]["html"].as_str().unwrap();
+    assert!(html.contains(
+        r#"src="/api/attachments/blob-image/download?disposition=inline&type=image%2Fjpeg""#
+    ));
 }

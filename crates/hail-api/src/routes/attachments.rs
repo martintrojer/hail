@@ -55,7 +55,8 @@ impl AttachmentProvider for JmapAttachmentProvider {
         state: &'a AppState,
         token: SecretString,
         limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<AttachmentItem>, AttachmentError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AttachmentItem>, AttachmentError>> + Send + 'a>>
+    {
         Box::pin(async move {
             use hail_jmap::jmap_client::email::{Property, query as email_query};
 
@@ -119,7 +120,10 @@ impl AttachmentProvider for JmapAttachmentProvider {
                     items.push(AttachmentItem {
                         blob_id: blob_id.to_string(),
                         name: attachment_name(part),
-                        type_: part.content_type().unwrap_or("application/octet-stream").to_string(),
+                        type_: part
+                            .content_type()
+                            .unwrap_or("application/octet-stream")
+                            .to_string(),
                         size: part.size(),
                         download_url: format!("/api/attachments/{}/download", urlencoding(blob_id)),
                         context: context.clone(),
@@ -264,6 +268,7 @@ async fn download_attachment(
     Extension(user): Extension<AuthUser>,
     Extension(provider): Extension<Arc<dyn AttachmentProvider>>,
     Path(blob_id): Path<String>,
+    Query(query): Query<DownloadAttachmentQuery>,
 ) -> Response {
     if blob_id.trim().is_empty() || blob_id.contains('/') || blob_id.contains('\\') {
         return bad_request("invalid_blob_id");
@@ -274,14 +279,25 @@ async fn download_attachment(
         .await
     {
         Ok(Some(bytes)) => {
+            let inline = query.disposition.as_deref() == Some("inline");
+            let content_type = if inline {
+                match query
+                    .r#type
+                    .as_deref()
+                    .filter(|value| is_safe_inline_image_type(value))
+                {
+                    Some(value) => HeaderValue::from_str(value)
+                        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+                    None => return bad_request("invalid_inline_type"),
+                }
+            } else {
+                HeaderValue::from_static("application/octet-stream")
+            };
             let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/octet-stream"),
-            );
+            headers.insert(header::CONTENT_TYPE, content_type);
             headers.insert(
                 header::CONTENT_DISPOSITION,
-                HeaderValue::from_static("attachment"),
+                HeaderValue::from_static(if inline { "inline" } else { "attachment" }),
             );
             (StatusCode::OK, headers, bytes).into_response()
         }
@@ -291,6 +307,28 @@ async fn download_attachment(
             internal()
         }
     }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct DownloadAttachmentQuery {
+    /// Optional inline rendering hint for safe inline image blobs.
+    disposition: Option<String>,
+    /// MIME type used only with `disposition=inline`; limited to safe raster image types.
+    #[serde(rename = "type")]
+    r#type: Option<String>,
+}
+
+fn is_safe_inline_image_type(content_type: &str) -> bool {
+    let content_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        content_type.as_str(),
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
+    )
 }
 
 fn attachment_name(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> String {

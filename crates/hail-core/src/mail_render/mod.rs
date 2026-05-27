@@ -7,14 +7,14 @@
 //! helpers for the thread-as-document view.
 
 pub mod quote;
-pub use quote::{strip_quoted_history, StrippedText};
+pub use quote::{StrippedText, strip_quoted_history};
 
 use std::borrow::Cow;
 
 use ammonia::{Builder, UrlRelative};
 use html5ever::serialize::{SerializeOpts, TraversalScope};
 use html5ever::tendril::TendrilSink;
-use html5ever::{local_name, ns, parse_fragment, serialize, QualName};
+use html5ever::{QualName, local_name, ns, parse_fragment, serialize};
 use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
 use regex::Regex;
 
@@ -100,7 +100,8 @@ fn sanitizer() -> Builder<'static> {
             // Defense in depth: reject event handlers regardless of tag.
             (_, attr) if attr.to_ascii_lowercase().starts_with("on") => None,
             _ => Some(Cow::Borrowed(value)),
-        });
+        })
+        .add_allowed_classes("img", &["hail-cid-inline-image"]);
     builder
 }
 
@@ -298,10 +299,12 @@ mod tests {
         assert!(sanitized.html.contains(">data</a>"));
         assert!(!sanitized.html.contains("href"));
         assert!(!sanitized.html.to_ascii_lowercase().contains("javascript"));
-        assert!(!sanitized
-            .html
-            .to_ascii_lowercase()
-            .contains("data:text/html"));
+        assert!(
+            !sanitized
+                .html
+                .to_ascii_lowercase()
+                .contains("data:text/html")
+        );
     }
 
     #[test]
@@ -325,10 +328,12 @@ mod tests {
         assert!(sanitized.html.contains("<img"));
         assert!(sanitized.html.contains(r#"alt="svg""#));
         assert!(!sanitized.html.contains("src"));
-        assert!(!sanitized
-            .html
-            .to_ascii_lowercase()
-            .contains("data:image/svg"));
+        assert!(
+            !sanitized
+                .html
+                .to_ascii_lowercase()
+                .contains("data:image/svg")
+        );
         assert!(!sanitized.html.to_ascii_lowercase().contains("onload"));
     }
 
@@ -408,9 +413,11 @@ mod tests {
             sanitized.blocked_trackers[0].src,
             "https://example.com/logo.png"
         );
-        assert!(sanitized.blocked_trackers[0]
-            .reason
-            .contains("remote image"));
+        assert!(
+            sanitized.blocked_trackers[0]
+                .reason
+                .contains("remote image")
+        );
     }
 
     #[test]
@@ -422,12 +429,16 @@ mod tests {
         assert!(!sanitized.html.contains("<img"));
         assert!(!sanitized.html.contains("cdn.example"));
         assert_eq!(sanitized.blocked_trackers.len(), 2);
-        assert!(sanitized.blocked_trackers[0]
-            .reason
-            .contains("tracking beacon"));
-        assert!(sanitized.blocked_trackers[1]
-            .reason
-            .contains("remote image"));
+        assert!(
+            sanitized.blocked_trackers[0]
+                .reason
+                .contains("tracking beacon")
+        );
+        assert!(
+            sanitized.blocked_trackers[1]
+                .reason
+                .contains("remote image")
+        );
     }
 
     #[test]
@@ -442,9 +453,11 @@ mod tests {
             sanitized.blocked_trackers[0].src,
             "https://images.example/newsletter.png?utm_source=list&OpenId=abc"
         );
-        assert!(sanitized.blocked_trackers[0]
-            .reason
-            .contains("tracking beacon"));
+        assert!(
+            sanitized.blocked_trackers[0]
+                .reason
+                .contains("tracking beacon")
+        );
     }
 
     #[test]
@@ -466,9 +479,11 @@ mod tests {
         );
 
         assert!(sanitized.html.contains("<img"));
-        assert!(sanitized
-            .html
-            .contains(r#"src="CID:logo.123@example?part=1&amp;name=logo.png""#));
+        assert!(
+            sanitized
+                .html
+                .contains(r#"src="CID:logo.123@example?part=1&amp;name=logo.png""#)
+        );
         assert!(sanitized.blocked_trackers.is_empty());
     }
 
@@ -497,10 +512,12 @@ mod tests {
         assert!(!sanitized.html.contains("<circle"));
         assert!(!sanitized.html.contains("src="));
         assert!(!sanitized.html.to_ascii_lowercase().contains("javascript"));
-        assert!(!sanitized
-            .html
-            .to_ascii_lowercase()
-            .contains("data:image/svg"));
+        assert!(
+            !sanitized
+                .html
+                .to_ascii_lowercase()
+                .contains("data:image/svg")
+        );
     }
 
     #[test]
@@ -519,9 +536,11 @@ mod tests {
         let sanitized = sanitize_and_strip_trackers(r#"<a href="https://example.com">site</a>"#);
 
         assert!(sanitized.html.contains(r#"href="https://example.com""#));
-        assert!(sanitized
-            .html
-            .contains(r#"rel="noopener noreferrer nofollow""#));
+        assert!(
+            sanitized
+                .html
+                .contains(r#"rel="noopener noreferrer nofollow""#)
+        );
         assert!(sanitized.html.contains(r#"target="_blank""#));
     }
 
@@ -577,7 +596,9 @@ mod tests {
             assert!(!rendered.html.contains("open.gif"));
             assert_eq!(
                 rendered.blocked_tracker_srcs,
-                ["https://track.northwind.example/open.gif?recipient=alex%40hail.test&campaign=2025-05-21"]
+                [
+                    "https://track.northwind.example/open.gif?recipient=alex%40hail.test&campaign=2025-05-21"
+                ]
             );
         }
 
@@ -607,7 +628,11 @@ mod tests {
             assert!(rendered.html.contains("Looks good to me"));
             assert!(rendered.html.contains("Priya"));
             assert!(!rendered.html.contains("gmail_quote"));
-            assert!(!rendered.html.contains("Can you sanity-check the launch checklist"));
+            assert!(
+                !rendered
+                    .html
+                    .contains("Can you sanity-check the launch checklist")
+            );
             assert!(!rendered.html.contains("Approve a sender"));
         }
 
@@ -627,7 +652,11 @@ mod tests {
             let rendered = render_fixture("personal-simple.eml");
 
             assert!(rendered.html.contains("Hey Alex"));
-            assert!(rendered.html.contains("Are you still free for dinner on Thursday?"));
+            assert!(
+                rendered
+                    .html
+                    .contains("Are you still free for dinner on Thursday?")
+            );
             assert!(rendered.html.contains("Bring the photos from the hike"));
             assert!(rendered.html.contains("<br>"));
             assert!(!rendered.html.contains("<script"));
