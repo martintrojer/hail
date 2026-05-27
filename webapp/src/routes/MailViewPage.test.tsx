@@ -417,13 +417,13 @@ describe('MailViewPage', () => {
       name: 'Open Second thread from Bob Sender',
     });
 
-    fireEvent.click(within(firstLink).getByRole('button', { name: 'Select Alice Sender' }));
-    fireEvent.click(within(secondLink).getByRole('button', { name: 'Select Bob Sender' }));
+    fireEvent.click(within(firstLink).getByRole('checkbox', { name: 'Select Alice Sender' }));
+    fireEvent.click(within(secondLink).getByRole('checkbox', { name: 'Select Bob Sender' }));
 
     expect(screen.getByText('2 selected')).toBeInTheDocument();
     expect(
-      within(firstLink).getByRole('button', { name: 'Deselect Alice Sender' }),
-    ).toHaveAttribute('aria-pressed', 'true');
+      within(firstLink).getByRole('checkbox', { name: 'Deselect Alice Sender' }),
+    ).toHaveAttribute('aria-checked', 'true');
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Set Aside' })[0]);
 

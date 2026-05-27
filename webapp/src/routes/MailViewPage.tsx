@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { cn } from '../lib/utils';
 import {
   type HailApiClient,
   type MailViewItem,
@@ -25,7 +26,9 @@ import { MailRow as SharedMailRow } from '../components/MailRow';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
-import { pillButtonClass } from '../lib/buttonStyles';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
 interface MailViewPageProps {
@@ -102,6 +105,18 @@ function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
   );
 }
 
+function rowDensityClass(view: MailViewKind) {
+  if (view === 'feed') {
+    return 'py-1.5';
+  }
+
+  if (view === 'papertrail') {
+    return 'py-0.5';
+  }
+
+  return 'py-1';
+}
+
 function MailThreadRow({
   item,
   view,
@@ -113,107 +128,24 @@ function MailThreadRow({
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
-  if (view === 'feed') {
-    return <FeedThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />;
-  }
-
-  if (view === 'papertrail') {
-    return <PaperTrailThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />;
-  }
-
-  return <ImboxThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />;
-}
-
-function ImboxThreadRow({
-  item,
-  selected = false,
-  onToggleSelect,
-}: {
-  item: MailViewItem;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
   return (
     <ThreadLink
       threadId={item.thread_id}
       mailListItem
-      className={`block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-4 pl-3 pr-0 focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-5 ${
-        selected ? 'bg-accent-blue/10' : 'hover:bg-bg-hover'
-      }`}
+      className={cn(
+        'block border-b border-l-2 border-b-border border-l-transparent focus-visible:border-l-primary focus-visible:bg-accent focus-visible:outline-none hover:bg-muted/60',
+        rowDensityClass(view),
+        selected && 'bg-accent',
+      )}
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
       <ScreenReaderThreadMetadata item={item} />
       <SharedMailRow
         from={item.from || 'Unknown sender'}
         subject={item.subject || '(no subject)'}
-        preview={item.preview || 'No preview available.'}
+        preview={view === 'papertrail' ? '' : item.preview || 'No preview available.'}
         receivedAt={item.received_at}
-        unread={item.unread}
-        hasNotes={item.has_notes}
-        selected={selected}
-        onToggleSelect={onToggleSelect}
-      />
-    </ThreadLink>
-  );
-}
-
-function FeedThreadRow({
-  item,
-  selected = false,
-  onToggleSelect,
-}: {
-  item: MailViewItem;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  return (
-    <ThreadLink
-      threadId={item.thread_id}
-      mailListItem
-      className={`block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-6 pl-3 pr-0 focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-7 ${
-        selected ? 'bg-accent-blue/10' : 'hover:bg-bg-hover'
-      }`}
-      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
-    >
-      <ScreenReaderThreadMetadata item={item} />
-      <SharedMailRow
-        from={item.from || 'Unknown sender'}
-        subject={item.subject || '(no subject)'}
-        preview={item.preview || 'No preview available.'}
-        receivedAt={item.received_at}
-        unread={item.unread}
-        hasNotes={item.has_notes}
-        selected={selected}
-        onToggleSelect={onToggleSelect}
-      />
-    </ThreadLink>
-  );
-}
-
-function PaperTrailThreadRow({
-  item,
-  selected = false,
-  onToggleSelect,
-}: {
-  item: MailViewItem;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  return (
-    <ThreadLink
-      threadId={item.thread_id}
-      mailListItem
-      className={`block border-b border-l-[3px] border-b-border-hairline border-l-transparent py-2.5 pl-3 pr-0 focus-visible:border-l-accent-blue focus-visible:bg-bg-selected focus-visible:outline-none sm:py-3 ${
-        selected ? 'bg-accent-blue/10' : 'hover:bg-bg-hover'
-      }`}
-      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
-    >
-      <ScreenReaderThreadMetadata item={item} />
-      <SharedMailRow
-        from={item.from || 'Unknown sender'}
-        subject={item.subject || '(no subject)'}
-        preview=""
-        receivedAt={item.received_at}
+        unread={view === 'papertrail' ? false : item.unread}
         hasNotes={item.has_notes}
         selected={selected}
         onToggleSelect={onToggleSelect}
@@ -302,76 +234,49 @@ function PowerThroughCard({
   onExit: () => void;
 }) {
   return (
-    <div className="rounded-xl bg-bg-surface p-6 shadow-lg shadow-ink-primary/10">
-      <div className="mb-4 flex items-center justify-between">
-        <span className="text-sm font-medium text-ink-secondary">
-          {index + 1} of {total}
-        </span>
-        <button
-          type="button"
-          onClick={onExit}
-          className="text-sm text-ink-tertiary focus-ring outline-none hover:text-ink-primary"
-        >
+    <Alert className="shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <AlertTitle>{index + 1} of {total}</AlertTitle>
+          <AlertDescription className="mt-2">
+            <span className="block text-sm font-medium text-foreground">
+              {item.from || 'Unknown sender'}
+            </span>
+            <span className="mt-1 block text-sm text-foreground">
+              {item.subject || '(no subject)'}
+            </span>
+            <span className="mt-1 line-clamp-2 block text-xs text-muted-foreground">
+              {item.preview || 'No preview available.'}
+            </span>
+          </AlertDescription>
+        </div>
+        <Button type="button" variant="ghost" size="sm" onClick={onExit}>
           Exit
-        </button>
+        </Button>
       </div>
-      <div className="mb-6">
-        <p className="text-lg font-semibold text-ink-primary">
-          {item.from || 'Unknown sender'}
-        </p>
-        <p className="mt-1 text-base text-ink-primary">{item.subject || '(no subject)'}</p>
-        <p className="mt-2 line-clamp-3 text-sm text-ink-secondary">
-          {item.preview || 'No preview available.'}
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onAction('imbox')}
-          className={pillButtonClass('primary', 'md')}
-        >
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" disabled={busy} onClick={() => onAction('imbox')} size="sm">
           Keep in Imbox
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onAction('feed')}
-          className={pillButtonClass('outline', 'md')}
-        >
+        </Button>
+        <Button type="button" disabled={busy} onClick={() => onAction('feed')} variant="outline" size="sm">
           Move to Feed
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onAction('papertrail')}
-          className={pillButtonClass('outline', 'md')}
-        >
+        </Button>
+        <Button type="button" disabled={busy} onClick={() => onAction('papertrail')} variant="outline" size="sm">
           Move to Paper Trail
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onAction('set-aside')}
-          className={pillButtonClass('outline', 'md')}
-        >
+        </Button>
+        <Button type="button" disabled={busy} onClick={() => onAction('set-aside')} variant="outline" size="sm">
           Set Aside
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onAction('trash')}
-          className={pillButtonClass('danger', 'md')}
-        >
+        </Button>
+        <Button type="button" disabled={busy} onClick={() => onAction('trash')} variant="destructive" size="sm">
           Trash
-        </button>
+        </Button>
       </div>
       {error ? (
-        <p role="alert" className="mt-4 text-sm text-accent-red">
+        <p role="alert" className="mt-3 text-sm text-destructive">
           {actionErrorMessage(error, 'Thread action')}
         </p>
       ) : null}
-    </div>
+    </Alert>
   );
 }
 
@@ -408,14 +313,14 @@ function ImboxSectionedList({
   const hiddenPreviouslySeen = Math.max(previouslySeenTotal - previouslySeen.length, 0);
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-5">
       {bubbledUp.length > 0 ? (
         <section aria-labelledby="imbox-bubbled-up-heading">
-          <div className="mb-3 flex items-center gap-2 px-1">
-            <ArrowUpCircle size={16} className="text-accent-yellow" aria-hidden="true" />
+          <div className="mb-2 flex items-center gap-2 px-1">
+            <ArrowUpCircle className="text-primary" aria-hidden="true" />
             <h2
               id="imbox-bubbled-up-heading"
-              className="text-sm font-semibold uppercase tracking-wider text-ink-secondary"
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
               Bubbled Up
             </h2>
@@ -429,28 +334,22 @@ function ImboxSectionedList({
       ) : null}
 
       <section aria-labelledby="imbox-new-for-you-heading">
-        <div className="mb-3 flex items-center justify-between px-1">
+        <div className="mb-2 flex items-center justify-between gap-3 px-1">
           <div className="flex items-center gap-2">
             <h2
               id="imbox-new-for-you-heading"
-              className="text-sm font-semibold uppercase tracking-wider text-ink-secondary"
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
               New for you
             </h2>
             {newCount > 0 ? (
-              <span className="rounded-full bg-accent-blue px-2 py-0.5 text-xs font-bold text-white">
-                {newCount}
-              </span>
+              <Badge>{newCount}</Badge>
             ) : null}
           </div>
           {newForYou.length > 0 && (
-            <button
-              type="button"
-              onClick={onStartPowerThrough}
-              className={pillButtonClass('primary', 'sm')}
-            >
+            <Button type="button" onClick={onStartPowerThrough} size="sm">
               Power through new ({newForYou.length})
-            </button>
+            </Button>
           )}
         </div>
         {powerThrough ? (
@@ -480,15 +379,15 @@ function ImboxSectionedList({
 
       {previouslySeen.length > 0 ? (
         <section aria-labelledby="imbox-previously-seen-heading">
-          <div className="mb-3 flex items-center justify-between px-1">
+          <div className="mb-2 flex items-center justify-between px-1">
             <h2
               id="imbox-previously-seen-heading"
-              className="text-sm font-semibold uppercase tracking-wider text-ink-tertiary"
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
               Previously seen
             </h2>
             {hiddenPreviouslySeen > 0 ? (
-              <span className="text-xs text-ink-tertiary">{hiddenPreviouslySeen} more</span>
+              <span className="text-xs text-muted-foreground">{hiddenPreviouslySeen} more</span>
             ) : null}
           </div>
           <MailRows
