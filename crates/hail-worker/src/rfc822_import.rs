@@ -219,6 +219,11 @@ impl FakeRfc822Importer {
             .clone()
     }
 
+    #[must_use]
+    pub fn local_message_count(&self) -> usize {
+        self.state.lock().expect("fake importer mutex").next_id as usize
+    }
+
     pub fn fail_next_for_provider_message_id(
         &self,
         provider_message_id: impl Into<String>,
