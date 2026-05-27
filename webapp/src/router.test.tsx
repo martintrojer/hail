@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   LoginRequest,
   MailViewResponse,
+  ScreenerView,
   SetupAdminRequest,
   SetupState,
   UserEnvelope,
@@ -29,6 +30,25 @@ const adminUser: UserEnvelope = {
 const imbox: MailViewResponse = {
   items: [],
   next_cursor: null,
+};
+
+const screenerView: ScreenerView = {
+  senders: [
+    {
+      sender: 'new@example.com',
+      message_count: 1,
+      emails: [],
+      latest_preview: null,
+      first_seen_at: '2026-05-27T12:00:00Z',
+    },
+    {
+      sender: 'another@example.com',
+      message_count: 1,
+      emails: [],
+      latest_preview: null,
+      first_seen_at: '2026-05-27T12:05:00Z',
+    },
+  ],
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -90,8 +110,22 @@ beforeEach(() => {
       return jsonResponse(adminUser, 201);
     }
 
+    if (url.pathname === '/api/views/imbox/sectioned' && method === 'GET') {
+      return jsonResponse({
+        bubbled_up: [],
+        new_for_you: imbox.items,
+        previously_seen: [],
+        new_count: 0,
+        previously_seen_total: 0,
+      });
+    }
+
     if (url.pathname === '/api/views/imbox' && method === 'GET') {
       return jsonResponse(imbox);
+    }
+
+    if (url.pathname === '/api/views/screener' && method === 'GET') {
+      return jsonResponse(screenerView);
     }
 
     return jsonResponse({ error: `unhandled ${method} ${url.pathname}` }, 500);
@@ -162,6 +196,17 @@ describe('SPA auth/router flows', () => {
     expect(await screen.findByRole('heading', { name: 'Imbox' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /hail/i }));
     expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
+  });
+
+  it('shows cached sidebar counter pills for available view data', async () => {
+    api.user = adminUser;
+
+    renderRouterAt('/imbox');
+
+    expect(
+      await screen.findByRole('link', { name: 'The Screener, 2 pending' }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0);
   });
 
   it('updates the auth cache and navigates to imbox after login', async () => {
