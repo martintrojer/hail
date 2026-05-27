@@ -1,5 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import { type ComponentType, type ReactNode, useState } from 'react';
+import type { ScreenerView } from '../api/client';
+import { queryKeys } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
 import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
@@ -30,6 +33,7 @@ import {
   Trash2,
   UserRoundPlus,
 } from '../components/icons';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import {
   Collapsible,
@@ -55,6 +59,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -85,6 +90,11 @@ interface NavItem {
   label: string;
   description: string;
   Icon: ComponentType<{ className?: string }>;
+  countKey?: 'screener-pending';
+}
+
+interface SidebarCounts {
+  screenerPending?: number;
 }
 
 const primaryNavItems: NavItem[] = [
@@ -111,6 +121,7 @@ const primaryNavItems: NavItem[] = [
     label: 'The Screener',
     description: 'New senders end up here. Decide if they get in.',
     Icon: UserRoundPlus,
+    countKey: 'screener-pending',
   },
 ];
 
@@ -301,30 +312,72 @@ function ThemeIcon({ theme }: { theme: ThemePreference }) {
   return <Monitor />;
 }
 
-function NavTooltip({ item }: { item: NavItem }) {
+function itemCount(item: NavItem, counts: SidebarCounts) {
+  if (item.countKey === 'screener-pending') {
+    return counts.screenerPending;
+  }
+
+  return undefined;
+}
+
+function CountPill({ count }: { count: number }) {
+  const label = count > 99 ? '99+' : String(count);
+
+  return (
+    <Badge
+      variant="secondary"
+      className="ml-auto h-5 min-w-5 px-1 text-[0.7rem] tabular-nums group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:ml-0 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:text-[0.625rem]"
+      aria-hidden="true"
+    >
+      {label}
+    </Badge>
+  );
+}
+
+function NavTooltip({ item, count }: { item: NavItem; count?: number }) {
   return (
     <div className="flex max-w-64 flex-col gap-1 text-left">
-      <span className="font-medium">{item.label}</span>
+      <span className="font-medium">
+        {item.label}
+        {count && count > 0 ? ` (${count})` : ''}
+      </span>
       <span className="text-xs opacity-85">{item.description}</span>
     </div>
   );
 }
 
-function NavMenuItem({ item, activePath }: { item: NavItem; activePath: string }) {
+function NavMenuItem({
+  item,
+  activePath,
+  counts,
+}: {
+  item: NavItem;
+  activePath: string;
+  counts: SidebarCounts;
+}) {
   const isActive = activePath === item.to || activePath.startsWith(`${item.to}/`);
+  const count = itemCount(item, counts);
+  const showCount = count !== undefined && count > 0;
+  const label = showCount ? `${item.label}, ${count} pending` : item.label;
 
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         asChild
         isActive={isActive}
-        tooltip={{ children: <NavTooltip item={item} />, hidden: false }}
+        tooltip={{ children: <NavTooltip item={item} count={count} />, hidden: false }}
       >
-        <Link to={item.to} aria-label={item.label}>
+        <Link to={item.to} aria-label={label}>
           <item.Icon />
           <span>{item.label}</span>
+          {showCount ? <CountPill count={count} /> : null}
         </Link>
       </SidebarMenuButton>
+      {showCount ? (
+        <SidebarMenuBadge className="sr-only">
+          {count}
+        </SidebarMenuBadge>
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -333,10 +386,12 @@ function SidebarNavGroup({
   label,
   items,
   activePath,
+  counts,
 }: {
   label: string;
   items: NavItem[];
   activePath: string;
+  counts: SidebarCounts;
 }) {
   return (
     <SidebarGroup>
@@ -344,7 +399,7 @@ function SidebarNavGroup({
       <SidebarGroupContent>
         <SidebarMenu>
           {items.map((item) => (
-            <NavMenuItem key={item.to} item={item} activePath={activePath} />
+            <NavMenuItem key={item.to} item={item} activePath={activePath} counts={counts} />
           ))}
         </SidebarMenu>
       </SidebarGroupContent>
@@ -400,7 +455,15 @@ function LabelsNavPlaceholder() {
   );
 }
 
-function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: boolean }) {
+function AppSidebar({
+  activePath,
+  isAdmin,
+  counts,
+}: {
+  activePath: string;
+  isAdmin: boolean;
+  counts: SidebarCounts;
+}) {
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border bg-sidebar text-sidebar-foreground">
       <SidebarHeader>
@@ -425,11 +488,11 @@ function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: bool
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarNavGroup label="Mail" items={primaryNavItems} activePath={activePath} />
-        <SidebarNavGroup label="Pile" items={pileNavItems} activePath={activePath} />
-        <SidebarNavGroup label="Folders" items={mailboxNavItems} activePath={activePath} />
+        <SidebarNavGroup label="Mail" items={primaryNavItems} activePath={activePath} counts={counts} />
+        <SidebarNavGroup label="Pile" items={pileNavItems} activePath={activePath} counts={counts} />
+        <SidebarNavGroup label="Folders" items={mailboxNavItems} activePath={activePath} counts={counts} />
         <LabelsNavPlaceholder />
-        <SidebarNavGroup label="Tools" items={workflowNavItems} activePath={activePath} />
+        <SidebarNavGroup label="Tools" items={workflowNavItems} activePath={activePath} counts={counts} />
       </SidebarContent>
 
       <SidebarFooter>
@@ -443,6 +506,7 @@ function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: bool
               Icon: KeyRound,
             }}
             activePath={activePath}
+            counts={counts}
           />
           {isAdmin ? (
             <NavMenuItem
@@ -453,6 +517,7 @@ function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: bool
                 Icon: Settings,
               }}
               activePath={activePath}
+              counts={counts}
             />
           ) : null}
         </SidebarMenu>
@@ -514,6 +579,11 @@ export function AppShell({
   const location = useLocation();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const { theme, setTheme } = useTheme();
+  const queryClient = useQueryClient();
+  const screenerData = queryClient.getQueryData<ScreenerView>(queryKeys.screener());
+  const sidebarCounts: SidebarCounts = {
+    screenerPending: screenerData?.senders.length,
+  };
   const hasContent = Boolean(list || reading);
 
   useKeyboardShortcuts({
@@ -565,7 +635,11 @@ export function AppShell({
           open={shortcutHelpOpen}
           onClose={() => setShortcutHelpOpen(false)}
         />
-        <AppSidebar activePath={location.pathname} isAdmin={Boolean(user?.is_admin)} />
+        <AppSidebar
+          activePath={location.pathname}
+          isAdmin={Boolean(user?.is_admin)}
+          counts={sidebarCounts}
+        />
         <SidebarInset>
             <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-backdrop-filter:bg-background/80">
             <SidebarTrigger aria-label="Toggle navigation">
