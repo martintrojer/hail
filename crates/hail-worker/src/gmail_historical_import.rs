@@ -628,6 +628,14 @@ where
             },
         )
         .await?;
+        assign_gmail_labels_to_thread_id(
+            db,
+            account.user_id,
+            user_labels,
+            &gmail_label_ids,
+            existing.jmap_thread_id.as_deref(),
+        )
+        .await?;
         summary.duplicates += 1;
         audit_message_skipped(
             db,
@@ -658,6 +666,14 @@ where
                 duplicate_jmap_thread_id: existing.jmap_thread_id.as_deref(),
                 duplicate_jmap_mailbox_ids_json: existing.jmap_mailbox_ids_json.as_deref(),
             },
+        )
+        .await?;
+        assign_gmail_labels_to_thread_id(
+            db,
+            account.user_id,
+            user_labels,
+            &gmail_label_ids,
+            existing.jmap_thread_id.as_deref(),
         )
         .await?;
         summary.duplicates += 1;
@@ -706,6 +722,14 @@ where
             Some(Ok(())) => {
                 clear_provider_message_route_error(db, account.provider_account_id, &raw.id)
                     .await?;
+                assign_gmail_labels_to_imported_thread(
+                    db,
+                    account.user_id,
+                    user_labels,
+                    &gmail_label_ids,
+                    &imported,
+                )
+                .await?;
                 summary.skipped += 1;
                 audit_message_skipped(
                     db,
@@ -828,11 +852,10 @@ where
     }
 
     clear_provider_message_route_error(db, account.provider_account_id, &raw.id).await?;
-    assign_gmail_labels_to_thread(
+    assign_gmail_labels_to_imported_thread(
         db,
         account.user_id,
         user_labels,
-        &listed,
         &gmail_label_ids,
         &imported,
     )
@@ -867,15 +890,31 @@ pub(crate) fn gmail_user_label_map(labels: Vec<GmailLabel>) -> HashMap<String, G
         .collect()
 }
 
-async fn assign_gmail_labels_to_thread(
+async fn assign_gmail_labels_to_imported_thread(
     db: &SqlitePool,
     user_id: i64,
     user_labels: &HashMap<String, GmailLabel>,
-    _listed: &ListMessage,
     raw_label_ids: &[String],
     imported: &ImportedRfc822Message,
 ) -> Result<(), GmailHistoricalImportError> {
-    let Some(thread_id) = imported.jmap_thread_id.as_deref() else {
+    assign_gmail_labels_to_thread_id(
+        db,
+        user_id,
+        user_labels,
+        raw_label_ids,
+        imported.jmap_thread_id.as_deref(),
+    )
+    .await
+}
+
+async fn assign_gmail_labels_to_thread_id(
+    db: &SqlitePool,
+    user_id: i64,
+    user_labels: &HashMap<String, GmailLabel>,
+    raw_label_ids: &[String],
+    thread_id: Option<&str>,
+) -> Result<(), GmailHistoricalImportError> {
+    let Some(thread_id) = thread_id else {
         return Ok(());
     };
 
