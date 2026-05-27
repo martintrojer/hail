@@ -110,6 +110,31 @@ impl ProviderSyncRunner for BlockingRunner {
     }
 }
 
+#[derive(Debug)]
+struct NonCooperativeBlockingRunner {
+    entered: Barrier,
+}
+
+#[async_trait]
+impl ProviderSyncRunner for NonCooperativeBlockingRunner {
+    async fn run_initial_sync(
+        &self,
+        _account: ProviderSyncAccount,
+        _cancel: &CancellationToken,
+    ) -> Result<ProviderSyncRunOutcome, ProviderSyncRunError> {
+        self.entered.wait().await;
+        std::future::pending().await
+    }
+
+    async fn run_incremental_sync(
+        &self,
+        account: ProviderSyncAccount,
+        cancel: &CancellationToken,
+    ) -> Result<ProviderSyncRunOutcome, ProviderSyncRunError> {
+        self.run_initial_sync(account, cancel).await
+    }
+}
+
 async fn setup() -> (SqlitePool, TempDb, i64) {
     let (url, guard) = fresh_db_url("hail-worker-provider-sync-scheduler-test");
     let pool = hail_db::connect(&url).await.expect("connect");
@@ -446,6 +471,45 @@ async fn errored_incomplete_initial_with_profile_history_retries_initial() {
             (incomplete, "initial"),
             (completed_then_errored, "incremental")
         ]
+    );
+}
+
+#[tokio::test]
+async fn tick_cancels_non_cooperative_blocked_runner_without_waiting_forever() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let id = insert_provider(&pool, user_id, "active", Some("100"), None, None).await;
+    let cancel = CancellationToken::new();
+    let runner = Arc::new(NonCooperativeBlockingRunner {
+        entered: Barrier::new(2),
+    });
+    let tick_pool = pool.clone();
+    let tick_runner = runner.clone();
+    let tick_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        process_provider_sync_tick(
+            &tick_pool,
+            tick_runner.as_ref(),
+            now,
+            ProviderSyncSchedulerOptions::default(),
+            &tick_cancel,
+        )
+        .await
+        .expect("provider sync tick")
+    });
+
+    runner.entered.wait().await;
+    cancel.cancel();
+    let summary = tokio::time::timeout(StdDuration::from_millis(200), handle)
+        .await
+        .expect("tick should stop promptly")
+        .expect("join");
+
+    assert!(summary.cancelled);
+    assert_eq!(summary.incremental_runs, 1);
+    assert_eq!(
+        provider_state(&pool, id).await.2.as_deref(),
+        Some("cancelled")
     );
 }
 

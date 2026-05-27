@@ -14,11 +14,12 @@ use hail_worker::gmail_client::{
 };
 use hail_worker::gmail_historical_import::GmailHistoricalSource;
 use hail_worker::gmail_incremental_sync::{
-    GmailIncrementalSource, GmailIncrementalSyncAccount, GmailIncrementalSyncOptions,
-    run_gmail_incremental_sync,
+    GmailIncrementalSource, GmailIncrementalSyncAccount, GmailIncrementalSyncError,
+    GmailIncrementalSyncOptions, run_gmail_incremental_sync,
 };
 use hail_worker::rfc822_import::FakeRfc822Importer;
 use reqwest::StatusCode;
+use tokio::sync::Barrier;
 use tokio_util::sync::CancellationToken;
 
 fn fresh_db_url() -> (String, TempDb) {
@@ -180,6 +181,73 @@ impl GmailHistoricalSource for FakeGmail {
     }
 }
 
+#[derive(Debug)]
+struct BlockingIncrementalGmail {
+    history_entered: Barrier,
+    raw_entered: Barrier,
+    block_history: bool,
+}
+
+impl BlockingIncrementalGmail {
+    fn history_blocked() -> Self {
+        Self {
+            history_entered: Barrier::new(2),
+            raw_entered: Barrier::new(1),
+            block_history: true,
+        }
+    }
+
+    fn raw_blocked() -> Self {
+        Self {
+            history_entered: Barrier::new(1),
+            raw_entered: Barrier::new(2),
+            block_history: false,
+        }
+    }
+}
+
+#[async_trait]
+impl GmailIncrementalSource for BlockingIncrementalGmail {
+    async fn list_history(
+        &self,
+        _params: &ListHistoryParams,
+    ) -> Result<ListHistoryResponse, GmailClientError> {
+        self.history_entered.wait().await;
+        if self.block_history {
+            std::future::pending().await
+        } else {
+            Ok(history_page(
+                vec![("101", vec![("gmail-block-raw", "thread-block")])],
+                None,
+                Some("102"),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+impl GmailHistoricalSource for BlockingIncrementalGmail {
+    async fn list_messages(
+        &self,
+        _params: &ListMessagesParams,
+    ) -> Result<ListMessagesResponse, GmailClientError> {
+        unreachable!("incremental cancellation tests should not run fallback list")
+    }
+
+    async fn get_raw_message(&self, message_id: &str) -> Result<RawGmailMessage, GmailClientError> {
+        self.raw_entered.wait().await;
+        Ok(match message_id {
+            "gmail-block-raw" => std::future::pending().await,
+            _ => raw_message(
+                message_id,
+                "thread-block",
+                "history-block",
+                "block@example.com",
+            ),
+        })
+    }
+}
+
 fn history_page(
     records: Vec<(&str, Vec<(&str, &str)>)>,
     next_page_token: Option<&str>,
@@ -242,6 +310,100 @@ fn message_page_from_fixtures(
         next_page_token: None,
         result_size_estimate: None,
     }
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_incremental_history_fetch() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let gmail = Arc::new(BlockingIncrementalGmail::history_blocked());
+    let importer = Arc::new(FakeRfc822Importer::default());
+    let cancel = CancellationToken::new();
+    let task_pool = pool.clone();
+    let task_gmail = gmail.clone();
+    let task_importer = importer.clone();
+    let task_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        run_gmail_incremental_sync(
+            &task_pool,
+            GmailIncrementalSyncAccount {
+                provider_account_id,
+                user_id,
+                history_id: Some("100".to_owned()),
+            },
+            task_gmail.as_ref(),
+            task_importer.as_ref(),
+            GmailIncrementalSyncOptions::into_mailboxes(["inbox"]),
+            &task_cancel,
+        )
+        .await
+    });
+
+    gmail.history_entered.wait().await;
+    cancel.cancel();
+    let err = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+        .await
+        .expect("incremental sync should stop promptly")
+        .expect("join")
+        .expect_err("cancelled sync");
+    assert!(matches!(err, GmailIncrementalSyncError::Cancelled));
+    assert_eq!(
+        account_error_class(&pool, provider_account_id)
+            .await
+            .as_deref(),
+        Some("cancelled")
+    );
+    assert!(importer.imports().is_empty());
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_incremental_raw_fetch() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let gmail = Arc::new(BlockingIncrementalGmail::raw_blocked());
+    let importer = Arc::new(FakeRfc822Importer::default());
+    let cancel = CancellationToken::new();
+    let task_pool = pool.clone();
+    let task_gmail = gmail.clone();
+    let task_importer = importer.clone();
+    let task_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        run_gmail_incremental_sync(
+            &task_pool,
+            GmailIncrementalSyncAccount {
+                provider_account_id,
+                user_id,
+                history_id: Some("100".to_owned()),
+            },
+            task_gmail.as_ref(),
+            task_importer.as_ref(),
+            GmailIncrementalSyncOptions::into_mailboxes(["inbox"]),
+            &task_cancel,
+        )
+        .await
+    });
+
+    gmail.raw_entered.wait().await;
+    cancel.cancel();
+    let err = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+        .await
+        .expect("incremental sync should stop promptly")
+        .expect("join")
+        .expect_err("cancelled sync");
+    assert!(matches!(err, GmailIncrementalSyncError::Import(_)));
+    assert!(importer.imports().is_empty());
+    assert!(
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-block-raw")
+            .await
+            .expect("mapping lookup")
+            .is_none()
+    );
+}
+
+async fn account_error_class(pool: &sqlx::SqlitePool, provider_account_id: i64) -> Option<String> {
+    sqlx::query_scalar("SELECT last_error_class FROM provider_accounts WHERE id = ?1")
+        .bind(provider_account_id)
+        .fetch_one(pool)
+        .await
+        .expect("account error class")
 }
 
 #[tokio::test]

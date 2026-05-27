@@ -357,9 +357,19 @@ where
             include_spam_trash: options.include_spam_trash,
         };
 
-        let response = match gmail.list_messages(&params).await {
-            Ok(response) => response,
-            Err(error) => {
+        let response = match cancel_or_complete(cancel, gmail.list_messages(&params)).await {
+            None => {
+                mark_sync_error(
+                    db,
+                    account.provider_account_id,
+                    "cancelled",
+                    "import cancelled",
+                )
+                .await?;
+                return Err(GmailHistoricalImportError::Cancelled);
+            }
+            Some(Ok(response)) => response,
+            Some(Err(error)) => {
                 let message = safe_error_message(&error);
                 audit_sync_failed(db, &account, "gmail_list", &message).await?;
                 mark_sync_error(db, account.provider_account_id, "gmail_list", &message).await?;
@@ -389,6 +399,7 @@ where
                 &options,
                 listed,
                 &mut summary,
+                cancel,
             )
             .await?;
             cursor.processed += 1;
@@ -417,6 +428,7 @@ pub(crate) async fn import_one_message<C, I>(
     options: &GmailHistoricalImportOptions,
     listed: ListMessage,
     summary: &mut GmailHistoricalImportSummary,
+    cancel: &CancellationToken,
 ) -> Result<(), GmailHistoricalImportError>
 where
     C: GmailHistoricalSource,
@@ -466,9 +478,10 @@ where
         }
     }
 
-    let raw = match gmail.get_raw_message(&listed.id).await {
-        Ok(raw) => raw,
-        Err(error) => {
+    let raw = match cancel_or_complete(cancel, gmail.get_raw_message(&listed.id)).await {
+        None => return Err(GmailHistoricalImportError::Cancelled),
+        Some(Ok(raw)) => raw,
+        Some(Err(error)) => {
             let message = safe_error_message(&error);
             summary.failed += 1;
             mark_message_failed(
@@ -579,12 +592,15 @@ where
         provider_message_id: Some(raw.id.clone()),
     };
 
-    let routed_import = match importer
-        .import_gmail_rfc822(db, account.user_id, request)
-        .await
+    let routed_import = match cancel_or_complete(
+        cancel,
+        importer.import_gmail_rfc822(db, account.user_id, request),
+    )
+    .await
     {
-        Ok(routed_import) => routed_import,
-        Err(error) => {
+        None => return Err(GmailHistoricalImportError::Cancelled),
+        Some(Ok(routed_import)) => routed_import,
+        Some(Err(error)) => {
             let message = safe_error_message(&error);
             summary.failed += 1;
             mark_message_failed(
@@ -650,6 +666,17 @@ where
     }
 
     Ok(())
+}
+
+async fn cancel_or_complete<T>(
+    cancel: &CancellationToken,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        output = future => Some(output),
+    }
 }
 
 fn limit_page_messages(
