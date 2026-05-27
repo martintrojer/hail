@@ -656,7 +656,10 @@ async fn incremental_duplicate_still_imports_newly_seen_gmail_labels_to_existing
 
     let first_gmail = FakeGmail::new(
         vec![Ok(history_page(
-            vec![("101", vec![("gmail-label-dupe-a", "gmail-thread-label-dupe")])],
+            vec![(
+                "101",
+                vec![("gmail-label-dupe-a", "gmail-thread-label-dupe")],
+            )],
             None,
             Some("102"),
         ))],
@@ -685,7 +688,10 @@ async fn incremental_duplicate_still_imports_newly_seen_gmail_labels_to_existing
 
     let second_gmail = FakeGmail::with_labels(
         vec![Ok(history_page(
-            vec![("103", vec![("gmail-label-dupe-b", "gmail-thread-label-dupe")])],
+            vec![(
+                "103",
+                vec![("gmail-label-dupe-b", "gmail-thread-label-dupe")],
+            )],
             None,
             Some("104"),
         ))],
@@ -720,6 +726,133 @@ async fn incremental_duplicate_still_imports_newly_seen_gmail_labels_to_existing
     assert_eq!(
         thread_label_names(&pool, user_id, "thread-1").await,
         vec!["Projects/Duplicate".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn incremental_label_metadata_rename_does_not_remove_absent_later_label() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let importer = FakeRfc822Importer::default();
+    let options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::with_labels(
+        vec![Ok(history_page(
+            vec![(
+                "101",
+                vec![("gmail-inc-label-rename-a", "gmail-thread-inc-label")],
+            )],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        vec![raw_message_with_labels(
+            "gmail-inc-label-rename-a",
+            "gmail-thread-inc-label",
+            "101",
+            "inc-label-rename-a@example.com",
+            &["Label_Status"],
+        )],
+        vec![gmail_label("Label_Status", "Status/Old", "user")],
+    );
+    let first = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first incremental sync");
+    assert_eq!(first.imported, 1);
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-1").await,
+        vec!["Status/Old".to_owned()]
+    );
+
+    let rename_gmail = FakeGmail::with_labels(
+        vec![Ok(history_page(
+            vec![(
+                "103",
+                vec![("gmail-inc-label-rename-b", "gmail-thread-inc-label")],
+            )],
+            None,
+            Some("104"),
+        ))],
+        Vec::new(),
+        vec![raw_message_with_labels(
+            "gmail-inc-label-rename-b",
+            "gmail-thread-inc-label",
+            "103",
+            "inc-label-rename-b@example.com",
+            &["Label_Status"],
+        )],
+        vec![gmail_label("Label_Status", "Status/New", "user")],
+    );
+    let renamed = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("102".to_owned()),
+        },
+        &rename_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("rename incremental sync");
+    assert_eq!(renamed.imported, 1);
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-2").await,
+        vec!["Status/New".to_owned()]
+    );
+
+    let removed_later_gmail = FakeGmail::with_labels(
+        vec![Ok(history_page(
+            vec![(
+                "105",
+                vec![("gmail-inc-label-rename-c", "gmail-thread-inc-label")],
+            )],
+            None,
+            Some("106"),
+        ))],
+        Vec::new(),
+        vec![raw_message_with_labels(
+            "gmail-inc-label-rename-c",
+            "gmail-thread-inc-label",
+            "105",
+            "inc-label-rename-b@example.com",
+            &[],
+        )],
+        Vec::new(),
+    );
+    let removed = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("104".to_owned()),
+        },
+        &removed_later_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("absent-label incremental sync");
+
+    assert_eq!(removed.imported, 0);
+    assert_eq!(removed.duplicates, 1);
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-2").await,
+        vec!["Status/New".to_owned()],
+        "Gmail label absence/removal in later history must not remove a local thread label"
     );
 }
 
