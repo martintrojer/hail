@@ -9,15 +9,33 @@ import {
 } from 'react';
 import type {
   ContactNoteSearchResult,
+  HailApiClient,
+  LabelResponse,
   MailSearchResult,
   SearchMailbox,
   SearchScope,
 } from '../api/client';
-import { useSearch } from '../api/query';
+import { useApiClient } from '../api/ApiClientProvider';
+import { useLabels, useSearch } from '../api/query';
 import { ListView } from '../components/ListView';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
 import { LabelChips } from '../components/LabelChips';
+import { Button } from '../components/ui/button';
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+} from '../components/ui/field';
+import { Input } from '../components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import { AppShell } from '../layout/AppShell';
 import { formatDateTime } from '../lib/dates';
 import { viewErrorMessage } from '../lib/errorMessages';
@@ -37,6 +55,24 @@ const mailboxOptions: Array<{ value: SearchMailbox; label: string }> = [
   { value: 'trash', label: 'Trash' },
   { value: 'drafts', label: 'Drafts' },
 ];
+
+const ALL_LABELS_VALUE = 'all';
+
+function labelDisplayName(label: LabelResponse) {
+  return label.path_segments.length > 0 ? label.path_segments.join(' / ') : label.name;
+}
+
+function labelDepth(label: LabelResponse) {
+  return Math.max(0, label.path_segments.length - 1);
+}
+
+function sortLabelsForPicker(labels: LabelResponse[]) {
+  return [...labels].sort((a, b) =>
+    labelDisplayName(a).localeCompare(labelDisplayName(b), undefined, {
+      sensitivity: 'base',
+    }),
+  );
+}
 
 function SearchSkeleton() {
   return (
@@ -175,15 +211,15 @@ function SearchReading({ submittedQuery }: { submittedQuery: string }) {
   );
 }
 
-export function SearchPage() {
+export function SearchPage({ client }: { client?: HailApiClient } = {}) {
+  const apiClient = client ?? useApiClient();
   const inputId = useId();
-  const scopeId = useId();
-  const mailboxId = useId();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [draftQuery, setDraftQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [scope, setScope] = useState<SearchScope>('all');
   const [mailbox, setMailbox] = useState<SearchMailbox>('all');
+  const [labelFilter, setLabelFilter] = useState<string>(ALL_LABELS_VALUE);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -193,7 +229,16 @@ export function SearchPage() {
     return () => window.clearTimeout(timeout);
   }, [draftQuery]);
 
-  const query = useSearch({ q: submittedQuery, scope, mailbox });
+  const selectedLabelId = labelFilter === ALL_LABELS_VALUE ? undefined : Number(labelFilter);
+  const query = useSearch(
+    { q: submittedQuery, scope, mailbox, label_id: selectedLabelId },
+    apiClient,
+  );
+  const labelsQuery = useLabels(apiClient);
+  const labels = useMemo(
+    () => sortLabelsForPicker(labelsQuery.data?.labels ?? []),
+    [labelsQuery.data?.labels],
+  );
   const grouped = useMemo(() => {
     const results = query.data?.results ?? [];
     return {
@@ -255,58 +300,81 @@ export function SearchPage() {
   );
 
   const form = (
-    <form onSubmit={onSubmit} className="mb-5 space-y-3">
-      <label htmlFor={inputId} className="block text-sm font-medium text-ink-primary">
-        Search
-        <input
-          ref={searchInputRef}
-          id={inputId}
-          type="search"
-          value={draftQuery}
-          onChange={(event) => setDraftQuery(event.target.value)}
-          placeholder="Search mail and notes"
-          autoComplete="off"
-          data-hail-search-input="true"
-          className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition focus:border-accent-blue focus:ring-2"
-        />
-      </label>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-        <label htmlFor={scopeId} className="block text-sm font-medium text-ink-primary">
-          Scope
-          <select
-            id={scopeId}
-            value={scope}
-            onChange={(event) => setScope(event.target.value as SearchScope)}
-            className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition focus:border-accent-blue focus:ring-2"
-          >
-            {scopeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label htmlFor={mailboxId} className="block text-sm font-medium text-ink-primary">
-          Mailbox
-          <select
-            id={mailboxId}
+    <form onSubmit={onSubmit} className="mb-5 flex flex-col gap-3">
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor={inputId}>Search</FieldLabel>
+          <Input
+            ref={searchInputRef}
+            id={inputId}
+            type="search"
+            value={draftQuery}
+            onChange={(event) => setDraftQuery(event.target.value)}
+            placeholder="Search mail and notes"
+            autoComplete="off"
+            data-hail-search-input="true"
+          />
+        </Field>
+      </FieldGroup>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end">
+        <Field>
+          <FieldLabel>Scope</FieldLabel>
+          <Select value={scope} onValueChange={(value) => setScope(value as SearchScope)}>
+            <SelectTrigger aria-label="Scope" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {scopeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel>Mailbox</FieldLabel>
+          <Select
             value={mailbox}
-            onChange={(event) => setMailbox(event.target.value as SearchMailbox)}
-            className="mt-2 w-full rounded-lg border border-border-hairline bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition focus:border-accent-blue focus:ring-2"
+            onValueChange={(value) => setMailbox(value as SearchMailbox)}
           >
-            {mailboxOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="submit"
-          className="rounded-full bg-accent-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-blue-hover"
-        >
-          Search
-        </button>
+            <SelectTrigger aria-label="Mailbox" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {mailboxOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel>Label</FieldLabel>
+          <Select value={labelFilter} onValueChange={setLabelFilter}>
+            <SelectTrigger aria-label="Label" className="w-full">
+              <SelectValue placeholder="All" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value={ALL_LABELS_VALUE}>All</SelectItem>
+                {labels.map((label) => (
+                  <SelectItem key={label.id} value={String(label.id)} title={label.name}>
+                    <span style={{ paddingLeft: `${labelDepth(label) * 0.75}rem` }}>
+                      {labelDisplayName(label)}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Button type="submit">Search</Button>
       </div>
     </form>
   );

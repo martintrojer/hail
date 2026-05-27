@@ -53,6 +53,7 @@ import {
   type InviteAcceptResponse,
   type InvitePreview,
   type GmailConnectResponse,
+  type LabelListResponse,
   type ProviderAccountResponse,
   type ProviderSyncStatusListResponse,
   type ProviderSyncTriggerResponse,
@@ -552,12 +553,24 @@ export function useSearch(
   const normalizedQuery = params.q.trim();
   const scope = params.scope ?? 'all';
   const mailbox = params.mailbox ?? 'all';
+  const labelId = params.label_id;
 
   return useQuery({
-    queryKey: queryKeys.search(normalizedQuery, scope, mailbox),
-    queryFn: () => client.search({ q: normalizedQuery, scope, mailbox }),
+    queryKey: queryKeys.search(normalizedQuery, scope, mailbox, labelId),
+    queryFn: () => client.search({ q: normalizedQuery, scope, mailbox, label_id: labelId }),
     ...options,
     enabled: normalizedQuery.length >= 2 && (options?.enabled ?? true),
+  });
+}
+
+export function useLabels(
+  client = defaultApiClient,
+  options?: QueryConfig<LabelListResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.labels(),
+    queryFn: () => client.listLabels(),
+    ...options,
   });
 }
 
