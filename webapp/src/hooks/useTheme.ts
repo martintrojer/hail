@@ -31,6 +31,8 @@ function applyThemeClass(theme: ThemePreference) {
 
   root.classList.toggle('light', theme === 'light');
   root.classList.toggle('dark', resolvedDark);
+  root.dataset.theme = theme;
+  root.style.colorScheme = resolvedDark ? 'dark' : 'light';
 }
 
 function subscribeToSystemTheme(onChange: () => void) {
