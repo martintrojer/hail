@@ -326,6 +326,26 @@ where
         self.get_json("users/me/profile", &[]).await
     }
 
+    /// `GET /gmail/v1/users/me/labels`
+    pub async fn list_labels(&self) -> Result<ListLabelsResponse, GmailClientError> {
+        self.get_json("users/me/labels", &[]).await
+    }
+
+    /// List only Gmail user-created labels (`type=user`).
+    ///
+    /// System/category/state labels are intentionally filtered here so later
+    /// import code can map provider label ids without guessing from message
+    /// `labelIds` alone.
+    pub async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        Ok(self
+            .list_labels()
+            .await?
+            .labels
+            .into_iter()
+            .filter(GmailLabel::is_user_created)
+            .collect())
+    }
+
     /// `GET /gmail/v1/users/me/messages`
     pub async fn list_messages(
         &self,
@@ -567,6 +587,29 @@ pub struct GmailProfile {
     pub messages_total: Option<u64>,
     pub threads_total: Option<u64>,
     pub history_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListLabelsResponse {
+    #[serde(default)]
+    pub labels: Vec<GmailLabel>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailLabel {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub label_type: Option<String>,
+}
+
+impl GmailLabel {
+    #[must_use]
+    pub fn is_user_created(&self) -> bool {
+        self.label_type.as_deref() == Some("user")
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
