@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "api:types": "node scripts/generate-api-types.mjs",
+    "api:types:live": "OPENAPI_SOURCE=live node scripts/generate-api-types.mjs",
     "prebuild": "npm run api:types",
     "build": "tsc -b && vite build",
     "test": "vitest run",
