@@ -5,6 +5,8 @@
 //! stripped before untrusted HTML is sanitized and likely tracking pixels are
 //! removed/counted. Never log message bodies from this module.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -92,6 +94,8 @@ impl ThreadAssembler for JmapThreadAssembler {
                 hail_jmap::jmap_client::email::Property::HtmlBody,
                 hail_jmap::jmap_client::email::Property::TextBody,
                 hail_jmap::jmap_client::email::Property::BodyValues,
+                hail_jmap::jmap_client::email::Property::BodyStructure,
+                hail_jmap::jmap_client::email::Property::Attachments,
                 hail_jmap::jmap_client::email::Property::Preview,
             ]);
             get_email.arguments().fetch_html_body_values(true);
@@ -126,6 +130,7 @@ impl ThreadAssembler for JmapThreadAssembler {
                     html: html_body_from_email(&email),
                     text: text_body_from_email(&email),
                     preview: email.preview().unwrap_or_default().to_string(),
+                    inline_images: inline_images_from_email(&email),
                 });
             }
 
@@ -162,6 +167,15 @@ pub struct AssembledMessage {
     pub html: String,
     pub text: String,
     pub preview: String,
+    pub inline_images: Vec<InlineImage>,
+}
+
+/// Inline image reference resolved from a MIME Content-ID to a JMAP blob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImage {
+    pub cid: String,
+    pub blob_id: String,
+    pub type_: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -289,7 +303,8 @@ fn render_message(message: AssembledMessage) -> ThreadMessageResponse {
         message.html
     };
     let stripped = strip_quoted_history(&body_html);
-    let sanitized = sanitize_and_strip_trackers(&stripped.html);
+    let mut sanitized = sanitize_and_strip_trackers(&stripped.html);
+    sanitized.html = rewrite_inline_image_sources(&sanitized.html, &message.inline_images);
     ThreadMessageResponse {
         email_id: message.email_id,
         from: message.from,
@@ -346,6 +361,215 @@ fn html_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String 
 
 fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
     body_from_parts(email, email.text_body())
+}
+
+fn inline_images_from_email(email: &hail_jmap::jmap_client::email::Email) -> Vec<InlineImage> {
+    let mut images = Vec::new();
+    collect_inline_images(email.body_structure(), &mut images);
+    if let Some(attachments) = email.attachments() {
+        for part in attachments {
+            collect_inline_image_part(part, &mut images);
+        }
+    }
+    images.sort_by(|a, b| a.cid.cmp(&b.cid).then(a.blob_id.cmp(&b.blob_id)));
+    images.dedup_by(|a, b| a.cid == b.cid);
+    images
+}
+
+fn collect_inline_images(
+    part: Option<&hail_jmap::jmap_client::email::EmailBodyPart>,
+    images: &mut Vec<InlineImage>,
+) {
+    let Some(part) = part else {
+        return;
+    };
+    collect_inline_image_part(part, images);
+    if let Some(sub_parts) = part.sub_parts() {
+        for sub_part in sub_parts {
+            collect_inline_images(Some(sub_part), images);
+        }
+    }
+}
+
+fn collect_inline_image_part(
+    part: &hail_jmap::jmap_client::email::EmailBodyPart,
+    images: &mut Vec<InlineImage>,
+) {
+    let Some(cid) = part.content_id().and_then(normalize_cid) else {
+        return;
+    };
+    let Some(blob_id) = part.blob_id().filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    let content_type = part.content_type().unwrap_or("application/octet-stream");
+    if !is_safe_inline_image_type(content_type) {
+        return;
+    }
+    images.push(InlineImage {
+        cid,
+        blob_id: blob_id.to_string(),
+        type_: content_type.to_string(),
+    });
+}
+
+fn normalize_cid(cid: &str) -> Option<String> {
+    let trimmed = cid
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_ascii_lowercase())
+}
+
+fn is_safe_inline_image_type(content_type: &str) -> bool {
+    let content_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        content_type.as_str(),
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
+    )
+}
+
+fn inline_image_url(image: &InlineImage) -> String {
+    format!(
+        "/api/attachments/{}/download?disposition=inline&type={}",
+        urlencoding(&image.blob_id),
+        urlencoding(&image.type_)
+    )
+}
+
+fn rewrite_inline_image_sources(body_html: &str, inline_images: &[InlineImage]) -> String {
+    if inline_images.is_empty() || !body_html.to_ascii_lowercase().contains("cid:") {
+        return body_html.to_string();
+    }
+    let cid_to_url = inline_images
+        .iter()
+        .map(|image| (image.cid.as_str(), inline_image_url(image)))
+        .collect::<HashMap<_, _>>();
+    let mut rewritten = String::with_capacity(body_html.len());
+    let mut rest = body_html;
+    while let Some(img_start) = find_next_img_tag(rest) {
+        rewritten.push_str(&rest[..img_start]);
+        rest = &rest[img_start..];
+        let Some(tag_end) = rest.find('>') else {
+            rewritten.push_str(rest);
+            return rewritten;
+        };
+        let tag = &rest[..=tag_end];
+        rewritten.push_str(&rewrite_img_tag_src(tag, &cid_to_url));
+        rest = &rest[tag_end + 1..];
+    }
+    rewritten.push_str(rest);
+    rewritten
+}
+
+fn find_next_img_tag(input: &str) -> Option<usize> {
+    let lower = input.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(index) = lower[offset..].find("<img") {
+        let index = offset + index;
+        let after = lower[index + 4..].chars().next();
+        if after.is_none_or(|ch| ch == '>' || ch.is_ascii_whitespace() || ch == '/') {
+            return Some(index);
+        }
+        offset = index + 4;
+    }
+    None
+}
+
+fn rewrite_img_tag_src<'a>(tag: &'a str, cid_to_url: &HashMap<&str, String>) -> Cow<'a, str> {
+    let Some((value_start, value_end, cid)) = find_img_src_cid_value(tag) else {
+        return Cow::Borrowed(tag);
+    };
+    let Some(url) = cid_to_url.get(cid.as_str()) else {
+        return Cow::Borrowed(tag);
+    };
+    let mut rewritten = String::with_capacity(tag.len() + url.len());
+    rewritten.push_str(&tag[..value_start]);
+    rewritten.push_str(url);
+    rewritten.push_str(&tag[value_end..]);
+    Cow::Owned(rewritten)
+}
+
+fn find_img_src_cid_value(tag: &str) -> Option<(usize, usize, String)> {
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name_start = i;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b':' | b'_'))
+        {
+            i += 1;
+        }
+        if name_start == i {
+            i += 1;
+            continue;
+        }
+        let name = &tag[name_start..i];
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'=' {
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+        let (value_start, value_end) = if matches!(bytes[i], b'"' | b'\'') {
+            let quote = bytes[i];
+            i += 1;
+            let value_start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            (value_start, i)
+        } else {
+            let value_start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                i += 1;
+            }
+            (value_start, i)
+        };
+        if name.eq_ignore_ascii_case("src")
+            && let Some(cid) = cid_from_src(&tag[value_start..value_end])
+        {
+            return Some((value_start, value_end, cid));
+        }
+    }
+    None
+}
+
+fn cid_from_src(src: &str) -> Option<String> {
+    let trimmed = src.trim();
+    let rest = trimmed
+        .get(..4)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("cid:"))?;
+    let cid = &trimmed[rest.len()..];
+    let cid = cid.split(['?', '#']).next().unwrap_or(cid);
+    percent_decode_cid(cid).and_then(|value| normalize_cid(&value))
+}
+
+fn percent_decode_cid(input: &str) -> Option<String> {
+    let decoded = url::form_urlencoded::parse(input.as_bytes())
+        .next()
+        .map(|(value, _)| value.into_owned())
+        .unwrap_or_else(|| input.to_string());
+    Some(decoded)
+}
+
+fn urlencoding(input: &str) -> String {
+    url::form_urlencoded::byte_serialize(input.as_bytes()).collect()
 }
 
 fn body_from_parts(
