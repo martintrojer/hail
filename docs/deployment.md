@@ -30,9 +30,9 @@ Use this when your VPS provider allows inbound TCP/25 and you are comfortable
 storing mail on the VPS.
 
 ```text
-Remote sender ──SMTP/25──> VPS Stalwart ──JMAP──> hail-api/hail-worker
-Browser ──HTTPS──> reverse proxy or Cloudflare Tunnel ──> hail-api
-Stalwart ──SMTP smarthost or direct outbound──> recipients
+Remote sender --> SMTP/25 --> VPS Stalwart --> JMAP --> hail-api/hail-worker
+Browser --> HTTPS --> reverse proxy or Cloudflare Tunnel --> hail-api
+Stalwart --> SMTP smarthost or direct outbound --> recipients
 ```
 
 Start with [quickstart.md](./quickstart.md). Add [reverse-proxy.md](./reverse-proxy.md)
@@ -44,9 +44,9 @@ Use this only if your home/business network can receive public TCP/25 and you
 are willing to publish the home IP as an MX target.
 
 ```text
-Remote sender ──SMTP/25──> home Stalwart
-Browser ──HTTPS/Tunnel──> hail-api at home
-Home Stalwart ──smarthost strongly recommended──> recipients
+Remote sender --> SMTP/25 --> home Stalwart
+Browser --> HTTPS/Tunnel --> hail-api at home
+Home Stalwart --> smarthost strongly recommended --> recipients
 ```
 
 Follow [quickstart.md](./quickstart.md) and use the direct DNS section. If you
@@ -62,18 +62,18 @@ path.
 ```text
 Inbound mail:
 Remote MTA
-  ──SMTP/25──> DNS-only mx.example.com on VPS
-  ──HAProxy PROXY protocol or MTA relay──> WireGuard
-  ──SMTP──> home Stalwart
+  --> SMTP/25 --> DNS-only mx.example.com on VPS
+  --> HAProxy PROXY protocol or MTA relay --> WireGuard
+  --> SMTP --> home Stalwart
 
 Web UI:
 Browser
-  ──HTTPS──> Cloudflare Tunnel
-  ──HTTP──> hail-api at home
+  --> HTTPS --> Cloudflare Tunnel
+  --> HTTP --> hail-api at home
 
 Outbound:
 Home Stalwart
-  ──authenticated smarthost/API relay──> recipient inbox
+  --> authenticated smarthost/API relay --> recipient inbox
 ```
 
 Key points:
@@ -94,10 +94,10 @@ message first. This is not transparent SMTP into Stalwart.
 
 ```text
 Remote sender
-  ──SMTP──> Cloudflare Email Routing MX
-  ──forward/Worker/import bridge──> HTTPS import endpoint over Tunnel
-  ──queue/import──> Stalwart or hail import path
-  ──hail routing/UI──> user
+  --> SMTP --> Cloudflare Email Routing MX
+  --> forward/Worker/import bridge --> HTTPS import endpoint over Tunnel
+  --> queue/import --> Stalwart or hail import path
+  --> hail routing/UI --> user
 ```
 
 This option needs careful replay protection, authentication, queueing, duplicate
@@ -113,26 +113,22 @@ workflow, and local archive without first moving MX records.
 
 ```text
 Gmail/provider mailbox
-  ──provider API──> hail-worker provider import
-  ──raw RFC822 import──> local Stalwart
-  ──existing JMAP APIs──> hail UI
+  --> provider API --> hail-worker provider import
+  --> raw RFC822 import --> local Stalwart
+  --> existing JMAP APIs --> hail UI
 
 Outbound, preferred:
 hail compose
-  ──JMAP submission──> Stalwart
-  ──provider smarthost──> recipients
+  --> JMAP submission --> Stalwart
+  --> provider smarthost --> recipients
 ```
 
 Current v1.2 design is **one-way import**: provider -> Stalwart. Hail actions
 archive/delete/classify local Stalwart mail; they do not mutate Gmail labels,
 read state, archive state, Trash, or Spam.
 
-Deep dives:
-
-- [provider-import-architecture.md](./provider-import-architecture.md)
-- [provider-outbound-strategy.md](./provider-outbound-strategy.md)
-- [gmail-api-rust-client-spike.md](./gmail-api-rust-client-spike.md)
-- [provider-backed-modes.md](./provider-backed-modes.md) for future variants
+Deep dive: [provider-import-architecture.md](./provider-import-architecture.md).
+Outbound details: [provider-outbound-strategy.md](./provider-outbound-strategy.md).
 
 ## DNS and naming rules
 

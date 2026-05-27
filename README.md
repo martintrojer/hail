@@ -34,18 +34,11 @@ Modern email clients treat your inbox as an infinite stream. hail takes a differ
 ## Architecture
 
 ```
-┌───────────┐      ┌────────────┐      ┌───────────┐
-│  Browser  │ ---> │  hail-api  │ ---> │ Stalwart  │
-│ React SPA │      │ Rust/Axum  │      │ JMAP/SMTP │
-└───────────┘      └─────┬──────┘      └─────▲─────┘
-                         │                   │
-                         │                   │ JMAP EventSource,
-                         │                   │ worker actions
-                         │                   │
-                   ┌─────▼──────┐      ┌─────┴──────┐
-                   │  hail.db   │◄────►│hail-worker │
-                   │  SQLite    │ sqlx │ Rust/tokio │
-                   └────────────┘      └────────────┘
+[ Browser / React SPA ] --> [ hail-api / Rust-Axum ] --> [ Stalwart / JMAP-SMTP ]
+                                  |                         ^
+                                  | sqlx                    | JMAP EventSource + actions
+                                  v                         |
+                            [ hail.db / SQLite ] <----> [ hail-worker / Rust-tokio ]
 ```
 
 Both `hail-api` and `hail-worker` open `hail.db` directly with sqlx. The browser never talks to Stalwart or SQLite; it only talks to `hail-api`.
@@ -77,19 +70,31 @@ See [docs/deployment.md](docs/deployment.md) for the deployment chooser, then [d
 
 ## Documentation
 
+### Operator docs
+
+Start here if you want to run hail.
+
 | Doc | Description |
 |-----|-------------|
-| [deployment.md](docs/deployment.md) | Top-level deployment chooser: direct, VPS/WireGuard, Cloudflare Tunnel, Gmail/provider import |
-| [quickstart.md](docs/quickstart.md) | Installation, configuration, first-run setup |
-| [architecture.md](docs/architecture.md) | System map, hard decisions, rejected alternatives |
-| [design.md](docs/design.md) | Product design and v1 feature spec |
-| [roadmap.md](docs/roadmap.md) | Post-v1 backlog, release themes, TUI plans |
-| [cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Cloudflare Tunnel + Email Routing recipes |
+| [deployment.md](docs/deployment.md) | Choose a deployment shape: direct, VPS/WireGuard, Cloudflare Tunnel, Gmail/provider import |
+| [quickstart.md](docs/quickstart.md) | Direct/simple Compose setup and first-run wizard |
+| [cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Cloudflare Tunnel, Email Routing/import bridge, and VPS/WireGuard MX details |
 | [reverse-proxy.md](docs/reverse-proxy.md) | Nginx/Caddy reverse proxy setup |
 | [backup.md](docs/backup.md) | Backup/restore procedures, including optional Litestream hail.db replication |
 | [upgrade.md](docs/upgrade.md) | Upgrade guide between versions |
-| [provider-import-architecture.md](docs/provider-import-architecture.md) | Gmail/provider import into local Stalwart |
-| [provider-outbound-strategy.md](docs/provider-outbound-strategy.md) | Provider smarthost/outbound strategy |
+
+### Development and design docs
+
+These are for contributors and project planning; operators do not need them for a normal install.
+
+| Doc | Description |
+|-----|-------------|
+| [architecture.md](docs/architecture.md) | System map, hard decisions, rejected alternatives |
+| [design.md](docs/design.md) | Product design and v1 feature spec |
+| [roadmap.md](docs/roadmap.md) | Post-v1 backlog, release themes, TUI plans |
+| [testing.md](docs/testing.md) | Test strategy and running tests |
+| [provider-import-architecture.md](docs/provider-import-architecture.md) | Internal Gmail/provider import design |
+| [provider-outbound-strategy.md](docs/provider-outbound-strategy.md) | Internal provider smarthost/outbound strategy |
 | [provider-backed-modes.md](docs/provider-backed-modes.md) | Provider-backed alternatives and future modes |
 
 ## Features
