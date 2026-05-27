@@ -1,5 +1,6 @@
 //! Integration tests for the baseline migration (design.md §6.2).
 
+use chrono::{Duration, TimeZone, Utc};
 use sqlx::Row;
 
 /// All application-owned tables defined in §6.2 (v1 baseline). The
@@ -804,14 +805,16 @@ async fn labels_schema_supports_flat_thread_labels_and_cascades() {
         "Work/Receipts must be stored as one flat concrete label, not imply Work"
     );
 
-    sqlx::query("INSERT INTO thread_labels (user_id, thread_id, label_id, created_at) VALUES (?, ?, ?, ?)")
-        .bind(user_id)
-        .bind("thread-1")
-        .bind(label_id)
-        .bind("2026-01-01T00:00:01Z")
-        .execute(&pool)
-        .await
-        .expect("thread label insert");
+    sqlx::query(
+        "INSERT INTO thread_labels (user_id, thread_id, label_id, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("thread-1")
+    .bind(label_id)
+    .bind("2026-01-01T00:00:01Z")
+    .execute(&pool)
+    .await
+    .expect("thread label insert");
 
     let duplicate_assignment = sqlx::query(
         "INSERT INTO thread_labels (user_id, thread_id, label_id, created_at) VALUES (?, ?, ?, ?)",
@@ -1076,6 +1079,124 @@ async fn speakeasy_schema_is_per_user_secret_with_rotation_metadata() {
         .await
         .expect("count speakeasy rows");
     assert_eq!(remaining, 0, "speakeasy rows cascade with user deletion");
+}
+
+#[tokio::test]
+async fn speakeasy_helpers_keep_current_phrase_until_utc_month_rotation() {
+    let (pool, _guard) = setup().await;
+
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("speakeasy-rotation@example.com")
+        .bind("acct-speakeasy-rotation")
+        .bind("2026-05-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("speakeasy-rotation@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
+
+    let may_27 = Utc.with_ymd_and_hms(2026, 5, 27, 12, 0, 0).unwrap();
+    let current =
+        hail_db::speakeasy::current_or_create_speakeasy_passphrase(&pool, user_id, may_27, || {
+            "amber-basil-coral-delta".to_string()
+        })
+        .await
+        .expect("create current phrase");
+    assert_eq!(current.user_id, user_id);
+    assert_eq!(current.passphrase, "amber-basil-coral-delta");
+    assert_eq!(current.period, "2026-05");
+    assert_eq!(
+        current.rotates_at,
+        Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap()
+    );
+
+    let still_current = hail_db::speakeasy::current_or_create_speakeasy_passphrase(
+        &pool,
+        user_id,
+        may_27 + Duration::hours(1),
+        || "should-not-be-used".to_string(),
+    )
+    .await
+    .expect("reuse current phrase");
+    assert_eq!(still_current.passphrase, current.passphrase);
+    assert_eq!(still_current.generated_at, current.generated_at);
+
+    let june_1 = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+    let rotated =
+        hail_db::speakeasy::current_or_create_speakeasy_passphrase(&pool, user_id, june_1, || {
+            "copper-ember-forest-harbor".to_string()
+        })
+        .await
+        .expect("rotate expired phrase");
+    assert_eq!(rotated.passphrase, "copper-ember-forest-harbor");
+    assert_eq!(rotated.period, "2026-06");
+    assert_eq!(
+        rotated.rotates_at,
+        Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap()
+    );
+
+    let row_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM speakeasy_passphrases WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .expect("row count");
+    assert_eq!(row_count, 1, "rotation updates the per-user current row");
+}
+
+#[tokio::test]
+async fn speakeasy_manual_rotation_replaces_only_that_users_phrase() {
+    let (pool, _guard) = setup().await;
+
+    for email in ["alice-rotate@example.com", "bob-rotate@example.com"] {
+        sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+            .bind(email)
+            .bind(format!("acct-{email}"))
+            .bind("2026-05-01T00:00:00Z")
+            .execute(&pool)
+            .await
+            .expect("user insert");
+    }
+    let alice_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("alice-rotate@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("alice id");
+    let bob_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("bob-rotate@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("bob id");
+
+    let now = Utc.with_ymd_and_hms(2026, 5, 27, 12, 0, 0).unwrap();
+    hail_db::speakeasy::current_or_create_speakeasy_passphrase(&pool, alice_id, now, || {
+        "amber-basil-coral-delta".to_string()
+    })
+    .await
+    .expect("alice create");
+    let bob =
+        hail_db::speakeasy::current_or_create_speakeasy_passphrase(&pool, bob_id, now, || {
+            "copper-ember-forest-harbor".to_string()
+        })
+        .await
+        .expect("bob create");
+
+    let rotated = hail_db::speakeasy::rotate_speakeasy_passphrase(&pool, alice_id, now, || {
+        "juniper-lagoon-maple-olive".to_string()
+    })
+    .await
+    .expect("alice manual rotate");
+    assert_eq!(rotated.passphrase, "juniper-lagoon-maple-olive");
+    assert_eq!(rotated.manually_rotated_at, Some(now));
+
+    let bob_after = hail_db::speakeasy::get_speakeasy_passphrase(&pool, bob_id)
+        .await
+        .expect("bob fetch")
+        .expect("bob phrase");
+    assert_eq!(bob_after, bob, "Alice rotation must not affect Bob");
 }
 
 #[tokio::test]

@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use hail_test::{TempDb, fresh_db_url};
 use sqlx::{Connection, SqliteConnection};
 
+const CURRENT_ROTATES_AT: &str = "2999-06-01T00:00:00Z";
+const EXPIRED_ROTATES_AT: &str = "2000-06-01T00:00:00Z";
+
 #[path = "../src/screener.rs"]
 mod screener;
 
@@ -188,6 +191,15 @@ async fn insert_rule(
 }
 
 async fn insert_speakeasy(conn: &mut SqliteConnection, user_id: i64, passphrase: &str) {
+    insert_speakeasy_with_rotation(conn, user_id, passphrase, CURRENT_ROTATES_AT).await;
+}
+
+async fn insert_speakeasy_with_rotation(
+    conn: &mut SqliteConnection,
+    user_id: i64,
+    passphrase: &str,
+    rotates_at: &str,
+) {
     sqlx::query(
         "INSERT INTO speakeasy_passphrases \
          (user_id, passphrase, period, rotates_at, generated_at, updated_at) \
@@ -195,7 +207,7 @@ async fn insert_speakeasy(conn: &mut SqliteConnection, user_id: i64, passphrase:
     )
     .bind(user_id)
     .bind(passphrase)
-    .bind("2026-06-01T00:00:00Z")
+    .bind(rotates_at)
     .bind("2026-05-27T12:00:00Z")
     .bind("2026-05-27T12:00:00Z")
     .execute(conn)
@@ -323,6 +335,158 @@ async fn speakeasy_subject_match_bypasses_screener_without_creating_rule() {
     .await
     .expect("rule count");
     assert_eq!(rule_count, 0, "Speakeasy must not approve or pend sender");
+}
+
+#[tokio::test]
+async fn speakeasy_preview_match_bypasses_direct_jmap_message() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "amber-basil-coral-delta").await;
+    let mut env = envelope("new@example.com");
+    env.preview = Some("Preview includes amber-basil-coral-delta for access".to_string());
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(outcome, RouteOutcome::SpeakeasyBypass);
+    assert_eq!(
+        jmap.calls(),
+        vec![Call::ApplyKeyword {
+            email_id: "email-1".to_string(),
+            keyword: "$hail_imbox".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn speakeasy_expired_phrase_does_not_bypass_and_is_pended() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy_with_rotation(
+        &mut conn,
+        alice_id,
+        "amber-basil-coral-delta",
+        EXPIRED_ROTATES_AT,
+    )
+    .await;
+    let mut env = envelope("new@example.com");
+    env.subject = "Please let amber-basil-coral-delta through".to_string();
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "new@example.com".to_string()
+        }
+    );
+    assert!(
+        jmap.calls()
+            .iter()
+            .any(|call| matches!(call, Call::MoveToMailbox { mailbox_id, .. } if mailbox_id == "screener-id")),
+        "expired phrase must follow normal Screener routing"
+    );
+    let pending_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ? AND sender_address = ? AND decision = 'pending'",
+    )
+    .bind(alice_id)
+    .bind("new@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("pending count");
+    assert_eq!(pending_count, 1);
+}
+
+#[tokio::test]
+async fn speakeasy_non_current_phrase_does_not_bypass_after_rotation() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "current-river-saffron-willow").await;
+    let mut env = envelope("new@example.com");
+    env.subject = "This still has old-amber-basil-coral-delta".to_string();
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "new@example.com".to_string()
+        }
+    );
+    let pending_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ? AND sender_address = ? AND decision = 'pending'",
+    )
+    .bind(alice_id)
+    .bind("new@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("pending count");
+    assert_eq!(pending_count, 1);
+}
+
+#[tokio::test]
+async fn speakeasy_bypass_is_only_for_the_matching_message() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "amber-basil-coral-delta").await;
+    let mut matching = envelope_with_id("new@example.com", "email-1", vec!["inbox-id".to_string()]);
+    matching.subject = "amber-basil-coral-delta".to_string();
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &matching)
+        .await
+        .expect("route matching message");
+    assert_eq!(outcome, RouteOutcome::SpeakeasyBypass);
+
+    let later = envelope_with_id("new@example.com", "email-2", vec!["inbox-id".to_string()]);
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &later)
+        .await
+        .expect("route later message");
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "new@example.com".to_string()
+        },
+        "bypass must not approve sender for future messages"
+    );
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("new@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("pending row after later message");
+    assert_eq!(row, ("pending".to_string(), None));
+}
+
+#[tokio::test]
+async fn speakeasy_html_body_match_bypasses_provider_import_message() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "amber-basil-coral-delta").await;
+    let mut env = envelope("sender@example.com");
+    env.raw_rfc822 = Some(
+        b"From: sender@example.com\r\nSubject: hi\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<html><body><p>The passphrase is <strong>amber-basil-coral-delta</strong>.</p></body></html>"
+            .to_vec(),
+    );
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(outcome, RouteOutcome::SpeakeasyBypass);
+    assert_eq!(
+        jmap.calls(),
+        vec![Call::ApplyKeyword {
+            email_id: "email-1".to_string(),
+            keyword: "$hail_imbox".to_string(),
+        }]
+    );
 }
 
 #[tokio::test]
