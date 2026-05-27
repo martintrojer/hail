@@ -155,6 +155,8 @@ fn envelope_with_id(from: &str, id: &str, mailbox_ids: Vec<String>) -> EmailEnve
         thread_id: "thread-1".to_string(),
         from: from.to_string(),
         subject: "subject must not be info-logged".to_string(),
+        preview: None,
+        raw_rfc822: None,
         mailbox_ids,
         keywords: vec![],
         received_at: None,
@@ -183,6 +185,22 @@ async fn insert_rule(
     .execute(conn)
     .await
     .expect("insert rule");
+}
+
+async fn insert_speakeasy(conn: &mut SqliteConnection, user_id: i64, passphrase: &str) {
+    sqlx::query(
+        "INSERT INTO speakeasy_passphrases \
+         (user_id, passphrase, period, rotates_at, generated_at, updated_at) \
+         VALUES (?, ?, '2026-05', ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(passphrase)
+    .bind("2026-06-01T00:00:00Z")
+    .bind("2026-05-27T12:00:00Z")
+    .bind("2026-05-27T12:00:00Z")
+    .execute(conn)
+    .await
+    .expect("insert speakeasy");
 }
 
 #[test]
@@ -273,6 +291,98 @@ async fn stalwart_spam_flag_falls_back_to_junk_mailbox_by_name() {
                 keyword: "$hail_spam".to_string()
             }
         ]
+    );
+}
+
+#[tokio::test]
+async fn speakeasy_subject_match_bypasses_screener_without_creating_rule() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "amber-basil-coral-delta").await;
+    let mut env = envelope("new@example.com");
+    env.subject = "Please let amber-basil-coral-delta through".to_string();
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(outcome, RouteOutcome::SpeakeasyBypass);
+    assert_eq!(
+        jmap.calls(),
+        vec![Call::ApplyKeyword {
+            email_id: "email-1".to_string(),
+            keyword: "$hail_imbox".to_string(),
+        }]
+    );
+    let rule_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("new@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("rule count");
+    assert_eq!(rule_count, 0, "Speakeasy must not approve or pend sender");
+}
+
+#[tokio::test]
+async fn speakeasy_body_match_bypasses_pending_sender_for_message_only() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "amber-basil-coral-delta").await;
+    insert_rule(&mut conn, alice_id, "sender@example.com", "pending", None).await;
+    let mut env = envelope("sender@example.com");
+    env.raw_rfc822 = Some(
+        b"From: sender@example.com\r\nSubject: hi\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nThe passphrase is amber-basil-coral-delta."
+            .to_vec(),
+    );
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), alice_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(outcome, RouteOutcome::SpeakeasyBypass);
+    assert_eq!(
+        jmap.calls(),
+        vec![Call::ApplyKeyword {
+            email_id: "email-1".to_string(),
+            keyword: "$hail_imbox".to_string(),
+        }]
+    );
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("sender@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("pending row");
+    assert_eq!(row, ("pending".to_string(), None));
+}
+
+#[tokio::test]
+async fn speakeasy_match_is_scoped_to_user() {
+    let (mut conn, _guard, alice_id, bob_id) = setup_db().await;
+    insert_speakeasy(&mut conn, alice_id, "amber-basil-coral-delta").await;
+    let mut env = envelope("new@example.com");
+    env.subject = "amber-basil-coral-delta".to_string();
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(&mut conn, jmap.as_ref(), bob_id, &env)
+        .await
+        .expect("route");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "new@example.com".to_string()
+        }
+    );
+    assert!(
+        jmap.calls()
+            .iter()
+            .any(|call| matches!(call, Call::MoveToMailbox { mailbox_id, .. } if mailbox_id == "screener-id")),
+        "non-owner secret must not bypass screener"
     );
 }
 

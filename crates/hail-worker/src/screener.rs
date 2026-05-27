@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 pub use hail_core::screener::{Classification, normalize_sender};
 use hail_core::screener::{ScreenerDecision, ScreenerRule, ScreenerRuleParseError, lookup_rule};
 use hail_core::{HAIL_SPAM_KEYWORD, SPAM_KEYWORD};
+use hail_db::speakeasy::get_speakeasy_passphrase_for_update;
 use hail_jmap::jmap_client;
 use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
 use sqlx::SqliteConnection;
@@ -15,6 +16,8 @@ pub struct EmailEnvelope {
     pub thread_id: String,
     pub from: String,
     pub subject: String,
+    pub preview: Option<String>,
+    pub raw_rfc822: Option<Vec<u8>>,
     pub mailbox_ids: Vec<String>,
     pub keywords: Vec<String>,
     pub received_at: Option<DateTime<Utc>>,
@@ -27,6 +30,7 @@ pub enum RouteOutcome {
     Trashed,
     ScreenerPending { sender: String },
     Spam,
+    SpeakeasyBypass,
     AlreadyScreened,
 }
 
@@ -171,6 +175,12 @@ pub async fn route_email(
         return Ok(RouteOutcome::AlreadyScreened);
     }
 
+    if speakeasy_matches(conn, user_id, env).await? {
+        jmap.apply_keyword(&env.id, Classification::Imbox.keyword())
+            .await?;
+        return Ok(RouteOutcome::SpeakeasyBypass);
+    }
+
     // System senders (bounce notifications, postmaster) bypass the screener entirely.
     if is_system_sender(&env.from) {
         jmap.apply_keyword(&env.id, Classification::Imbox.keyword())
@@ -249,6 +259,57 @@ pub async fn route_email(
     }
 }
 
+async fn speakeasy_matches(
+    conn: &mut SqliteConnection,
+    user_id: i64,
+    env: &EmailEnvelope,
+) -> Result<bool, RouteError> {
+    let Some(secret) = get_speakeasy_passphrase_for_update(&mut *conn, user_id).await? else {
+        return Ok(false);
+    };
+    if secret.rotates_at <= Utc::now() {
+        return Ok(false);
+    }
+    let passphrase = secret.passphrase.trim();
+    if passphrase.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(speakeasy_surfaces(env)
+        .into_iter()
+        .any(|surface| surface.contains(passphrase)))
+}
+
+fn speakeasy_surfaces(env: &EmailEnvelope) -> Vec<String> {
+    let mut surfaces = vec![env.subject.clone()];
+    if let Some(preview) = &env.preview {
+        surfaces.push(preview.clone());
+    }
+    if let Some(raw_rfc822) = &env.raw_rfc822 {
+        surfaces.extend(rfc822_body_surfaces(raw_rfc822));
+    }
+    surfaces
+}
+
+fn rfc822_body_surfaces(raw_rfc822: &[u8]) -> Vec<String> {
+    let Some(message) = mail_parser::MessageParser::default().parse(raw_rfc822) else {
+        return Vec::new();
+    };
+
+    let mut surfaces = Vec::new();
+    for index in 0..message.text_body_count() {
+        if let Some(body) = message.body_text(index) {
+            surfaces.push(body.into_owned());
+        }
+    }
+    for index in 0..message.html_body_count() {
+        if let Some(body) = message.body_html(index) {
+            surfaces.push(body.into_owned());
+        }
+    }
+    surfaces
+}
+
 async fn move_to_screener_if_needed(
     jmap: &dyn JmapOps,
     env: &EmailEnvelope,
@@ -306,5 +367,42 @@ mod tests {
         assert!(!is_system_sender("newsletter@company.com"));
         assert!(!is_system_sender("daemon@example.com"));
         assert!(!is_system_sender("reply@example.com"));
+    }
+
+    #[test]
+    fn speakeasy_surfaces_include_subject_preview_and_rfc822_bodies() {
+        let env = EmailEnvelope {
+            id: "email-1".to_string(),
+            thread_id: "thread-1".to_string(),
+            from: "sender@example.com".to_string(),
+            subject: "subject phrase".to_string(),
+            preview: Some("preview phrase".to_string()),
+            raw_rfc822: Some(
+                b"From: sender@example.com\r\nSubject: ignored\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<p>html phrase</p>"
+                    .to_vec(),
+            ),
+            mailbox_ids: Vec::new(),
+            keywords: Vec::new(),
+            received_at: None,
+            size: None,
+        };
+
+        let surfaces = speakeasy_surfaces(&env);
+
+        assert!(
+            surfaces
+                .iter()
+                .any(|surface| surface.contains("subject phrase"))
+        );
+        assert!(
+            surfaces
+                .iter()
+                .any(|surface| surface.contains("preview phrase"))
+        );
+        assert!(
+            surfaces
+                .iter()
+                .any(|surface| surface.contains("html phrase"))
+        );
     }
 }
