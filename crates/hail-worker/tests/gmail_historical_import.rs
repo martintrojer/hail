@@ -969,6 +969,119 @@ async fn dedupes_different_provider_id_by_rfc822_message_id() {
 }
 
 #[tokio::test]
+async fn configured_bound_limits_list_fetch_import_and_audits_explicitly() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![
+                ListMessage {
+                    id: "gmail-bound-1".to_owned(),
+                    thread_id: Some("thread-bound-1".to_owned()),
+                },
+                ListMessage {
+                    id: "gmail-bound-2".to_owned(),
+                    thread_id: Some("thread-bound-2".to_owned()),
+                },
+                ListMessage {
+                    id: "gmail-bound-3".to_owned(),
+                    thread_id: Some("thread-bound-3".to_owned()),
+                },
+            ],
+            next_page_token: Some("page-after-bound".to_owned()),
+            result_size_estimate: Some(99),
+        }],
+        vec![
+            raw_message(
+                "gmail-bound-1",
+                "thread-bound-1",
+                "history-bound-1",
+                "bound-1@example.com",
+            ),
+            raw_message(
+                "gmail-bound-2",
+                "thread-bound-2",
+                "history-bound-2",
+                "bound-2@example.com",
+            ),
+            raw_message(
+                "gmail-bound-3",
+                "thread-bound-3",
+                "history-bound-3",
+                "bound-3@example.com",
+            ),
+        ],
+    );
+    let importer = FakeRfc822Importer::default();
+    let mut options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+    options.max_messages = Some(2);
+    options.page_size = 50;
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("bounded historical import");
+
+    assert_eq!(summary.listed, 2);
+    assert_eq!(summary.fetched, 2);
+    assert_eq!(summary.imported, 2);
+    assert_eq!(summary.pages, 1);
+    assert!(!summary.completed);
+    assert!(summary.bounded);
+    assert_eq!(summary.bound_max_messages, Some(2));
+    assert_eq!(summary.next_page_token.as_deref(), Some("page-after-bound"));
+    assert_eq!(gmail.list_params()[0].max_results, Some(2));
+    assert_eq!(
+        gmail.raw_gets(),
+        vec!["gmail-bound-1".to_owned(), "gmail-bound-2".to_owned()]
+    );
+    assert_eq!(importer.imports().len(), 2);
+    assert!(
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-bound-3")
+            .await
+            .expect("mapping lookup")
+            .is_none(),
+        "messages beyond the configured bound must not be fetched/imported"
+    );
+
+    let (status, completed_at, cursor_json): (String, Option<String>, String) = sqlx::query_as(
+        "SELECT sync_status, initial_sync_completed_at, backfill_cursor_json \
+         FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(provider_account_id)
+    .fetch_one(&pool)
+    .await
+    .expect("provider account state");
+    assert_eq!(status, "initial_sync");
+    assert!(completed_at.is_none());
+    assert!(cursor_json.contains("page-after-bound"));
+    assert!(cursor_json.contains("\"max_messages\""));
+
+    let audit = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 20)
+        .await
+        .expect("audit logs");
+    assert!(audit.iter().any(|log| {
+        log.event_type == "message_skipped"
+            && log.safe_error_class.as_deref() == Some("configured_initial_import_bound")
+    }));
+    assert!(audit.iter().any(|log| {
+        log.event_type == "sync_completed"
+            && log
+                .metadata_json
+                .as_deref()
+                .is_some_and(|json| json.contains("\"bounded\":true"))
+    }));
+}
+
+#[tokio::test]
 async fn bounded_import_saves_resume_cursor_and_uses_it_next_run() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
     let first_gmail = FakeGmail::new(
@@ -1040,14 +1153,56 @@ async fn bounded_import_saves_resume_cursor_and_uses_it_next_run() {
         },
         &second_gmail,
         &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("same bounded import remains capped");
+
+    assert_eq!(second.listed, 0);
+    assert!(!second.completed);
+    assert!(second.bounded);
+    assert!(second_gmail.list_params().is_empty());
+    assert!(
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-2")
+            .await
+            .expect("mapping lookup")
+            .is_none()
+    );
+
+    let second_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-2".to_owned(),
+                thread_id: Some("thread-2".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-2",
+            "thread-2",
+            "history-2",
+            "resume-2@example.com",
+        )],
+    );
+    options.max_messages = Some(2);
+    let third = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &second_gmail,
+        &importer,
         options,
         &CancellationToken::new(),
     )
     .await
-    .expect("second bounded import");
+    .expect("raised bound import");
 
-    assert_eq!(second.listed, 1);
-    assert!(second.completed);
+    assert_eq!(third.listed, 1);
+    assert!(third.completed);
     assert_eq!(
         second_gmail.list_params()[0].page_token.as_deref(),
         Some("page-2")

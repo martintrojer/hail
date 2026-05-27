@@ -71,6 +71,7 @@ bootstrap_token = "operator-only-bootstrap-token"
 [provider_import.gmail]
 oauth_client_id = "gmail-client-id.apps.googleusercontent.com"
 oauth_client_secret = "gmail-client-secret"
+initial_import_max_messages = 37
 
 [secrets]
 server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -120,6 +121,10 @@ fn loads_full_toml_fields() {
             .expect("gmail client secret")
             .expose_secret(),
         "gmail-client-secret"
+    );
+    assert_eq!(
+        cfg.provider_import.gmail.initial_import_max_messages,
+        Some(37)
     );
 
     assert_eq!(cfg.secrets.server_key.expose_secret(), VALID_KEY_HEX);

@@ -112,6 +112,14 @@ pub struct GmailProviderConfig {
     pub oauth_revoke_url: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+    /// Optional smoke/development safety bound for the initial Gmail backfill.
+    ///
+    /// Defaults to `None` so production imports keep the full historical
+    /// window. Set this for live smoke/dev environments with small local
+    /// Stalwart blob quotas; the worker leaves the account in `initial_sync`
+    /// with a durable backfill cursor when the bound is reached.
+    #[serde(default)]
+    pub initial_import_max_messages: Option<usize>,
 }
 
 /// Pre-provisioned admin login. Setting this block opts out of the wizard
