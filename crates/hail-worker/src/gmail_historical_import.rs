@@ -11,6 +11,8 @@
 //! Gmail labels or derive authoritative hail/Stalwart state from them after the
 //! raw RFC822 import boundary.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use hail_db::provider_audit_sanitizer::safe_provider_account_error_message;
 use hail_db::provider_message_mappings::{
@@ -32,7 +34,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::gmail_client::{
-    GmailClient, GmailClientError, GmailTokenSource, ListMessage, ListMessagesParams,
+    GmailClient, GmailClientError, GmailLabel, GmailTokenSource, ListMessage, ListMessagesParams,
     ListMessagesResponse, RawGmailMessage,
 };
 use crate::rfc822_import::{ImportedRfc822Message, Rfc822ImportRequest, Rfc822Importer};
@@ -196,6 +198,10 @@ pub trait GmailHistoricalSource: Send + Sync {
     ) -> Result<ListMessagesResponse, GmailClientError>;
 
     async fn get_raw_message(&self, message_id: &str) -> Result<RawGmailMessage, GmailClientError>;
+
+    async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]
@@ -213,6 +219,10 @@ where
     async fn get_raw_message(&self, message_id: &str) -> Result<RawGmailMessage, GmailClientError> {
         self.get_raw_message(message_id).await
     }
+
+    async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        GmailClient::list_user_labels(self).await
+    }
 }
 
 #[derive(Debug, Error)]
@@ -229,6 +239,10 @@ pub enum GmailHistoricalImportError {
     CursorDeserialize(#[source] serde_json::Error),
     #[error("gmail list failed: {0}")]
     GmailList(#[source] GmailClientError),
+    #[error("gmail label metadata list failed: {0}")]
+    GmailLabels(#[source] GmailClientError),
+    #[error("label database error during Gmail import: {0}")]
+    Labels(#[from] hail_db::labels::LabelDbError),
     #[error(transparent)]
     Rfc822Import(#[from] crate::rfc822_import::Rfc822ImportError),
     #[error(transparent)]
@@ -357,6 +371,25 @@ where
 
     audit_sync_started(db, &account, &options, cursor.next_page_token.as_deref()).await?;
     mark_sync_attempt_started(db, account.provider_account_id).await?;
+    let user_labels = match cancel_or_complete(cancel, gmail.list_user_labels()).await {
+        None => {
+            mark_sync_error(
+                db,
+                account.provider_account_id,
+                "cancelled",
+                "import cancelled",
+            )
+            .await?;
+            return Err(GmailHistoricalImportError::Cancelled);
+        }
+        Some(Ok(labels)) => gmail_user_label_map(labels),
+        Some(Err(error)) => {
+            let message = safe_error_message(&error);
+            audit_sync_failed(db, &account, "gmail_labels", &message).await?;
+            mark_sync_error(db, account.provider_account_id, "gmail_labels", &message).await?;
+            return Err(GmailHistoricalImportError::GmailLabels(error));
+        }
+    };
 
     loop {
         if cancel.is_cancelled() {
@@ -435,6 +468,7 @@ where
                 gmail,
                 importer,
                 &options,
+                &user_labels,
                 listed,
                 &mut summary,
                 cancel,
@@ -464,6 +498,7 @@ pub(crate) async fn import_one_message<C, I>(
     gmail: &C,
     importer: &I,
     options: &GmailHistoricalImportOptions,
+    user_labels: &HashMap<String, GmailLabel>,
     listed: ListMessage,
     summary: &mut GmailHistoricalImportSummary,
     cancel: &CancellationToken,
@@ -557,6 +592,7 @@ where
     let content_sha256 = Sha256::digest(&raw.rfc822).to_vec();
     let provider_thread_id = raw.thread_id.as_deref().or(listed.thread_id.as_deref());
     let provider_history_id = raw.history_id.as_deref();
+    let gmail_label_ids = raw.label_ids.clone();
 
     record_provider_message_seen(
         db,
@@ -792,6 +828,15 @@ where
     }
 
     clear_provider_message_route_error(db, account.provider_account_id, &raw.id).await?;
+    assign_gmail_labels_to_thread(
+        db,
+        account.user_id,
+        user_labels,
+        &listed,
+        &gmail_label_ids,
+        &imported,
+    )
+    .await?;
     if imported.duplicate {
         summary.duplicates += 1;
         audit_message_imported(db, account, &raw.id, &imported.jmap_email_id, true).await?;
@@ -812,6 +857,50 @@ async fn cancel_or_complete<T>(
         _ = cancel.cancelled() => None,
         output = future => Some(output),
     }
+}
+
+pub(crate) fn gmail_user_label_map(labels: Vec<GmailLabel>) -> HashMap<String, GmailLabel> {
+    labels
+        .into_iter()
+        .filter(|label| label.is_user_created() && !is_skipped_gmail_label_id(&label.id))
+        .map(|label| (label.id.clone(), label))
+        .collect()
+}
+
+async fn assign_gmail_labels_to_thread(
+    db: &SqlitePool,
+    user_id: i64,
+    user_labels: &HashMap<String, GmailLabel>,
+    _listed: &ListMessage,
+    raw_label_ids: &[String],
+    imported: &ImportedRfc822Message,
+) -> Result<(), GmailHistoricalImportError> {
+    let Some(thread_id) = imported.jmap_thread_id.as_deref() else {
+        return Ok(());
+    };
+
+    for label_id in gmail_message_label_ids(raw_label_ids) {
+        let Some(label) = user_labels.get(label_id) else {
+            continue;
+        };
+        let local_label =
+            hail_db::labels::upsert_gmail_label(db, user_id, &label.id, &label.name, None).await?;
+        hail_db::labels::assign_label_to_thread(db, user_id, thread_id, local_label.id).await?;
+    }
+
+    Ok(())
+}
+
+fn gmail_message_label_ids(raw_label_ids: &[String]) -> impl Iterator<Item = &str> {
+    raw_label_ids.iter().map(String::as_str)
+}
+
+fn is_skipped_gmail_label_id(label_id: &str) -> bool {
+    let label_id = label_id.trim().to_ascii_uppercase();
+    matches!(
+        label_id.as_str(),
+        "INBOX" | "SENT" | "TRASH" | "SPAM" | "DRAFT" | "UNREAD" | "STARRED" | "IMPORTANT"
+    ) || label_id.starts_with("CATEGORY_")
 }
 
 fn limit_page_messages(

@@ -9,8 +9,8 @@ use hail_test::gmail_import_fixtures::{
 };
 use hail_worker::gmail_client::{
     GmailApiErrorKind, GmailClientError, GmailHistoryMessage, GmailHistoryMessageRef,
-    GmailHistoryRecord, ListHistoryParams, ListHistoryResponse, ListMessage, ListMessagesParams,
-    ListMessagesResponse, RawGmailMessage,
+    GmailHistoryRecord, GmailLabel, ListHistoryParams, ListHistoryResponse, ListMessage,
+    ListMessagesParams, ListMessagesResponse, RawGmailMessage,
 };
 use hail_worker::gmail_historical_import::{GmailHistoricalImporter, GmailHistoricalSource};
 use hail_worker::gmail_incremental_sync::{
@@ -121,6 +121,7 @@ struct FakeGmail {
     history_pages: Arc<Mutex<Vec<Result<ListHistoryResponse, GmailClientError>>>>,
     message_pages: Arc<Mutex<Vec<ListMessagesResponse>>>,
     raw: Arc<HashMap<String, RawGmailMessage>>,
+    labels: Arc<Vec<GmailLabel>>,
     history_params: Arc<Mutex<Vec<ListHistoryParams>>>,
     raw_gets: Arc<Mutex<Vec<String>>>,
 }
@@ -131,10 +132,20 @@ impl FakeGmail {
         message_pages: Vec<ListMessagesResponse>,
         raw: Vec<RawGmailMessage>,
     ) -> Self {
+        Self::with_labels(history_pages, message_pages, raw, Vec::new())
+    }
+
+    fn with_labels(
+        history_pages: Vec<Result<ListHistoryResponse, GmailClientError>>,
+        message_pages: Vec<ListMessagesResponse>,
+        raw: Vec<RawGmailMessage>,
+        labels: Vec<GmailLabel>,
+    ) -> Self {
         Self {
             history_pages: Arc::new(Mutex::new(history_pages)),
             message_pages: Arc::new(Mutex::new(message_pages)),
             raw: Arc::new(raw.into_iter().map(|msg| (msg.id.clone(), msg)).collect()),
+            labels: Arc::new(labels),
             history_params: Arc::new(Mutex::new(Vec::new())),
             raw_gets: Arc::new(Mutex::new(Vec::new())),
         }
@@ -181,6 +192,10 @@ impl GmailHistoricalSource for FakeGmail {
             .get(message_id)
             .cloned()
             .ok_or(GmailClientError::MissingRawMessage)
+    }
+
+    async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        Ok(self.labels.as_ref().clone())
     }
 }
 
@@ -283,6 +298,7 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),
+        label_ids: Vec::new(),
         rfc822: format!(
             "From: sender@example.com\r\nTo: user@example.com\r\nMessage-ID: <{message_id}>\r\nSubject: hi\r\n\r\nBody"
         )
@@ -295,8 +311,38 @@ fn raw_fixture_message(fixture: GmailImportFixture) -> RawGmailMessage {
         id: fixture.gmail_id.to_owned(),
         thread_id: Some(fixture.thread_id.to_owned()),
         history_id: Some(fixture.history_id.to_owned()),
+        label_ids: Vec::new(),
         rfc822: fixture.raw_rfc822().to_vec(),
     }
+}
+
+fn gmail_label(id: &str, name: &str, label_type: &str) -> GmailLabel {
+    GmailLabel {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        label_type: Some(label_type.to_owned()),
+    }
+}
+
+fn raw_message_with_labels(
+    id: &str,
+    thread_id: &str,
+    history_id: &str,
+    message_id: &str,
+    label_ids: &[&str],
+) -> RawGmailMessage {
+    let mut raw = raw_message(id, thread_id, history_id, message_id);
+    raw.label_ids = label_ids.iter().map(|label| (*label).to_owned()).collect();
+    raw
+}
+
+async fn thread_label_names(pool: &sqlx::SqlitePool, user_id: i64, thread_id: &str) -> Vec<String> {
+    hail_db::labels::list_thread_labels(pool, user_id, thread_id)
+        .await
+        .expect("thread labels")
+        .into_iter()
+        .map(|label| label.name)
+        .collect()
 }
 
 fn message_page_from_fixtures(
@@ -549,6 +595,56 @@ async fn incremental_history_imports_new_messages_and_advances_cursor() {
             .filter(|log| log.event_type == "message_imported")
             .count(),
         2
+    );
+}
+
+#[tokio::test]
+async fn incremental_history_imports_gmail_user_labels_to_local_thread_labels() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let gmail = FakeGmail::with_labels(
+        vec![Ok(history_page(
+            vec![(
+                "101",
+                vec![("gmail-incremental-label", "gmail-thread-label")],
+            )],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        vec![raw_message_with_labels(
+            "gmail-incremental-label",
+            "gmail-thread-label",
+            "101",
+            "incremental-label@example.com",
+            &["Label_Inc", "SPAM", "CATEGORY_UPDATES"],
+        )],
+        vec![
+            gmail_label("Label_Inc", "Projects/Incremental", "user"),
+            gmail_label("SPAM", "Spam", "system"),
+            gmail_label("CATEGORY_UPDATES", "Updates", "system"),
+        ],
+    );
+    let importer = FakeRfc822Importer::default();
+
+    let summary = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &gmail,
+        &importer,
+        GmailIncrementalSyncOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("incremental sync");
+
+    assert_eq!(summary.imported, 1);
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-1").await,
+        vec!["Projects/Incremental".to_owned()]
     );
 }
 

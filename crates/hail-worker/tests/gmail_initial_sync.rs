@@ -199,6 +199,7 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),
+        label_ids: Vec::new(),
         rfc822: format!(
             "From: sender@example.com\r\nTo: user@example.com\r\nMessage-ID: <{message_id}>\r\nSubject: hi\r\n\r\nBody"
         )

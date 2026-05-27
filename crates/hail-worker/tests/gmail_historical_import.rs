@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use hail_db::labels::{delete_label, list_labels, list_thread_labels, upsert_gmail_label};
 use hail_db::provider_message_mappings::{
     ImportedProviderMessageMapping, ProviderImportStatus, get_provider_message_mapping,
     mark_provider_message_imported,
@@ -11,7 +12,8 @@ use hail_test::gmail_import_fixtures::{
     GmailImportFixture, GmailImportScenario, gmail_import_fixture,
 };
 use hail_worker::gmail_client::{
-    GmailClientError, ListMessage, ListMessagesParams, ListMessagesResponse, RawGmailMessage,
+    GmailClientError, GmailLabel, ListMessage, ListMessagesParams, ListMessagesResponse,
+    RawGmailMessage,
 };
 use hail_worker::gmail_historical_import::{
     GmailHistoricalImportAccount, GmailHistoricalImportError, GmailHistoricalImportOptions,
@@ -220,12 +222,21 @@ async fn insert_provider_account(
 struct FakeGmail {
     pages: Arc<Mutex<Vec<ListMessagesResponse>>>,
     raw: Arc<HashMap<String, RawGmailMessage>>,
+    labels: Arc<Vec<GmailLabel>>,
     list_params: Arc<Mutex<Vec<ListMessagesParams>>>,
     raw_gets: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeGmail {
     fn new(pages: Vec<ListMessagesResponse>, raw: Vec<RawGmailMessage>) -> Self {
+        Self::with_labels(pages, raw, Vec::new())
+    }
+
+    fn with_labels(
+        pages: Vec<ListMessagesResponse>,
+        raw: Vec<RawGmailMessage>,
+        labels: Vec<GmailLabel>,
+    ) -> Self {
         Self {
             pages: Arc::new(Mutex::new(pages)),
             raw: Arc::new(
@@ -233,6 +244,7 @@ impl FakeGmail {
                     .map(|message| (message.id.clone(), message))
                     .collect(),
             ),
+            labels: Arc::new(labels),
             list_params: Arc::new(Mutex::new(Vec::new())),
             raw_gets: Arc::new(Mutex::new(Vec::new())),
         }
@@ -269,6 +281,10 @@ impl GmailHistoricalSource for FakeGmail {
             .get(message_id)
             .cloned()
             .ok_or(GmailClientError::MissingRawMessage)
+    }
+
+    async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        Ok(self.labels.as_ref().clone())
     }
 }
 
@@ -374,6 +390,7 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),
+        label_ids: Vec::new(),
         rfc822: format!(
             "From: sender@example.com\r\nTo: user@example.com\r\nMessage-ID: <{message_id}>\r\nSubject: hi\r\n\r\nBody"
         )
@@ -386,6 +403,7 @@ fn raw_fixture_message(fixture: GmailImportFixture) -> RawGmailMessage {
         id: fixture.gmail_id.to_owned(),
         thread_id: Some(fixture.thread_id.to_owned()),
         history_id: Some(fixture.history_id.to_owned()),
+        label_ids: Vec::new(),
         rfc822: fixture.raw_rfc822().to_vec(),
     }
 }
@@ -404,6 +422,275 @@ fn list_fixture_page(
         next_page_token: None,
         result_size_estimate: None,
     }
+}
+
+fn gmail_label(id: &str, name: &str, label_type: &str) -> GmailLabel {
+    GmailLabel {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        label_type: Some(label_type.to_owned()),
+    }
+}
+
+fn raw_message_with_labels(
+    id: &str,
+    thread_id: &str,
+    history_id: &str,
+    message_id: &str,
+    label_ids: &[&str],
+) -> RawGmailMessage {
+    let mut raw = raw_message(id, thread_id, history_id, message_id);
+    raw.label_ids = label_ids.iter().map(|label| (*label).to_owned()).collect();
+    raw
+}
+
+async fn thread_label_names(pool: &sqlx::SqlitePool, user_id: i64, thread_id: &str) -> Vec<String> {
+    list_thread_labels(pool, user_id, thread_id)
+        .await
+        .expect("thread labels")
+        .into_iter()
+        .map(|label| label.name)
+        .collect()
+}
+
+#[tokio::test]
+async fn imports_gmail_user_labels_to_local_thread_labels() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![
+                ListMessage {
+                    id: "gmail-label-1".to_owned(),
+                    thread_id: Some("gmail-thread-1".to_owned()),
+                },
+                ListMessage {
+                    id: "gmail-label-2".to_owned(),
+                    thread_id: Some("gmail-thread-1".to_owned()),
+                },
+            ],
+            next_page_token: None,
+            result_size_estimate: Some(2),
+        }],
+        vec![
+            raw_message_with_labels(
+                "gmail-label-1",
+                "gmail-thread-1",
+                "history-1",
+                "label-1@example.com",
+                &["Label_Work", "INBOX", "CATEGORY_PROMOTIONS", "Label_Nested"],
+            ),
+            raw_message_with_labels(
+                "gmail-label-2",
+                "gmail-thread-1",
+                "history-2",
+                "label-2@example.com",
+                &["Label_Nested", "STARRED"],
+            ),
+        ],
+        vec![
+            gmail_label("Label_Work", "Work", "user"),
+            gmail_label("Label_Nested", "Work/Receipts", "user"),
+            gmail_label("INBOX", "Inbox", "system"),
+            gmail_label("CATEGORY_PROMOTIONS", "Promotions", "system"),
+            gmail_label("STARRED", "Starred", "system"),
+        ],
+    );
+    let importer = FakeRfc822Importer::default();
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("historical import");
+
+    assert_eq!(summary.imported, 2);
+    let labels = list_labels(&pool, user_id).await.expect("labels");
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| (label.name.as_str(), label.provider_label_id.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Work", Some("Label_Work")),
+            ("Work/Receipts", Some("Label_Nested")),
+        ]
+    );
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-1").await,
+        vec!["Work".to_owned(), "Work/Receipts".to_owned()]
+    );
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-2").await,
+        vec!["Work/Receipts".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn gmail_label_import_merges_manual_labels_and_recreates_deleted_labels() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let manual = hail_db::labels::create_label(&pool, user_id, " work / receipts ", None)
+        .await
+        .expect("manual label");
+    let importer = FakeRfc822Importer::default();
+    let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-merge-label".to_owned(),
+                thread_id: Some("gmail-thread-merge".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message_with_labels(
+            "gmail-merge-label",
+            "gmail-thread-merge",
+            "history-merge",
+            "merge-label@example.com",
+            &["Label_Receipts"],
+        )],
+        vec![gmail_label("Label_Receipts", "Work/Receipts", "user")],
+    );
+
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first import");
+
+    let labels = list_labels(&pool, user_id).await.expect("labels");
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].id, manual.id);
+    assert_eq!(
+        labels[0].provider_label_id.as_deref(),
+        Some("Label_Receipts")
+    );
+
+    delete_label(&pool, user_id, manual.id)
+        .await
+        .expect("delete label");
+    let second_gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-recreate-label".to_owned(),
+                thread_id: Some("gmail-thread-recreate".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message_with_labels(
+            "gmail-recreate-label",
+            "gmail-thread-recreate",
+            "history-recreate",
+            "recreate-label@example.com",
+            &["Label_Receipts"],
+        )],
+        vec![gmail_label("Label_Receipts", "Work/Receipts", "user")],
+    );
+
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &second_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("second import");
+
+    let labels = list_labels(&pool, user_id).await.expect("labels");
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].name, "Work/Receipts");
+    assert_eq!(
+        labels[0].provider_label_id.as_deref(),
+        Some("Label_Receipts")
+    );
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-2").await,
+        vec!["Work/Receipts".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn gmail_label_import_is_scoped_per_user() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let other_user = insert_user(&pool, "other-labels@example.com", "acct-other-labels").await;
+    upsert_gmail_label(&pool, other_user, "Label_Shared", "Other/Only", None)
+        .await
+        .expect("other label");
+    let gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-scoped-label".to_owned(),
+                thread_id: Some("gmail-thread-scoped".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message_with_labels(
+            "gmail-scoped-label",
+            "gmail-thread-scoped",
+            "history-scoped",
+            "scoped-label@example.com",
+            &["Label_Shared"],
+        )],
+        vec![gmail_label("Label_Shared", "Mine/Only", "user")],
+    );
+    let importer = FakeRfc822Importer::default();
+
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("import");
+
+    assert_eq!(
+        list_labels(&pool, user_id)
+            .await
+            .expect("user labels")
+            .into_iter()
+            .map(|label| label.name)
+            .collect::<Vec<_>>(),
+        vec!["Mine/Only".to_owned()]
+    );
+    assert_eq!(
+        list_labels(&pool, other_user)
+            .await
+            .expect("other labels")
+            .into_iter()
+            .map(|label| label.name)
+            .collect::<Vec<_>>(),
+        vec!["Other/Only".to_owned()]
+    );
 }
 
 fn hostile_leak_error() -> String {
@@ -1376,6 +1663,7 @@ async fn failed_message_import_redacts_tokens_and_raw_body_from_mapping_and_audi
             id: "gmail-hostile-leak".to_owned(),
             thread_id: Some("thread-hostile".to_owned()),
             history_id: Some("history-hostile".to_owned()),
+            label_ids: Vec::new(),
             rfc822: b"From: sender@example.com\r\nTo: user@example.com\r\nMessage-ID: <hostile@example.com>\r\nSubject: imported body\r\n\r\nImported raw body is not an error".to_vec(),
         }],
     );
@@ -2133,6 +2421,7 @@ fn raw_from_message(
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),
+        label_ids: Vec::new(),
         rfc822: format!(
             "From: {from}\r\nTo: user@example.com\r\nMessage-ID: <{message_id}>\r\nSubject: hi\r\n\r\nBody"
         )

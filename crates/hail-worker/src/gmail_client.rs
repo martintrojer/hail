@@ -472,6 +472,7 @@ where
             id: response.id,
             thread_id: response.thread_id,
             history_id: response.history_id,
+            label_ids: response.label_ids,
             rfc822,
         })
     }
@@ -665,6 +666,7 @@ pub struct RawGmailMessage {
     pub id: String,
     pub thread_id: Option<String>,
     pub history_id: Option<String>,
+    pub label_ids: Vec<String>,
     pub rfc822: Vec<u8>,
 }
 
@@ -674,6 +676,8 @@ struct GetMessageResponse {
     id: String,
     thread_id: Option<String>,
     history_id: Option<String>,
+    #[serde(default)]
+    label_ids: Vec<String>,
     raw: Option<String>,
 }
 
