@@ -56,6 +56,11 @@ public_url = "https://hail.example.com"
 # oauth_token_url = "https://oauth2.googleapis.com/token"
 # oauth_revoke_url = "https://oauth2.googleapis.com/revoke"
 # api_base_url = "https://gmail.googleapis.com"
+# Optional smoke/dev bound for the initial historical import. Leave unset for
+# production/full import. When set, the worker imports at most this many Gmail
+# messages per initial import run, records an explicit audit event, and keeps the
+# account in initial_sync with a durable cursor for a later continuation.
+# initial_import_max_messages = 200
 
 # --- Admin (OPTIONAL) -------------------------------------------------------
 # Uncomment AND set to disable the first-run wizard at /setup. Leave commented

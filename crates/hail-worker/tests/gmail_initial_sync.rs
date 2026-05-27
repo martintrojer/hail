@@ -255,6 +255,8 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     assert_eq!(summary.import.listed, 2);
     assert_eq!(summary.import.imported, 2);
     assert!(!summary.import.completed);
+    assert!(summary.import.bounded);
+    assert_eq!(summary.import.bound_max_messages, Some(2));
     assert_eq!(gmail.raw_gets(), vec!["gmail-1", "gmail-2"]);
     assert_eq!(gmail.list_params()[0].label_ids, vec!["INBOX"]);
     assert_eq!(gmail.list_params()[0].query.as_deref(), Some("-in:sent"));
@@ -275,6 +277,19 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     assert!(row.3.is_none());
     assert!(row.4.expect("cursor").contains("next-page"));
     assert!(row.5.is_none());
+
+    let audit = hail_db::provider_sync_audit::list_provider_sync_audit_logs(
+        &pool,
+        account.user_id,
+        account.id,
+        20,
+    )
+    .await
+    .expect("audit logs");
+    assert!(audit.iter().any(|log| {
+        log.event_type == "message_skipped"
+            && log.safe_error_class.as_deref() == Some("configured_initial_import_bound")
+    }));
 }
 
 #[tokio::test]

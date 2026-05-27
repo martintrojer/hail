@@ -112,6 +112,8 @@ pub struct GmailHistoricalImportSummary {
     pub failed: usize,
     pub pages: usize,
     pub completed: bool,
+    pub bounded: bool,
+    pub bound_max_messages: Option<usize>,
     pub next_page_token: Option<String>,
 }
 
@@ -129,6 +131,8 @@ struct GmailHistoricalBackfillCursor {
     include_spam_trash: bool,
     #[serde(default = "default_exclude_sent")]
     exclude_sent: bool,
+    #[serde(default)]
+    max_messages: Option<usize>,
     next_page_token: Option<String>,
     processed: usize,
     completed: bool,
@@ -142,6 +146,7 @@ impl GmailHistoricalBackfillCursor {
             query: options.query.clone(),
             include_spam_trash: options.include_spam_trash,
             exclude_sent: options.exclude_sent,
+            max_messages: options.max_messages,
             next_page_token: None,
             processed: 0,
             completed: false,
@@ -365,17 +370,20 @@ where
             return Err(GmailHistoricalImportError::Cancelled);
         }
         if let Some(max_messages) = options.max_messages
-            && summary.listed >= max_messages
+            && cursor.processed >= max_messages
         {
             summary.completed = false;
+            summary.bounded = true;
+            summary.bound_max_messages = Some(max_messages);
             summary.next_page_token = cursor.next_page_token.clone();
             save_cursor(db, account.provider_account_id, &cursor).await?;
+            audit_sync_bounded(db, &account, &summary).await?;
             audit_sync_completed(db, &account, &summary).await?;
             mark_sync_succeeded(db, account.provider_account_id, &summary).await?;
             return Ok(summary);
         }
 
-        let remaining = options.max_messages.map(|max| max - summary.listed);
+        let remaining = options.max_messages.map(|max| max - cursor.processed);
         let params = ListMessagesParams {
             max_results: Some(options.normalized_page_size(remaining)),
             page_token: cursor.next_page_token.clone(),
@@ -405,8 +413,11 @@ where
         };
         summary.pages += 1;
 
+        let already_processed = cursor.processed;
         let next_page_token = response.next_page_token.clone();
-        for listed in limit_page_messages(response.messages, options.max_messages, summary.listed) {
+        for listed in
+            limit_page_messages(response.messages, options.max_messages, already_processed)
+        {
             if cancel.is_cancelled() {
                 mark_sync_error(
                     db,
@@ -811,10 +822,11 @@ fn limit_page_messages(
     let Some(max_messages) = max_messages else {
         return messages;
     };
-    messages
-        .into_iter()
-        .take(max_messages.saturating_sub(already_listed))
-        .collect()
+    let remaining = max_messages.saturating_sub(already_listed);
+    if remaining == 0 {
+        return Vec::new();
+    }
+    messages.into_iter().take(remaining).collect()
 }
 
 async fn mark_message_failed(
@@ -948,6 +960,7 @@ async fn audit_sync_started(
         "pageSize": options.page_size,
         "includeSpamTrash": options.include_spam_trash,
         "excludeSent": options.exclude_sent,
+        "maxMessages": options.max_messages,
         "resuming": page_token.is_some(),
     })
     .to_string();
@@ -982,7 +995,11 @@ async fn audit_sync_completed(
         "duplicates": summary.duplicates,
         "skipped": summary.skipped,
         "failed": summary.failed,
+        "pages": summary.pages,
         "completed": summary.completed,
+        "bounded": summary.bounded,
+        "boundMaxMessages": summary.bound_max_messages,
+        "nextPageTokenPresent": summary.next_page_token.is_some(),
     })
     .to_string();
     insert_provider_sync_audit_log(
@@ -997,6 +1014,39 @@ async fn audit_sync_completed(
             safe_error_code: None,
             safe_error_class: None,
             safe_error_message: None,
+            metadata_json: Some(&metadata),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn audit_sync_bounded(
+    db: &SqlitePool,
+    account: &GmailHistoricalImportAccount,
+    summary: &GmailHistoricalImportSummary,
+) -> Result<(), sqlx::Error> {
+    let metadata = serde_json::json!({
+        "reason": "configured_initial_import_bound",
+        "listed": summary.listed,
+        "maxMessages": summary.bound_max_messages,
+        "nextPageTokenPresent": summary.next_page_token.is_some(),
+    })
+    .to_string();
+    insert_provider_sync_audit_log(
+        db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.provider_account_id,
+            operation_kind: ProviderSyncOperationKind::MessageSkip,
+            event_type: ProviderSyncEventType::MessageSkipped,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Skipped,
+            safe_error_code: Some("configured_initial_import_bound"),
+            safe_error_class: Some("configured_initial_import_bound"),
+            safe_error_message: Some(
+                "initial Gmail import stopped at configured max_messages bound",
+            ),
             metadata_json: Some(&metadata),
         },
     )

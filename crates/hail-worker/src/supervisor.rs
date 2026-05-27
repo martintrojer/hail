@@ -117,6 +117,11 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
         state.config.provider_import.gmail.oauth_token_url.clone(),
         state.config.provider_import.gmail.api_base_url.clone(),
         state.config.stalwart.jmap_url.clone(),
+        state
+            .config
+            .provider_import
+            .gmail
+            .initial_import_max_messages,
     )?;
     let trash_retention_days = trash_retention_days();
     let mut next_trash_purge_at = chrono::Utc::now();

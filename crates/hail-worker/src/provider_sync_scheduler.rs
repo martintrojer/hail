@@ -535,6 +535,7 @@ pub mod live {
         token_url: String,
         gmail_api_base_url: String,
         stalwart_jmap_url: String,
+        initial_import_max_messages: Option<usize>,
     }
 
     impl LiveProviderSyncRunner {
@@ -547,6 +548,7 @@ pub mod live {
             token_url: Option<String>,
             gmail_api_base_url: Option<String>,
             stalwart_jmap_url: String,
+            initial_import_max_messages: Option<usize>,
         ) -> Result<Self> {
             Ok(Self {
                 db,
@@ -562,6 +564,7 @@ pub mod live {
                 gmail_api_base_url: gmail_api_base_url
                     .unwrap_or_else(|| "https://gmail.googleapis.com/gmail/v1/".to_string()),
                 stalwart_jmap_url,
+                initial_import_max_messages,
             })
         }
 
@@ -637,7 +640,16 @@ pub mod live {
                 .inbox_id()
                 .await
                 .map_err(|err| ProviderSyncRunError::retryable("jmap_mailbox", err))?;
-            let options = GmailInitialSyncOptions::into_mailboxes([inbox_id]);
+            let mut options = GmailInitialSyncOptions::into_mailboxes([inbox_id]);
+            options.historical.max_messages = self.initial_import_max_messages;
+            if let Some(max_messages) = self.initial_import_max_messages {
+                info!(
+                    provider_account_id = account.id,
+                    user_id = account.user_id,
+                    max_messages,
+                    "provider initial Gmail import is bounded by configuration"
+                );
+            }
             let account =
                 crate::gmail_initial_sync::load_gmail_provider_account_by_id(&self.db, account.id)
                     .await
