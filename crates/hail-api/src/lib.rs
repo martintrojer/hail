@@ -91,6 +91,10 @@ fn build_api_router(
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
+        routes::labels::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::notes::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
@@ -165,6 +169,7 @@ fn build_api_router(
         .merge(routes::compose::router())
         .merge(routes::contacts::router())
         .merge(routes::drafts::router())
+        .merge(routes::labels::router())
         .merge(routes::notes::router())
         .merge(routes::pile::router())
         .merge(routes::provider_accounts::router_with_client(Arc::new(
