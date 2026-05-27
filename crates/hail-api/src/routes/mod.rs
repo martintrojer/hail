@@ -25,6 +25,7 @@ pub mod provider_sync;
 pub mod response;
 pub mod screener;
 pub mod setup;
+pub mod speakeasy;
 pub mod threads;
 pub mod threads_view;
 pub mod undo;

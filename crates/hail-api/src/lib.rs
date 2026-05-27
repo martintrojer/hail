@@ -115,6 +115,10 @@ fn build_api_router(
             .with_state::<AppState>(state.clone())
             .split_for_parts()
             .1,
+        routes::speakeasy::openapi_router()
+            .with_state::<AppState>(state.clone())
+            .split_for_parts()
+            .1,
         routes::threads::openapi_router()
             .with_state::<AppState>(state.clone())
             .split_for_parts()
@@ -177,6 +181,7 @@ fn build_api_router(
         )))
         .merge(routes::provider_sync::router())
         .merge(routes::screener::router())
+        .merge(routes::speakeasy::router())
         .merge(routes::threads::router())
         .merge(Router::from(routes::threads_view::router()))
         .merge(routes::undo::router())

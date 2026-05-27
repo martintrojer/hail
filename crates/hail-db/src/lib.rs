@@ -8,6 +8,7 @@ pub mod labels;
 pub mod provider_audit_sanitizer;
 pub mod provider_message_mappings;
 pub mod provider_sync_audit;
+pub mod speakeasy;
 
 use std::collections::HashSet;
 use std::str::FromStr;
