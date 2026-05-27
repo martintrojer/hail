@@ -209,6 +209,14 @@ describe('SPA auth/router flows', () => {
     expect(screen.getAllByText('2').length).toBeGreaterThan(0);
   });
 
+  it('keeps logout available from the sidebar controls', async () => {
+    api.user = adminUser;
+
+    renderRouterAt('/imbox');
+
+    expect(await screen.findByRole('button', { name: 'Sign Out' })).toBeEnabled();
+  });
+
   it('updates the auth cache and navigates to imbox after login', async () => {
     renderRouterAt('/login');
 

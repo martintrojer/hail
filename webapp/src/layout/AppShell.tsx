@@ -458,10 +458,14 @@ function AppSidebar({
   activePath,
   isAdmin,
   counts,
+  logout,
+  logoutLoading,
 }: {
   activePath: string;
   isAdmin: boolean;
   counts: SidebarCounts;
+  logout: () => void;
+  logoutLoading: boolean;
 }) {
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -519,6 +523,21 @@ function AppSidebar({
               counts={counts}
             />
           ) : null}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              type="button"
+              onClick={logout}
+              disabled={logoutLoading}
+              tooltip={{
+                children: logoutLoading ? 'Signing out…' : 'Sign Out',
+                hidden: false,
+              }}
+              aria-label={logoutLoading ? 'Signing out…' : 'Sign Out'}
+            >
+              <LogOut />
+              <span>{logoutLoading ? 'Signing out…' : 'Sign Out'}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
@@ -638,6 +657,8 @@ export function AppShell({
           activePath={location.pathname}
           isAdmin={Boolean(user?.is_admin)}
           counts={sidebarCounts}
+          logout={logout}
+          logoutLoading={logoutLoading}
         />
         <SidebarInset>
             <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-backdrop-filter:bg-background/80">
