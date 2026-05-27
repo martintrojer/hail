@@ -141,16 +141,20 @@ async fn request_search(
         .unwrap()
 }
 
-fn mail_item() -> MailSearchResult {
+fn mail_item_with_thread(thread_id: &str, email_id: &str) -> MailSearchResult {
     MailSearchResult {
-        thread_id: "thread-1".to_string(),
-        email_id: "email-1".to_string(),
+        thread_id: thread_id.to_string(),
+        email_id: email_id.to_string(),
         from: "Ada <ada@example.org>".to_string(),
         subject: "Project update".to_string(),
         preview: "Needle in mail".to_string(),
         received_at: Some(Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap()),
         labels: Vec::new(),
     }
+}
+
+fn mail_item() -> MailSearchResult {
+    mail_item_with_thread("thread-1", "email-1")
 }
 
 fn result_addresses(json: &Value) -> Vec<String> {
@@ -577,6 +581,149 @@ async fn unknown_mailbox_returns_400_invalid_mailbox() {
     assert!(search.calls().is_empty());
 }
 
+#[tokio::test]
+async fn label_filter_keeps_only_current_user_assigned_threads_and_hydrates_labels() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "bob@example.org").await;
+    let alice_label = hail_db::labels::create_label(&state.db, alice_id, "Work/Receipts", None)
+        .await
+        .expect("create alice label");
+    let bob_label = hail_db::labels::create_label(&state.db, bob_id, "Bob private", None)
+        .await
+        .expect("create bob label");
+    hail_db::labels::assign_label_to_thread(&state.db, alice_id, "thread-2", alice_label.id)
+        .await
+        .expect("assign alice label");
+    hail_db::labels::assign_label_to_thread(&state.db, bob_id, "thread-1", bob_label.id)
+        .await
+        .expect("assign bob label");
+    insert_note(&state, alice_id, "ada@example.org", "needle note").await;
+
+    let search = Arc::new(FakeSearchProvider::new(vec![
+        mail_item_with_thread("thread-1", "email-1"),
+        mail_item_with_thread("thread-2", "email-2"),
+    ]));
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&alice_sid),
+        &format!(
+            "/api/views/search?q=needle&scope=all&mailbox=papertrail&label_id={}",
+            alice_label.id
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        search.calls(),
+        vec![("needle".to_string(), Some(SearchMailbox::Papertrail), 50)]
+    );
+    let json = json_body(resp).await;
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["type"], "mail");
+    assert_eq!(results[0]["thread_id"], "thread-2");
+    assert_eq!(results[0]["labels"].as_array().unwrap().len(), 1);
+    assert_eq!(results[0]["labels"][0]["id"], alice_label.id);
+    assert_eq!(results[0]["labels"][0]["name"], "Work/Receipts");
+    assert_eq!(results[0]["labels"][0]["leaf_name"], "Receipts");
+}
+
+#[tokio::test]
+async fn unknown_label_filter_returns_404_without_searching_mail() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=mail&label_id=999",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(resp).await["error"], "label");
+    assert!(search.calls().is_empty());
+}
+
+#[tokio::test]
+async fn invalid_label_filter_returns_404_without_searching_mail() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        "/api/views/search?q=needle&scope=mail&label_id=0",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(resp).await["error"], "label");
+    assert!(search.calls().is_empty());
+}
+
+#[tokio::test]
+async fn other_users_label_filter_returns_404_without_searching_mail() {
+    let (state, key) = fixture_state().await;
+    let (_alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "bob@example.org").await;
+    let bob_label = hail_db::labels::create_label(&state.db, bob_id, "Bob private", None)
+        .await
+        .expect("create bob label");
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&alice_sid),
+        &format!(
+            "/api/views/search?q=needle&scope=mail&label_id={}",
+            bob_label.id
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(resp).await["error"], "label");
+    assert!(search.calls().is_empty());
+}
+
+#[tokio::test]
+async fn label_filter_with_no_matching_threads_returns_empty_mail_results() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let label = hail_db::labels::create_label(&state.db, user_id, "Empty", None)
+        .await
+        .expect("create label");
+    let search = Arc::new(FakeSearchProvider::new(vec![mail_item()]));
+
+    let resp = request_search(
+        state,
+        search.clone(),
+        Some(&sid),
+        &format!(
+            "/api/views/search?q=needle&scope=mail&label_id={}",
+            label.id
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(search.calls(), vec![("needle".to_string(), None, 50)]);
+    assert!(
+        json_body(resp).await["results"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
 #[tokio::test]
 async fn default_all_scope_calls_fake_mail_provider() {
     let (state, key) = fixture_state().await;
