@@ -814,7 +814,7 @@ function providerSyncStatusResponse() {
     next_sync_after: '2026-05-26T17:15:00Z',
     sync_backoff_secs: 900,
     last_error_class: 'gmail_rate_limit',
-    last_error_message: 'Gmail asked hail to slow down',
+    last_error_message: null,
     last_profile_history_id: '12345',
     profile_synced_at: '2026-05-26T16:00:00Z',
     last_sync_event: null,

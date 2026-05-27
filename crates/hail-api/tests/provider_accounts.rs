@@ -826,7 +826,7 @@ async fn sync_status_lists_only_importable_connected_gmail_accounts_with_canonic
     assert!(error_account["next_sync_after"].as_str().is_some());
     assert_eq!(error_account["sync_backoff_secs"], 120);
     assert_eq!(error_account["last_error_class"], "gmail_rate_limit");
-    assert_eq!(error_account["last_error_message"], "rate limited");
+    assert!(error_account["last_error_message"].is_null());
     assert_eq!(error_account["last_profile_history_id"], "history-9");
     assert_eq!(
         error_account["last_sync_event"]["event_type"],
@@ -947,6 +947,7 @@ async fn sync_status_output_redacts_hostile_error_fields() {
     let body = json_body(resp).await;
     let rendered = serde_json::to_string(&body).expect("response json");
     assert_no_hostile_leak(&rendered);
+    assert!(body["accounts"][0]["last_error_message"].is_null());
     assert!(rendered.contains("[redacted]"));
 }
 
