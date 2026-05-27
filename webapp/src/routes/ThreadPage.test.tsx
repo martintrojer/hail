@@ -315,6 +315,31 @@ describe('ThreadPage', () => {
   });
 
 
+  it('does not add artificial borders to email layout tables', async () => {
+    const { container } = renderThread(
+      sampleThread({
+        messages: [
+          {
+            email_id: 'message-table',
+            from: [{ name: 'Alice Sender', email: 'alice@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T12:00:00Z',
+            html: '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
+            html_with_remote_images: '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
+            preview: 'Nested layout table',
+            blocked_trackers: [],
+          },
+        ],
+      }),
+    );
+
+    await screen.findByText('Outer');
+    const htmlBoundary = container.querySelector('article div.mt-5');
+    expect(htmlBoundary?.className).not.toContain('[&_td]:border');
+    expect(htmlBoundary?.className).not.toContain('[&_th]:border');
+    expect(htmlBoundary?.innerHTML).toContain('<table>');
+  });
+
   it('renders plaintext fallback content when no sanitized HTML is available', async () => {
     renderThread(sampleThread());
 
