@@ -68,6 +68,7 @@ pub const SENT_COPY_REASON_LOCAL_SENT_MESSAGE_ID_MATCH: &str = "local_sent_messa
 pub const SENT_COPY_REASON_EXISTING_LOCAL_MESSAGE_ID_MATCH: &str =
     "existing_local_message_id_match";
 pub const SENT_COPY_REASON_NO_LOCAL_SENT_MATCH: &str = "no_local_sent_match";
+pub const PROVIDER_MESSAGE_ROUTE_ERROR_CLASS: &str = "route_import";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderSentCopyImportDecision {
@@ -322,6 +323,57 @@ pub async fn mark_provider_message_duplicate(
     )
     .await?
     .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn mark_provider_message_route_failed(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    provider_message_id: &str,
+    error_message: &str,
+) -> Result<ProviderMessageMapping, sqlx::Error> {
+    let now = now();
+    let safe_error_message = safe_provider_error_message(&error_message);
+    sqlx::query(
+        "UPDATE provider_message_mappings \
+         SET error_class = ?1, error_message = ?2, updated_at = ?3 \
+         WHERE provider_account_id = ?4 AND provider_message_id = ?5 \
+           AND jmap_email_id IS NOT NULL AND import_status IN ('imported', 'duplicate')",
+    )
+    .bind(PROVIDER_MESSAGE_ROUTE_ERROR_CLASS)
+    .bind(safe_error_message)
+    .bind(&now)
+    .bind(provider_account_id)
+    .bind(provider_message_id)
+    .execute(db)
+    .await?;
+
+    get_provider_message_mapping(db, provider_account_id, provider_message_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn clear_provider_message_route_error(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    provider_message_id: &str,
+) -> Result<ProviderMessageMapping, sqlx::Error> {
+    let now = now();
+    sqlx::query(
+        "UPDATE provider_message_mappings \
+         SET error_class = NULL, error_message = NULL, updated_at = ?1 \
+         WHERE provider_account_id = ?2 AND provider_message_id = ?3 \
+           AND error_class = ?4",
+    )
+    .bind(&now)
+    .bind(provider_account_id)
+    .bind(provider_message_id)
+    .bind(PROVIDER_MESSAGE_ROUTE_ERROR_CLASS)
+    .execute(db)
+    .await?;
+
+    get_provider_message_mapping(db, provider_account_id, provider_message_id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
 }
 
 pub async fn mark_provider_sent_copy_deduped(

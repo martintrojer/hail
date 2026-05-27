@@ -15,9 +15,10 @@ use async_trait::async_trait;
 use hail_db::provider_audit_sanitizer::safe_provider_account_error_message;
 use hail_db::provider_message_mappings::{
     DuplicateProviderMessageMapping, FailedProviderMessageMapping, ImportedProviderMessageMapping,
-    ProviderImportStatus, ProviderMessageSeen, find_local_mapping_by_content_sha256,
-    find_local_mapping_by_rfc822_message_id, get_provider_message_mapping,
-    mark_provider_message_duplicate, mark_provider_message_failed, mark_provider_message_imported,
+    ProviderImportStatus, ProviderMessageSeen, clear_provider_message_route_error,
+    find_local_mapping_by_content_sha256, find_local_mapping_by_rfc822_message_id,
+    get_provider_message_mapping, mark_provider_message_duplicate, mark_provider_message_failed,
+    mark_provider_message_imported, mark_provider_message_route_failed,
     record_provider_message_seen,
 };
 use hail_db::provider_sync_audit::{
@@ -34,8 +35,7 @@ use crate::gmail_client::{
     GmailClient, GmailClientError, GmailTokenSource, ListMessage, ListMessagesParams,
     ListMessagesResponse, RawGmailMessage,
 };
-use crate::provider_import_routing::RoutedRfc822Importer;
-use crate::rfc822_import::{Rfc822ImportRequest, Rfc822Importer};
+use crate::rfc822_import::{ImportedRfc822Message, Rfc822ImportRequest, Rfc822Importer};
 
 const DEFAULT_PAGE_SIZE: u16 = 100;
 const MAX_PAGE_SIZE: u16 = 500;
@@ -241,6 +241,16 @@ pub trait GmailHistoricalImporter: Send + Sync {
         crate::provider_import_routing::RoutedImportedRfc822Message,
         GmailHistoricalImportError,
     >;
+
+    async fn route_imported_gmail_rfc822(
+        &self,
+        _db: &SqlitePool,
+        _user_id: i64,
+        _imported: &crate::rfc822_import::ImportedRfc822Message,
+        _request: &Rfc822ImportRequest,
+    ) -> Result<(), GmailHistoricalImportError> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -275,14 +285,30 @@ where
 {
     async fn import_gmail_rfc822(
         &self,
-        db: &SqlitePool,
-        user_id: i64,
+        _db: &SqlitePool,
+        _user_id: i64,
         request: Rfc822ImportRequest,
     ) -> Result<
         crate::provider_import_routing::RoutedImportedRfc822Message,
         GmailHistoricalImportError,
     > {
-        Ok(self.import_and_route_rfc822(db, user_id, request).await?)
+        Ok(
+            crate::provider_import_routing::RoutedImportedRfc822Message {
+                imported: self.import_rfc822_only(request).await?,
+                route_outcome: None,
+            },
+        )
+    }
+    async fn route_imported_gmail_rfc822(
+        &self,
+        db: &SqlitePool,
+        user_id: i64,
+        imported: &crate::rfc822_import::ImportedRfc822Message,
+        request: &Rfc822ImportRequest,
+    ) -> Result<(), GmailHistoricalImportError> {
+        self.route_imported_rfc822(db, user_id, imported, request)
+            .await?;
+        Ok(())
     }
 }
 
@@ -435,12 +461,13 @@ where
     C: GmailHistoricalSource,
     I: GmailHistoricalImporter,
 {
+    let mut route_retry_mapping = None;
     if let Some(existing) =
         get_provider_message_mapping(db, account.provider_account_id, &listed.id).await?
     {
         match existing.import_status {
             ProviderImportStatus::Imported | ProviderImportStatus::Duplicate
-                if existing.jmap_email_id.is_some() =>
+                if existing.jmap_email_id.is_some() && existing.error_class.is_none() =>
             {
                 summary.skipped += 1;
                 audit_message_skipped(
@@ -452,6 +479,19 @@ where
                 )
                 .await?;
                 return Ok(());
+            }
+            ProviderImportStatus::Imported | ProviderImportStatus::Duplicate
+                if existing.jmap_email_id.is_some() =>
+            {
+                audit_message_skipped(
+                    db,
+                    account,
+                    &listed.id,
+                    "route_retry_after_import",
+                    existing.error_class.as_deref(),
+                )
+                .await?;
+                route_retry_mapping = Some(existing);
             }
             ProviderImportStatus::Skipped => {
                 summary.skipped += 1;
@@ -593,9 +633,62 @@ where
         provider_message_id: Some(raw.id.clone()),
     };
 
+    if let Some(existing) = route_retry_mapping {
+        let mailbox_ids = existing
+            .jmap_mailbox_ids_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+            .filter(|mailbox_ids| !mailbox_ids.is_empty())
+            .unwrap_or_else(|| options.target_mailbox_ids.clone());
+        let imported = ImportedRfc822Message {
+            jmap_email_id: existing
+                .jmap_email_id
+                .expect("route retry mapping has local JMAP id"),
+            jmap_thread_id: existing.jmap_thread_id,
+            jmap_mailbox_ids: mailbox_ids,
+            rfc822_message_ids: existing.rfc822_message_id.into_iter().collect(),
+            duplicate: existing.import_status == ProviderImportStatus::Duplicate,
+        };
+        match cancel_or_complete(
+            cancel,
+            importer.route_imported_gmail_rfc822(db, account.user_id, &imported, &request),
+        )
+        .await
+        {
+            None => return Err(GmailHistoricalImportError::Cancelled),
+            Some(Ok(())) => {
+                clear_provider_message_route_error(db, account.provider_account_id, &raw.id)
+                    .await?;
+                summary.skipped += 1;
+                audit_message_skipped(
+                    db,
+                    account,
+                    &raw.id,
+                    "route_retry_succeeded",
+                    Some(&imported.jmap_email_id),
+                )
+                .await?;
+                return Ok(());
+            }
+            Some(Err(error)) => {
+                let message = safe_error_message(&error);
+                mark_provider_message_route_failed(
+                    db,
+                    account.provider_account_id,
+                    &raw.id,
+                    &message,
+                )
+                .await?;
+                summary.failed += 1;
+                audit_message_failed(db, account, &raw.id, "route_import", &message).await?;
+                return Ok(());
+            }
+        }
+    }
+
     let routed_import = match cancel_or_complete(
         cancel,
-        importer.import_gmail_rfc822(db, account.user_id, request),
+        importer.import_gmail_rfc822(db, account.user_id, request.clone()),
     )
     .await
     {
@@ -644,8 +737,6 @@ where
             },
         )
         .await?;
-        summary.duplicates += 1;
-        audit_message_imported(db, account, &raw.id, &imported.jmap_email_id, true).await?;
     } else {
         mark_provider_message_imported(
             db,
@@ -662,6 +753,38 @@ where
             },
         )
         .await?;
+    }
+
+    if routed_import.route_outcome.is_none() {
+        match cancel_or_complete(
+            cancel,
+            importer.route_imported_gmail_rfc822(db, account.user_id, &imported, &request),
+        )
+        .await
+        {
+            None => return Err(GmailHistoricalImportError::Cancelled),
+            Some(Ok(())) => {}
+            Some(Err(error)) => {
+                let message = safe_error_message(&error);
+                mark_provider_message_route_failed(
+                    db,
+                    account.provider_account_id,
+                    &raw.id,
+                    &message,
+                )
+                .await?;
+                summary.failed += 1;
+                audit_message_failed(db, account, &raw.id, "route_import", &message).await?;
+                return Ok(());
+            }
+        }
+    }
+
+    clear_provider_message_route_error(db, account.provider_account_id, &raw.id).await?;
+    if imported.duplicate {
+        summary.duplicates += 1;
+        audit_message_imported(db, account, &raw.id, &imported.jmap_email_id, true).await?;
+    } else {
         summary.imported += 1;
         audit_message_imported(db, account, &raw.id, &imported.jmap_email_id, false).await?;
     }

@@ -610,8 +610,8 @@ async fn cancellation_interrupts_blocked_historical_routing() {
         .await
         .expect("mapping lookup")
         .expect("seen mapping");
-    assert_eq!(mapping.import_status, ProviderImportStatus::Pending);
-    assert!(mapping.jmap_email_id.is_none());
+    assert_eq!(mapping.import_status, ProviderImportStatus::Imported);
+    assert_eq!(mapping.jmap_email_id.as_deref(), Some("email-1"));
 }
 
 async fn account_error_class(pool: &sqlx::SqlitePool, provider_account_id: i64) -> Option<String> {
@@ -1340,6 +1340,188 @@ async fn retries_failed_import_mapping_without_duplicating_stalwart_mail() {
     assert_eq!(
         imported.provider_history_id.as_deref(),
         Some("history-retry-2")
+    );
+}
+
+#[derive(Debug, Default)]
+struct FailingThenOkJmapOps {
+    calls: Mutex<Vec<JmapCall>>,
+    fail_next_apply_keyword: Mutex<bool>,
+}
+
+impl FailingThenOkJmapOps {
+    fn calls(&self) -> Vec<JmapCall> {
+        self.calls.lock().expect("jmap calls").clone()
+    }
+}
+
+#[async_trait]
+impl JmapOps for FailingThenOkJmapOps {
+    async fn get_or_create_mailbox(&self, name: &str) -> Result<String, RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::GetOrCreateMailbox(name.to_string()));
+        Ok(format!("{}-id", name.to_ascii_lowercase()))
+    }
+
+    async fn get_mailbox_by_role(&self, role: &str) -> Result<Option<String>, RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::GetMailboxByRole(role.to_string()));
+        Ok(Some(format!("{role}-id")))
+    }
+
+    async fn apply_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::ApplyKeyword {
+                email_id: email_id.to_string(),
+                keyword: keyword.to_string(),
+            });
+        let mut fail_next = self
+            .fail_next_apply_keyword
+            .lock()
+            .expect("fail_next_apply_keyword");
+        if *fail_next {
+            *fail_next = false;
+            return Err(RouteError::Jmap("transient route failure".to_string()));
+        }
+        Ok(())
+    }
+
+    async fn move_to_mailbox(&self, email_id: &str, mailbox_id: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("jmap calls")
+            .push(JmapCall::MoveToMailbox {
+                email_id: email_id.to_string(),
+                mailbox_id: mailbox_id.to_string(),
+            });
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn routed_import_failure_preserves_mapping_and_retries_route_without_duplicate_import() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    sqlx::query(
+        "INSERT INTO screener_rules \
+         (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
+         VALUES (?, 'sender@example.com', 'allow', 'imbox', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("allow rule");
+
+    let importer = FakeRfc822Importer::default();
+    let jmap = FailingThenOkJmapOps {
+        fail_next_apply_keyword: Mutex::new(true),
+        ..FailingThenOkJmapOps::default()
+    };
+    let router = ScreenerRfc822ImportRouter::new(&jmap);
+    let routed_importer = RoutingRfc822Importer::new(&importer, &router);
+    let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-route-retry".to_owned(),
+                thread_id: Some("thread-route-retry".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-route-retry",
+            "thread-route-retry",
+            "history-route-retry-1",
+            "route-retry@example.com",
+        )],
+    );
+    let first = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &first_gmail,
+        &routed_importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first routed import pass");
+
+    assert_eq!(first.failed, 1);
+    assert_eq!(first.imported, 0);
+    assert_eq!(importer.imports().len(), 1);
+    let failed_route =
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-route-retry")
+            .await
+            .expect("mapping lookup")
+            .expect("mapping retained after route failure");
+    assert_eq!(failed_route.import_status, ProviderImportStatus::Imported);
+    assert_eq!(failed_route.jmap_email_id.as_deref(), Some("email-1"));
+    assert_eq!(failed_route.error_class.as_deref(), Some("route_import"));
+
+    let second_gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-route-retry".to_owned(),
+                thread_id: Some("thread-route-retry".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-route-retry",
+            "thread-route-retry",
+            "history-route-retry-2",
+            "route-retry@example.com",
+        )],
+    );
+    let second = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &second_gmail,
+        &routed_importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("retry routed import pass");
+
+    assert_eq!(second.failed, 0);
+    assert_eq!(second.skipped, 1);
+    assert_eq!(importer.imports().len(), 1);
+    let imported = get_provider_message_mapping(&pool, provider_account_id, "gmail-route-retry")
+        .await
+        .expect("mapping lookup")
+        .expect("imported mapping");
+    assert_eq!(imported.import_status, ProviderImportStatus::Imported);
+    assert_eq!(imported.jmap_email_id.as_deref(), Some("email-1"));
+    assert!(imported.error_class.is_none());
+    assert_eq!(
+        jmap.calls(),
+        vec![
+            JmapCall::ApplyKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_imbox".to_string(),
+            },
+            JmapCall::ApplyKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_imbox".to_string(),
+            },
+        ]
     );
 }
 

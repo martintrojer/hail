@@ -9,7 +9,8 @@ use hail_db::provider_message_mappings::{
     SkippedProviderMessageMapping, decide_provider_sent_copy_import,
     find_local_mapping_by_content_sha256, find_local_mapping_by_rfc822_message_id,
     get_provider_message_mapping, list_provider_thread_mappings, mark_provider_message_duplicate,
-    mark_provider_message_failed, mark_provider_message_imported, mark_provider_message_skipped,
+    mark_provider_message_failed, mark_provider_message_imported,
+    mark_provider_message_route_failed, mark_provider_message_skipped,
     mark_provider_sent_copy_deduped, record_provider_message_seen,
 };
 
@@ -292,6 +293,58 @@ async fn imported_mapping_stores_local_jmap_ids_and_is_upsertable() {
     );
     assert_eq!(updated.content_sha256.as_deref(), Some(&[2_u8; 32][..]));
     assert_eq!(updated.jmap_email_id.as_deref(), Some("jmap-email-1b"));
+}
+
+#[tokio::test]
+async fn route_failed_mapping_keeps_local_ids_and_terminal_import_status() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(&pool, "route-user@example.com", "acct-route-user").await;
+    let provider_account_id =
+        insert_provider_account(&pool, user_id, "acct-route-user", "gmail-provider-route").await;
+
+    mark_provider_message_imported(
+        &pool,
+        ImportedProviderMessageMapping {
+            provider_account_id,
+            provider_message_id: "gmail-route-failed",
+            provider_thread_id: Some("gmail-thread-route"),
+            provider_history_id: Some("history-route"),
+            rfc822_message_id: Some("route@example.com"),
+            content_sha256: Some(&[3_u8; 32]),
+            jmap_email_id: "jmap-route-email",
+            jmap_thread_id: Some("jmap-route-thread"),
+            jmap_mailbox_ids_json: Some(r#"["mailbox-inbox"]"#),
+        },
+    )
+    .await
+    .expect("mark imported");
+
+    let route_failed = mark_provider_message_route_failed(
+        &pool,
+        provider_account_id,
+        "gmail-route-failed",
+        hostile_leak_error(),
+    )
+    .await
+    .expect("mark route failed");
+
+    assert_eq!(route_failed.import_status, ProviderImportStatus::Imported);
+    assert_eq!(
+        route_failed.jmap_email_id.as_deref(),
+        Some("jmap-route-email")
+    );
+    assert_eq!(
+        route_failed.jmap_thread_id.as_deref(),
+        Some("jmap-route-thread")
+    );
+    assert_eq!(
+        route_failed.rfc822_message_id.as_deref(),
+        Some("route@example.com")
+    );
+    assert_eq!(route_failed.error_class.as_deref(), Some("route_import"));
+    let error = route_failed.error_message.expect("route error message");
+    assert_no_hostile_leak(&error);
+    assert!(error.contains("[redacted]"));
 }
 
 #[tokio::test]

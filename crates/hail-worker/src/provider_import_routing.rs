@@ -64,6 +64,7 @@ impl Rfc822ImportRouter for ScreenerRfc822ImportRouter<'_> {
     }
 }
 
+#[allow(dead_code)]
 #[async_trait]
 pub trait RoutedRfc822Importer: Send + Sync {
     async fn import_and_route_rfc822(
@@ -98,17 +99,43 @@ where
         user_id: i64,
         request: Rfc822ImportRequest,
     ) -> Result<RoutedImportedRfc822Message, RoutedRfc822ImportError> {
-        let imported = self.importer.import_rfc822(request.clone()).await?;
-        let mut conn = db.acquire().await?;
+        let imported = self.import_rfc822_only(request.clone()).await?;
         let outcome = self
-            .router
-            .route_imported_rfc822(conn.as_mut(), user_id, &imported, &request)
+            .route_imported_rfc822(db, user_id, &imported, &request)
             .await?;
-        publish_route_event(db, user_id, &outcome).await?;
         Ok(RoutedImportedRfc822Message {
             imported,
             route_outcome: Some(outcome),
         })
+    }
+}
+
+impl<I, R> RoutingRfc822Importer<'_, I, R>
+where
+    I: Rfc822Importer,
+    R: Rfc822ImportRouter,
+{
+    pub async fn import_rfc822_only(
+        &self,
+        request: Rfc822ImportRequest,
+    ) -> Result<ImportedRfc822Message, Rfc822ImportError> {
+        self.importer.import_rfc822(request).await
+    }
+
+    pub async fn route_imported_rfc822(
+        &self,
+        db: &SqlitePool,
+        user_id: i64,
+        imported: &ImportedRfc822Message,
+        request: &Rfc822ImportRequest,
+    ) -> Result<RouteOutcome, RoutedRfc822ImportError> {
+        let mut conn = db.acquire().await?;
+        let outcome = self
+            .router
+            .route_imported_rfc822(conn.as_mut(), user_id, imported, request)
+            .await?;
+        publish_route_event(db, user_id, &outcome).await?;
+        Ok(outcome)
     }
 }
 
