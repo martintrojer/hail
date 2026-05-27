@@ -27,6 +27,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "provider_oauth_states",
     "provider_message_mappings",
     "provider_sync_events",
+    "labels",
+    "thread_labels",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -57,6 +59,11 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_provider_sync_events_type",
     "idx_provider_sync_events_user_account_time",
     "idx_provider_sync_events_account_result",
+    "idx_labels_user_id",
+    "idx_labels_user_normalized_name",
+    "idx_labels_provider_identity",
+    "idx_labels_user_name",
+    "idx_thread_labels_label",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
@@ -741,6 +748,261 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     .expect("event count");
     assert_eq!(mappings, 0, "mappings must cascade with provider account");
     assert_eq!(events, 0, "sync events must cascade with provider account");
+}
+
+#[tokio::test]
+async fn labels_schema_supports_flat_thread_labels_and_cascades() {
+    let (pool, _guard) = setup().await;
+
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("labels@example.com")
+        .bind("acct-labels")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
+
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("labels@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
+
+    sqlx::query(
+        "INSERT INTO labels \
+         (user_id, name, normalized_name, source, provider_kind, provider_label_id, color, created_at, updated_at) \
+         VALUES (?, ?, ?, 'gmail', 'gmail', ?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("Work/Receipts")
+    .bind("work/receipts")
+    .bind("Label_123")
+    .bind("#3b82f6")
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("flat nested label insert");
+
+    let label_id: i64 = sqlx::query_scalar("SELECT id FROM labels WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch label id");
+
+    let parent_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM labels WHERE user_id = ? AND normalized_name = 'work'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("parent label count");
+    assert_eq!(
+        parent_count, 0,
+        "Work/Receipts must be stored as one flat concrete label, not imply Work"
+    );
+
+    sqlx::query("INSERT INTO thread_labels (user_id, thread_id, label_id, created_at) VALUES (?, ?, ?, ?)")
+        .bind(user_id)
+        .bind("thread-1")
+        .bind(label_id)
+        .bind("2026-01-01T00:00:01Z")
+        .execute(&pool)
+        .await
+        .expect("thread label insert");
+
+    let duplicate_assignment = sqlx::query(
+        "INSERT INTO thread_labels (user_id, thread_id, label_id, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind("thread-1")
+    .bind(label_id)
+    .bind("2026-01-01T00:00:02Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate_assignment.is_err(),
+        "thread label assignments must be unique per user/thread/label"
+    );
+
+    sqlx::query("DELETE FROM labels WHERE id = ?")
+        .bind(label_id)
+        .execute(&pool)
+        .await
+        .expect("label delete cascades");
+
+    let assignment_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM thread_labels WHERE label_id = ?")
+            .bind(label_id)
+            .fetch_one(&pool)
+            .await
+            .expect("assignment count");
+    assert_eq!(
+        assignment_count, 0,
+        "deleting a label must delete thread label assignments"
+    );
+}
+
+#[tokio::test]
+async fn labels_schema_enforces_uniqueness_and_provider_identity() {
+    let (pool, _guard) = setup().await;
+
+    for (email, acct) in [
+        ("label-unique-a@example.com", "acct-label-unique-a"),
+        ("label-unique-b@example.com", "acct-label-unique-b"),
+    ] {
+        sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+            .bind(email)
+            .bind(acct)
+            .bind("2026-01-01T00:00:00Z")
+            .execute(&pool)
+            .await
+            .expect("user insert");
+    }
+
+    let user_a: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("label-unique-a@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user a");
+    let user_b: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("label-unique-b@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user b");
+
+    sqlx::query(
+        "INSERT INTO labels (user_id, name, normalized_name, source, created_at, updated_at) \
+         VALUES (?, 'Work/Receipts', 'work/receipts', 'manual', ?, ?)",
+    )
+    .bind(user_a)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("user a label insert");
+
+    let duplicate_normalized = sqlx::query(
+        "INSERT INTO labels (user_id, name, normalized_name, source, created_at, updated_at) \
+         VALUES (?, 'work/receipts', 'work/receipts', 'manual', ?, ?)",
+    )
+    .bind(user_a)
+    .bind("2026-01-01T00:00:01Z")
+    .bind("2026-01-01T00:00:01Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate_normalized.is_err(),
+        "normalized label names must be unique per user"
+    );
+
+    sqlx::query(
+        "INSERT INTO labels (user_id, name, normalized_name, source, created_at, updated_at) \
+         VALUES (?, 'Work/Receipts', 'work/receipts', 'manual', ?, ?)",
+    )
+    .bind(user_b)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("same normalized name is allowed for a different user");
+
+    sqlx::query(
+        "INSERT INTO labels \
+         (user_id, name, normalized_name, source, provider_kind, provider_label_id, created_at, updated_at) \
+         VALUES (?, 'Gmail Label', 'gmail label', 'gmail', 'gmail', 'Label_1', ?, ?)",
+    )
+    .bind(user_a)
+    .bind("2026-01-01T00:00:02Z")
+    .bind("2026-01-01T00:00:02Z")
+    .execute(&pool)
+    .await
+    .expect("gmail label insert");
+
+    let duplicate_provider = sqlx::query(
+        "INSERT INTO labels \
+         (user_id, name, normalized_name, source, provider_kind, provider_label_id, created_at, updated_at) \
+         VALUES (?, 'Gmail Label Renamed', 'gmail label renamed', 'gmail', 'gmail', 'Label_1', ?, ?)",
+    )
+    .bind(user_a)
+    .bind("2026-01-01T00:00:03Z")
+    .bind("2026-01-01T00:00:03Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate_provider.is_err(),
+        "provider label ids must be unique per user/provider when present"
+    );
+}
+
+#[tokio::test]
+async fn labels_schema_rejects_invalid_shape_values() {
+    let (pool, _guard) = setup().await;
+
+    sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
+        .bind("label-invalid@example.com")
+        .bind("acct-label-invalid")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("user insert");
+
+    let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind("label-invalid@example.com")
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user id");
+
+    let empty_name = sqlx::query(
+        "INSERT INTO labels (user_id, name, normalized_name, source, created_at, updated_at) \
+         VALUES (?, '', 'empty', 'manual', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(empty_name.is_err(), "empty label names must be rejected");
+
+    let empty_segment = sqlx::query(
+        "INSERT INTO labels (user_id, name, normalized_name, source, created_at, updated_at) \
+         VALUES (?, 'Work//Receipts', 'work//receipts', 'manual', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        empty_segment.is_err(),
+        "empty path segments must be rejected"
+    );
+
+    let bad_source = sqlx::query(
+        "INSERT INTO labels (user_id, name, normalized_name, source, created_at, updated_at) \
+         VALUES (?, 'Work', 'work', 'imap', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(bad_source.is_err(), "label source must be constrained");
+
+    let partial_provider_identity = sqlx::query(
+        "INSERT INTO labels \
+         (user_id, name, normalized_name, source, provider_kind, created_at, updated_at) \
+         VALUES (?, 'Gmail', 'gmail', 'gmail', 'gmail', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        partial_provider_identity.is_err(),
+        "provider_kind and provider_label_id must be present or absent together"
+    );
 }
 
 #[tokio::test]
