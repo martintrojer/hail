@@ -3,10 +3,9 @@ import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
-  ScreenerAllowedView,
-  ScreenerClassification,
-  ScreenerDecisionRequest,
-  ScreenerDecisionResponse,
+  RotateSpeakeasyRequest,
+  RotateSpeakeasyResponse,
+  SpeakeasyResponse,
 } from '../api/client';
 import { HailApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
@@ -20,41 +19,46 @@ import {
 import { ScreenerSpeakeasyPage } from './ScreenerSpeakeasyPage';
 
 class ScreenerSpeakeasyPageTestClient extends TestHailApiClient {
-  readonly decideScreenerCalls: ScreenerDecisionRequest[] = [];
-  allowedFailure: Error | null = null;
-  decisionFailure: Error | null = null;
-  private allowedPromise: Promise<ScreenerAllowedView>;
+  readonly rotateCalls: RotateSpeakeasyRequest[] = [];
+  speakeasyFailure: Error | null = null;
+  rotateFailure: Error | null = null;
+  private speakeasyPromise: Promise<SpeakeasyResponse>;
+  private rotated: SpeakeasyResponse;
 
   constructor({
-    allowed = sampleAllowedView(),
-    allowedPromise,
+    speakeasy = sampleSpeakeasyResponse(),
+    speakeasyPromise,
+    rotated = sampleSpeakeasyResponse({
+      passphrase: 'new-river-copper-saffron-willow-0123456789abcdef',
+      generated_at: '2026-05-27T12:00:00Z',
+      manually_rotated_at: '2026-05-27T12:00:00Z',
+    }),
   }: {
-    allowed?: ScreenerAllowedView;
-    allowedPromise?: Promise<ScreenerAllowedView>;
+    speakeasy?: SpeakeasyResponse;
+    speakeasyPromise?: Promise<SpeakeasyResponse>;
+    rotated?: SpeakeasyResponse;
   } = {}) {
     super();
-    this.allowedPromise = allowedPromise ?? Promise.resolve(allowed);
+    this.speakeasyPromise = speakeasyPromise ?? Promise.resolve(speakeasy);
+    this.rotated = rotated;
   }
 
-  override async getScreenerAllowedView(): Promise<ScreenerAllowedView> {
-    if (this.allowedFailure) {
-      throw this.allowedFailure;
+  override async getSpeakeasy(): Promise<SpeakeasyResponse> {
+    if (this.speakeasyFailure) {
+      throw this.speakeasyFailure;
     }
-    return this.allowedPromise;
+    return this.speakeasyPromise;
   }
 
-  override async decideScreener(
-    body: ScreenerDecisionRequest,
-  ): Promise<ScreenerDecisionResponse> {
-    this.decideScreenerCalls.push(body);
-    if (this.decisionFailure) {
-      throw this.decisionFailure;
+  override async rotateSpeakeasy(
+    body: RotateSpeakeasyRequest = { acknowledge_bypass_secret: true },
+  ): Promise<RotateSpeakeasyResponse> {
+    this.rotateCalls.push(body);
+    if (this.rotateFailure) {
+      throw this.rotateFailure;
     }
-    return {
-      sender: body.sender,
-      decision: body.decision,
-      classify_as: body.classify_as as ScreenerClassification,
-    };
+    this.speakeasyPromise = Promise.resolve(this.rotated);
+    return this.rotated;
   }
 }
 
@@ -107,25 +111,18 @@ function renderSpeakeasy(client = new ScreenerSpeakeasyPageTestClient()) {
   return client;
 }
 
-function sampleAllowedView(
-  overrides: Partial<ScreenerAllowedView> = {},
-): ScreenerAllowedView {
+function sampleSpeakeasyResponse(
+  overrides: Partial<SpeakeasyResponse['speakeasy']> = {},
+): SpeakeasyResponse {
   return {
-    allowed: [
-      {
-        sender_address: 'friend@example.com',
-        classify_as: 'imbox',
-        first_seen_at: '2026-05-20T09:00:00Z',
-        decided_at: '2026-05-21T10:00:00Z',
-      },
-      {
-        sender_address: 'receipts@example.com',
-        classify_as: 'papertrail',
-        first_seen_at: '2026-05-22T11:00:00Z',
-        decided_at: null,
-      },
-    ],
-    ...overrides,
+    speakeasy: {
+      passphrase: 'amber-basil-canyon-delta-abcdef0123456789',
+      period: '2026-05',
+      rotates_at: '2026-06-01T00:00:00Z',
+      generated_at: '2026-05-01T00:00:00Z',
+      manually_rotated_at: null,
+      ...overrides,
+    },
   };
 }
 
@@ -137,77 +134,78 @@ function response(status: number, body: unknown = {}) {
 }
 
 describe('ScreenerSpeakeasyPage', () => {
-  it('renders approved senders with their API-provided classifications', async () => {
+  it('renders the current monthly passphrase with one-message bypass semantics', async () => {
     renderSpeakeasy();
 
     expect(await screen.findByRole('heading', { name: 'Speakeasy' })).toBeInTheDocument();
-    expect(await screen.findByText('friend@example.com')).toBeInTheDocument();
-    expect(screen.getByText('Routed to The Imbox')).toBeInTheDocument();
-    expect(screen.getByText('First seen May 20, 2026')).toBeInTheDocument();
-    expect(screen.getByText('Approved May 21, 2026')).toBeInTheDocument();
-    expect(screen.getByText('receipts@example.com')).toBeInTheDocument();
-    expect(screen.getByText('Routed to Paper Trail')).toBeInTheDocument();
-    expect(screen.getByText('2 approved senders')).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText('Current Speakeasy passphrase'),
+    ).toHaveValue('amber-basil-canyon-delta-abcdef0123456789');
+    expect(
+      screen.getByRole('heading', {
+        name: 'A monthly passphrase for one-message bypasses.',
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('May 2026')).toBeInTheDocument();
+    expect(screen.getByText('One message only')).toBeInTheDocument();
+    expect(
+      screen.getByText(/A matching message skips the Screener once/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/does not approve the sender, create a rule/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/approved senders/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change route' })).not.toBeInTheDocument();
   });
 
-  it('changes an approved sender route through the shared routing picker', async () => {
+  it('regenerates the passphrase through the Speakeasy API', async () => {
     const client = renderSpeakeasy();
 
-    fireEvent.click(await screen.findAllByRole('button', { name: 'Change route' }).then((buttons) => buttons[0]));
-    expect(
-      screen.getByRole('menu', { name: 'Screener routing destinations' }),
-    ).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Regenerate passphrase' }),
+    );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
-
-    await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
-    expect(client.decideScreenerCalls[0]).toEqual({
-      sender: 'friend@example.com',
-      decision: 'approve',
-      classify_as: 'feed',
-      apply_to_history: true,
+    await waitFor(() => expect(client.rotateCalls).toHaveLength(1));
+    expect(client.rotateCalls[0]).toEqual({
+      acknowledge_bypass_secret: true,
     });
+    expect(
+      await screen.findByDisplayValue(
+        'new-river-copper-saffron-willow-0123456789abcdef',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/The old phrase stops working immediately/)).toBeInTheDocument();
   });
 
-  it('shows loading, empty, and error states', async () => {
+  it('shows loading and error states for the passphrase API', async () => {
     renderSpeakeasy(
       new ScreenerSpeakeasyPageTestClient({
-        allowedPromise: new Promise<ScreenerAllowedView>(() => undefined),
+        speakeasyPromise: new Promise<SpeakeasyResponse>(() => undefined),
       }),
     );
-    expect(screen.getByLabelText('Loading approved senders')).toBeInTheDocument();
-    cleanup();
-    restoreRoute();
-
-    renderSpeakeasy(
-      new ScreenerSpeakeasyPageTestClient({
-        allowed: sampleAllowedView({ allowed: [] }),
-      }),
-    );
-    expect(await screen.findByText('No approved senders yet.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loading Speakeasy passphrase')).toBeInTheDocument();
     cleanup();
     restoreRoute();
 
     const errorClient = new ScreenerSpeakeasyPageTestClient();
-    errorClient.allowedFailure = new HailApiError(503, undefined, response(503));
+    errorClient.speakeasyFailure = new HailApiError(503, undefined, response(503));
     renderSpeakeasy(errorClient);
     expect(await screen.findByText('Something went wrong.')).toBeInTheDocument();
-    expect(
-      screen.getByText('Screener Speakeasy failed with HTTP 503.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Speakeasy failed with HTTP 503.')).toBeInTheDocument();
   });
 
-  it('shows an inline error when changing a route fails', async () => {
+  it('shows an inline error when regeneration fails', async () => {
     const client = new ScreenerSpeakeasyPageTestClient();
-    client.decisionFailure = new HailApiError(422, undefined, response(422));
+    client.rotateFailure = new HailApiError(403, undefined, response(403));
     renderSpeakeasy(client);
 
-    fireEvent.click(await screen.findAllByRole('button', { name: 'Change route' }).then((buttons) => buttons[0]));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Regenerate passphrase' }),
+    );
 
-    await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
+    await waitFor(() => expect(client.rotateCalls).toHaveLength(1));
     expect(
-      await screen.findByText('The server rejected this decision. Refresh and try again.'),
+      await screen.findByText('Speakeasy rotation failed with HTTP 403.'),
     ).toBeInTheDocument();
   });
 });

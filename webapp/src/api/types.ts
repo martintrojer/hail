@@ -914,6 +914,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/speakeasy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_speakeasy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/speakeasy/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rotate_speakeasy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1394,6 +1426,24 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
+        };
+        RotateSpeakeasyRequest: {
+            acknowledge_bypass_secret?: boolean;
+        };
+        SpeakeasyResponse: {
+            speakeasy: components["schemas"]["SpeakeasyState"];
+        };
+        SpeakeasyState: {
+            /** @description Raw current bypass passphrase. This is intentionally returned only to the authenticated owner so the UI can display/share it. */
+            passphrase: string;
+            /** @description UTC month this phrase is current for, formatted YYYY-MM. */
+            period: string;
+            /** Format: date-time */
+            rotates_at: string;
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date-time */
+            manually_rotated_at?: string | null;
         };
     };
     responses: never;
@@ -4137,6 +4187,92 @@ export interface operations {
             };
             /** @description A dependency is unhealthy. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_speakeasy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current Speakeasy bypass passphrase and rotation metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakeasyResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Speakeasy lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rotate_speakeasy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RotateSpeakeasyRequest"];
+            };
+        };
+        responses: {
+            /** @description Speakeasy passphrase rotated immediately. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakeasyResponse"];
+                };
+            };
+            /** @description Invalid JSON payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CSRF header missing. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Speakeasy rotation failed. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

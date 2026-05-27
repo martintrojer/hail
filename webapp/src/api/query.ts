@@ -32,6 +32,7 @@ import {
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
+  type RotateSpeakeasyResponse,
   type ScheduledSend,
   type ScheduledSendsResponse,
   type ScreenerAllowedView,
@@ -39,6 +40,7 @@ import {
   type ScreenerDecisionResponse,
   type ScreenerView,
   type SpamThreadResponse,
+  type SpeakeasyResponse,
   type NotSpamThreadResponse,
   type UndoDenyRequest,
   type UndoDenyResponse,
@@ -421,6 +423,35 @@ export function useScreenerAllowedView(
     queryKey: queryKeys.screenerAllowed(),
     queryFn: () => client.getScreenerAllowedView(),
     ...options,
+  });
+}
+
+export function useSpeakeasy(
+  client = defaultApiClient,
+  options?: QueryConfig<SpeakeasyResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.speakeasy(),
+    queryFn: () => client.getSpeakeasy(),
+    ...options,
+  });
+}
+
+export function useRotateSpeakeasyMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<void, RotateSpeakeasyResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () =>
+      client.rotateSpeakeasy({ acknowledge_bypass_secret: true }),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData(queryKeys.speakeasy(), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.speakeasy() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
 }
 
