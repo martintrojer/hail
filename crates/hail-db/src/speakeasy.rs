@@ -4,7 +4,7 @@
 //! modeled as one current passphrase per user, not sender routing state.
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeakeasyPassphrase {
@@ -47,12 +47,29 @@ pub async fn get_speakeasy_passphrase(
     db: &SqlitePool,
     user_id: i64,
 ) -> Result<Option<SpeakeasyPassphrase>, sqlx::Error> {
+    get_speakeasy_passphrase_from_connection(db, user_id).await
+}
+
+pub async fn get_speakeasy_passphrase_for_update(
+    conn: &mut SqliteConnection,
+    user_id: i64,
+) -> Result<Option<SpeakeasyPassphrase>, sqlx::Error> {
+    get_speakeasy_passphrase_from_connection(conn, user_id).await
+}
+
+async fn get_speakeasy_passphrase_from_connection<'e, E>(
+    executor: E,
+    user_id: i64,
+) -> Result<Option<SpeakeasyPassphrase>, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query_as::<_, SpeakeasyPassphraseRow>(
         "SELECT user_id, passphrase, period, rotates_at, generated_at, manually_rotated_at, updated_at \
          FROM speakeasy_passphrases WHERE user_id = ?1",
     )
     .bind(user_id)
-    .fetch_optional(db)
+    .fetch_optional(executor)
     .await
     .map(|row| row.map(Into::into))
 }

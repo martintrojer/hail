@@ -154,6 +154,8 @@ fn email_envelope_from_import(
         thread_id: imported.jmap_thread_id.clone().unwrap_or_default(),
         from,
         subject: first_header_value(&request.raw_rfc822, "Subject").unwrap_or_default(),
+        preview: None,
+        raw_rfc822: Some(request.raw_rfc822.clone()),
         mailbox_ids: imported.jmap_mailbox_ids.clone(),
         keywords: request.keywords.clone(),
         received_at: request
@@ -207,6 +209,7 @@ async fn publish_route_event(
             hail_core::MailClassification::Papertrail => WorkerAppEvent::PapertrailNew,
         },
         RouteOutcome::ScreenerPending { .. } => WorkerAppEvent::ScreenerPending,
+        RouteOutcome::SpeakeasyBypass => WorkerAppEvent::ImboxNew,
         RouteOutcome::Trashed | RouteOutcome::Spam | RouteOutcome::AlreadyScreened => {
             WorkerAppEvent::ThreadUpdated
         }

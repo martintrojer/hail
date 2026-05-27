@@ -327,6 +327,7 @@ fn app_event_for_route_outcome(outcome: &RouteOutcome) -> Option<WorkerAppEvent>
             hail_core::MailClassification::Papertrail => WorkerAppEvent::PapertrailNew,
         }),
         RouteOutcome::ScreenerPending { .. } => Some(WorkerAppEvent::ScreenerPending),
+        RouteOutcome::SpeakeasyBypass => Some(WorkerAppEvent::ImboxNew),
         RouteOutcome::Trashed => Some(WorkerAppEvent::ThreadUpdated),
         RouteOutcome::Spam => Some(WorkerAppEvent::ThreadUpdated),
         RouteOutcome::AlreadyScreened => Some(WorkerAppEvent::ThreadUpdated),
@@ -350,6 +351,8 @@ fn route_envelope_from_change(env: &EmailEnvelope) -> Option<screener::EmailEnve
         thread_id: env.thread_id.clone().unwrap_or_default(),
         from,
         subject: env.subject.clone().unwrap_or_default(),
+        preview: env.preview.clone(),
+        raw_rfc822: None,
         mailbox_ids: env.mailbox_ids.clone(),
         keywords: env.keywords.clone(),
         received_at: env
