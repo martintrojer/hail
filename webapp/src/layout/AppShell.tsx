@@ -6,26 +6,29 @@ import {
   Archive,
   ArrowUpCircle,
   Bookmark,
-  Check,
   ChevronDown,
-  Clock,
-  FileText,
+  Clock3,
+  FileArchive,
+  FilePenLine,
+  FolderOpen,
+  Inbox,
   KeyRound,
   LogOut,
-  Mail,
   Menu,
   Moon,
   Monitor,
   PenSquare,
+  ReceiptText,
+  Rss,
   Search,
   Send,
   Settings,
   ShieldAlert,
   ShieldOff,
-  SlidersHorizontal,
   Sun,
+  Tags,
   Trash2,
-  UserPlus,
+  UserRoundPlus,
 } from '../components/icons';
 import { Button } from '../components/ui/button';
 import {
@@ -84,31 +87,30 @@ interface NavItem {
 }
 
 const primaryNavItems: NavItem[] = [
-  { to: '/imbox', label: 'Imbox', Icon: Mail },
-  { to: '/feed', label: 'The Feed', Icon: Mail },
-  { to: '/papertrail', label: 'Paper Trail', Icon: Mail },
-  { to: '/screener', label: 'The Screener', Icon: UserPlus },
+  { to: '/imbox', label: 'Imbox', Icon: Inbox },
+  { to: '/feed', label: 'The Feed', Icon: Rss },
+  { to: '/papertrail', label: 'Paper Trail', Icon: ReceiptText },
+  { to: '/screener', label: 'The Screener', Icon: UserRoundPlus },
 ];
 
 const pileNavItems: NavItem[] = [
   { to: '/set-aside', label: 'Set Aside', Icon: Bookmark },
-  { to: '/reply-later', label: 'Reply Later', Icon: Clock },
+  { to: '/reply-later', label: 'Reply Later', Icon: Clock3 },
   { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
 ];
 
 const mailboxNavItems: NavItem[] = [
-  { to: '/drafts', label: 'Drafts', Icon: PenSquare },
+  { to: '/drafts', label: 'Drafts', Icon: FilePenLine },
   { to: '/scheduled', label: 'Scheduled', Icon: Send },
   { to: '/archive', label: 'Archive', Icon: Archive },
   { to: '/spam', label: 'Spam', Icon: ShieldAlert },
   { to: '/trash', label: 'Trash', Icon: Trash2 },
-  { to: '/files', label: 'All Files', Icon: FileText },
+  { to: '/files', label: 'All Files', Icon: FileArchive },
 ];
 
 const workflowNavItems: NavItem[] = [
-  { to: '/screener/speakeasy', label: 'Speakeasy', Icon: Check },
+  { to: '/search', label: 'Search', Icon: Search },
   { to: '/screened-out', label: 'Screened Out', Icon: ShieldOff },
-  { to: '/workflows', label: 'Workflows', Icon: SlidersHorizontal },
 ];
 
 function EmptyList({ title }: { title: string }) {
@@ -264,18 +266,31 @@ function SidebarNavGroup({
 function LabelsNavPlaceholder() {
   return (
     <SidebarGroup>
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton asChild tooltip="Labels">
+            <Link to="/search" search={{}}>
+              <Tags />
+              <span>Labels</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
       <Collapsible defaultOpen>
         <SidebarGroupLabel asChild>
-          <CollapsibleTrigger className="group/labels w-full justify-between">
-            <span>Labels</span>
-            <ChevronDown className="transition-transform group-data-[state=open]/labels:rotate-180" />
+          <CollapsibleTrigger className="group/labels flex w-full items-center gap-2">
+            <FolderOpen />
+            <span>All labels</span>
+            <ChevronDown className="ml-auto transition-transform group-data-[state=open]/labels:rotate-180" />
           </CollapsibleTrigger>
         </SidebarGroupLabel>
         <CollapsibleContent>
           <SidebarMenuSub>
             <SidebarMenuSubItem>
               <SidebarMenuSubButton asChild>
-                <Link to="/search" search={{}}>All labels</Link>
+                <Link to="/search" search={{}}>
+                  <span>Uncategorized</span>
+                </Link>
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>
           </SidebarMenuSub>
@@ -287,14 +302,19 @@ function LabelsNavPlaceholder() {
 
 function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: boolean }) {
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" className="border-sidebar-border bg-sidebar text-sidebar-foreground">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip="hail">
-              <Link to="/imbox" className="font-semibold">
-                <span className="grid size-7 shrink-0 place-items-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                  <img src="/logo-icon-transparent.png" alt="" className="h-5" aria-hidden="true" />
+              <Link to="/imbox" className="font-semibold" aria-label="hail Imbox">
+                <span className="grid size-7 shrink-0 place-items-center rounded-md bg-sidebar-accent text-sidebar-accent-foreground ring-1 ring-sidebar-border">
+                  <img
+                    src="/logo-icon-transparent.png"
+                    alt=""
+                    className="size-5 object-contain"
+                    aria-hidden="true"
+                  />
                 </span>
                 <span className="truncate">hail</span>
                 <span className="sr-only"> menu</span>
