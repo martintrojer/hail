@@ -8,7 +8,7 @@
 //! `cursor` is accepted for API compatibility but intentionally ignored for v1;
 //! responses always return `next_cursor: null`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -29,6 +29,7 @@ use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{
     MAIL_VIEW_PROPERTIES, hydrate_thread_previews, jmap_session, trash_mailbox_id,
 };
+use crate::routes::labels::LabelResponse;
 use crate::routes::response::{bad_request, internal};
 use crate::routes::threads::MailboxRole;
 use crate::state::AppState;
@@ -139,6 +140,7 @@ impl MailViewProvider for JmapMailViewProvider {
                         unread: !email.keywords().into_iter().any(|kw| kw == "$seen"),
                         classification,
                         has_notes: false,
+                        labels: Vec::new(),
                     })
                 })
                 .collect()
@@ -439,6 +441,7 @@ impl SearchProvider for JmapSearchProvider {
                         received_at: email
                             .received_at()
                             .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                        labels: Vec::new(),
                     })
                 })
                 .collect()
@@ -610,6 +613,7 @@ pub struct MailViewItem {
     pub unread: bool,
     pub classification: MailViewClassification,
     pub has_notes: bool,
+    pub labels: Vec<LabelResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -621,6 +625,7 @@ pub struct MailSearchResult {
     pub preview: String,
     #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
+    pub labels: Vec<LabelResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -647,6 +652,7 @@ enum SearchResult {
         preview: String,
         #[schema(value_type = Option<String>, format = DateTime)]
         received_at: Option<DateTime<Utc>>,
+        labels: Vec<LabelResponse>,
     },
     ContactNote {
         address: String,
@@ -665,6 +671,7 @@ impl From<MailSearchResult> for SearchResult {
             subject: item.subject,
             preview: item.preview,
             received_at: item.received_at,
+            labels: item.labels,
         }
     }
 }
@@ -1028,7 +1035,7 @@ async fn get_search(
     let mut results = Vec::new();
 
     if scope.includes_mail() {
-        let mail = match provider
+        let mut mail = match provider
             .search(&state, user.jmap_token.clone(), q, mailbox, SEARCH_LIMIT)
             .await
         {
@@ -1038,6 +1045,10 @@ async fn get_search(
                 return internal();
             }
         };
+        if let Err(err) = annotate_search_labels(&state, user.id, &mut mail).await {
+            tracing::error!(user_id = user.id, error = %err, "search result label lookup failed");
+            return internal();
+        }
         results.extend(mail.into_iter().map(SearchResult::from));
     }
 
@@ -1265,6 +1276,10 @@ async fn get_view(
         tracing::error!(user_id = user.id, view = ?view, error = %err, "thread note flag lookup failed");
         return internal();
     }
+    if let Err(err) = annotate_item_labels(&state, user.id, &mut items).await {
+        tracing::error!(user_id = user.id, view = ?view, error = %err, "thread label lookup failed");
+        return internal();
+    }
 
     Json(MailViewResponse {
         items,
@@ -1295,6 +1310,10 @@ async fn get_imbox_sectioned_view(
 
     if let Err(err) = annotate_note_flags(&state, user.id, &mut items).await {
         tracing::error!(user_id = user.id, error = %err, "imbox sectioned note flag lookup failed");
+        return internal();
+    }
+    if let Err(err) = annotate_item_labels(&state, user.id, &mut items).await {
+        tracing::error!(user_id = user.id, error = %err, "imbox sectioned label lookup failed");
         return internal();
     }
 
@@ -1383,6 +1402,69 @@ async fn annotate_note_flags(
     }
 
     Ok(())
+}
+
+async fn annotate_item_labels(
+    state: &AppState,
+    user_id: i64,
+    items: &mut [MailViewItem],
+) -> Result<(), hail_db::labels::LabelDbError> {
+    let labels_by_thread_id = labels_by_thread_id(
+        state,
+        user_id,
+        items.iter().map(|item| item.thread_id.as_str()),
+    )
+    .await?;
+    for item in items {
+        item.labels = labels_by_thread_id
+            .get(&item.thread_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(())
+}
+
+async fn annotate_search_labels(
+    state: &AppState,
+    user_id: i64,
+    items: &mut [MailSearchResult],
+) -> Result<(), hail_db::labels::LabelDbError> {
+    let labels_by_thread_id = labels_by_thread_id(
+        state,
+        user_id,
+        items.iter().map(|item| item.thread_id.as_str()),
+    )
+    .await?;
+    for item in items {
+        item.labels = labels_by_thread_id
+            .get(&item.thread_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(())
+}
+
+async fn labels_by_thread_id<'a>(
+    state: &AppState,
+    user_id: i64,
+    thread_ids: impl Iterator<Item = &'a str>,
+) -> Result<HashMap<String, Vec<LabelResponse>>, hail_db::labels::LabelDbError> {
+    let thread_ids: Vec<String> = thread_ids
+        .map(ToOwned::to_owned)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let labels_by_thread_id =
+        hail_db::labels::list_labels_for_threads(&state.db, user_id, &thread_ids).await?;
+    Ok(labels_by_thread_id
+        .into_iter()
+        .map(|(thread_id, labels)| {
+            (
+                thread_id,
+                labels.into_iter().map(LabelResponse::from).collect(),
+            )
+        })
+        .collect())
 }
 
 fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {

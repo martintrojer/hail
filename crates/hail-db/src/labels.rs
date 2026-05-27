@@ -4,6 +4,8 @@
 //! `Work/Receipts` are stored as one flat full path; `/` only affects display
 //! and normalization.
 
+use std::collections::HashMap;
+
 use sqlx::{Row, SqlitePool};
 
 #[derive(Debug, thiserror::Error)]
@@ -312,6 +314,48 @@ pub async fn list_thread_labels(
         .fetch_all(db)
         .await?;
     Ok(rows.into_iter().map(label_from_row).collect())
+}
+
+pub async fn list_labels_for_threads(
+    db: &SqlitePool,
+    user_id: i64,
+    thread_ids: &[String],
+) -> Result<HashMap<String, Vec<Label>>, LabelDbError> {
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    for thread_id in thread_ids {
+        validate_thread_id(thread_id)?;
+    }
+
+    let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT tl_filter.thread_id AS assigned_thread_id, \
+         l.id, l.user_id, l.name, l.normalized_name, l.source, l.provider_kind, \
+         l.provider_label_id, l.color, l.created_at, l.updated_at, \
+         COUNT(tl_count.thread_id) AS thread_count \
+         FROM thread_labels tl_filter \
+         INNER JOIN labels l ON l.user_id = tl_filter.user_id AND l.id = tl_filter.label_id \
+         LEFT JOIN thread_labels tl_count ON tl_count.user_id = l.user_id AND tl_count.label_id = l.id \
+         WHERE tl_filter.user_id = ",
+    );
+    builder.push_bind(user_id);
+    builder.push(" AND tl_filter.thread_id IN (");
+    let mut separated = builder.separated(", ");
+    for thread_id in thread_ids {
+        separated.push_bind(thread_id);
+    }
+    separated.push_unseparated(") GROUP BY tl_filter.thread_id, l.id ORDER BY tl_filter.thread_id ASC, l.normalized_name ASC");
+
+    let rows = builder.build().fetch_all(db).await?;
+    let mut labels_by_thread_id: HashMap<String, Vec<Label>> = HashMap::new();
+    for row in rows {
+        let thread_id: String = row.get("assigned_thread_id");
+        labels_by_thread_id
+            .entry(thread_id)
+            .or_default()
+            .push(label_from_row(row));
+    }
+    Ok(labels_by_thread_id)
 }
 
 pub async fn list_label_thread_ids(

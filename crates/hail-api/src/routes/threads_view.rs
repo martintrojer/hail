@@ -26,6 +26,7 @@ use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{jmap_session, validate_thread_id};
+use crate::routes::labels::LabelResponse;
 use crate::routes::notes::ThreadNoteResponse;
 use crate::routes::response::{internal, not_found};
 use crate::state::AppState;
@@ -208,6 +209,7 @@ struct ThreadViewResponse {
     participants: Vec<Participant>,
     messages: Vec<ThreadMessageResponse>,
     notes: Vec<ThreadNoteResponse>,
+    labels: Vec<LabelResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -286,6 +288,15 @@ async fn get_thread(
             return internal();
         }
     };
+    let labels = match hail_db::labels::list_thread_labels(&state.db, user.id, &assembled.thread_id)
+        .await
+    {
+        Ok(labels) => labels.into_iter().map(LabelResponse::from).collect(),
+        Err(err) => {
+            tracing::error!(user_id = user.id, thread_id = %assembled.thread_id, error = %err, "thread label lookup failed");
+            return internal();
+        }
+    };
 
     Json(ThreadViewResponse {
         thread_id: assembled.thread_id,
@@ -293,6 +304,7 @@ async fn get_thread(
         participants,
         messages,
         notes,
+        labels,
     })
     .into_response()
 }

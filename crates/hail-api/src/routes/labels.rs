@@ -44,20 +44,20 @@ struct LabelItemResponse {
     label: LabelResponse,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
-struct LabelResponse {
-    id: i64,
-    name: String,
-    leaf_name: String,
-    path_segments: Vec<String>,
-    source: LabelSourceResponse,
-    color: Option<String>,
-    thread_count: i64,
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct LabelResponse {
+    pub id: i64,
+    pub name: String,
+    pub leaf_name: String,
+    pub path_segments: Vec<String>,
+    pub source: LabelSourceResponse,
+    pub color: Option<String>,
+    pub thread_count: i64,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-enum LabelSourceResponse {
+pub enum LabelSourceResponse {
     Manual,
     Gmail,
 }

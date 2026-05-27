@@ -127,6 +127,7 @@ fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
         unread: n % 2 == 0,
         classification,
         has_notes: false,
+        labels: Vec::new(),
     }
 }
 
@@ -228,6 +229,54 @@ async fn response_preserves_provider_order() {
         .map(|value| value["email_id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec!["email-30", "email-10", "email-20"]);
+}
+
+#[tokio::test]
+async fn response_hydrates_current_users_thread_labels() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "labels-owner@example.org").await;
+    let (other_user_id, _other_sid) = seed_session(&state, &key, "other-labels@example.org").await;
+    let receipts = hail_db::labels::create_label(&state.db, user_id, "Work/Receipts", Some("blue"))
+        .await
+        .expect("create receipts label");
+    let travel = hail_db::labels::create_label(&state.db, user_id, "Travel", None)
+        .await
+        .expect("create travel label");
+    let hidden = hail_db::labels::create_label(&state.db, other_user_id, "Hidden", None)
+        .await
+        .expect("create hidden label");
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-20", receipts.id)
+        .await
+        .expect("assign receipts");
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-20", travel.id)
+        .await
+        .expect("assign travel");
+    hail_db::labels::assign_label_to_thread(&state.db, other_user_id, "thread-30", hidden.id)
+        .await
+        .expect("assign hidden");
+    let provider = Arc::new(FakeProvider::new(vec![
+        item_with_view(30, MailView::Imbox),
+        item_with_view(20, MailView::Imbox),
+        item_with_view(10, MailView::Imbox),
+    ]));
+
+    let resp = get_view(state, provider, Some(&sid), "/api/views/imbox?limit=3").await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["items"][0]["labels"], serde_json::json!([]));
+    assert_eq!(json["items"][2]["labels"], serde_json::json!([]));
+    let labels = json["items"][1]["labels"].as_array().expect("labels array");
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0]["name"], "Travel");
+    assert_eq!(labels[0]["leaf_name"], "Travel");
+    assert_eq!(labels[1]["name"], "Work/Receipts");
+    assert_eq!(labels[1]["leaf_name"], "Receipts");
+    assert_eq!(
+        labels[1]["path_segments"],
+        serde_json::json!(["Work", "Receipts"])
+    );
+    assert_eq!(labels[1]["color"], "blue");
 }
 
 #[tokio::test]
