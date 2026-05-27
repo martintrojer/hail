@@ -327,7 +327,7 @@ function MessageCard({
 
           {renderedHtml.trim().length > 0 ? (
             <div
-              className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-ink-primary [&_a]:text-accent-blue [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border-hairline [&_blockquote]:pl-4 [&_blockquote]:text-ink-secondary [&_code]:rounded [&_code]:bg-bg-hover [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border-hairline [&_td]:p-2 [&_th]:border [&_th]:border-border-hairline [&_th]:p-2"
+              className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-ink-primary [&_a]:text-accent-blue [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border-hairline [&_blockquote]:pl-4 [&_blockquote]:text-ink-secondary [&_code]:rounded [&_code]:bg-bg-hover [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top"
               // Server owns the mail-render trust boundary: hail-api strips quoted
               // history, removes trackers, and sanitizes HTML before this field is
               // exposed to the SPA. The client renders only that sanitized fragment.
