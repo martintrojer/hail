@@ -285,6 +285,17 @@ describe('MailViewPage', () => {
               preview: 'A direct note for the Imbox.',
               unread: true,
               has_notes: true,
+              labels: [
+                {
+                  id: 12,
+                  name: 'Work/Receipts',
+                  leaf_name: 'Receipts',
+                  path_segments: ['Work', 'Receipts'],
+                  source: 'gmail',
+                  color: null,
+                  thread_count: 8,
+                },
+              ],
             }),
           ]),
         ),
@@ -300,6 +311,8 @@ describe('MailViewPage', () => {
     expect(within(link).getByText('Unread')).toBeInTheDocument();
     expect(screen.getByLabelText('Unread thread')).toBeInTheDocument();
     expect(within(link).getByLabelText('Thread has notes')).toBeInTheDocument();
+    expect(within(link).getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
+    expect(within(link).getByLabelText('Label Work/Receipts')).toBeInTheDocument();
     expect(
       within(link).getByText('A direct note for the Imbox.'),
     ).toBeInTheDocument();

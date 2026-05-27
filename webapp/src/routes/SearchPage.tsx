@@ -17,6 +17,7 @@ import { useSearch } from '../api/query';
 import { ListView } from '../components/ListView';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
+import { LabelChips } from '../components/LabelChips';
 import { AppShell } from '../layout/AppShell';
 import { formatDateTime } from '../lib/dates';
 import { viewErrorMessage } from '../lib/errorMessages';
@@ -82,6 +83,7 @@ function MailResultCard({ item }: { item: MailSearchResult }) {
       <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-secondary">
         {item.preview || 'No preview available.'}
       </p>
+      <LabelChips labels={item.labels} className="mt-2 flex min-w-0 flex-wrap items-center gap-1" />
     </ThreadLink>
   );
 }

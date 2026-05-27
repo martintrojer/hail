@@ -27,6 +27,7 @@ import {
   MoreHorizontal,
   iconSizeProps,
 } from '../components/icons';
+import { LabelChips } from '../components/LabelChips';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { MessageActionPopup } from '../components/MessageActionPopup';
@@ -391,6 +392,7 @@ function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
           </>
         ) : null}
       </p>
+      <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1" />
       {thread.messages.length === 0 ? (
         <p className="sr-only">0 messages with Unknown</p>
       ) : null}
