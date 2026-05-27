@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { HailApiClient, ProviderAccount, ProviderSyncStatus } from '../api/client';
+import { useEffect, useMemo } from 'react';
+import type { HailApiClient, ProviderSyncStatus } from '../api/client';
 import {
   useConnectGmailMutation,
   useDisconnectProviderAccountMutation,
@@ -12,12 +12,10 @@ import { actionErrorMessage } from '../lib/errorMessages';
 
 interface ProviderAccountsPageProps {
   client?: HailApiClient;
-  initialAccount?: ProviderAccount | null;
+  initialAccount?: ProviderSyncStatus | null;
   location?: Pick<Location, 'assign'> & { search?: string };
   confirmDisconnect?: (message: string) => boolean;
 }
-
-const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
 type ProviderSyncStatusValue =
   | 'disabled'
@@ -73,10 +71,6 @@ function formatBackoff(value: number | null | undefined) {
   if (minutes < 60) return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
   const hours = Math.round(minutes / 60);
   return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
-}
-
-function scopeLabel(scope: string) {
-  return scope === GMAIL_READONLY_SCOPE ? 'Gmail read-only import' : scope;
 }
 
 function failureText(status: ProviderSyncStatus) {
@@ -162,7 +156,7 @@ function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
 }
 
 function ProviderAccountCard({ account, disconnecting, disconnectError, onDisconnect }: {
-  account: ProviderAccount;
+  account: ProviderSyncStatus;
   disconnecting: boolean;
   disconnectError: Error | null;
   onDisconnect: () => void;
@@ -174,7 +168,7 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Gmail account</p>
-          <h2 className="mt-1 text-xl font-semibold text-ink-primary">{account.display_email || account.provider_email}</h2>
+          <p className="mt-1 text-xl font-semibold text-ink-primary">{account.display_email || account.provider_email}</p>
           <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-hairline bg-page px-3 py-1 text-sm font-medium text-ink-primary">
             <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${healthTone(account.sync_status)}`} />
             {statusLabel(account.sync_status)}
@@ -188,13 +182,7 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
       <dl className="mt-5 grid gap-3 sm:grid-cols-2">
         <DetailTile label="Provider id" value={account.provider_account_id} />
         <DetailTile label="Gmail history cursor" value={account.last_profile_history_id || 'Not captured yet'} />
-        <DetailTile label="Access token expires" value={formatDateTime(account.cached_access_token_expires_at)} />
-        <div className="rounded-lg border border-hairline bg-page p-3">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Granted scopes</dt>
-          <dd className="mt-1 text-sm text-ink-primary">
-            {account.granted_scopes.length === 0 ? 'None recorded' : <ul className="list-inside list-disc space-y-1">{account.granted_scopes.map((scope) => <li key={scope}>{scopeLabel(scope)}</li>)}</ul>}
-          </dd>
-        </div>
+        <DetailTile label="Profile synced" value={formatDateTime(account.profile_synced_at)} />
       </dl>
 
       {disconnectError ? <p role="alert" className="mt-4 rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">{actionErrorMessage(disconnectError, 'Disconnect Gmail')}</p> : null}
@@ -202,11 +190,10 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
   );
 }
 
-export function ProviderAccountsPage({ client, initialAccount = null, location = window.location, confirmDisconnect = window.confirm }: ProviderAccountsPageProps) {
-  const [account, setAccount] = useState<ProviderAccount | null>(initialAccount);
+export function ProviderAccountsPage({ client, location = window.location, confirmDisconnect = window.confirm }: ProviderAccountsPageProps) {
   const callbackNotice = useMemo(() => providerCallbackNotice(location.search), [location.search]);
   const connectGmail = useConnectGmailMutation(client, { onSuccess: (data) => location.assign(data.authorization_url) });
-  const disconnectProviderAccount = useDisconnectProviderAccountMutation(client, { onSuccess: (updated) => setAccount(updated) });
+  const disconnectProviderAccount = useDisconnectProviderAccountMutation(client);
   const syncStatuses = useProviderSyncStatuses(client);
   const triggerSync = useTriggerProviderSyncMutation(client);
   const { refetch: refetchSyncStatuses } = syncStatuses;
@@ -217,17 +204,15 @@ export function ProviderAccountsPage({ client, initialAccount = null, location =
     }
   }, [callbackNotice, refetchSyncStatuses]);
 
-  const connectedAccount = useMemo(() => account && account.provider_kind === 'gmail' ? account : null, [account]);
-  const gmailStatuses = syncStatuses.data?.accounts ?? [];
+  const gmailStatuses = syncStatuses.data?.accounts.filter((status) => status.provider_kind === 'gmail') ?? [];
 
   function onConnect() {
     connectGmail.mutate();
   }
 
-  function onDisconnect() {
-    if (!connectedAccount) return;
-    const confirmed = confirmDisconnect(`Disconnect ${connectedAccount.provider_email} from Gmail import? Hail will keep already-imported local mail, but new Gmail mail will stop importing.`);
-    if (confirmed) disconnectProviderAccount.mutate(connectedAccount.id);
+  function onDisconnect(status: ProviderSyncStatus) {
+    const confirmed = confirmDisconnect(`Disconnect ${status.provider_email} from Gmail import? Hail will keep already-imported local mail, but new Gmail mail will stop importing.`);
+    if (confirmed) disconnectProviderAccount.mutate(status.id);
   }
 
   const list = (
@@ -240,7 +225,7 @@ export function ProviderAccountsPage({ client, initialAccount = null, location =
             <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-secondary">Gmail remains your public mailbox and spam filter. Hail imports a local Stalwart copy and the normal hail UI reads that local copy. During v1.2 import, hail actions do not archive, delete, mark read, or relabel Gmail mail.</p>
           </div>
           <button type="button" onClick={onConnect} disabled={connectGmail.isPending} className="rounded-full bg-accent-blue px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60">
-            {connectGmail.isPending ? 'Opening Google…' : connectedAccount || gmailStatuses.length > 0 ? 'Reconnect Gmail' : 'Connect Gmail'}
+            {connectGmail.isPending ? 'Opening Google…' : gmailStatuses.length > 0 ? 'Reconnect Gmail' : 'Connect Gmail'}
           </button>
         </div>
 
@@ -266,14 +251,17 @@ export function ProviderAccountsPage({ client, initialAccount = null, location =
       ) : syncStatuses.isError ? (
         <p role="alert" className="rounded-2xl border border-accent-red/30 bg-accent-red/10 p-4 text-sm text-accent-red">{actionErrorMessage(syncStatuses.error, 'Load Gmail import status')}</p>
       ) : gmailStatuses.length > 0 ? (
-        gmailStatuses.map((status) => <ProviderSyncStatusCard key={status.id} status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} onSync={() => triggerSync.mutate(status.id)} />)
-      ) : connectedAccount ? (
-        <ProviderAccountCard account={connectedAccount} disconnecting={disconnectProviderAccount.isPending} disconnectError={disconnectProviderAccount.error} onDisconnect={onDisconnect} />
+        <>
+          {gmailStatuses.map((status) => (
+            <div key={status.id} className="space-y-5">
+              <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} onSync={() => triggerSync.mutate(status.id)} />
+              <ProviderAccountCard account={status} disconnecting={disconnectProviderAccount.isPending && disconnectProviderAccount.variables === status.id} disconnectError={disconnectProviderAccount.variables === status.id ? disconnectProviderAccount.error : null} onDisconnect={() => onDisconnect(status)} />
+            </div>
+          ))}
+        </>
       ) : (
         <StateCard title="No Gmail account connected" body="Connect Gmail to start the server-side OAuth flow. Once Google redirects back, import status will appear here." className="rounded-2xl border border-hairline bg-surface p-8 text-center" />
       )}
-
-      {connectedAccount && gmailStatuses.length > 0 ? <ProviderAccountCard account={connectedAccount} disconnecting={disconnectProviderAccount.isPending} disconnectError={disconnectProviderAccount.error} onDisconnect={onDisconnect} /> : null}
     </div>
   );
 

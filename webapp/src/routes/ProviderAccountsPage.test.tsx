@@ -82,7 +82,6 @@ function providerSyncStatus(
   };
 }
 
-const sampleAccount = providerAccount();
 const sampleSyncStatus = providerSyncStatus();
 
 function response(status: number) {
@@ -141,10 +140,24 @@ class ProviderAccountsTestClient extends TestHailApiClient {
     if (this.disconnectFailure) {
       throw this.disconnectFailure;
     }
-    return (
+    const updated = (
       this.disconnectResponse ??
       providerAccount({ id, sync_status: 'disconnected' })
     );
+    this.syncStatuses = this.syncStatuses.map((status) =>
+      status.id === id
+        ? {
+            ...status,
+            display_email: updated.display_email,
+            last_profile_history_id: updated.last_profile_history_id,
+            provider_account_id: updated.provider_account_id,
+            provider_email: updated.provider_email,
+            provider_kind: updated.provider_kind,
+            sync_status: updated.sync_status,
+          }
+        : status,
+    );
+    return updated;
   }
 
   override async listProviderSyncStatuses(): Promise<ProviderSyncStatusListResponse> {
@@ -218,7 +231,7 @@ function renderPage({
   queryClient = createTestQueryClient(),
 }: {
   client?: HailApiClient;
-  account?: ProviderAccount | null;
+  account?: ProviderSyncStatus | null;
   assign?: (url: string) => void;
   search?: string;
   confirm?: (message: string) => boolean;
@@ -298,15 +311,17 @@ describe('ProviderAccountsPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('shows connected Gmail status and disconnects with confirmation', async () => {
-    const { client, confirm } = renderPage({ account: sampleAccount });
+  it('shows connected Gmail status from sync status and disconnects with confirmation', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [providerSyncStatus({ sync_status: 'active' })];
+    const { confirm } = renderPage({ client });
 
     expect(
-      await screen.findByText('Reader <reader@gmail.com>'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Gmail read-only import')).toBeInTheDocument();
-    expect(screen.getByText('12345')).toBeInTheDocument();
+      await screen.findAllByText('Reader <reader@gmail.com>'),
+    ).toHaveLength(2);
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
+    expect(screen.getByText('Gmail account')).toBeInTheDocument();
+    expect(screen.getAllByText('12345').length).toBeGreaterThan(0);
 
     clickButton('Disconnect');
 
@@ -314,23 +329,23 @@ describe('ProviderAccountsPage', () => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining('reader@gmail.com'),
       );
-      expect((client as ProviderAccountsTestClient).disconnectCalls).toEqual([
-        42,
-      ]);
+      expect(client.disconnectCalls).toEqual([42]);
       expect(screen.getAllByText('Disconnected').length).toBeGreaterThan(0);
     });
   });
 
   it('does not disconnect when confirmation is cancelled', async () => {
-    const { client, confirm } = renderPage({
-      account: sampleAccount,
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [providerSyncStatus({ sync_status: 'active' })];
+    const { confirm } = renderPage({
+      client,
       confirm: vi.fn(() => false),
     });
 
     await screen.findByRole('button', { name: 'Disconnect' });
     clickButton('Disconnect');
     expect(confirm).toHaveBeenCalled();
-    expect((client as ProviderAccountsTestClient).disconnectCalls).toEqual([]);
+    expect(client.disconnectCalls).toEqual([]);
   });
 
   it('surfaces client errors for connect and disconnect actions', async () => {
@@ -350,14 +365,15 @@ describe('ProviderAccountsPage', () => {
     cleanup();
 
     const disconnectClient = new ProviderAccountsTestClient();
+    disconnectClient.syncStatuses = [providerSyncStatus({ sync_status: 'active' })];
     disconnectClient.disconnectFailure = new HailApiError(
       500,
       undefined,
       response(500),
     );
-    renderPage({ client: disconnectClient, account: sampleAccount });
+    renderPage({ client: disconnectClient });
 
-    await screen.findByText('Reader <reader@gmail.com>');
+    await screen.findAllByText('Reader <reader@gmail.com>');
     clickButton('Disconnect');
     expect(
       await screen.findByText('Disconnect Gmail failed with HTTP 500.'),
@@ -390,7 +406,7 @@ describe('ProviderAccountsPage', () => {
     renderPage({ client });
 
     expect(await screen.findByText('Gmail import health')).toBeInTheDocument();
-    expect(screen.getByText('Needs attention')).toBeInTheDocument();
+    expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
     expect(screen.getByText('Last successful sync')).toBeInTheDocument();
     expect(screen.getByText('Next retry')).toBeInTheDocument();
     expect(screen.getByText('15 minutes')).toBeInTheDocument();
@@ -402,7 +418,7 @@ describe('ProviderAccountsPage', () => {
 
     await waitFor(() => {
       expect(client.triggerSyncCalls).toEqual([42]);
-      expect(screen.getByText('Connected')).toBeInTheDocument();
+      expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
       expect(screen.getByText('No retry backoff')).toBeInTheDocument();
     });
   });
@@ -419,12 +435,12 @@ describe('ProviderAccountsPage', () => {
     ];
     renderPage({ client });
 
-    expect(await screen.findByText('Disabled')).toBeInTheDocument();
-    expect(screen.getByText('Initial import running')).toBeInTheDocument();
-    expect(screen.getByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Needs attention')).toBeInTheDocument();
-    expect(screen.getByText('Access revoked')).toBeInTheDocument();
-    expect(screen.getByText('future_state')).toBeInTheDocument();
+    expect((await screen.findAllByText('Disabled')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Initial import running').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Access revoked').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('future_state').length).toBeGreaterThan(0);
   });
 
   it('surfaces sync status and manual sync errors', async () => {
@@ -609,21 +625,57 @@ describe('ProviderAccountsPage', () => {
         queryKeys.providerSyncStatuses(),
       );
       expect(cached?.accounts[0]?.sync_status).toBe('active');
-      expect(screen.getByText('Connected')).toBeInTheDocument();
+      expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
     });
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.providerSyncStatuses(),
     });
   });
 
-  it('disconnects with simultaneous account and sync-status state without hiding the status card', async () => {
+  it('uses provider sync status as the only persistent account card source', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [sampleSyncStatus];
+    renderPage({ client, account: providerSyncStatus({ id: 99, provider_email: 'stale@gmail.com', display_email: 'Stale Account' }) });
+
+    expect(await screen.findByText('Gmail import health')).toBeInTheDocument();
+    expect(screen.getAllByText('Gmail account')).toHaveLength(1);
+    expect(screen.getAllByText('Reader <reader@gmail.com>')).toHaveLength(2);
+    expect(screen.queryByText('Stale Account')).not.toBeInTheDocument();
+  });
+
+  it('updates cached sync status after disconnect and invalidates it', async () => {
+    const client = new ProviderAccountsTestClient();
+    const queryClient = createTestQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    client.syncStatuses = [providerSyncStatus({ sync_status: 'active' })];
+    client.disconnectResponse = providerAccount({
+      sync_status: 'disconnected',
+      cached_access_token_expires_at: null,
+    });
+    renderPage({ client, queryClient });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Disconnect' }));
+
+    await waitFor(() => {
+      const cached = queryClient.getQueryData<ProviderSyncStatusListResponse>(
+        queryKeys.providerSyncStatuses(),
+      );
+      expect(cached?.accounts[0]?.sync_status).toBe('disconnected');
+      expect(screen.getAllByText('Disconnected').length).toBeGreaterThan(0);
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.providerSyncStatuses(),
+    });
+  });
+
+  it('disconnects without duplicate stale account cards', async () => {
     const client = new ProviderAccountsTestClient();
     client.syncStatuses = [sampleSyncStatus];
     client.disconnectResponse = providerAccount({
       sync_status: 'disconnected',
       cached_access_token_expires_at: null,
     });
-    renderPage({ client, account: sampleAccount });
+    renderPage({ client });
 
     expect(await screen.findByText('Gmail import health')).toBeInTheDocument();
     expect(screen.getByText('Gmail account')).toBeInTheDocument();
@@ -633,7 +685,7 @@ describe('ProviderAccountsPage', () => {
     await waitFor(() => {
       expect(client.disconnectCalls).toEqual([42]);
       expect(screen.getByText('Gmail import health')).toBeInTheDocument();
-      expect(screen.getByText('Gmail account')).toBeInTheDocument();
+      expect(screen.getAllByText('Gmail account')).toHaveLength(1);
       expect(
         screen.getByRole('button', { name: 'Disconnected' }),
       ).toBeDisabled();
@@ -661,8 +713,8 @@ describe('ProviderAccountsPage', () => {
       assign,
     });
 
-    await screen.findByRole('button', { name: 'Connect Gmail' });
-    clickButton('Connect Gmail');
+    const connectButton = await screen.findByRole('button', { name: 'Connect Gmail' });
+    fireEvent.click(connectButton);
 
     await waitFor(() =>
       expect(assign).toHaveBeenCalledWith(
