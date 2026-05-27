@@ -44,6 +44,7 @@ struct FakeResponse {
 struct FakeState {
     requests: tokio::sync::Mutex<Vec<RequestRecord>>,
     profile_responses: tokio::sync::Mutex<VecDeque<FakeResponse>>,
+    label_responses: tokio::sync::Mutex<VecDeque<FakeResponse>>,
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +110,30 @@ async fn fake_server_with_profile_responses(
 ) -> (String, Arc<FakeState>) {
     let state = Arc::new(FakeState {
         profile_responses: tokio::sync::Mutex::new(profile_responses.into_iter().collect()),
+        label_responses: tokio::sync::Mutex::new(VecDeque::new()),
+        ..FakeState::default()
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let state = server_state.clone();
+            tokio::spawn(async move {
+                handle_connection(stream, state).await;
+            });
+        }
+    });
+    (format_base_url(addr), state)
+}
+
+async fn fake_server_with_label_responses(
+    label_responses: impl IntoIterator<Item = FakeResponse>,
+) -> (String, Arc<FakeState>) {
+    let state = Arc::new(FakeState {
+        profile_responses: tokio::sync::Mutex::new(VecDeque::new()),
+        label_responses: tokio::sync::Mutex::new(label_responses.into_iter().collect()),
         ..FakeState::default()
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -204,6 +229,41 @@ fn error_profile(
     }
 }
 
+fn ok_labels() -> FakeResponse {
+    FakeResponse {
+        status: StatusCode::OK,
+        retry_after: None,
+        body: json!({
+            "labels": [
+                {"id":"Label_1","name":"Work","type":"user"},
+                {"id":"Label_2","name":"Work/Receipts","type":"user"},
+                {"id":"INBOX","name":"INBOX","type":"system"},
+                {"id":"CATEGORY_PROMOTIONS","name":"CATEGORY_PROMOTIONS","type":"system"},
+                {"id":"legacy-no-type","name":"Legacy Without Type"}
+            ]
+        }),
+    }
+}
+
+fn rate_limited_labels(retry_after_seconds: u64) -> FakeResponse {
+    FakeResponse {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        retry_after: Some(retry_after_seconds),
+        body: json!({"error":{"message":"slow down labels","errors":[{"reason":"rateLimitExceeded"}]}}),
+    }
+}
+
+fn error_labels(status: StatusCode, reason: Option<&str>, message: &str) -> FakeResponse {
+    let errors = reason
+        .map(|reason| json!([{"reason": reason, "message": message}]))
+        .unwrap_or_else(|| json!([]));
+    FakeResponse {
+        status,
+        retry_after: None,
+        body: json!({"error":{"message": message,"errors": errors}}),
+    }
+}
+
 async fn handle_connection(mut stream: TcpStream, state: Arc<FakeState>) {
     let mut buffer = vec![0_u8; 8192];
     let read = stream.read(&mut buffer).await.expect("read request");
@@ -269,6 +329,7 @@ async fn route_request(
 ) -> FakeResponse {
     match path {
         "/gmail/v1/users/me/profile" => profile(state).await,
+        "/gmail/v1/users/me/labels" => labels(state).await,
         "/gmail/v1/users/me/messages" => list_messages(query),
         "/gmail/v1/users/me/history" => list_history(query),
         path if path.starts_with("/gmail/v1/users/me/messages/") => get_message(path),
@@ -287,6 +348,15 @@ async fn profile(state: &FakeState) -> FakeResponse {
         .await
         .pop_front()
         .unwrap_or_else(ok_profile)
+}
+
+async fn labels(state: &FakeState) -> FakeResponse {
+    state
+        .label_responses
+        .lock()
+        .await
+        .pop_front()
+        .unwrap_or_else(ok_labels)
 }
 
 fn list_messages(query: &std::collections::HashMap<String, String>) -> FakeResponse {
@@ -594,6 +664,113 @@ async fn cached_token_source_reuses_token_until_near_expiry() {
         requests[3].authorization.as_deref(),
         Some("Bearer cached-token-2")
     );
+}
+
+#[tokio::test]
+async fn list_labels_returns_raw_label_metadata() {
+    let (base_url, state) = fake_server_with_label_responses(vec![ok_labels()]).await;
+
+    let labels = client(&base_url).list_labels().await.expect("labels");
+
+    assert_eq!(labels.labels.len(), 5);
+    assert_eq!(labels.labels[0].id, "Label_1");
+    assert_eq!(labels.labels[0].name, "Work");
+    assert_eq!(labels.labels[0].label_type.as_deref(), Some("user"));
+    assert!(labels.labels[0].is_user_created());
+    assert_eq!(labels.labels[2].id, "INBOX");
+    assert_eq!(labels.labels[2].label_type.as_deref(), Some("system"));
+    assert!(!labels.labels[2].is_user_created());
+    assert_eq!(labels.labels[4].id, "legacy-no-type");
+    assert_eq!(labels.labels[4].label_type, None);
+    assert!(!labels.labels[4].is_user_created());
+
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, Method::GET);
+    assert_eq!(requests[0].path, "/gmail/v1/users/me/labels");
+    assert_eq!(requests[0].query, None);
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer test-token")
+    );
+}
+
+#[tokio::test]
+async fn list_user_labels_filters_to_gmail_type_user() {
+    let (base_url, _state) = fake_server_with_label_responses(vec![ok_labels()]).await;
+
+    let labels = client(&base_url)
+        .list_user_labels()
+        .await
+        .expect("user labels");
+
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0].id, "Label_1");
+    assert_eq!(labels[0].name, "Work");
+    assert_eq!(labels[0].label_type.as_deref(), Some("user"));
+    assert_eq!(labels[1].id, "Label_2");
+    assert_eq!(labels[1].name, "Work/Receipts");
+    assert_eq!(labels[1].label_type.as_deref(), Some("user"));
+}
+
+#[tokio::test]
+async fn list_labels_retries_rate_limits_and_preserves_http_error_mapping() {
+    let (base_url, state) = fake_server_with_label_responses(vec![
+        rate_limited_labels(0),
+        error_labels(
+            StatusCode::FORBIDDEN,
+            Some("insufficientPermissions"),
+            "no label scope",
+        ),
+    ])
+    .await;
+
+    let error = client(&base_url)
+        .list_labels()
+        .await
+        .expect_err("permission denied after retry");
+
+    assert!(matches!(
+        error,
+        GmailClientError::Api {
+            status: StatusCode::FORBIDDEN,
+            kind: GmailApiErrorKind::PermissionDenied,
+            reason: Some(ref reason),
+            ref message,
+            ..
+        } if reason == "insufficientPermissions" && message == "no label scope"
+    ));
+
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path == "/gmail/v1/users/me/labels")
+    );
+}
+
+#[tokio::test]
+async fn list_labels_retries_transient_error() {
+    let (base_url, state) = fake_server_with_label_responses(vec![
+        error_labels(StatusCode::SERVICE_UNAVAILABLE, None, "try labels later"),
+        ok_labels(),
+    ])
+    .await;
+    let (client, token_calls) = counting_client(&base_url, zero_delay_retries(2));
+
+    let labels = client.list_user_labels().await.expect("labels after retry");
+
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.id.as_str())
+            .collect::<Vec<_>>(),
+        ["Label_1", "Label_2"]
+    );
+    assert_eq!(token_calls.load(Ordering::SeqCst), 2);
+    let requests = state.requests.lock().await;
+    assert_eq!(requests.len(), 2);
 }
 
 #[tokio::test]
