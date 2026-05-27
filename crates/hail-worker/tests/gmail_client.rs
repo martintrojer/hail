@@ -16,10 +16,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use gmail_client::{
-    CachedGmailTokenSource, GmailAccessToken, GmailAccessTokenProvider, GmailApiErrorKind,
-    GmailClient, GmailClientError, GmailRetryConfig, GmailTokenSource, ListHistoryParams,
-    ListMessagesParams, StaticGmailTokenSource, classify_gmail_error, parse_gmail_error,
-    provider_worker_http_client, retry_after_duration,
+    CachedGmailTokenSource, GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE, GmailAccessToken,
+    GmailAccessTokenProvider, GmailApiErrorKind, GmailClient, GmailClientError, GmailRetryConfig,
+    GmailTokenSource, ListHistoryParams, ListMessagesParams, StaticGmailTokenSource,
+    classify_gmail_error, parse_gmail_error, provider_worker_http_client, retry_after_duration,
 };
 use reqwest::header::{AUTHORIZATION, HeaderValue, RETRY_AFTER};
 use reqwest::{Method, StatusCode};
@@ -664,6 +664,24 @@ async fn cached_token_source_reuses_token_until_near_expiry() {
         requests[3].authorization.as_deref(),
         Some("Bearer cached-token-2")
     );
+}
+
+#[test]
+fn gmail_import_scopes_are_read_only_and_do_not_include_modify_or_broad_mail_scope() {
+    assert_eq!(
+        GMAIL_READONLY_SCOPE,
+        "https://www.googleapis.com/auth/gmail.readonly"
+    );
+    assert_eq!(
+        GMAIL_SEND_SCOPE,
+        "https://www.googleapis.com/auth/gmail.send"
+    );
+
+    for import_scope in [GMAIL_READONLY_SCOPE] {
+        assert_ne!(import_scope, "https://www.googleapis.com/auth/gmail.modify");
+        assert_ne!(import_scope, "https://mail.google.com/");
+        assert_ne!(import_scope, GMAIL_SEND_SCOPE);
+    }
 }
 
 #[tokio::test]

@@ -117,6 +117,7 @@ struct FakeGmail {
     list_params: Arc<Mutex<Vec<ListMessagesParams>>>,
     raw_gets: Arc<Mutex<Vec<String>>>,
     profile_calls: Arc<Mutex<usize>>,
+    user_label_calls: Arc<Mutex<usize>>,
 }
 
 impl FakeGmail {
@@ -136,6 +137,7 @@ impl FakeGmail {
             list_params: Arc::new(Mutex::new(Vec::new())),
             raw_gets: Arc::new(Mutex::new(Vec::new())),
             profile_calls: Arc::new(Mutex::new(0)),
+            user_label_calls: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -149,6 +151,10 @@ impl FakeGmail {
 
     fn profile_calls(&self) -> usize {
         *self.profile_calls.lock().expect("profile_calls")
+    }
+
+    fn user_label_calls(&self) -> usize {
+        *self.user_label_calls.lock().expect("user_label_calls")
     }
 }
 
@@ -182,6 +188,13 @@ impl GmailHistoricalSource for FakeGmail {
             .get(message_id)
             .cloned()
             .ok_or(GmailClientError::MissingRawMessage)
+    }
+
+    async fn list_user_labels(
+        &self,
+    ) -> Result<Vec<hail_worker::gmail_client::GmailLabel>, GmailClientError> {
+        *self.user_label_calls.lock().expect("user_label_calls") += 1;
+        Ok(Vec::new())
     }
 }
 
@@ -249,6 +262,7 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     .expect("initial sync");
 
     assert_eq!(gmail.profile_calls(), 1);
+    assert_eq!(gmail.user_label_calls(), 1);
     assert_eq!(
         summary.profile.history_id.as_deref(),
         Some("profile-history-42")

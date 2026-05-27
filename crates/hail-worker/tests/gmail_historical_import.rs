@@ -453,6 +453,55 @@ async fn thread_label_names(pool: &sqlx::SqlitePool, user_id: i64, thread_id: &s
         .collect()
 }
 
+#[derive(Debug)]
+struct SharedThreadImporter {
+    state: Mutex<SharedThreadImporterState>,
+    thread_id: String,
+}
+
+#[derive(Debug, Default)]
+struct SharedThreadImporterState {
+    next_id: u64,
+    imports: Vec<Rfc822ImportRequest>,
+}
+
+impl SharedThreadImporter {
+    fn new(thread_id: impl Into<String>) -> Self {
+        Self {
+            state: Mutex::new(SharedThreadImporterState::default()),
+            thread_id: thread_id.into(),
+        }
+    }
+
+    fn imports(&self) -> Vec<Rfc822ImportRequest> {
+        self.state
+            .lock()
+            .expect("shared importer state")
+            .imports
+            .clone()
+    }
+}
+
+#[async_trait]
+impl Rfc822Importer for SharedThreadImporter {
+    async fn import_rfc822(
+        &self,
+        request: Rfc822ImportRequest,
+    ) -> Result<ImportedRfc822Message, Rfc822ImportError> {
+        let mut state = self.state.lock().expect("shared importer state");
+        state.next_id += 1;
+        let id = state.next_id;
+        state.imports.push(request.clone());
+        Ok(ImportedRfc822Message {
+            jmap_email_id: format!("shared-email-{id}"),
+            jmap_thread_id: Some(self.thread_id.clone()),
+            jmap_mailbox_ids: request.mailbox_ids,
+            rfc822_message_ids: Vec::new(),
+            duplicate: false,
+        })
+    }
+}
+
 #[tokio::test]
 async fn imports_gmail_user_labels_to_local_thread_labels() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
@@ -530,6 +579,188 @@ async fn imports_gmail_user_labels_to_local_thread_labels() {
     assert_eq!(
         thread_label_names(&pool, user_id, "thread-2").await,
         vec!["Work/Receipts".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn historical_import_rolls_up_one_gmail_label_across_multi_message_local_thread() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![
+                ListMessage {
+                    id: "gmail-thread-rollup-a".to_owned(),
+                    thread_id: Some("gmail-thread-rollup".to_owned()),
+                },
+                ListMessage {
+                    id: "gmail-thread-rollup-b".to_owned(),
+                    thread_id: Some("gmail-thread-rollup".to_owned()),
+                },
+            ],
+            next_page_token: None,
+            result_size_estimate: Some(2),
+        }],
+        vec![
+            raw_message_with_labels(
+                "gmail-thread-rollup-a",
+                "gmail-thread-rollup",
+                "history-rollup-a",
+                "thread-rollup-a@example.com",
+                &["Label_Project"],
+            ),
+            raw_message_with_labels(
+                "gmail-thread-rollup-b",
+                "gmail-thread-rollup",
+                "history-rollup-b",
+                "thread-rollup-b@example.com",
+                &[],
+            ),
+        ],
+        vec![gmail_label("Label_Project", "Projects/Rollup", "user")],
+    );
+    let importer = SharedThreadImporter::new("local-thread-rollup");
+
+    let summary = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("historical import");
+
+    assert_eq!(summary.imported, 2);
+    assert_eq!(importer.imports().len(), 2);
+    assert_eq!(
+        thread_label_names(&pool, user_id, "local-thread-rollup").await,
+        vec!["Projects/Rollup".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn historical_label_metadata_rename_updates_without_removing_absent_later_label() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let importer = SharedThreadImporter::new("local-thread-rename");
+    let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-label-rename-a".to_owned(),
+                thread_id: Some("gmail-thread-rename".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message_with_labels(
+            "gmail-label-rename-a",
+            "gmail-thread-rename",
+            "history-rename-a",
+            "label-rename-a@example.com",
+            &["Label_Client"],
+        )],
+        vec![gmail_label("Label_Client", "Client/Old", "user")],
+    );
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first historical import");
+    let label_id = list_labels(&pool, user_id).await.expect("labels")[0].id;
+    assert_eq!(
+        thread_label_names(&pool, user_id, "local-thread-rename").await,
+        vec!["Client/Old".to_owned()]
+    );
+
+    let rename_gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-label-rename-b".to_owned(),
+                thread_id: Some("gmail-thread-rename".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message_with_labels(
+            "gmail-label-rename-b",
+            "gmail-thread-rename",
+            "history-rename-b",
+            "label-rename-b@example.com",
+            &["Label_Client"],
+        )],
+        vec![gmail_label("Label_Client", "Client/New", "user")],
+    );
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &rename_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("rename metadata import");
+    let labels = list_labels(&pool, user_id).await.expect("labels");
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0].id, label_id);
+    assert_eq!(labels[0].name, "Client/New");
+    assert_eq!(
+        thread_label_names(&pool, user_id, "local-thread-rename").await,
+        vec!["Client/New".to_owned()]
+    );
+
+    let removed_later_gmail = FakeGmail::with_labels(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-label-rename-c".to_owned(),
+                thread_id: Some("gmail-thread-rename".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message_with_labels(
+            "gmail-label-rename-c",
+            "gmail-thread-rename",
+            "history-rename-c",
+            "label-rename-b@example.com",
+            &[],
+        )],
+        Vec::new(),
+    );
+    import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &removed_later_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("absent-label historical import");
+
+    assert_eq!(
+        thread_label_names(&pool, user_id, "local-thread-rename").await,
+        vec!["Client/New".to_owned()],
+        "provider label absence on a later message must not reconcile away the local thread label"
     );
 }
 
