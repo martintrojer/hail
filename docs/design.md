@@ -658,7 +658,7 @@ Decisions deferred to implementation or post-v1:
 - **Theming.** Dark mode in v1.1. Custom theming v2.
 - **Workflows / Mail Rules.** Automated routing rules with conditions and actions (HEY calls these "Workflows"). UI for list, detail, and create/edit. Tracked as `ui-workflows-rules` (DEFERRED). See `docs/ui-direction.md` §17b.
 - **All Files view.** Cross-mail attachments browser. Tracked as `ui-all-files-view` (DEFERRED). See `docs/ui-direction.md` §17c.
-- **Screener Speakeasy.** Private bypass email address. Tracked as `ui-screener-speakeasy` (DEFERRED). See `docs/ui-direction.md` §8b.
+- **Screener Speakeasy.** Monthly rotating password/passphrase that lets an incoming message bypass the Screener when the current phrase is included in that message. It is not an allowed-senders list, not a private bypass address, and not route management. See `docs/speakeasy-design.md`.
 - **Migrating from existing IMAP servers.** Stalwart has an IMAP import tool; we document it but don't wrap it. Open whether to surface in admin UI in v2.
 - **Federation / multi-host scaling.** Not a goal. If anyone wants this, fork.
 
@@ -673,7 +673,7 @@ UI: HEY-inspired warm paper aesthetic (single-column, no sidebar, dropdown menu 
 
 ### v1.1 — "Power user complete"
 
-Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Files view (per-contact, per-thread, global attachments browser), aliases / send-as identities, Screener Speakeasy (private bypass address), keyboard power-through-Imbox triage mode, Trash view (list/restore/auto-purge after N days), Spam view + mark-as-spam + Stalwart antispam integration.
+Email notes (yellow annotations), Clips + Clips library, Focus & Reply mode, Files view (per-contact, per-thread, global attachments browser), aliases / send-as identities, Screener Speakeasy (monthly bypass password/passphrase), keyboard power-through-Imbox triage mode, Trash view (list/restore/auto-purge after N days), Spam view + mark-as-spam + Stalwart antispam integration.
 
 ### v2 — Polish + self-host bonus
 

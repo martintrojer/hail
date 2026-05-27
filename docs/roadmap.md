@@ -50,7 +50,7 @@ User-facing features that didn't make v1.
 
 ### Email workflow
 - **Workflows / mail rules** — user-defined routing rules (`ui-workflows-rules` → `workflows-rules-api`, `workflows-rules-spa`)
-- **Screener Speakeasy** — secret address that bypasses the Screener (`ui-screener-speakeasy`)
+- **Screener Speakeasy** — monthly rotating password/passphrase that lets matching incoming messages bypass the Screener (`speakeasy-monthly-password-feature`)
 - **All Files view** — browse all attachments across threads (`ui-all-files-view`)
 - **Compose identity selection** — pick sender identity for multi-domain users (`tighten-compose-identity-selection`)
 - **Clips** — highlight and save text snippets from emails (`clips-feature`)

@@ -384,10 +384,15 @@ Imbox. It's a gatekeeper, not a spam filter.
   - Each option is a text row (~0.875rem, font-medium) with py-2 px-3.
   - Clicking an option immediately routes and moves to the next sender.
 
-- **Screener Speakeasy** (from `21-screener-speakeasy.png`):
-  - A special private email address that bypasses the Screener entirely.
-  - Shown in the Screener settings or as a discoverable feature.
-  - For hail v1: deferred. Track as a future feature, not v1-blocking.
+- **Screener Speakeasy**:
+  - A monthly rotating password/passphrase for bypassing the Screener.
+  - If the current password/passphrase is included in an incoming email, that
+    message bypasses the Screener.
+  - Speakeasy is not an allowed-senders list, does not approve the sender for
+    future messages, and does not choose an Imbox / Feed / Paper Trail route.
+  - Shown in Screener settings or another discoverable settings surface.
+  - Matching surface, generation/rotation, visibility, and audit/security
+    details are open implementation choices. See `docs/speakeasy-design.md`.
 
 ## 9. Paper Trail
 
