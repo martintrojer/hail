@@ -649,6 +649,81 @@ async fn incremental_history_imports_gmail_user_labels_to_local_thread_labels() 
 }
 
 #[tokio::test]
+async fn incremental_duplicate_still_imports_newly_seen_gmail_labels_to_existing_thread() {
+    let (pool, _guard, user_id, provider_account_id) = setup(Some("100")).await;
+    let importer = FakeRfc822Importer::default();
+    let options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
+
+    let first_gmail = FakeGmail::new(
+        vec![Ok(history_page(
+            vec![("101", vec![("gmail-label-dupe-a", "gmail-thread-label-dupe")])],
+            None,
+            Some("102"),
+        ))],
+        Vec::new(),
+        vec![raw_message(
+            "gmail-label-dupe-a",
+            "gmail-thread-label-dupe",
+            "101",
+            "incremental-label-dupe@example.com",
+        )],
+    );
+    run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("100".to_owned()),
+        },
+        &first_gmail,
+        &importer,
+        options.clone(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("first incremental sync");
+
+    let second_gmail = FakeGmail::with_labels(
+        vec![Ok(history_page(
+            vec![("103", vec![("gmail-label-dupe-b", "gmail-thread-label-dupe")])],
+            None,
+            Some("104"),
+        ))],
+        Vec::new(),
+        vec![raw_message_with_labels(
+            "gmail-label-dupe-b",
+            "gmail-thread-label-dupe",
+            "103",
+            "incremental-label-dupe@example.com",
+            &["Label_Dupe"],
+        )],
+        vec![gmail_label("Label_Dupe", "Projects/Duplicate", "user")],
+    );
+    let second = run_gmail_incremental_sync(
+        &pool,
+        GmailIncrementalSyncAccount {
+            provider_account_id,
+            user_id,
+            history_id: Some("102".to_owned()),
+        },
+        &second_gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("second incremental sync");
+
+    assert_eq!(second.imported, 0);
+    assert_eq!(second.duplicates, 1);
+    assert_eq!(importer.local_message_count(), 1);
+    assert_eq!(
+        thread_label_names(&pool, user_id, "thread-1").await,
+        vec!["Projects/Duplicate".to_owned()]
+    );
+}
+
+#[tokio::test]
 async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
     let (pool, _guard, user_id, provider_account_id) = setup(Some("expired-100")).await;
     let fallback = gmail_import_fixture(GmailImportScenario::ExpiredCursorFallback);
