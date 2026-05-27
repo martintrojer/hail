@@ -65,6 +65,9 @@ type SearchGetSuccess = ResponseBody<
 type LabelThreadsGetSuccess = ResponseBody<
   paths['/api/labels/{id}/threads']['get']['responses']['200']
 >;
+type LabelListSuccess = ResponseBody<
+  paths['/api/labels']['get']['responses']['200']
+>;
 type BubbleUpGetSuccess = ResponseBody<
   paths['/api/views/bubble-up']['get']['responses']['200']
 >;
@@ -254,11 +257,13 @@ export type SearchResult = components['schemas']['SearchResult'];
 export type MailSearchResult = Extract<SearchResult, { type: 'mail' }>;
 export type ContactNoteSearchResult = Extract<SearchResult, { type: 'contact_note' }>;
 export type SearchResponse = SearchGetSuccess;
+export type LabelListResponse = LabelListSuccess;
 
 export interface SearchParams {
   q: string;
   scope?: SearchScope;
   mailbox?: SearchMailbox;
+  label_id?: number;
 }
 
 export type BlockedTracker = components['schemas']['BlockedTrackerResponse'];
@@ -695,6 +700,9 @@ export class HailApiClient {
     if (params.mailbox && params.mailbox !== 'all') {
       query.set('mailbox', params.mailbox);
     }
+    if (params.label_id !== undefined) {
+      query.set('label_id', String(params.label_id));
+    }
 
     return this.#json<SearchResponse>(
       await this.#request(`/api/views/search?${query.toString()}`),
@@ -719,6 +727,13 @@ export class HailApiClient {
       await this.#request(
         `/api/labels/${encodeURIComponent(String(labelId))}/threads${suffix ? `?${suffix}` : ''}`,
       ),
+      200,
+    );
+  }
+
+  async listLabels(): Promise<LabelListResponse> {
+    return this.#json<LabelListResponse>(
+      await this.#request('/api/labels'),
       200,
     );
   }

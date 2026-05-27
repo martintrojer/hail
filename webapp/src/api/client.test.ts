@@ -85,12 +85,30 @@ describe('HailApiClient GET request contract', () => {
       q: 'from:alice+bob@example.org / tag?',
       scope: 'clips',
       mailbox: 'papertrail',
+      label_id: 12,
     });
 
     expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
       new URL(
-        'http://localhost/api/views/search?q=from%3Aalice%2Bbob%40example.org+%2F+tag%3F&scope=clips&mailbox=papertrail',
+        'http://localhost/api/views/search?q=from%3Aalice%2Bbob%40example.org+%2F+tag%3F&scope=clips&mailbox=papertrail&label_id=12',
       ),
+    );
+    expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
+  });
+
+  it('omits all mailbox and empty label filters from search query parameters', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(200, { results: [] }));
+
+    await client.search({
+      q: 'invoice',
+      scope: 'all',
+      mailbox: 'all',
+    });
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toEqual(
+      new URL('http://localhost/api/views/search?q=invoice&scope=all'),
     );
     expectGetRequest(fetchSpy.mock.calls[0]?.[1]);
   });

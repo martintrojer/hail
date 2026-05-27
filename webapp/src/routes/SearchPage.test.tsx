@@ -1,8 +1,9 @@
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SearchResponse } from '../api/client';
+import type { LabelListResponse, SearchParams, SearchResponse } from '../api/client';
+import { ApiClientProvider } from '../api/ApiClientProvider';
 import { AuthProvider } from '../auth/AuthProvider';
 import { router } from '../router';
 import {
@@ -14,9 +15,47 @@ import {
 import { SearchPage } from './SearchPage';
 
 class SearchPageTestClient extends TestHailApiClient {
-  override async search(): Promise<SearchResponse> {
+  searchCalls: SearchParams[] = [];
+
+  override async search(params: SearchParams): Promise<SearchResponse> {
+    this.searchCalls.push(params);
     return { results: [] };
   }
+
+  override async listLabels(): Promise<LabelListResponse> {
+    return {
+      labels: [
+        {
+          id: 10,
+          name: 'Work',
+          leaf_name: 'Work',
+          path_segments: ['Work'],
+          source: 'manual',
+          color: null,
+          thread_count: 2,
+        },
+        {
+          id: 12,
+          name: 'Work/Receipts',
+          leaf_name: 'Receipts',
+          path_segments: ['Work', 'Receipts'],
+          source: 'gmail',
+          color: null,
+          thread_count: 8,
+        },
+      ],
+    };
+  }
+}
+
+if (!HTMLElement.prototype.hasPointerCapture) {
+  HTMLElement.prototype.hasPointerCapture = () => false;
+}
+if (!HTMLElement.prototype.setPointerCapture) {
+  HTMLElement.prototype.setPointerCapture = () => undefined;
+}
+if (!HTMLElement.prototype.scrollIntoView) {
+  HTMLElement.prototype.scrollIntoView = () => undefined;
 }
 
 let currentTestBody: ReactNode = null;
@@ -48,52 +87,74 @@ function installTestRouteComponent() {
 
 function renderSearchPage() {
   const queryClient = createTestQueryClient();
+  const client = new SearchPageTestClient();
 
   seedMe(queryClient);
 
   currentTestBody = (
-    <AuthProvider>
-      <SearchPage />
-    </AuthProvider>
+    <ApiClientProvider client={client}>
+      <AuthProvider>
+        <SearchPage client={client} />
+      </AuthProvider>
+    </ApiClientProvider>
   );
   installTestRouteComponent();
   window.history.pushState({}, '', '/search');
 
-  return renderWithQueryClient(
-    <RouterProvider
-      router={router}
-      context={{ client: new SearchPageTestClient() }}
-    />,
+  const view = renderWithQueryClient(
+    <ApiClientProvider client={client}>
+      <RouterProvider router={router} context={{ client }} />
+    </ApiClientProvider>,
     queryClient,
   );
+
+  return { ...view, client };
 }
 
 describe('SearchPage', () => {
-  it('does not offer Clips scope while clips search is unsupported', async () => {
-    renderSearchPage();
+  it('defaults label filter to All and omits label_id from search calls', async () => {
+    const { client } = renderSearchPage();
 
-    const scope = await screen.findByLabelText('Scope');
-    expect(scope).toHaveValue('all');
-    expect(
-      within(scope).getByRole('option', { name: 'All' }),
-    ).toBeInTheDocument();
-    expect(
-      within(scope).getByRole('option', { name: 'Mail' }),
-    ).toBeInTheDocument();
-    expect(
-      within(scope).getByRole('option', { name: 'Notes' }),
-    ).toBeInTheDocument();
-    expect(
-      within(scope).queryByRole('option', { name: 'Clips' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText('Search mail and notes'),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText('Label')).toHaveTextContent('All');
 
-    const mailbox = screen.getByLabelText('Mailbox');
-    expect(mailbox).toHaveValue('all');
-    for (const label of ['All', 'Imbox', 'Feed', 'Paper Trail', 'Archive', 'Trash', 'Drafts']) {
-      expect(within(mailbox).getByRole('option', { name: label })).toBeInTheDocument();
-    }
+    fireEvent.change(screen.getByPlaceholderText('Search mail and notes'), {
+      target: { value: 'invoice' },
+    });
+
+    await waitFor(() => expect(client.searchCalls).toHaveLength(1));
+    expect(client.searchCalls[0]).toEqual({
+      q: 'invoice',
+      scope: 'all',
+      mailbox: 'all',
+      label_id: undefined,
+    });
+  });
+
+  it('AND-composes selected label with query and mailbox search filters', async () => {
+    const { client } = renderSearchPage();
+
+    fireEvent.pointerDown(await screen.findByLabelText('Mailbox'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'Paper Trail' }));
+    fireEvent.pointerDown(screen.getByLabelText('Label'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'Work / Receipts' }));
+    fireEvent.change(screen.getByPlaceholderText('Search mail and notes'), {
+      target: { value: 'invoice' },
+    });
+
+    await waitFor(() => expect(client.searchCalls).toHaveLength(1));
+    expect(client.searchCalls[0]).toEqual({
+      q: 'invoice',
+      scope: 'all',
+      mailbox: 'papertrail',
+      label_id: 12,
+    });
   });
 });
