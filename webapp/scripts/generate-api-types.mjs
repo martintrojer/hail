@@ -7,88 +7,108 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webappRoot = path.resolve(__dirname, '..');
 const fixturePath = path.join(webappRoot, 'src', 'api', 'openapi.example.json');
 const outputPath = path.join(webappRoot, 'src', 'api', 'types.ts');
-const openapiUrl = process.env.OPENAPI_URL ?? 'http://localhost:8080/api/openapi.json';
+const defaultOpenapiUrl = 'http://localhost:8080/api/openapi.json';
+const fixtureSource = path.relative(webappRoot, fixturePath);
+
+const usage = `Usage: npm run api:types
+
+By default this command reads ${fixtureSource} and does not contact localhost,
+so normal builds are deterministic even if an old hail-api is running.
+
+To intentionally regenerate from a live/temp API, use one of:
+  OPENAPI_SOURCE=live npm run api:types
+  OPENAPI_URL=http://127.0.0.1:8080/api/openapi.json npm run api:types
+
+Live OpenAPI documents must include every path present in ${fixtureSource};
+missing fixture paths are treated as a stale API and fail the command.
+`;
+
+function shouldShowHelp() {
+  return process.argv.includes('--help') || process.argv.includes('-h');
+}
+
+function requestedSource() {
+  const source = process.env.OPENAPI_SOURCE;
+  if (source && source !== 'fixture' && source !== 'live') {
+    throw new Error(`OPENAPI_SOURCE must be "fixture" or "live", got "${source}".\n\n${usage}`);
+  }
+
+  if (process.env.OPENAPI_URL && source === 'fixture') {
+    throw new Error(
+      `OPENAPI_URL was set but OPENAPI_SOURCE=fixture was requested. Unset OPENAPI_URL or use OPENAPI_SOURCE=live.\n\n${usage}`,
+    );
+  }
+
+  if (source) {
+    return source;
+  }
+
+  return process.env.OPENAPI_URL ? 'live' : 'fixture';
+}
 
 async function readJson(filePath) {
   const contents = await fs.readFile(filePath, 'utf8');
   return JSON.parse(contents);
 }
 
-async function loadSpec() {
-  try {
-    const response = await fetch(openapiUrl, {
-      headers: { accept: 'application/json' },
-    });
+function ensureLiveSpecIncludesFixturePaths(liveSpec, fixtureSpec, openapiUrl) {
+  const fixturePaths = Object.keys(fixtureSpec.paths ?? {});
+  const livePaths = new Set(Object.keys(liveSpec.paths ?? {}));
+  const missingFixturePaths = fixturePaths.filter((path) => !livePaths.has(path));
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-
-    const fetchedSpec = await response.json();
-    try {
-      const fixtureSpec = await readJson(fixturePath);
-      const fixturePaths = Object.keys(fixtureSpec.paths ?? {});
-      const fetchedPaths = new Set(Object.keys(fetchedSpec.paths ?? {}));
-      const missingFixturePaths = fixturePaths.filter((path) => !fetchedPaths.has(path));
-      if (missingFixturePaths.length > 0) {
-        return {
-          source: path.relative(webappRoot, fixturePath),
-          spec: fixtureSpec,
-          warning: `${openapiUrl} appears stale; missing fixture paths: ${missingFixturePaths.join(', ')}`,
-        };
-      }
-    } catch {
-      // If the local fixture is absent or malformed, trust the fetched OpenAPI document.
-    }
-
-    return {
-      source: openapiUrl,
-      spec: fetchedSpec,
-    };
-  } catch (fetchError) {
-    try {
-      return {
-        source: path.relative(webappRoot, fixturePath),
-        spec: await readJson(fixturePath),
-        warning: `Could not fetch ${openapiUrl}: ${fetchError.message}`,
-      };
-    } catch (fixtureError) {
-      return {
-        source: 'placeholder',
-        warning: `Could not fetch ${openapiUrl}: ${fetchError.message}; could not read fixture ${path.relative(
-          webappRoot,
-          fixturePath,
-        )}: ${fixtureError.message}`,
-      };
-    }
+  if (missingFixturePaths.length > 0) {
+    throw new Error(
+      `${openapiUrl} appears stale; missing fixture paths: ${missingFixturePaths.join(', ')}. ` +
+        `Regenerate from the checked-out hail-api or omit OPENAPI_SOURCE/OPENAPI_URL to use ${fixtureSource}.`,
+    );
   }
 }
 
-const loaded = await loadSpec();
+async function fetchLiveSpec(openapiUrl) {
+  const response = await fetch(openapiUrl, {
+    headers: { accept: 'application/json' },
+  });
 
-if (loaded.warning) {
-  console.warn(`[api:types] ${loaded.warning}`);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
 }
 
-if (!loaded.spec) {
-  await fs.writeFile(
-    outputPath,
-    [
-      '// Generated placeholder; regenerate via npm run api:types.',
-      '// The OpenAPI URL was unreachable and no fixture was available.',
-      'export type paths = Record<string, never>;',
-      'export type webhooks = Record<string, never>;',
-      'export type components = Record<string, never>;',
-      'export type $defs = Record<string, never>;',
-      'export type operations = Record<string, never>;',
-      '',
-    ].join('\n'),
-  );
-  console.warn(`[api:types] wrote placeholder ${path.relative(webappRoot, outputPath)}`);
+async function loadSpec() {
+  const source = requestedSource();
+  const fixtureSpec = await readJson(fixturePath);
+
+  if (source === 'fixture') {
+    return {
+      source: fixtureSource,
+      spec: fixtureSpec,
+    };
+  }
+
+  const openapiUrl = process.env.OPENAPI_URL ?? defaultOpenapiUrl;
+  const liveSpec = await fetchLiveSpec(openapiUrl);
+  ensureLiveSpecIncludesFixturePaths(liveSpec, fixtureSpec, openapiUrl);
+
+  return {
+    source: openapiUrl,
+    spec: liveSpec,
+  };
+}
+
+if (shouldShowHelp()) {
+  console.log(usage.trimEnd());
   process.exit(0);
 }
 
-const ast = await openapiTS(loaded.spec);
-const banner = `// This file is auto-generated from ${loaded.source}.\n// Do not edit by hand; regenerate via npm run api:types.\n`;
-await fs.writeFile(outputPath, `${banner}${astToString(ast)}`);
-console.log(`[api:types] wrote ${path.relative(webappRoot, outputPath)} from ${loaded.source}`);
+try {
+  const loaded = await loadSpec();
+  const ast = await openapiTS(loaded.spec);
+  const banner = `// This file is auto-generated from ${loaded.source}.\n// Do not edit by hand; regenerate via npm run api:types.\n`;
+  await fs.writeFile(outputPath, `${banner}${astToString(ast)}`);
+  console.log(`[api:types] wrote ${path.relative(webappRoot, outputPath)} from ${loaded.source}`);
+} catch (error) {
+  console.error(`[api:types] ${error.message}`);
+  process.exit(1);
+}
