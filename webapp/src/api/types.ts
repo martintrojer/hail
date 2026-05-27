@@ -177,6 +177,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_labels"];
+        put?: never;
+        post: operations["create_label"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/labels/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete_label"];
+        options?: never;
+        head?: never;
+        patch: operations["rename_label"];
+        trace?: never;
+    };
+    "/api/labels/{id}/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["label_threads"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-accounts/gmail/callback": {
         parameters: {
             query?: never;
@@ -321,6 +369,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/speakeasy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_speakeasy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/speakeasy/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rotate_speakeasy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["assign_label_to_threads"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/threads/{thread_id}": {
         parameters: {
             query?: never;
@@ -396,6 +492,38 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["destroy_thread"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/{thread_id}/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["assign_label_name_to_thread"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/threads/{thread_id}/labels/{label_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["assign_label_to_thread"];
+        delete: operations["remove_label_from_thread"];
         options?: never;
         head?: never;
         patch?: never;
@@ -914,38 +1042,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/speakeasy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["get_speakeasy"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/speakeasy/rotate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["rotate_speakeasy"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -977,6 +1073,9 @@ export interface components {
         AllowedSendersResponse: {
             allowed: components["schemas"]["AllowedSender"][];
         };
+        AssignLabelNameRequest: {
+            label_name: string;
+        };
         AttachmentContext: {
             email_id: string;
             from: string;
@@ -996,6 +1095,12 @@ export interface components {
         };
         AttachmentsResponse: {
             items: components["schemas"]["AttachmentItem"][];
+        };
+        BatchAssignLabelRequest: {
+            /** Format: int64 */
+            label_id?: number | null;
+            label_name?: string | null;
+            thread_ids: string[];
         };
         BlobUploadResponse: {
             blobs: components["schemas"]["UploadedBlob"][];
@@ -1072,6 +1177,10 @@ export interface components {
              */
             threads: unknown[];
         };
+        CreateLabelRequest: {
+            color?: string | null;
+            name: string;
+        };
         CreateThreadNoteRequest: {
             body: string;
             email_id: string;
@@ -1140,6 +1249,37 @@ export interface components {
             /** Format: date-time */
             expires_at: string;
         };
+        LabelItemResponse: {
+            label: components["schemas"]["LabelResponse"];
+        };
+        LabelListResponse: {
+            labels: components["schemas"]["LabelResponse"][];
+        };
+        LabelResponse: {
+            color?: string | null;
+            /** Format: int64 */
+            id: number;
+            leaf_name: string;
+            name: string;
+            path_segments: string[];
+            source: components["schemas"]["LabelSourceResponse"];
+            /** Format: int64 */
+            thread_count: number;
+        };
+        /** @enum {string} */
+        LabelSourceResponse: "manual" | "gmail";
+        LabelThreadItem: {
+            from: string;
+            labels: components["schemas"]["LabelResponse"][];
+            preview: string;
+            subject: string;
+            thread_id: string;
+        };
+        LabelThreadsResponse: {
+            items: components["schemas"]["LabelThreadItem"][];
+            label: components["schemas"]["LabelResponse"];
+            next_cursor?: string | null;
+        };
         /**
          * @description Canonical hail-owned routing classification for incoming mail.
          *
@@ -1157,6 +1297,7 @@ export interface components {
             email_id: string;
             from: string;
             has_notes: boolean;
+            labels: components["schemas"]["LabelResponse"][];
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
@@ -1241,11 +1382,22 @@ export interface components {
         PutNoteRequest: {
             markdown: string;
         };
+        RenameLabelRequest: {
+            name: string;
+        };
         ReplyPayload: {
             attachments?: unknown[] | null;
             body_markdown: string;
             /** Format: date-time */
             send_at?: string | null;
+        };
+        RotateSpeakeasyRequest: {
+            /**
+             * @description Optional explicit acknowledgement that this invalidates the previous
+             *     phrase immediately. Omitted/false is still accepted for initial API
+             *     clients; the field exists so the SPA can make the warning explicit.
+             */
+            acknowledge_bypass_secret?: boolean;
         };
         ScheduledSendResponse: {
             /** Format: date-time */
@@ -1294,6 +1446,7 @@ export interface components {
         SearchResult: {
             email_id: string;
             from: string;
+            labels: components["schemas"]["LabelResponse"][];
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
@@ -1308,6 +1461,24 @@ export interface components {
             type: "contact_note";
             /** Format: date-time */
             updated_at: string;
+        };
+        SpeakeasyResponse: {
+            speakeasy: components["schemas"]["SpeakeasyState"];
+        };
+        SpeakeasyState: {
+            /** Format: date-time */
+            generated_at: string;
+            /** Format: date-time */
+            manually_rotated_at?: string | null;
+            /**
+             * @description Raw current bypass passphrase. This is intentionally returned only to
+             *     the authenticated owner so the UI can display/share it.
+             */
+            passphrase: string;
+            /** @description UTC month this phrase is current for, formatted YYYY-MM. */
+            period: string;
+            /** Format: date-time */
+            rotates_at: string;
         };
         /** @enum {string} */
         StalwartStatus: "connected" | "unreachable";
@@ -1336,6 +1507,7 @@ export interface components {
             undo?: null | components["schemas"]["UndoToken"];
         };
         ThreadViewResponse: {
+            labels: components["schemas"]["LabelResponse"][];
             messages: components["schemas"]["ThreadMessageResponse"][];
             notes: components["schemas"]["ThreadNoteResponse"][];
             participants: components["schemas"]["Participant"][];
@@ -1426,24 +1598,6 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
-        };
-        RotateSpeakeasyRequest: {
-            acknowledge_bypass_secret?: boolean;
-        };
-        SpeakeasyResponse: {
-            speakeasy: components["schemas"]["SpeakeasyState"];
-        };
-        SpeakeasyState: {
-            /** @description Raw current bypass passphrase. This is intentionally returned only to the authenticated owner so the UI can display/share it. */
-            passphrase: string;
-            /** @description UTC month this phrase is current for, formatted YYYY-MM. */
-            period: string;
-            /** Format: date-time */
-            rotates_at: string;
-            /** Format: date-time */
-            generated_at: string;
-            /** Format: date-time */
-            manually_rotated_at?: string | null;
         };
     };
     responses: never;
@@ -2092,6 +2246,257 @@ export interface operations {
             };
         };
     };
+    list_labels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Labels for the current user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelListResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_label: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Label created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelItemResponse"];
+                };
+            };
+            /** @description Invalid label payload or duplicate name. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label create failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_label: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Label id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Label deleted; thread label assignments cascade. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label delete failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rename_label: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Label id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Label renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelItemResponse"];
+                };
+            };
+            /** @description Invalid label payload or duplicate name. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label rename failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    label_threads: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Label id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Threads assigned to this label for the current user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelThreadsResponse"];
+                };
+            };
+            /** @description Invalid cursor. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label thread lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     gmail_callback: {
         parameters: {
             query?: {
@@ -2420,6 +2825,151 @@ export interface operations {
             };
         };
     };
+    get_speakeasy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current Speakeasy bypass passphrase and rotation metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakeasyResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Speakeasy lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rotate_speakeasy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotateSpeakeasyRequest"];
+            };
+        };
+        responses: {
+            /** @description Speakeasy passphrase rotated immediately. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpeakeasyResponse"];
+                };
+            };
+            /** @description Invalid JSON payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CSRF header missing. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Speakeasy rotation failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    assign_label_to_threads: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchAssignLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing normalized label reused or a manual label created, then assigned idempotently to every selected thread. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelItemResponse"];
+                };
+            };
+            /** @description Invalid JSON, payload shape, thread id, or label name. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label id not found for the current user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Batch label assignment failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_thread: {
         parameters: {
             query?: never;
@@ -2719,6 +3269,179 @@ export interface operations {
                 content?: never;
             };
             /** @description Thread destroy failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    assign_label_name_to_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id. */
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssignLabelNameRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing normalized label reused or a manual label created, then assigned idempotently. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelItemResponse"];
+                };
+            };
+            /** @description Invalid thread id, JSON, or label name. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inline label assignment failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    assign_label_to_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id. */
+                thread_id: string;
+                /** @description Label id. */
+                label_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Label assigned to the thread. Duplicate assignment is idempotent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelItemResponse"];
+                };
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label not found for the current user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label assignment failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    remove_label_from_thread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JMAP thread id. */
+                thread_id: string;
+                /** @description Label id. */
+                label_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Label assignment removed. Removing a non-assigned current-user label is idempotent. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid thread id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label not found for the current user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Label assignment removal failed. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -3784,6 +4507,8 @@ export interface operations {
                 scope?: string;
                 /** @example imbox */
                 mailbox?: string;
+                /** @example 12 */
+                label_id?: number;
             };
             header?: never;
             path?: never;
@@ -4187,92 +4912,6 @@ export interface operations {
             };
             /** @description A dependency is unhealthy. */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_speakeasy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current Speakeasy bypass passphrase and rotation metadata. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpeakeasyResponse"];
-                };
-            };
-            /** @description Missing or invalid session. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Speakeasy lookup failed. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    rotate_speakeasy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["RotateSpeakeasyRequest"];
-            };
-        };
-        responses: {
-            /** @description Speakeasy passphrase rotated immediately. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpeakeasyResponse"];
-                };
-            };
-            /** @description Invalid JSON payload. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Missing or invalid session. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description CSRF header missing. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Speakeasy rotation failed. */
-            500: {
                 headers: {
                     [name: string]: unknown;
                 };

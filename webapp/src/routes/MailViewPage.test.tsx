@@ -209,6 +209,7 @@ function mailItem(
     unread: true,
     classification,
     has_notes: false,
+    labels: [],
     ...overrides,
   };
 }

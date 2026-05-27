@@ -263,6 +263,7 @@ function sampleThread(
       },
     ],
     notes: [],
+    labels: [],
     ...overrides,
   };
 }
