@@ -304,6 +304,152 @@ async fn not_found_and_invalid_ids_are_404s() {
 }
 
 #[tokio::test]
+async fn label_threads_returns_current_user_assigned_threads_with_labels() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice-label-view@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "bob-label-view@example.org").await;
+    let label = hail_db::labels::create_label(&state.db, alice_id, "Work/Receipts", None)
+        .await
+        .expect("create alice label");
+    let other_label = hail_db::labels::create_label(&state.db, alice_id, "Important", Some("red"))
+        .await
+        .expect("create other label");
+    let bob_label = hail_db::labels::create_label(&state.db, bob_id, "Work/Receipts", None)
+        .await
+        .expect("create bob label");
+
+    hail_db::labels::assign_label_to_thread(&state.db, alice_id, "thread-a", label.id)
+        .await
+        .expect("assign target label to thread-a");
+    hail_db::labels::assign_label_to_thread(&state.db, alice_id, "thread-a", other_label.id)
+        .await
+        .expect("assign second label to thread-a");
+    hail_db::labels::assign_label_to_thread(&state.db, alice_id, "thread-b", label.id)
+        .await
+        .expect("assign target label to thread-b");
+    hail_db::labels::assign_label_to_thread(&state.db, bob_id, "thread-bob", bob_label.id)
+        .await
+        .expect("assign bob label");
+
+    let resp = request(
+        state,
+        Method::GET,
+        &format!("/api/labels/{}/threads?limit=10", label.id),
+        Some(&alice_sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["label"]["id"], label.id);
+    assert_eq!(json["label"]["name"], "Work/Receipts");
+    assert_eq!(json["label"]["thread_count"], 2);
+    assert_eq!(json["next_cursor"], serde_json::Value::Null);
+
+    let items = json["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    let returned_threads = items
+        .iter()
+        .map(|item| item["thread_id"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        returned_threads,
+        std::collections::BTreeSet::from(["thread-a", "thread-b"])
+    );
+    assert!(!returned_threads.contains("thread-bob"));
+
+    let thread_a = items
+        .iter()
+        .find(|item| item["thread_id"] == "thread-a")
+        .expect("thread-a in response");
+    let label_names = thread_a["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|label| label["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(label_names, vec!["Important", "Work/Receipts"]);
+}
+
+#[tokio::test]
+async fn label_threads_paginates_and_validates_label_ids() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "label-pages@example.org").await;
+    let label = hail_db::labels::create_label(&state.db, user_id, "Pages", None)
+        .await
+        .expect("create label");
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-1", label.id)
+        .await
+        .expect("assign thread 1");
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-2", label.id)
+        .await
+        .expect("assign thread 2");
+
+    let resp = request(
+        state.clone(),
+        Method::GET,
+        &format!("/api/labels/{}/threads?limit=1", label.id),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let first_page = json_body(resp).await;
+    assert_eq!(first_page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first_page["next_cursor"], "1");
+
+    let resp = request(
+        state.clone(),
+        Method::GET,
+        &format!("/api/labels/{}/threads?cursor=1&limit=1", label.id),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let second_page = json_body(resp).await;
+    assert_eq!(second_page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second_page["next_cursor"], serde_json::Value::Null);
+
+    let resp = request(
+        state.clone(),
+        Method::GET,
+        &format!("/api/labels/{}/threads?cursor=oops", label.id),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"], "invalid_cursor");
+
+    let resp = request(
+        state.clone(),
+        Method::GET,
+        "/api/labels/0/threads",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/labels/999/threads",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn no_auth_returns_401() {
     let (state, _key) = fixture_state().await;
     let resp = request(state, Method::GET, "/api/labels", None, false, None).await;
@@ -349,4 +495,5 @@ async fn openapi_contains_label_paths() {
     let json = json_body(resp).await;
     assert!(json["paths"].get("/api/labels").is_some());
     assert!(json["paths"].get("/api/labels/{id}").is_some());
+    assert!(json["paths"].get("/api/labels/{id}/threads").is_some());
 }
