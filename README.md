@@ -36,19 +36,19 @@ Modern email clients treat your inbox as an infinite stream. hail takes a differ
 ```
 ┌───────────┐      ┌────────────┐      ┌───────────┐
 │  Browser  │ ---> │  hail-api  │ ---> │ Stalwart  │
-│ React SPA │      │ Rust/Axum  │      │   JMAP    │
-└───────────┘      └─────┬──────┘      └───────────┘
-                         │
-                   ┌─────┴──────┐
-                   │hail-worker │
-                   │ Rust/tokio │
-                   └─────┬──────┘
-                         │
-                   ┌─────┴──────┐
-                   │  hail.db   │
-                   │  SQLite    │
-                   └────────────┘
+│ React SPA │      │ Rust/Axum  │      │ JMAP/SMTP │
+└───────────┘      └─────┬──────┘      └─────▲─────┘
+                         │                   │
+                         │                   │ JMAP EventSource,
+                         │                   │ worker actions
+                         │                   │
+                   ┌─────▼──────┐      ┌─────┴──────┐
+                   │  hail.db   │◄────►│hail-worker │
+                   │  SQLite    │ sqlx │ Rust/tokio │
+                   └────────────┘      └────────────┘
 ```
+
+Both `hail-api` and `hail-worker` open `hail.db` directly with sqlx. The browser never talks to Stalwart or SQLite; it only talks to `hail-api`.
 
 - **hail-api** — Serves the React SPA, REST API, and WebSocket on a single port. No Node.js in production.
 - **hail-worker** — Background worker for JMAP EventSource subscriptions, screener routing, send-later scheduling, bubble-up timers, and nightly reconciliation.
@@ -73,12 +73,13 @@ open http://localhost:8080
 
 The setup wizard creates your first admin account and provisions your domain in Stalwart. After setup, log in and start using hail.
 
-See [docs/quickstart.md](docs/quickstart.md) for the full guide including DNS, TLS, and Cloudflare Tunnel options.
+See [docs/deployment.md](docs/deployment.md) for the deployment chooser, then [docs/quickstart.md](docs/quickstart.md) for the direct/simple path including DNS, TLS, and first-run setup.
 
 ## Documentation
 
 | Doc | Description |
 |-----|-------------|
+| [deployment.md](docs/deployment.md) | Top-level deployment chooser: direct, VPS/WireGuard, Cloudflare Tunnel, Gmail/provider import |
 | [quickstart.md](docs/quickstart.md) | Installation, configuration, first-run setup |
 | [architecture.md](docs/architecture.md) | System map, hard decisions, rejected alternatives |
 | [design.md](docs/design.md) | Product design and v1 feature spec |
@@ -87,7 +88,9 @@ See [docs/quickstart.md](docs/quickstart.md) for the full guide including DNS, T
 | [reverse-proxy.md](docs/reverse-proxy.md) | Nginx/Caddy reverse proxy setup |
 | [backup.md](docs/backup.md) | Backup/restore procedures, including optional Litestream hail.db replication |
 | [upgrade.md](docs/upgrade.md) | Upgrade guide between versions |
-| [testing.md](docs/testing.md) | Test strategy and running tests |
+| [provider-import-architecture.md](docs/provider-import-architecture.md) | Gmail/provider import into local Stalwart |
+| [provider-outbound-strategy.md](docs/provider-outbound-strategy.md) | Provider smarthost/outbound strategy |
+| [provider-backed-modes.md](docs/provider-backed-modes.md) | Provider-backed alternatives and future modes |
 
 ## Features
 
