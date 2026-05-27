@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type MouseEvent, useState } from 'react';
 import type { ComposeRequest, HailApiClient, PileItem, PileViewResponse } from '../api/client';
 import { useApiClient } from '../api/ApiClientProvider';
 import {
@@ -18,6 +18,8 @@ import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { AppShell } from '../layout/AppShell';
 import { pilePreview } from '../lib/pilePreview';
+import { cn } from '../lib/utils';
+import { Checkbox } from '../components/ui/checkbox';
 
 interface PileSectionPageProps {
   kind: 'set-aside' | 'reply-later';
@@ -182,27 +184,48 @@ function PileRow({
     },
   });
 
+  function handleCheckboxClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    onToggleSelect?.();
+  }
+
   const rowContent = (
     <MailRow
       from={preview.sender}
       subject={preview.subject}
       preview={preview.snippet || 'No preview available.'}
       receivedAt={item.added_at}
-      selected={selected}
-      onToggleSelect={onToggleSelect}
     />
+  );
+
+  const rowClassName = cn(
+    'block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5',
+    onSelect && 'text-left',
   );
 
   return (
     <div
-      className={`group flex items-stretch gap-3 border-b border-border-hairline hover:bg-bg-hover focus-within:bg-bg-selected ${active || selected ? 'bg-bg-selected' : ''}`}
+      className={cn(
+        'group flex items-stretch gap-3 border-b border-border-hairline hover:bg-bg-hover focus-within:bg-bg-selected',
+        (active || selected) && 'bg-bg-selected',
+      )}
     >
+      {onToggleSelect ? (
+        <div className="flex shrink-0 items-start pl-3 pt-6 sm:pt-7">
+          <Checkbox
+            checked={selected}
+            onClick={handleCheckboxClick}
+            aria-label={`${selected ? 'Deselect' : 'Select'} ${preview.sender || 'Unknown sender'}`}
+          />
+        </div>
+      ) : null}
       {onSelect ? (
         // Reply Later: clicking selects the row to show reply panel
         <button
           type="button"
           onClick={onSelect}
-          className="block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 text-left outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5"
+          className={rowClassName}
           aria-label={`Select ${preview.subject} from ${preview.sender} to reply`}
           aria-pressed={active}
           data-hail-mail-list-item="true"
@@ -216,7 +239,7 @@ function PileRow({
           to="/thread/$threadId"
           params={{ threadId: item.thread_id }}
           search={{ from: kind }}
-          className="block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5"
+          className={rowClassName}
           aria-label={`Open ${preview.subject} from ${preview.sender}`}
           data-hail-mail-list-item="true"
           data-hail-thread-id={item.thread_id}
