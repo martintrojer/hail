@@ -14,13 +14,13 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailHistoryRecord, GmailTokenSource,
-    ListHistoryParams, ListHistoryResponse, ListMessage,
+    GmailApiErrorKind, GmailClient, GmailClientError, GmailHistoryRecord, GmailLabel,
+    GmailTokenSource, ListHistoryParams, ListHistoryResponse, ListMessage,
 };
 use crate::gmail_historical_import::{
     GmailHistoricalImportAccount, GmailHistoricalImportError, GmailHistoricalImportOptions,
     GmailHistoricalImportSummary, GmailHistoricalImporter, GmailHistoricalSource,
-    import_gmail_history, import_one_message,
+    gmail_user_label_map, import_gmail_history, import_one_message,
 };
 
 const DEFAULT_HISTORY_PAGE_SIZE: u16 = 100;
@@ -42,9 +42,9 @@ pub struct GmailIncrementalSyncOptions {
     pub label_id: Option<String>,
     /// Gmail history event types to observe.
     ///
-    /// Defaults to `messageAdded` only. v1.2 intentionally ignores
-    /// labelAdded/labelRemoved history for archive/read/delete/label mirroring;
-    /// provider labels are not authoritative after import.
+    /// Defaults to `messageAdded` only. Label metadata is read only so newly
+    /// imported messages can get local hail labels; labelRemoved is still not
+    /// reconciled back into local removals.
     pub history_types: Vec<String>,
     pub historical_fallback: GmailHistoricalImportOptions,
 }
@@ -97,6 +97,10 @@ pub trait GmailIncrementalSource: GmailHistoricalSource {
         &self,
         params: &ListHistoryParams,
     ) -> Result<ListHistoryResponse, GmailClientError>;
+
+    async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        GmailHistoricalSource::list_user_labels(self).await
+    }
 }
 
 #[async_trait]
@@ -109,6 +113,10 @@ where
         params: &ListHistoryParams,
     ) -> Result<ListHistoryResponse, GmailClientError> {
         self.list_history(params).await
+    }
+
+    async fn list_user_labels(&self) -> Result<Vec<GmailLabel>, GmailClientError> {
+        GmailClient::list_user_labels(self).await
     }
 }
 
@@ -197,6 +205,28 @@ where
 
     audit_sync_started(db, &account, &options, &start_history_id).await?;
     mark_sync_attempt_started(db, account.provider_account_id).await?;
+    let user_labels =
+        match cancel_or_complete(cancel, GmailIncrementalSource::list_user_labels(gmail)).await {
+            None => {
+                mark_sync_error(
+                    db,
+                    account.provider_account_id,
+                    "cancelled",
+                    "sync cancelled",
+                )
+                .await?;
+                return Err(GmailIncrementalSyncError::Cancelled);
+            }
+            Some(Ok(labels)) => gmail_user_label_map(labels),
+            Some(Err(error)) => {
+                let message = safe_error_message(&error);
+                audit_sync_failed(db, &account, "gmail_labels", &message).await?;
+                mark_sync_error(db, account.provider_account_id, "gmail_labels", &message).await?;
+                return Err(GmailIncrementalSyncError::Import(
+                    GmailHistoricalImportError::GmailLabels(error),
+                ));
+            }
+        };
 
     loop {
         if cancel.is_cancelled() {
@@ -310,6 +340,7 @@ where
                         gmail,
                         importer,
                         &options.historical_fallback,
+                        &user_labels,
                         listed,
                         &mut import_summary,
                         cancel,
