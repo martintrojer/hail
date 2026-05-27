@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::Engine;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use base64::prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -353,6 +353,16 @@ fn get_message(path: &str) -> FakeResponse {
                 }
             }),
         },
+        "padded-raw" => FakeResponse {
+            status: StatusCode::OK,
+            retry_after: None,
+            body: json!({
+                "id": id,
+                "threadId":"thread-1",
+                "historyId":"42",
+                "raw": BASE64_URL_SAFE.encode(b"Subject: padded\r\n\r\nBody")
+            }),
+        },
         _ => FakeResponse {
             status: StatusCode::OK,
             retry_after: None,
@@ -693,6 +703,20 @@ async fn get_raw_message_decodes_rfc822() {
 
     let requests = state.requests.lock().await;
     assert_eq!(requests[0].path, "/gmail/v1/users/me/messages/msg-1");
+    assert_eq!(requests[0].query.as_deref(), Some("format=raw"));
+}
+
+#[tokio::test]
+async fn get_raw_message_decodes_padded_rfc822() {
+    let (base_url, state) = fake_server().await;
+    let message = client(&base_url)
+        .get_raw_message("padded-raw")
+        .await
+        .expect("message");
+    assert_eq!(message.rfc822, b"Subject: padded\r\n\r\nBody");
+
+    let requests = state.requests.lock().await;
+    assert_eq!(requests[0].path, "/gmail/v1/users/me/messages/padded-raw");
     assert_eq!(requests[0].query.as_deref(), Some("format=raw"));
 }
 
