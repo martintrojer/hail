@@ -73,7 +73,6 @@ import {
 import { TooltipProvider } from '../components/ui/tooltip';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
-import { Pile } from './Pile';
 
 interface AppShellProps {
   title: string;
@@ -694,7 +693,6 @@ export function AppShell({
             </div>
           </main>
         </SidebarInset>
-        <Pile />
       </SidebarProvider>
     </TooltipProvider>
   );
