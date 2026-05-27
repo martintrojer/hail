@@ -29,6 +29,20 @@ type = "fs"
 path = "/var/lib/stalwart/blobs"
 depth = 2
 
+# Local smoke profile: provider import uses JMAP Blob/upload before
+# Email/import, so Stalwart's default 1000 files / 50 MB upload-window quota can
+# stop live Gmail smoke runs after only a few hundred messages. This raises the
+# per-window JMAP upload quota for throwaway local testbeds only. Keep
+# production quotas deliberate; see docs/provider-import-architecture.md.
+[jmap.protocol.upload]
+max-size = 50000000
+max-concurrent = 4
+ttl = "1h"
+
+[jmap.protocol.upload.quota]
+files = 10000
+size = 1073741824
+
 [directory."internal"]
 type = "internal"
 store = "sqlite"

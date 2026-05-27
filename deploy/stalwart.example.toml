@@ -123,6 +123,30 @@ path = "/var/lib/stalwart/blobs"
 depth = 2
 
 #############################################
+# JMAP upload quotas
+#############################################
+# Provider import uploads each raw RFC822 message to Stalwart with JMAP
+# Blob/upload, then creates the local message with Email/import. Stalwart's
+# default upload-window quota is intentionally conservative (1000 files /
+# 50,000,000 bytes per account per window) and can stop large historical Gmail
+# imports before the mailbox is fully backfilled.
+#
+# Leave production limits explicit and sized for your host. For development or
+# one-time historical import smoke, either set hail's bounded Gmail import knob:
+#   HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=200
+# or raise the Stalwart upload quota below and restart Stalwart before running a
+# larger backfill. See docs/provider-import-architecture.md for the runbook.
+#
+# [jmap.protocol.upload]
+# max-size = 50000000
+# max-concurrent = 4
+# ttl = "1h"
+#
+# [jmap.protocol.upload.quota]
+# files = 10000
+# size = 1073741824
+
+#############################################
 # Authentication backend: Stalwart internal directory
 #############################################
 # Confirmed keys from Stalwart's distributed config.toml:

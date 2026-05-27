@@ -124,7 +124,13 @@ hail compose
 
 Current provider import behavior is **one-way import**: provider -> Stalwart. Hail actions
 archive/delete/classify local Stalwart mail; they do not mutate Gmail labels,
-read state, archive state, Trash, or Spam.
+read state, archive state, Trash, or Spam. Historical imports use Stalwart JMAP
+`Blob/upload` before `Email/import`, so large first backfills can hit Stalwart's
+JMAP upload-window quota before they hit a Gmail API quota. For smoke runs, set
+`HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES` to a small value. For
+larger local imports, raise Stalwart `jmap.protocol.upload.quota.files` and
+`jmap.protocol.upload.quota.size` deliberately; see
+[provider-import-architecture.md](./provider-import-architecture.md#stalwart-rfc822-import-primitive).
 
 Deep dive: [provider-import-architecture.md](./provider-import-architecture.md).
 Outbound details: [provider-outbound-strategy.md](./provider-outbound-strategy.md).

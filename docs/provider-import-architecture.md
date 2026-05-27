@@ -180,6 +180,44 @@ blob id and mailbox ids, then read back `Email.id`, `Email.threadId`,
 `Email.mailboxIds`, and `Email.messageId`. The current code does not rely on an
 unmodified Stalwart management API or filesystem injection path.
 
+#### Stalwart upload quota for imports
+
+Because this path uses JMAP `Blob/upload` once per imported provider message,
+Stalwart's JMAP upload-window quota is part of provider-import capacity. Current
+Stalwart defaults are conservative (`jmap.protocol.upload.quota.files = 1000`,
+`jmap.protocol.upload.quota.size = 50000000` bytes, alongside
+`jmap.protocol.upload.ttl = "1h"` in Stalwart's JMAP protocol settings). A live
+Gmail smoke run reached that limit after roughly 240 messages because raw mail
+and MIME attachments count against the same blob-upload window. This is not a
+Gmail quota and not a hail sidecar storage limit; it is Stalwart rejecting the
+pre-`Email/import` upload. See Stalwart's JMAP protocol upload settings at
+https://stalw.art/docs/http/jmap/protocol/.
+
+Operational guidance:
+
+- For live smoke and demos, prefer hail's bounded initial-import knob,
+  `HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES`, so the first run
+  imports a small deterministic window and leaves a durable cursor for later.
+- For local throwaway Stalwart containers, raise the JMAP upload quota before a
+  larger backfill. The checked-in local smoke configs set:
+
+  ```toml
+  [jmap.protocol.upload]
+  max-size = 50000000
+  max-concurrent = 4
+  ttl = "1h"
+
+  [jmap.protocol.upload.quota]
+  files = 10000
+  size = 1073741824
+  ```
+
+- For production, do not blindly copy a smoke quota. Size `quota.files` and
+  `quota.size` for expected import volume, mailbox size, disk capacity, and
+  abuse tolerance; keep `ttl`/quota values explicit in Stalwart configuration or
+  Stalwart's admin configuration database, and monitor normal storage quota
+  separately from this upload-window throttle.
+
 The primitive is idempotent from the caller's perspective only as far as this
 boundary can know: the fake is fully idempotent for tests, and production checks
 existing local `Message-ID` before import. Durable provider idempotency remains

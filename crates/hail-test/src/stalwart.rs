@@ -75,6 +75,19 @@ type = "fs"
 path = "/var/lib/stalwart/blobs"
 depth = 2
 
+# Local fixture profile: provider-import and smoke tests use JMAP Blob/upload
+# before Email/import. Raise Stalwart's default 1000 files / 50 MB upload-window
+# quota for throwaway containers so fixture runs are not capped by conservative
+# production defaults.
+[jmap.protocol.upload]
+max-size = 50000000
+max-concurrent = 4
+ttl = "1h"
+
+[jmap.protocol.upload.quota]
+files = 10000
+size = 1073741824
+
 [directory."internal"]
 type = "internal"
 store = "sqlite"
@@ -1061,6 +1074,9 @@ mod tests {
         assert!(rendered.contains("[server.listener.\"http\"]"));
         assert!(rendered.contains("bind = [\"0.0.0.0:8080\"]"));
         assert!(rendered.contains("path = \"/var/lib/stalwart/stalwart.sqlite3\""));
+        assert!(rendered.contains("[jmap.protocol.upload.quota]"));
+        assert!(rendered.contains("files = 10000"));
+        assert!(rendered.contains("size = 1073741824"));
         assert!(rendered.contains("secret = \"HASHED\""));
     }
 
