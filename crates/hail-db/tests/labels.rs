@@ -1,7 +1,7 @@
 use hail_db::labels::{
     LabelDbError, LabelSource, assign_label_name_to_thread, assign_label_name_to_threads,
-    assign_label_to_thread, assign_label_to_threads, create_label, delete_label,
-    find_label_by_name, list_label_thread_ids, list_labels, list_thread_labels,
+    assign_label_to_thread, assign_label_to_threads, assigned_thread_ids_for_label, create_label,
+    delete_label, find_label_by_name, list_label_thread_ids, list_labels, list_thread_labels,
     normalize_label_path, remove_label_from_thread, rename_label, upsert_gmail_label,
 };
 
@@ -281,6 +281,34 @@ async fn strict_user_scoping_prevents_cross_user_reads_and_assignments() {
             .unwrap()[0]
             .id,
         b_label.id
+    );
+    assert_eq!(
+        assigned_thread_ids_for_label(
+            &pool,
+            user_a,
+            a_label.id,
+            &["same-thread-id".to_owned(), "thread-b".to_owned()],
+        )
+        .await
+        .expect("a search label filter ids"),
+        vec!["same-thread-id".to_owned()]
+    );
+    assert!(
+        assigned_thread_ids_for_label(
+            &pool,
+            user_b,
+            a_label.id,
+            &["same-thread-id".to_owned(), "thread-b".to_owned()],
+        )
+        .await
+        .expect("cross-user search label filter ids")
+        .is_empty()
+    );
+    assert_eq!(
+        assigned_thread_ids_for_label(&pool, user_b, b_label.id, &["same-thread-id".to_owned()])
+            .await
+            .expect("b search label filter ids"),
+        vec!["same-thread-id".to_owned()]
     );
 }
 
