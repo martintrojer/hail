@@ -2,6 +2,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiClientProvider } from '../api/ApiClientProvider';
 import {
   HailApiError,
   type BubbleUpRequest,
@@ -19,6 +20,10 @@ import { router } from '../router';
 import { queryClient as appQueryClient } from '../lib/queryClient';
 import {
   createTestQueryClient,
+  installNoNetworkFetch,
+  installNoopHistoryBack,
+  installTestRoute,
+  isolateAppQueryClientAuth,
   renderWithQueryClient,
   seedMe,
   TestHailApiClient,
@@ -145,14 +150,27 @@ class ThreadPageTestClient extends TestHailApiClient {
 
 let currentTestBody: ReactNode = null;
 let restoreThreadRoute: (() => void) | null = null;
+let restoreAppQueryClientAuth: (() => void) | null = null;
+let restoreHistoryBack: (() => void) | null = null;
+let restoreNetworkFetch: (() => void) | null = null;
+
+function restoreRouterState() {
+  window.history.pushState({}, '', '/');
+}
 
 afterEach(() => {
-  currentTestBody = null;
+  cleanup();
   restoreThreadRoute?.();
   restoreThreadRoute = null;
-  window.history.pushState({}, '', '/');
+  restoreAppQueryClientAuth?.();
+  restoreAppQueryClientAuth = null;
+  restoreHistoryBack?.();
+  restoreHistoryBack = null;
+  restoreNetworkFetch?.();
+  restoreNetworkFetch = null;
+  currentTestBody = null;
   window.localStorage.clear();
-  cleanup();
+  restoreRouterState();
 });
 
 function TestBody() {
@@ -160,39 +178,53 @@ function TestBody() {
 }
 
 function installTestRouteComponent() {
-  const matchRoute = router.routesByPath['/thread/$threadId'];
-  const previousComponent = matchRoute.options.component;
-  const previousBeforeLoad = matchRoute.options.beforeLoad;
-  matchRoute.options.component = TestBody;
-  matchRoute.options.beforeLoad = undefined;
-  restoreThreadRoute = () => {
-    matchRoute.options.component = previousComponent;
-    matchRoute.options.beforeLoad = previousBeforeLoad;
-  };
+  restoreThreadRoute?.();
+  restoreThreadRoute = installTestRoute(router, '/thread/$threadId', {
+    component: TestBody,
+    beforeLoad: undefined,
+  });
 }
 
 function renderThread(thread: ThreadViewResponse) {
   const queryClient = createTestQueryClient();
   const client = new ThreadPageTestClient(thread);
 
-  seedMe(queryClient);
-  seedMe(appQueryClient);
+  seedMe(queryClient, client.testUser);
   queryClient.setQueryData(queryKeys.thread(thread.thread_id), thread);
 
   currentTestBody = (
-    <AuthProvider>
-      <UndoToastProvider>
-        <ThreadPage threadId={thread.thread_id} client={client} />
-      </UndoToastProvider>
-    </AuthProvider>
+    <ApiClientProvider client={client}>
+      <AuthProvider>
+        <UndoToastProvider>
+          <ThreadPage threadId={thread.thread_id} client={client} />
+        </UndoToastProvider>
+      </AuthProvider>
+    </ApiClientProvider>
   );
   installTestRouteComponent();
   window.history.pushState({}, '', `/thread/${thread.thread_id}`);
 
+  restoreAppQueryClientAuth?.();
+  restoreAppQueryClientAuth = isolateAppQueryClientAuth(
+    appQueryClient,
+    client.testUser,
+  );
+  restoreHistoryBack?.();
+  restoreHistoryBack = installNoopHistoryBack();
+  restoreNetworkFetch?.();
+  const noNetworkFetch = installNoNetworkFetch();
+  restoreNetworkFetch = noNetworkFetch.restore;
+
   return {
-    ...renderWithQueryClient(<RouterProvider router={router} />, queryClient),
+    ...renderWithQueryClient(
+      <ApiClientProvider client={client}>
+        <RouterProvider router={router} />
+      </ApiClientProvider>,
+      queryClient,
+    ),
     client,
     queryClient,
+    fetchSpy: noNetworkFetch.fetchSpy,
   };
 }
 
@@ -558,7 +590,7 @@ describe('ThreadPage', () => {
   });
 
   it('routes bubble-up selections through the shared mutation', async () => {
-    const { client, queryClient } = renderThread(sampleThread());
+    const { client, queryClient, fetchSpy } = renderThread(sampleThread());
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     const actionButtons = await screen.findAllByRole('button', {
@@ -576,5 +608,10 @@ describe('ThreadPage', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
     expect(await screen.findByText(/Thread will bubble up at/)).toBeInTheDocument();
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).endsWith('/api/auth/me'),
+      ),
+    ).toBe(false);
   });
 });
