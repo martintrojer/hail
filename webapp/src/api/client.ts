@@ -125,6 +125,12 @@ type ProviderSyncStatusListSuccess = ResponseBody<
 type ProviderSyncTriggerSuccess = ResponseBody<
   paths['/api/provider-accounts/{id}/sync']['post']['responses']['200']
 >;
+type SpeakeasyGetSuccess = ResponseBody<
+  paths['/api/speakeasy']['get']['responses']['200']
+>;
+type SpeakeasyRotateSuccess = ResponseBody<
+  paths['/api/speakeasy/rotate']['post']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -304,6 +310,10 @@ export type WorkflowAction = components['schemas']['WorkflowAction'];
 export type WorkflowRulePayload = components['schemas']['WorkflowRulePayload'];
 export type WorkflowRuleListResponse = WorkflowsGetSuccess;
 export type WorkflowRuleResponse = WorkflowPostSuccess | WorkflowPutSuccess;
+export type SpeakeasyState = components['schemas']['SpeakeasyState'];
+export type SpeakeasyResponse = SpeakeasyGetSuccess;
+export type RotateSpeakeasyRequest = components['schemas']['RotateSpeakeasyRequest'];
+export type RotateSpeakeasyResponse = SpeakeasyRotateSuccess;
 export type DraftRequest = components['schemas']['DraftPayload'];
 export type DraftResponse = components['schemas']['DraftResponse'];
 export type DraftDetails = DraftGetSuccess;
@@ -752,6 +762,26 @@ export class HailApiClient {
   async getBubbleUps(): Promise<BubbleUpViewResponse> {
     return this.#json<BubbleUpViewResponse>(
       await this.#request('/api/views/bubble-up'),
+      200,
+    );
+  }
+
+  async getSpeakeasy(): Promise<SpeakeasyResponse> {
+    return this.#json<SpeakeasyResponse>(
+      await this.#request('/api/speakeasy'),
+      200,
+    );
+  }
+
+  async rotateSpeakeasy(
+    body: RotateSpeakeasyRequest = { acknowledge_bypass_secret: true },
+  ): Promise<RotateSpeakeasyResponse> {
+    return this.#json<RotateSpeakeasyResponse>(
+      await this.#request('/api/speakeasy/rotate', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
       200,
     );
   }
