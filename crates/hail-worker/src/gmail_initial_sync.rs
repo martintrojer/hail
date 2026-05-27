@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
+use hail_db::provider_audit_sanitizer::safe_provider_account_error_message;
 use sqlx::SqlitePool;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -221,5 +222,5 @@ fn normalize_email(email: &str) -> String {
 }
 
 fn safe_error_message(error: &impl std::fmt::Display) -> String {
-    hail_db::provider_error_redaction::safe_provider_error_message(error)
+    safe_provider_account_error_message(error)
 }

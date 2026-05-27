@@ -4,7 +4,7 @@
 //! is the sidecar store and what schema the baseline migration establishes.
 
 pub mod app_events;
-pub mod provider_error_redaction;
+pub mod provider_audit_sanitizer;
 pub mod provider_message_mappings;
 pub mod provider_sync_audit;
 
