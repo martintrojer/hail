@@ -1,16 +1,31 @@
-# Quickstart: receive mail in about 10 minutes
+# Quickstart: direct/simple Compose deployment
 
-This guide takes a fresh host to one received message in hail. Replace
-`example.com` and `mail.example.com` with your real domain and host name.
+This guide takes a fresh host to one received message in hail using the
+**direct/simple Stalwart deployment path**. Replace `example.com` and
+`mail.example.com` with your real domain and host name.
+
+If you have not chosen a deployment shape yet, start with
+[deployment.md](./deployment.md). This quickstart assumes mail can reach your
+Stalwart host directly on TCP/25, or that you only want to boot the stack before
+following a deeper ingress guide.
+
+For other shapes:
+
+- CGNAT or blocked TCP/25 with mail data at home: see the
+  [VPS/WireGuard MX option](./deployment.md#3-home-server-with-vpswireguard-mx-gateway).
+- Cloudflare Email Routing/import bridge: see
+  [cloudflare-tunnel.md](./cloudflare-tunnel.md#recipe-b-cloudflare-email-routing-plus-tunnel).
+- Gmail/provider import: see
+  [provider-import-architecture.md](./provider-import-architecture.md).
 
 ## 1. Prerequisites
 
 You need:
 
 - A domain you control, with DNS access.
-- A host with TCP `25` and `8080` reachable from the internet, a Cloudflare
-  account for the web tunnel / Email Routing recipe, or a VPS gateway for the
-  WireGuard MX recipe.
+- A host that can run Podman/Docker Compose. For this direct quickstart, public
+  TCP `25` should reach Stalwart and public HTTPS should reach `hail-api` or a
+  reverse proxy in front of it.
 - Podman with `podman compose`, or Docker with the Compose plugin.
 - `openssl`.
 
@@ -22,11 +37,10 @@ podman --version && podman compose version
 # or: docker --version && docker compose version
 ```
 
-If port 25 is blocked or you are behind CGNAT, use `docs/cloudflare-tunnel.md`.
-The most realistic home-hosted mail ingress is often Recipe C: DNS-only MX to a
-small VPS gateway, then WireGuard to the home Stalwart host. Cloudflare Email
-Routing remains documented for forwarding/import-based setups. You can still
-start the local stack with this guide.
+If port 25 is blocked or you are behind CGNAT, pause here and choose a different
+ingress shape in [deployment.md](./deployment.md). You can still use the rest of
+this guide to boot the local stack, but public mail will not arrive until the
+chosen ingress path is configured.
 
 ## 2. Clone and enter the repo
 
@@ -213,6 +227,10 @@ Cloudflare Tunnel before inviting other users.
 
 ## 8. Publish DNS for direct SMTP
 
+This section is only for the direct SMTP deployment shape. If you chose
+VPS/WireGuard, Cloudflare Email Routing/import, or Gmail/provider import, use the
+matching guide from [deployment.md](./deployment.md) instead.
+
 For direct delivery to Stalwart, create:
 
 ```text
@@ -264,8 +282,9 @@ podman compose -f deploy/docker-compose.yml logs --tail=200 stalwart
 # or: docker compose -f deploy/docker-compose.yml logs --tail=200 stalwart
 ```
 
-If port 25 fails from outside your network, fix firewall/NAT rules or use
-Cloudflare Email Routing for blocked port 25 / CGNAT deployments.
+If port 25 fails from outside your network, this direct quickstart cannot
+receive public mail yet. Choose an alternate ingress path in
+[deployment.md](./deployment.md), such as VPS/WireGuard MX or provider import.
 
 ### A container is failing
 
