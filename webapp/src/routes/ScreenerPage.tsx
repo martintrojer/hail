@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { CheckCircle, ShieldOff } from 'lucide-react';
+import { ShieldOff } from 'lucide-react';
 import type { HailApiClient } from '../api/client';
 import {
   type ScreenerClassification,
@@ -13,7 +13,6 @@ import {
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { ListView } from '../components/ListView';
-import { ScreenerBanner } from '../components/ScreenerBanner';
 import {
   ScreenerRoutingDropdown,
   type ScreenerRoutingDestination,
@@ -246,7 +245,6 @@ function PendingSenderCard({
 
 export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
   const query = useScreenerView(client);
-  const pendingCount = query.data?.senders.length ?? 0;
 
   let list;
   if (query.isPending) {
@@ -282,14 +280,6 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
       description="New senders end up here. Decide if they get in."
       actions={
         <div className="flex items-center gap-4">
-          <ScreenerBanner pendingCount={pendingCount} />
-          <Link
-            to="/screener/speakeasy"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-secondary hover:text-ink-primary"
-          >
-            <CheckCircle size={14} />
-            Speakeasy
-          </Link>
           <Link
             to="/screened-out"
             className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-secondary hover:text-ink-primary"

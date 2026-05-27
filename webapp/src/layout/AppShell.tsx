@@ -83,34 +83,110 @@ interface AppShellProps {
 interface NavItem {
   to: string;
   label: string;
+  description: string;
   Icon: ComponentType<{ className?: string }>;
 }
 
 const primaryNavItems: NavItem[] = [
-  { to: '/imbox', label: 'Imbox', Icon: Inbox },
-  { to: '/feed', label: 'The Feed', Icon: Rss },
-  { to: '/papertrail', label: 'Paper Trail', Icon: ReceiptText },
-  { to: '/screener', label: 'The Screener', Icon: UserRoundPlus },
+  {
+    to: '/imbox',
+    label: 'Imbox',
+    description: 'Important mail from approved people lands here.',
+    Icon: Inbox,
+  },
+  {
+    to: '/feed',
+    label: 'The Feed',
+    description: 'Newsletters and recurring reading can collect here.',
+    Icon: Rss,
+  },
+  {
+    to: '/papertrail',
+    label: 'Paper Trail',
+    description: 'Receipts, statements, and reference mail will land here.',
+    Icon: ReceiptText,
+  },
+  {
+    to: '/screener',
+    label: 'The Screener',
+    description: 'New senders end up here. Decide if they get in.',
+    Icon: UserRoundPlus,
+  },
 ];
 
 const pileNavItems: NavItem[] = [
-  { to: '/set-aside', label: 'Set Aside', Icon: Bookmark },
-  { to: '/reply-later', label: 'Reply Later', Icon: Clock3 },
-  { to: '/bubble-up', label: 'Bubble Up', Icon: ArrowUpCircle },
+  {
+    to: '/set-aside',
+    label: 'Set Aside',
+    description: 'Threads you want to keep handy without leaving them in the Imbox.',
+    Icon: Bookmark,
+  },
+  {
+    to: '/reply-later',
+    label: 'Reply Later',
+    description: 'Threads waiting for a response when you have time.',
+    Icon: Clock3,
+  },
+  {
+    to: '/bubble-up',
+    label: 'Bubble Up',
+    description: 'Threads scheduled to return to your attention.',
+    Icon: ArrowUpCircle,
+  },
 ];
 
 const mailboxNavItems: NavItem[] = [
-  { to: '/drafts', label: 'Drafts', Icon: FilePenLine },
-  { to: '/scheduled', label: 'Scheduled', Icon: Send },
-  { to: '/archive', label: 'Archive', Icon: Archive },
-  { to: '/spam', label: 'Spam', Icon: ShieldAlert },
-  { to: '/trash', label: 'Trash', Icon: Trash2 },
-  { to: '/files', label: 'All Files', Icon: FileArchive },
+  {
+    to: '/drafts',
+    label: 'Drafts',
+    description: 'Resume messages you started but have not sent yet.',
+    Icon: FilePenLine,
+  },
+  {
+    to: '/scheduled',
+    label: 'Scheduled',
+    description: 'Messages waiting for scheduled delivery.',
+    Icon: Send,
+  },
+  {
+    to: '/archive',
+    label: 'Archive',
+    description: 'Mail you have dealt with and moved out of the Imbox.',
+    Icon: Archive,
+  },
+  {
+    to: '/spam',
+    label: 'Spam',
+    description: 'Mail identified as spam collects here until you restore or delete it.',
+    Icon: ShieldAlert,
+  },
+  {
+    to: '/trash',
+    label: 'Trash',
+    description: 'Deleted mail stays here until it is permanently removed.',
+    Icon: Trash2,
+  },
+  {
+    to: '/files',
+    label: 'All Files',
+    description: 'Every recent attachment in one place, with the mail thread it came from.',
+    Icon: FileArchive,
+  },
 ];
 
 const workflowNavItems: NavItem[] = [
-  { to: '/search', label: 'Search', Icon: Search },
-  { to: '/screened-out', label: 'Screened Out', Icon: ShieldOff },
+  {
+    to: '/search',
+    label: 'Search',
+    description: 'Find mail and contact notes across hail.',
+    Icon: Search,
+  },
+  {
+    to: '/screened-out',
+    label: 'Screened Out',
+    description: 'Review blocked senders and allow mistakes into the right place.',
+    Icon: ShieldOff,
+  },
 ];
 
 function EmptyList({ title }: { title: string }) {
@@ -225,13 +301,26 @@ function ThemeIcon({ theme }: { theme: ThemePreference }) {
   return <Monitor />;
 }
 
+function NavTooltip({ item }: { item: NavItem }) {
+  return (
+    <div className="flex max-w-64 flex-col gap-1 text-left">
+      <span className="font-medium">{item.label}</span>
+      <span className="text-xs opacity-85">{item.description}</span>
+    </div>
+  );
+}
+
 function NavMenuItem({ item, activePath }: { item: NavItem; activePath: string }) {
   const isActive = activePath === item.to || activePath.startsWith(`${item.to}/`);
 
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
-        <Link to={item.to}>
+      <SidebarMenuButton
+        asChild
+        isActive={isActive}
+        tooltip={{ children: <NavTooltip item={item} />, hidden: false }}
+      >
+        <Link to={item.to} aria-label={item.label}>
           <item.Icon />
           <span>{item.label}</span>
         </Link>
@@ -268,7 +357,18 @@ function LabelsNavPlaceholder() {
     <SidebarGroup>
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton asChild tooltip="Labels">
+          <SidebarMenuButton
+            asChild
+            tooltip={{
+              children: (
+                <div className="flex max-w-64 flex-col gap-1 text-left">
+                  <span className="font-medium">Labels</span>
+                  <span className="text-xs opacity-85">Browse and filter mail by labels.</span>
+                </div>
+              ),
+              hidden: false,
+            }}
+          >
             <Link to="/search" search={{}}>
               <Tags />
               <span>Labels</span>
@@ -336,12 +436,22 @@ function AppSidebar({ activePath, isAdmin }: { activePath: string; isAdmin: bool
         <SidebarSeparator />
         <SidebarMenu>
           <NavMenuItem
-            item={{ to: '/provider-accounts', label: 'Provider Accounts', Icon: KeyRound }}
+            item={{
+              to: '/provider-accounts',
+              label: 'Provider Accounts',
+              description: 'Connect Gmail for one-way provider import into hail.',
+              Icon: KeyRound,
+            }}
             activePath={activePath}
           />
           {isAdmin ? (
             <NavMenuItem
-              item={{ to: '/admin', label: 'Admin', Icon: Settings }}
+              item={{
+                to: '/admin',
+                label: 'Admin',
+                description: 'Manage mailbox users and accepted mail domains.',
+                Icon: Settings,
+              }}
               activePath={activePath}
             />
           ) : null}
@@ -394,7 +504,6 @@ function UserMenu({
 
 export function AppShell({
   title,
-  description,
   list,
   reading,
   actions,
@@ -499,11 +608,6 @@ export function AppShell({
                   <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
                     {title}
                   </h1>
-                  {description ? (
-                    <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-                      {description}
-                    </p>
-                  ) : null}
                 </div>
                 {actions ? <div className="shrink-0">{actions}</div> : null}
               </div>
