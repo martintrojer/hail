@@ -173,6 +173,7 @@ function mailItem(overrides: Partial<MailViewItem>): MailViewItem {
     unread: true,
     classification: 'imbox',
     has_notes: false,
+    labels: [],
     ...overrides,
   };
 }

@@ -42,6 +42,7 @@ class ComposerPageTestClient extends TestHailApiClient {
     subject: 'Launch plan',
     participants: [],
     notes: [],
+    labels: [],
     messages: [
       {
         email_id: 'email-1',
