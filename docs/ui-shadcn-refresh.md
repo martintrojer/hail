@@ -41,6 +41,17 @@ HEY's large-box visual language.
 
 ## Component principle: shadcn first
 
+Agents implementing this refresh should use the installed `shadcn` skill:
+
+```text
+/var/home/martintrojer/.agents/skills/shadcn/SKILL.md
+```
+
+The skill contains project workflow rules for shadcn component search, docs,
+composition, styling, forms, icons, and update safety. In this repo, prefer the
+CLI through `npx shadcn@latest ...` unless the package manager changes; `pnpm`
+is not currently assumed to exist on the host.
+
 Default to shadcn/Radix primitives for every UI building block.
 
 Use shadcn-style primitives for:
