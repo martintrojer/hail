@@ -115,7 +115,7 @@ async fn list_statuses(
                 sync_backoff_secs, last_error_class, last_error_message, last_profile_history_id, \
                 profile_synced_at \
          FROM provider_accounts \
-         WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status != 'disconnected' \
+         WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync') \
          ORDER BY provider_email COLLATE NOCASE, id",
     )
     .bind(user_id)
@@ -137,7 +137,7 @@ async fn mark_provider_account_due(
     let mut tx = db.begin().await?;
     let found: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM provider_accounts \
-         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
+         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync')",
     )
     .bind(provider_account_id)
     .bind(user_id)

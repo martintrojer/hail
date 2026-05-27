@@ -47,11 +47,16 @@ struct FakeGmailOAuthClient {
     exchange_codes: Mutex<Vec<String>>,
     revoked_tokens: Mutex<Vec<String>>,
     exchange_error: Mutex<Option<String>>,
+    revoke_error: Mutex<Option<String>>,
 }
 
 impl FakeGmailOAuthClient {
     fn fail_next_exchange(&self, message: impl Into<String>) {
         *self.exchange_error.lock().expect("exchange error") = Some(message.into());
+    }
+
+    fn fail_next_revoke(&self, message: impl Into<String>) {
+        *self.revoke_error.lock().expect("revoke error") = Some(message.into());
     }
 }
 
@@ -104,6 +109,9 @@ impl GmailOAuthClient for FakeGmailOAuthClient {
                 .lock()
                 .expect("revoked tokens")
                 .push(refresh_token.expose_secret().to_owned());
+            if let Some(message) = self.revoke_error.lock().expect("revoke error").take() {
+                return Err(GmailOAuthError::Revoke(message));
+            }
             Ok(())
         })
     }
@@ -629,50 +637,141 @@ async fn gmail_callback_redirects_safe_errors_to_provider_accounts_page() {
 }
 
 #[tokio::test]
-async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
+async fn sync_status_lists_only_importable_connected_gmail_accounts_with_canonical_statuses() {
     let (state, key) = app_state().await;
     let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
     let (other_user_id, _other_session) = seed_session(&state, &key, "bob@example.com").await;
     let client = Arc::new(FakeGmailOAuthClient::default());
     let now = chrono::Utc::now();
-    let next_sync = now + chrono::Duration::minutes(10);
 
-    let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
-          granted_scopes_json, refresh_token_enc, last_profile_history_id, profile_synced_at, sync_status, \
-          last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, sync_backoff_secs, \
-          last_error_class, last_error_message, created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', 'Alice Gmail', '[]', \
-                 ?2, 'history-9', ?3, 'error', ?3, ?3, ?4, 120, \
-                 'gmail_rate_limit', 'rate limited', ?3, ?3) \
-         RETURNING id",
+    async fn insert_account(
+        state: &AppState,
+        user_id: i64,
+        provider_account_id: &str,
+        email: &str,
+        sync_status: &str,
+        token: Option<Vec<u8>>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO provider_accounts \
+             (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
+              granted_scopes_json, refresh_token_enc, last_profile_history_id, profile_synced_at, sync_status, \
+              last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, sync_backoff_secs, \
+              last_error_class, last_error_message, disconnected_at, revoked_at, created_at, updated_at) \
+             VALUES (?1, 'acct-a', 'gmail', ?2, ?3, ?4, '[]', \
+                     ?5, 'history-9', ?6, ?7, ?6, ?6, ?8, 120, \
+                     'gmail_rate_limit', 'rate limited', \
+                     CASE WHEN ?7 = 'disconnected' THEN ?6 ELSE NULL END, \
+                     CASE WHEN ?7 = 'revoked' THEN ?6 ELSE NULL END, ?6, ?6) \
+             RETURNING id",
+        )
+        .bind(user_id)
+        .bind(provider_account_id)
+        .bind(email)
+        .bind(format!("{email} display"))
+        .bind(token)
+        .bind(now)
+        .bind(sync_status)
+        .bind(now + chrono::Duration::minutes(10))
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+    }
+
+    let active_id = insert_account(
+        &state,
+        user_id,
+        "gmail-active",
+        "bravo@gmail.example",
+        "active",
+        Some(vec![1_u8; 29]),
+        now,
     )
-    .bind(user_id)
-    .bind(vec![1_u8; 29])
-    .bind(now)
-    .bind(next_sync)
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?1, 'acct-b', 'gmail', 'gmail-bob', 'bob@gmail.example', '[]', \
-                 ?2, 'active', ?3, ?3)",
+    .await;
+    let error_id = insert_account(
+        &state,
+        user_id,
+        "gmail-error",
+        "alpha@gmail.example",
+        "error",
+        Some(vec![2_u8; 29]),
+        now,
     )
-    .bind(other_user_id)
-    .bind(vec![2_u8; 29])
-    .bind(now)
-    .execute(&state.db)
+    .await;
+    let initial_id = insert_account(
+        &state,
+        user_id,
+        "gmail-initial",
+        "charlie@gmail.example",
+        "initial_sync",
+        Some(vec![3_u8; 29]),
+        now,
+    )
+    .await;
+    let revoked_id = insert_account(
+        &state,
+        user_id,
+        "gmail-revoked",
+        "delta@gmail.example",
+        "revoked",
+        None,
+        now,
+    )
+    .await;
+    let disconnected_id = insert_account(
+        &state,
+        user_id,
+        "gmail-disconnected",
+        "echo@gmail.example",
+        "disconnected",
+        None,
+        now,
+    )
+    .await;
+    let disabled_id = insert_account(
+        &state,
+        user_id,
+        "gmail-disabled",
+        "foxtrot@gmail.example",
+        "disabled",
+        None,
+        now,
+    )
+    .await;
+    let other_id = insert_account(
+        &state,
+        other_user_id,
+        "gmail-bob",
+        "bob@gmail.example",
+        "active",
+        Some(vec![4_u8; 29]),
+        now,
+    )
+    .await;
+
+    insert_provider_sync_audit_log(
+        &state.db,
+        NewProviderSyncAuditLog {
+            user_id,
+            provider_account_id: error_id,
+            operation_kind: ProviderSyncOperationKind::Sync,
+            event_type: ProviderSyncEventType::SyncStarted,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Started,
+            safe_error_code: None,
+            safe_error_class: None,
+            safe_error_message: None,
+            metadata_json: None,
+        },
+    )
     .await
     .unwrap();
     insert_provider_sync_audit_log(
         &state.db,
         NewProviderSyncAuditLog {
             user_id,
-            provider_account_id: account_id,
+            provider_account_id: error_id,
             operation_kind: ProviderSyncOperationKind::Failure,
             event_type: ProviderSyncEventType::SyncFailed,
             provider_message_id: None,
@@ -697,21 +796,61 @@ async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = json_body(resp).await;
     let accounts = body["accounts"].as_array().expect("accounts array");
-    assert_eq!(accounts.len(), 1);
-    let account = &accounts[0];
-    assert_eq!(account["id"], account_id);
-    assert_eq!(account["provider_kind"], "gmail");
-    assert_eq!(account["provider_email"], "alice@gmail.example");
-    assert_eq!(account["sync_status"], "error");
-    assert!(account["last_sync_succeeded_at"].as_str().is_some());
-    assert!(account["next_sync_after"].as_str().is_some());
-    assert_eq!(account["sync_backoff_secs"], 120);
-    assert_eq!(account["last_error_class"], "gmail_rate_limit");
-    assert_eq!(account["last_error_message"], "rate limited");
-    assert_eq!(account["last_profile_history_id"], "history-9");
+    let ids: Vec<i64> = accounts
+        .iter()
+        .map(|account| account["id"].as_i64().expect("account id"))
+        .collect();
+    assert_eq!(ids, vec![error_id, active_id, initial_id]);
+    assert!(!ids.contains(&revoked_id));
+    assert!(!ids.contains(&disconnected_id));
+    assert!(!ids.contains(&disabled_id));
+    assert!(!ids.contains(&other_id));
+
+    let statuses: Vec<&str> = accounts
+        .iter()
+        .map(|account| account["sync_status"].as_str().expect("sync_status"))
+        .collect();
+    assert_eq!(statuses, vec!["error", "active", "initial_sync"]);
+    for status in statuses {
+        assert!(
+            ["active", "error", "initial_sync"].contains(&status),
+            "sync-status endpoint returned non-importable or non-canonical status: {status}"
+        );
+    }
+
+    let error_account = &accounts[0];
+    assert_eq!(error_account["id"], error_id);
+    assert_eq!(error_account["provider_kind"], "gmail");
+    assert_eq!(error_account["provider_email"], "alpha@gmail.example");
+    assert!(error_account["last_sync_succeeded_at"].as_str().is_some());
+    assert!(error_account["next_sync_after"].as_str().is_some());
+    assert_eq!(error_account["sync_backoff_secs"], 120);
+    assert_eq!(error_account["last_error_class"], "gmail_rate_limit");
+    assert_eq!(error_account["last_error_message"], "rate limited");
+    assert_eq!(error_account["last_profile_history_id"], "history-9");
     assert_eq!(
-        account["last_error_event"]["safe_error_message"],
+        error_account["last_sync_event"]["event_type"],
+        "sync_failed"
+    );
+    assert_eq!(error_account["last_sync_event"]["result_status"], "failed");
+    assert!(
+        error_account["last_sync_event"]["created_at"]
+            .as_str()
+            .is_some()
+    );
+    assert_eq!(
+        error_account["last_error_event"]["event_type"],
+        "sync_failed"
+    );
+    assert_eq!(error_account["last_error_event"]["result_status"], "failed");
+    assert_eq!(
+        error_account["last_error_event"]["safe_error_message"],
         "provider asked us to retry later"
+    );
+    assert!(
+        error_account["last_error_event"]["created_at"]
+            .as_str()
+            .is_some()
     );
 }
 
@@ -812,7 +951,7 @@ async fn sync_status_output_redacts_hostile_error_fields() {
 }
 
 #[tokio::test]
-async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
+async fn manual_sync_trigger_marks_only_importable_accounts_due_without_running_gmail() {
     let (state, key) = app_state().await;
     let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
     let (other_user_id, _other_session) = seed_session(&state, &key, "bob@example.com").await;
@@ -820,37 +959,88 @@ async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
     let now = chrono::Utc::now();
     let next_sync = now + chrono::Duration::hours(1);
 
-    let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, sync_backoff_secs, \
-          last_error_class, last_error_message, created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
-                 ?2, 'error', ?3, 300, 'network', 'timeout', ?4, ?4) \
-         RETURNING id",
+    async fn insert_account(
+        state: &AppState,
+        user_id: i64,
+        provider_account_id: &str,
+        status: &str,
+        token: Option<Vec<u8>>,
+        next_sync: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO provider_accounts \
+             (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+              granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, sync_backoff_secs, \
+              last_error_class, last_error_message, disconnected_at, revoked_at, created_at, updated_at) \
+             VALUES (?1, 'acct-a', 'gmail', ?2, ?3, '[]', \
+                     ?4, ?5, ?6, 300, 'network', 'timeout', \
+                     CASE WHEN ?5 = 'disconnected' THEN ?7 ELSE NULL END, \
+                     CASE WHEN ?5 = 'revoked' THEN ?7 ELSE NULL END, ?7, ?7) \
+             RETURNING id",
+        )
+        .bind(user_id)
+        .bind(provider_account_id)
+        .bind(format!("{provider_account_id}@gmail.example"))
+        .bind(token)
+        .bind(status)
+        .bind(next_sync)
+        .bind(now)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+    }
+
+    let account_id = insert_account(
+        &state,
+        user_id,
+        "gmail-alice",
+        "error",
+        Some(vec![3_u8; 29]),
+        next_sync,
+        now,
     )
-    .bind(user_id)
-    .bind(vec![3_u8; 29])
-    .bind(next_sync)
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
-    let other_account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, created_at, updated_at) \
-         VALUES (?1, 'acct-b', 'gmail', 'gmail-bob', 'bob@gmail.example', '[]', \
-                 ?2, 'active', ?3, ?4, ?4) \
-         RETURNING id",
+    .await;
+    let other_account_id = insert_account(
+        &state,
+        other_user_id,
+        "gmail-bob",
+        "active",
+        Some(vec![4_u8; 29]),
+        next_sync,
+        now,
     )
-    .bind(other_user_id)
-    .bind(vec![4_u8; 29])
-    .bind(next_sync)
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
+    .await;
+    let revoked_id = insert_account(
+        &state,
+        user_id,
+        "gmail-revoked-sync",
+        "revoked",
+        None,
+        next_sync,
+        now,
+    )
+    .await;
+    let disconnected_id = insert_account(
+        &state,
+        user_id,
+        "gmail-disconnected-sync",
+        "disconnected",
+        None,
+        next_sync,
+        now,
+    )
+    .await;
+    let disabled_id = insert_account(
+        &state,
+        user_id,
+        "gmail-disabled-sync",
+        "disabled",
+        None,
+        next_sync,
+        now,
+    )
+    .await;
 
     let resp = app(state.clone(), client.clone())
         .oneshot(auth_request(
@@ -871,8 +1061,8 @@ async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
         0
     );
 
-    let row: (String, Option<String>, Option<i64>, Option<String>) = sqlx::query_as(
-        "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class \
+    let row: (String, Option<String>, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class, last_error_message \
          FROM provider_accounts WHERE id = ?1",
     )
     .bind(account_id)
@@ -881,18 +1071,44 @@ async fn manual_sync_trigger_marks_account_due_without_running_gmail() {
     .unwrap();
     assert_eq!(
         row,
-        ("error".to_owned(), None, None, Some("network".to_owned()))
+        (
+            "error".to_owned(),
+            None,
+            None,
+            Some("network".to_owned()),
+            Some("timeout".to_owned())
+        )
     );
 
-    let resp = app(state.clone(), client)
-        .oneshot(auth_request(
-            Method::POST,
-            &format!("/api/provider-accounts/{other_account_id}/sync"),
-            &session_id,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    for denied_id in [other_account_id, revoked_id, disconnected_id, disabled_id] {
+        let resp = app(state.clone(), client.clone())
+            .oneshot(auth_request(
+                Method::POST,
+                &format!("/api/provider-accounts/{denied_id}/sync"),
+                &session_id,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "account {denied_id}");
+    }
+
+    let denied_rows: Vec<(i64, Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT id, next_sync_after, sync_backoff_secs, last_error_class \
+         FROM provider_accounts WHERE id IN (?1, ?2, ?3, ?4) ORDER BY id",
+    )
+    .bind(other_account_id)
+    .bind(revoked_id)
+    .bind(disconnected_id)
+    .bind(disabled_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(denied_rows.len(), 4);
+    for (_id, denied_next_sync, denied_backoff, denied_error_class) in denied_rows {
+        assert!(denied_next_sync.is_some());
+        assert_eq!(denied_backoff, Some(300));
+        assert_eq!(denied_error_class.as_deref(), Some("network"));
+    }
 }
 
 #[tokio::test]
@@ -1042,4 +1258,197 @@ async fn disconnect_revokes_refresh_token_and_clears_local_secret() {
     .unwrap();
     assert_eq!(status, "disconnected");
     assert!(token.is_none());
+}
+
+#[tokio::test]
+async fn disconnect_succeeds_locally_when_provider_revoke_fails_and_hides_token_material() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+    let uri = format!("/api/provider-accounts/gmail/callback?state={state_token}&code=oauth-code");
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &session_id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let account_id = connected_account_id(&state, user_id).await;
+    client.fail_next_revoke(hostile_leak_error());
+
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/disconnect"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["sync_status"], "disconnected");
+    let rendered = serde_json::to_string(&body).expect("response json");
+    assert!(!rendered.contains("refresh-token-secret"));
+    assert_no_hostile_leak(&rendered);
+
+    assert_eq!(
+        client
+            .revoked_tokens
+            .lock()
+            .expect("revoked tokens")
+            .as_slice(),
+        ["1//refresh-token-secret"]
+    );
+    let (status, token, token_ref, key_id, disconnected_at): (
+        String,
+        Option<Vec<u8>>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT sync_status, refresh_token_enc, refresh_token_ref, refresh_token_key_id, disconnected_at \
+         FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "disconnected");
+    assert!(token.is_none());
+    assert!(token_ref.is_none());
+    assert!(key_id.is_none());
+    assert!(disconnected_at.is_some());
+}
+
+#[tokio::test]
+async fn disconnect_already_disconnected_account_returns_not_found_without_revoke() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, sync_status, disconnected_at, created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-disconnected', 'disconnected@gmail.example', \
+                 '[]', 'disconnected', ?2, ?2, ?2) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/disconnect"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(resp).await["error"], "provider_account_not_found");
+    assert!(
+        client
+            .revoked_tokens
+            .lock()
+            .expect("revoked tokens")
+            .is_empty()
+    );
+
+    let row: (String, Option<String>, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT sync_status, disconnected_at, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "disconnected");
+    assert!(row.1.is_some());
+    assert!(row.2.is_none());
+}
+
+#[tokio::test]
+async fn reconnect_clears_stale_disconnect_error_and_retry_state() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+    let uri = format!("/api/provider-accounts/gmail/callback?state={state_token}&code=oauth-code");
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &session_id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let account_id = connected_account_id(&state, user_id).await;
+    let original_token: Vec<u8> =
+        sqlx::query_scalar("SELECT refresh_token_enc FROM provider_accounts WHERE id = ?1")
+            .bind(account_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+
+    let stale_time = chrono::Utc::now() - chrono::Duration::days(1);
+    sqlx::query(
+        "UPDATE provider_accounts \
+         SET sync_status = 'disconnected', refresh_token_enc = NULL, refresh_token_key_id = NULL, \
+             disconnected_at = ?2, revoked_at = ?2, last_error_class = 'old_error', \
+             last_error_message = 'old failure', next_sync_after = ?2, sync_backoff_secs = 900 \
+         WHERE id = ?1",
+    )
+    .bind(account_id)
+    .bind(stale_time)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let reconnect_state =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+    let reconnect_uri =
+        format!("/api/provider-accounts/gmail/callback?state={reconnect_state}&code=oauth-code-2");
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &reconnect_uri, &session_id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(resp.headers()),
+        "/provider-accounts?connected=gmail"
+    );
+
+    let row: (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Vec<u8>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT sync_status, disconnected_at, revoked_at, last_error_class, last_error_message, \
+                sync_backoff_secs, refresh_token_enc, next_sync_after \
+         FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "active");
+    assert!(row.1.is_none(), "disconnected_at should be cleared");
+    assert!(row.2.is_none(), "revoked_at should be cleared");
+    assert!(row.3.is_none(), "last_error_class should be cleared");
+    assert!(row.4.is_none(), "last_error_message should be cleared");
+    assert!(row.5.is_none(), "sync_backoff_secs should be cleared");
+    assert_ne!(
+        row.6, original_token,
+        "refresh token ciphertext should be replaced"
+    );
+    assert!(
+        row.7.is_none(),
+        "next_sync_after should be cleared for immediate import eligibility"
+    );
 }
