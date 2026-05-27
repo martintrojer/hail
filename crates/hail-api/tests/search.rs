@@ -62,6 +62,16 @@ impl MailViewProvider for EmptyMailViewProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+
+    fn count<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        _view: MailView,
+        _unread_only: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<usize, MailViewError>> + Send + 'a>> {
+        Box::pin(async { Ok(0) })
+    }
 }
 
 #[derive(Default)]

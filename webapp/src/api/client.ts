@@ -32,6 +32,9 @@ type ContactNotePutSuccess = ResponseBody<
 type ScreenerGetSuccess = ResponseBody<
   paths['/api/views/screener']['get']['responses']['200']
 >;
+type ViewCountsGetSuccess = ResponseBody<
+  paths['/api/views/counts']['get']['responses']['200']
+>;
 type ScreenerAllowedGetSuccess = ResponseBody<
   paths['/api/views/screener/allowed']['get']['responses']['200']
 >;
@@ -225,6 +228,7 @@ export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
+export type ViewCountsResponse = ViewCountsGetSuccess;
 export interface ImboxSectionedResponse {
   bubbled_up: MailViewItem[];
   new_for_you: MailViewItem[];
@@ -586,6 +590,13 @@ export class HailApiClient {
   async getScreenerView(): Promise<ScreenerView> {
     return this.#json<ScreenerView>(
       await this.#request('/api/views/screener'),
+      200,
+    );
+  }
+
+  async getViewCounts(): Promise<ViewCountsResponse> {
+    return this.#json<ViewCountsResponse>(
+      await this.#request('/api/views/counts'),
       200,
     );
   }

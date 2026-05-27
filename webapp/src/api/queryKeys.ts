@@ -10,6 +10,7 @@ export const queryKeys = {
   adminStats: () => [...queryKeys.admin(), 'stats'] as const,
   adminDomains: () => [...queryKeys.admin(), 'domains'] as const,
   views: () => [...queryKeys.all, 'views'] as const,
+  viewCounts: () => [...queryKeys.views(), 'counts'] as const,
   attachments: () => [...queryKeys.all, 'attachments'] as const,
   view: (view: 'imbox' | 'feed' | 'papertrail' | 'drafts' | 'trash' | 'spam' | 'archive' | 'set-aside' | 'reply-later' | 'bubble-up') =>
     [...queryKeys.views(), view] as const,

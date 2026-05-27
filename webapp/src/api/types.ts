@@ -1,4 +1,4 @@
-// This file is auto-generated from http://localhost:8080/api/openapi.json.
+// This file is auto-generated from src/api/openapi.example.json.
 // Do not edit by hand; regenerate via npm run api:types.
 export interface paths {
     "/api/admin/stats": {
@@ -601,6 +601,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["get_bubble_up"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/views/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_view_counts"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1327,6 +1343,19 @@ export interface components {
             /** Format: int64 */
             id: number;
             is_admin: boolean;
+        };
+        ViewCountsResponse: {
+            bubble_up: number;
+            drafts: number;
+            feed_unread: number;
+            imbox_new: number;
+            papertrail_unread: number;
+            reply_later: number;
+            scheduled: number;
+            screener_pending: number;
+            set_aside: number;
+            spam: number;
+            trash: number;
         };
         WorkflowAction: {
             add_label?: string | null;
@@ -3335,6 +3364,40 @@ export interface operations {
                 content?: never;
             };
             /** @description Bubble Up view lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_view_counts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cheap sidebar navigation counts for the current user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewCountsResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description View count lookup failed. */
             500: {
                 headers: {
                     [name: string]: unknown;

@@ -65,7 +65,34 @@ impl MailViewProvider for FakeProvider {
             if let Some(message) = &self.error {
                 return Err(MailViewError::provider(message.clone()));
             }
-            Ok(self.items.iter().take(limit).cloned().collect())
+            Ok(self
+                .items
+                .iter()
+                .filter(|item| item.classification == view.classification())
+                .take(limit)
+                .cloned()
+                .collect())
+        })
+    }
+
+    fn count<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _token: SecretString,
+        view: MailView,
+        unread_only: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<usize, MailViewError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls lock").push((view, 0));
+            if let Some(message) = &self.error {
+                return Err(MailViewError::provider(message.clone()));
+            }
+            Ok(self
+                .items
+                .iter()
+                .filter(|item| item.classification == view.classification())
+                .filter(|item| !unread_only || item.unread)
+                .count())
         })
     }
 }
@@ -310,6 +337,135 @@ async fn bubble_up_view_returns_current_users_future_pending_rows_ordered_by_sur
     assert_eq!(
         json["items"][0]["created_at"],
         now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
+}
+
+#[tokio::test]
+async fn view_counts_returns_sidebar_summary_without_fetching_full_lists() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "counts@example.org").await;
+    let (bob_id, _bob_sid) = seed_session(&state, &key, "other-counts@example.org").await;
+    let now = Utc::now();
+
+    hail_db::mark_thread_seen(&state.db, alice_id, "thread-2")
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(alice_id)
+    .bind("thread-3")
+    .bind(now)
+    .bind(now)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    for (user_id, decision, sender) in [
+        (alice_id, "pending", "pending@example.org"),
+        (alice_id, "allow", "allowed@example.org"),
+        (bob_id, "pending", "hidden@example.org"),
+    ] {
+        sqlx::query(
+            "INSERT INTO screener_rules (user_id, sender_address, decision, first_seen_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(user_id)
+        .bind(sender)
+        .bind(decision)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO scheduled_sends (user_id, draft_email_id, send_at, status, created_at) \
+         VALUES (?1, 'draft-1', ?2, 'pending', ?3), (?1, 'draft-2', ?2, 'sent', ?3)",
+    )
+    .bind(alice_id)
+    .bind(now + Duration::minutes(30))
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    for (stack, thread_id, position) in [
+        ("set_aside", "set-1", 1),
+        ("set_aside", "set-2", 2),
+        ("reply_later", "reply-1", 1),
+    ] {
+        sqlx::query(
+            "INSERT INTO stack_positions (user_id, stack, thread_id, position, added_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(alice_id)
+        .bind(stack)
+        .bind(thread_id)
+        .bind(position)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
+         VALUES (?1, 'future-1', ?2, NULL, ?3), (?1, 'past-1', ?4, NULL, ?3)",
+    )
+    .bind(alice_id)
+    .bind(now + Duration::minutes(10))
+    .bind(now)
+    .bind(now - Duration::minutes(10))
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let provider = Arc::new(FakeProvider::new(vec![
+        item_with_view(1, MailView::Imbox),
+        item_with_view(2, MailView::Imbox),
+        item_with_view(3, MailView::Imbox),
+        item_with_view(10, MailView::Feed),
+        item_with_view(11, MailView::Feed),
+        item_with_view(20, MailView::Papertrail),
+        item_with_view(30, MailView::Drafts),
+        item_with_view(40, MailView::Spam),
+        item_with_view(50, MailView::Trash),
+    ]));
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&alice_sid),
+        "/api/views/counts",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(resp).await,
+        serde_json::json!({
+            "imbox_new": 1,
+            "feed_unread": 1,
+            "papertrail_unread": 1,
+            "screener_pending": 1,
+            "drafts": 1,
+            "scheduled": 1,
+            "set_aside": 2,
+            "reply_later": 1,
+            "bubble_up": 1,
+            "spam": 1,
+            "trash": 1,
+        }),
+    );
+    assert_eq!(
+        provider.calls(),
+        vec![
+            (MailView::Imbox, 100),
+            (MailView::Feed, 0),
+            (MailView::Papertrail, 0),
+            (MailView::Drafts, 0),
+            (MailView::Spam, 0),
+            (MailView::Trash, 0),
+        ],
     );
 }
 
