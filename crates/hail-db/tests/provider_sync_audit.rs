@@ -180,6 +180,40 @@ async fn insert_and_list_provider_sync_audit_logs_for_account() {
 }
 
 #[tokio::test]
+async fn insert_rejects_invalid_metadata_json() {
+    let (pool, _guard) = setup().await;
+    let user_id = insert_user(
+        &pool,
+        "audit-invalid-json@example.com",
+        "acct-audit-invalid",
+    )
+    .await;
+    let provider_account_id = insert_provider_account(&pool, user_id, "acct-audit-invalid").await;
+
+    let result = insert_provider_sync_audit_log(
+        &pool,
+        NewProviderSyncAuditLog {
+            user_id,
+            provider_account_id,
+            operation_kind: ProviderSyncOperationKind::Sync,
+            event_type: ProviderSyncEventType::SyncStarted,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Started,
+            safe_error_code: None,
+            safe_error_class: None,
+            safe_error_message: None,
+            metadata_json: Some("not-json"),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "audit helper must not persist invalid metadata_json"
+    );
+}
+
+#[tokio::test]
 async fn audit_log_insert_redacts_tokens_and_raw_body_from_safe_fields_and_metadata() {
     let (pool, _guard) = setup().await;
     let user_id = insert_user(&pool, "audit-redact@example.com", "acct-audit-redact").await;

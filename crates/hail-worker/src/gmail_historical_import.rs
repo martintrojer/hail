@@ -219,6 +219,8 @@ pub enum GmailHistoricalImportError {
     Database(#[from] sqlx::Error),
     #[error("failed to serialize Gmail historical import cursor: {0}")]
     CursorSerialize(#[from] serde_json::Error),
+    #[error("failed to deserialize Gmail historical import cursor: {0}")]
+    CursorDeserialize(#[source] serde_json::Error),
     #[error("gmail list failed: {0}")]
     GmailList(#[source] GmailClientError),
     #[error(transparent)]
@@ -301,10 +303,22 @@ where
 
     let mut summary = GmailHistoricalImportSummary::default();
     let mut cursor = if options.resume {
-        load_cursor(db, account.provider_account_id)
-            .await?
-            .filter(|cursor| cursor.matches_options(&options) && !cursor.completed)
-            .unwrap_or_else(|| GmailHistoricalBackfillCursor::new(&options))
+        match load_cursor(db, account.provider_account_id).await {
+            Ok(Some(cursor)) if cursor.matches_options(&options) && !cursor.completed => cursor,
+            Ok(_) => GmailHistoricalBackfillCursor::new(&options),
+            Err(error) => {
+                let message = safe_error_message(&error);
+                audit_sync_failed(db, &account, "provider_cursor_corrupt", &message).await?;
+                mark_sync_error(
+                    db,
+                    account.provider_account_id,
+                    "provider_cursor_corrupt",
+                    &message,
+                )
+                .await?;
+                return Err(error);
+            }
+        }
     } else {
         GmailHistoricalBackfillCursor::new(&options)
     };
@@ -682,13 +696,16 @@ async fn mark_message_failed(
 async fn load_cursor(
     db: &SqlitePool,
     provider_account_id: i64,
-) -> Result<Option<GmailHistoricalBackfillCursor>, sqlx::Error> {
+) -> Result<Option<GmailHistoricalBackfillCursor>, GmailHistoricalImportError> {
     let value: Option<String> =
         sqlx::query_scalar("SELECT backfill_cursor_json FROM provider_accounts WHERE id = ?1")
             .bind(provider_account_id)
             .fetch_one(db)
             .await?;
-    Ok(value.and_then(|value| serde_json::from_str(&value).ok()))
+    value
+        .map(|value| serde_json::from_str(&value))
+        .transpose()
+        .map_err(GmailHistoricalImportError::CursorDeserialize)
 }
 
 async fn save_cursor(

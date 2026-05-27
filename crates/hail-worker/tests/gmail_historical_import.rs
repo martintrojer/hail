@@ -729,6 +729,75 @@ async fn bounded_import_saves_resume_cursor_and_uses_it_next_run() {
 }
 
 #[tokio::test]
+async fn corrupt_resume_cursor_surfaces_error_and_audit() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    sqlx::query("DROP TRIGGER provider_accounts_json_state_update")
+        .execute(&pool)
+        .await
+        .expect("drop json state update trigger for corruption simulation");
+    sqlx::query("UPDATE provider_accounts SET backfill_cursor_json = ?1 WHERE id = ?2")
+        .bind("{not-json")
+        .bind(provider_account_id)
+        .execute(&pool)
+        .await
+        .expect("simulate durable cursor corruption");
+
+    let gmail = FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-corrupt-cursor".to_owned(),
+                thread_id: Some("thread-corrupt-cursor".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-corrupt-cursor",
+            "thread-corrupt-cursor",
+            "history-corrupt-cursor",
+            "corrupt-cursor@example.com",
+        )],
+    );
+    let importer = FakeRfc822Importer::default();
+    let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+
+    let result = import_gmail_history(
+        &pool,
+        GmailHistoricalImportAccount {
+            provider_account_id,
+            user_id,
+        },
+        &gmail,
+        &importer,
+        options,
+        &CancellationToken::new(),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "corrupt durable cursor must not silently restart import"
+    );
+    assert!(
+        gmail.list_params().is_empty(),
+        "import must fail before issuing Gmail list with reset cursor semantics"
+    );
+    let (sync_status, last_error_class): (String, Option<String>) =
+        sqlx::query_as("SELECT sync_status, last_error_class FROM provider_accounts WHERE id = ?1")
+            .bind(provider_account_id)
+            .fetch_one(&pool)
+            .await
+            .expect("account status");
+    assert_eq!(sync_status, "error");
+    assert_eq!(last_error_class.as_deref(), Some("provider_cursor_corrupt"));
+    let logs = list_provider_sync_audit_logs(&pool, user_id, provider_account_id, 10)
+        .await
+        .expect("audit logs");
+    assert!(logs.iter().any(|log| log.event_type == "sync_failed"
+        && log.safe_error_class.as_deref() == Some("provider_cursor_corrupt")));
+}
+
+#[tokio::test]
 async fn full_rerun_after_completed_import_does_not_import_or_fetch_again() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
     let first_gmail = FakeGmail::new(

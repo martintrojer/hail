@@ -241,7 +241,13 @@ async fn gmail_connect_requires_auth_and_csrf() {
         .unwrap();
     assert_eq!(no_cookie.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(json_body(no_cookie).await["error"], "unauthorized");
-    assert!(client.auth_requests.lock().expect("auth requests").is_empty());
+    assert!(
+        client
+            .auth_requests
+            .lock()
+            .expect("auth requests")
+            .is_empty()
+    );
 }
 
 fn redirect_location(headers: &HeaderMap) -> &str {
@@ -488,7 +494,13 @@ async fn gmail_callback_rejects_unauthenticated_cross_user_cross_session_and_exp
     }
     assert_eq!(provider_account_count(&state, alice_id).await, 0);
     assert_eq!(consumed_state_count(&state).await, 0);
-    assert!(client.exchange_codes.lock().expect("exchange codes").is_empty());
+    assert!(
+        client
+            .exchange_codes
+            .lock()
+            .expect("exchange codes")
+            .is_empty()
+    );
 
     sqlx::query("UPDATE provider_oauth_states SET expires_at = ?1 WHERE consumed_at IS NULL")
         .bind(chrono::Utc::now() - chrono::Duration::seconds(1))
@@ -506,7 +518,13 @@ async fn gmail_callback_rejects_unauthenticated_cross_user_cross_session_and_exp
     );
     assert_eq!(provider_account_count(&state, alice_id).await, 0);
     assert_eq!(consumed_state_count(&state).await, 0);
-    assert!(client.exchange_codes.lock().expect("exchange codes").is_empty());
+    assert!(
+        client
+            .exchange_codes
+            .lock()
+            .expect("exchange codes")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -529,7 +547,11 @@ async fn gmail_callback_exchange_failure_consumes_state_without_creating_account
         "/provider-accounts?error=oauth_exchange_failed"
     );
     assert_eq!(
-        client.exchange_codes.lock().expect("exchange codes").as_slice(),
+        client
+            .exchange_codes
+            .lock()
+            .expect("exchange codes")
+            .as_slice(),
         ["bad-code"]
     );
     assert_eq!(provider_account_count(&state, user_id).await, 0);
@@ -545,7 +567,11 @@ async fn gmail_callback_exchange_failure_consumes_state_without_creating_account
         "/provider-accounts?error=invalid_oauth_state"
     );
     assert_eq!(
-        client.exchange_codes.lock().expect("exchange codes").as_slice(),
+        client
+            .exchange_codes
+            .lock()
+            .expect("exchange codes")
+            .as_slice(),
         ["bad-code"]
     );
     assert_eq!(provider_account_count(&state, user_id).await, 0);
@@ -687,6 +713,46 @@ async fn sync_status_lists_only_authenticated_users_connected_gmail_accounts() {
         account["last_error_event"]["safe_error_message"],
         "provider asked us to retry later"
     );
+}
+
+#[tokio::test]
+async fn provider_account_response_returns_internal_error_for_corrupt_granted_scopes_json() {
+    let (state, key) = app_state().await;
+    let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+    let uri = format!("/api/provider-accounts/gmail/callback?state={state_token}&code=oauth-code");
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &session_id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let account_id: i64 = sqlx::query_scalar("SELECT id FROM provider_accounts LIMIT 1")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+
+    sqlx::query("DROP TRIGGER provider_accounts_json_state_update")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE provider_accounts SET granted_scopes_json = ?1 WHERE id = ?2")
+        .bind("not-json")
+        .bind(account_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+    let resp = app(state, client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/disconnect"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
@@ -903,14 +969,26 @@ async fn disconnect_requires_csrf_and_owner_session() {
         .await
         .unwrap();
     assert_eq!(no_csrf.status(), StatusCode::FORBIDDEN);
-    assert!(client.revoked_tokens.lock().expect("revoked tokens").is_empty());
+    assert!(
+        client
+            .revoked_tokens
+            .lock()
+            .expect("revoked tokens")
+            .is_empty()
+    );
 
     let other_user = app(state.clone(), client.clone())
         .oneshot(auth_request(Method::POST, &disconnect_uri, &bob_session))
         .await
         .unwrap();
     assert_eq!(other_user.status(), StatusCode::NOT_FOUND);
-    assert!(client.revoked_tokens.lock().expect("revoked tokens").is_empty());
+    assert!(
+        client
+            .revoked_tokens
+            .lock()
+            .expect("revoked tokens")
+            .is_empty()
+    );
 
     let (status, token): (String, Option<Vec<u8>>) = sqlx::query_as(
         "SELECT sync_status, refresh_token_enc FROM provider_accounts WHERE id = ?1",
