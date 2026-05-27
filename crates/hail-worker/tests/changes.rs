@@ -82,6 +82,10 @@ impl JmapOps for NoopJmapOps {
         Ok(())
     }
 
+    async fn remove_keyword(&self, _email_id: &str, _keyword: &str) -> Result<(), RouteError> {
+        Ok(())
+    }
+
     async fn move_to_mailbox(&self, _email_id: &str, _mailbox_id: &str) -> Result<(), RouteError> {
         Ok(())
     }
@@ -102,6 +106,10 @@ impl JmapOps for FailingRouteJmapOps {
     }
 
     async fn apply_keyword(&self, _email_id: &str, _keyword: &str) -> Result<(), RouteError> {
+        Ok(())
+    }
+
+    async fn remove_keyword(&self, _email_id: &str, _keyword: &str) -> Result<(), RouteError> {
         Ok(())
     }
 

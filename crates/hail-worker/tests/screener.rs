@@ -29,6 +29,10 @@ enum Call {
         email_id: String,
         keyword: String,
     },
+    RemoveKeyword {
+        email_id: String,
+        keyword: String,
+    },
     MoveToMailbox {
         email_id: String,
         mailbox_id: String,
@@ -82,6 +86,17 @@ impl JmapOps for FakeJmapOps {
             .lock()
             .expect("calls mutex")
             .push(Call::ApplyKeyword {
+                email_id: email_id.to_string(),
+                keyword: keyword.to_string(),
+            });
+        Ok(())
+    }
+
+    async fn remove_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(Call::RemoveKeyword {
                 email_id: email_id.to_string(),
                 keyword: keyword.to_string(),
             });
@@ -403,6 +418,18 @@ async fn no_rule_moves_to_screener_and_inserts_pending() {
             Call::MoveToMailbox {
                 email_id: "email-1".to_string(),
                 mailbox_id: "screener-id".to_string()
+            },
+            Call::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_imbox".to_string(),
+            },
+            Call::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_feed".to_string(),
+            },
+            Call::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_papertrail".to_string(),
             }
         ]
     );
@@ -449,6 +476,18 @@ async fn pending_rule_moves_subsequent_message_to_screener() {
             Call::MoveToMailbox {
                 email_id: "email-2".to_string(),
                 mailbox_id: "screener-id".to_string()
+            },
+            Call::RemoveKeyword {
+                email_id: "email-2".to_string(),
+                keyword: "$hail_imbox".to_string(),
+            },
+            Call::RemoveKeyword {
+                email_id: "email-2".to_string(),
+                keyword: "$hail_feed".to_string(),
+            },
+            Call::RemoveKeyword {
+                email_id: "email-2".to_string(),
+                keyword: "$hail_papertrail".to_string(),
             }
         ]
     );
@@ -552,6 +591,18 @@ async fn wrong_user_rule_does_not_affect_other_user() {
             Call::MoveToMailbox {
                 email_id: "email-1".to_string(),
                 mailbox_id: "screener-id".to_string()
+            },
+            Call::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_imbox".to_string(),
+            },
+            Call::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_feed".to_string(),
+            },
+            Call::RemoveKeyword {
+                email_id: "email-1".to_string(),
+                keyword: "$hail_papertrail".to_string(),
             }
         ]
     );

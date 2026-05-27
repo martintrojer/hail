@@ -802,6 +802,14 @@ mod tests {
             Ok(())
         }
 
+        async fn remove_keyword(
+            &self,
+            _email_id: &str,
+            _keyword: &str,
+        ) -> std::result::Result<(), RouteError> {
+            Ok(())
+        }
+
         async fn move_to_mailbox(
             &self,
             _email_id: &str,

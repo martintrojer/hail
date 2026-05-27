@@ -55,6 +55,7 @@ pub trait JmapOps: Send + Sync {
     async fn get_or_create_mailbox(&self, name: &str) -> Result<String, RouteError>;
     async fn get_mailbox_by_role(&self, role: &str) -> Result<Option<String>, RouteError>;
     async fn apply_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError>;
+    async fn remove_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError>;
     async fn move_to_mailbox(&self, email_id: &str, mailbox_id: &str) -> Result<(), RouteError>;
 }
 
@@ -99,6 +100,14 @@ impl JmapOps for JmapOpsLive {
         self.session
             .client()
             .email_set_keyword(email_id, keyword, true)
+            .await?;
+        Ok(())
+    }
+
+    async fn remove_keyword(&self, email_id: &str, keyword: &str) -> Result<(), RouteError> {
+        self.session
+            .client()
+            .email_set_keyword(email_id, keyword, false)
             .await?;
         Ok(())
     }
@@ -254,7 +263,12 @@ async fn move_to_screener_if_needed(
     {
         return Ok(());
     }
-    jmap.move_to_mailbox(&env.id, &screener_id).await
+    jmap.move_to_mailbox(&env.id, &screener_id).await?;
+    for classification in Classification::ALL {
+        jmap.remove_keyword(&env.id, classification.keyword())
+            .await?;
+    }
+    Ok(())
 }
 
 fn parse_mailbox_role(role: &str) -> Result<Role, RouteError> {
