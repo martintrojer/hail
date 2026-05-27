@@ -11,6 +11,7 @@ authors.workspace = true
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono"] }
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

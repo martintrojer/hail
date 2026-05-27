@@ -704,7 +704,7 @@ async fn load_provider_account_response(
     .bind(user_id)
     .fetch_one(db)
     .await?;
-    Ok(row_to_response(row))
+    row_to_response(row)
 }
 
 fn row_to_response(
@@ -719,7 +719,7 @@ fn row_to_response(
         Option<chrono::DateTime<Utc>>,
         Option<String>,
     ),
-) -> ProviderAccountResponse {
+) -> Result<ProviderAccountResponse, sqlx::Error> {
     let (
         id,
         provider_kind,
@@ -731,17 +731,22 @@ fn row_to_response(
         cached_access_token_expires_at,
         last_profile_history_id,
     ) = row;
-    ProviderAccountResponse {
+    let granted_scopes = serde_json::from_str(&granted_scopes_json).map_err(|err| {
+        sqlx::Error::Protocol(format!(
+            "provider account {id} granted_scopes_json must be valid JSON: {err}"
+        ))
+    })?;
+    Ok(ProviderAccountResponse {
         id,
         provider_kind,
         provider_account_id,
         provider_email,
         display_email,
-        granted_scopes: serde_json::from_str(&granted_scopes_json).unwrap_or_default(),
+        granted_scopes,
         sync_status,
         cached_access_token_expires_at,
         last_profile_history_id,
-    }
+    })
 }
 
 fn gmail_redirect_uri(state: &AppState) -> String {

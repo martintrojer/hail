@@ -129,6 +129,10 @@ pub async fn insert_provider_sync_audit_log(
     db: &SqlitePool,
     log: NewProviderSyncAuditLog<'_>,
 ) -> Result<i64, sqlx::Error> {
+    let metadata_json = log
+        .metadata_json
+        .map(validate_and_sanitize_metadata_json)
+        .transpose()?;
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query_scalar(
         "INSERT INTO provider_sync_events \
@@ -148,10 +152,19 @@ pub async fn insert_provider_sync_audit_log(
     .bind(log.safe_error_message.map(|message| {
         safe_provider_error_message(&message)
     }))
-    .bind(log.metadata_json.map(safe_provider_metadata_json))
+    .bind(metadata_json)
     .bind(now)
     .fetch_one(db)
     .await
+}
+
+fn validate_and_sanitize_metadata_json(metadata_json: &str) -> Result<String, sqlx::Error> {
+    serde_json::from_str::<serde_json::Value>(metadata_json).map_err(|err| {
+        sqlx::Error::Protocol(format!(
+            "provider sync audit metadata_json must be valid JSON: {err}"
+        ))
+    })?;
+    Ok(safe_provider_metadata_json(metadata_json))
 }
 
 /// List provider sync/import audit rows for one user's provider account, newest

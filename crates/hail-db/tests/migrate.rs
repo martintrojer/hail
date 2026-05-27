@@ -503,6 +503,36 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
         "active provider account must reject unresolved external token references"
     );
 
+    let bad_granted_scopes = sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?, ?, 'gmail', 'gmail-provider-bad-scopes', 'bad-scopes@gmail.com', ?, ?, 'active', ?, ?)",
+    )
+    .bind(user_id)
+    .bind("acct-gmail-user")
+    .bind("not-json")
+    .bind(vec![5_u8; 29])
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        bad_granted_scopes.is_err(),
+        "granted_scopes_json must be valid JSON"
+    );
+
+    let bad_backfill_cursor = sqlx::query(
+        "UPDATE provider_accounts SET backfill_cursor_json = ? WHERE provider_account_id = 'gmail-provider-id-1'",
+    )
+    .bind("{not-json")
+    .execute(&pool)
+    .await;
+    assert!(
+        bad_backfill_cursor.is_err(),
+        "backfill_cursor_json must be valid JSON when present"
+    );
+
     let duplicate = sqlx::query(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
@@ -644,6 +674,22 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
         "content_sha256 must be stored as a 32-byte BLOB, not 32 chars of text"
     );
 
+    let bad_mailbox_json = sqlx::query(
+        "INSERT INTO provider_message_mappings \
+         (provider_account_id, provider_message_id, jmap_mailbox_ids_json, import_status, created_at, updated_at) \
+         VALUES (?, 'gmail-msg-bad-mailboxes', ?, 'pending', ?, ?)",
+    )
+    .bind(account_id)
+    .bind("not-json")
+    .bind("2026-01-01T00:11:00Z")
+    .bind("2026-01-01T00:11:00Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        bad_mailbox_json.is_err(),
+        "jmap_mailbox_ids_json must be valid JSON when present"
+    );
+
     sqlx::query(
         "INSERT INTO provider_sync_events \
          (provider_account_id, user_id, operation_kind, event_type, provider_message_id, result_status, metadata_json, created_at) \
@@ -656,6 +702,22 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     .execute(&pool)
     .await
     .expect("sync event insert");
+
+    let bad_metadata_json = sqlx::query(
+        "INSERT INTO provider_sync_events \
+         (provider_account_id, user_id, operation_kind, event_type, provider_message_id, result_status, metadata_json, created_at) \
+         VALUES (?, ?, 'message_import', 'message_imported', 'gmail-msg-bad-json', 'succeeded', ?, ?)",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .bind("not-json")
+    .bind("2026-01-01T00:10:02Z")
+    .execute(&pool)
+    .await;
+    assert!(
+        bad_metadata_json.is_err(),
+        "provider audit metadata_json must be valid JSON when present"
+    );
 
     sqlx::query("DELETE FROM provider_accounts WHERE id = ?")
         .bind(account_id)
