@@ -140,6 +140,22 @@ beforeEach(() => {
       return jsonResponse(imbox);
     }
 
+    if (url.pathname === '/api/labels/42/threads' && method === 'GET') {
+      return jsonResponse({
+        label: {
+          id: 42,
+          name: 'Work/Receipts',
+          leaf_name: 'Receipts',
+          path_segments: ['Work', 'Receipts'],
+          source: 'manual',
+          color: null,
+          thread_count: 0,
+        },
+        items: [],
+        next_cursor: null,
+      });
+    }
+
     if (url.pathname === '/api/views/screener' && method === 'GET') {
       return jsonResponse(screenerView);
     }
@@ -236,6 +252,22 @@ describe('SPA auth/router flows', () => {
         await screen.findByRole('link', { name: `${name}, ${count} items` }),
       ).toBeInTheDocument();
     }
+  });
+
+  it('lets authenticated users reach a label mail view', async () => {
+    api.user = adminUser;
+
+    renderRouterAt('/labels/42');
+
+    await expectLocation('/labels/42');
+    expect(await screen.findByRole('heading', { name: 'Work / Receipts' })).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === `${window.location.origin}/api/labels/42/threads` &&
+          (init as RequestInit | undefined)?.credentials === 'include',
+      ),
+    ).toBe(true);
   });
 
   it('keeps logout available from the sidebar controls', async () => {

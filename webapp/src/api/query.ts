@@ -29,6 +29,7 @@ import {
   type DraftRequest,
   type DraftResponse,
   type ImboxSectionedResponse,
+  type LabelThreadsResponse,
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
@@ -527,6 +528,19 @@ export function useWorkflows(
     queryKey: queryKeys.workflows(),
     queryFn: () => client.listWorkflows(),
     ...options,
+  });
+}
+
+export function useLabelThreads(
+  labelId: number,
+  client = defaultApiClient,
+  options?: QueryConfig<LabelThreadsResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.labelThreads(labelId),
+    queryFn: () => client.getLabelThreads(labelId),
+    ...options,
+    enabled: Number.isSafeInteger(labelId) && labelId > 0 && (options?.enabled ?? true),
   });
 }
 
