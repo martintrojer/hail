@@ -40,6 +40,7 @@ pub fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(rename_label, delete_label))
         .routes(routes!(assign_label_to_thread, remove_label_from_thread))
         .routes(routes!(assign_label_name_to_thread))
+        .routes(routes!(assign_label_to_threads))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -123,6 +124,15 @@ struct RenameLabelRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 struct AssignLabelNameRequest {
     label_name: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct BatchAssignLabelRequest {
+    thread_ids: Vec<String>,
+    #[serde(default)]
+    label_id: Option<i64>,
+    #[serde(default)]
+    label_name: Option<String>,
 }
 
 #[utoipa::path(
@@ -471,6 +481,79 @@ async fn assign_label_name_to_thread(
         })
         .into_response(),
         Err(err) => label_db_error(err, user.id, "inline label assignment failed"),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/threads/labels",
+    tag = TAG,
+    request_body(content = BatchAssignLabelRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Existing normalized label reused or a manual label created, then assigned idempotently to every selected thread.", body = LabelItemResponse),
+        (status = 400, description = "Invalid JSON, payload shape, thread id, or label name."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 403, description = "Missing CSRF header."),
+        (status = 404, description = "Label id not found for the current user."),
+        (status = 500, description = "Batch label assignment failed."),
+    ),
+)]
+async fn assign_label_to_threads(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    body: Result<Json<BatchAssignLabelRequest>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = body else {
+        return bad_request("invalid_json");
+    };
+    if body.thread_ids.is_empty() {
+        return bad_request("empty_thread_ids");
+    }
+    for thread_id in &body.thread_ids {
+        if let Err(response) = validate_thread_id(thread_id) {
+            return response;
+        }
+    }
+
+    let has_label_id = body.label_id.is_some();
+    let has_label_name = body.label_name.is_some();
+    if has_label_id == has_label_name {
+        return bad_request("exactly_one_label_selector_required");
+    }
+    let thread_ids = body
+        .thread_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+
+    if let Some(label_id) = body.label_id {
+        if label_id <= 0 {
+            return not_found("label");
+        }
+        let label = match labels::get_label(&state.db, user.id, label_id).await {
+            Ok(label) => label,
+            Err(err) => return label_db_error(err, user.id, "batch label lookup failed"),
+        };
+        match labels::assign_label_to_threads(&state.db, user.id, &thread_ids, label.id).await {
+            Ok(_) => Json(LabelItemResponse {
+                label: LabelResponse::from(label),
+            })
+            .into_response(),
+            Err(err) => label_db_error(err, user.id, "batch label assignment failed"),
+        }
+    } else {
+        let label_name = body
+            .label_name
+            .expect("exactly one selector validation guarantees label_name");
+        match labels::assign_label_name_to_threads(&state.db, user.id, &thread_ids, &label_name)
+            .await
+        {
+            Ok(label) => Json(LabelItemResponse {
+                label: LabelResponse::from(label),
+            })
+            .into_response(),
+            Err(err) => label_db_error(err, user.id, "batch inline label assignment failed"),
+        }
     }
 }
 
