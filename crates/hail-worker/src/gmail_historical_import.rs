@@ -12,6 +12,7 @@
 //! raw RFC822 import boundary.
 
 use async_trait::async_trait;
+use hail_db::provider_audit_sanitizer::safe_provider_account_error_message;
 use hail_db::provider_message_mappings::{
     DuplicateProviderMessageMapping, FailedProviderMessageMapping, ImportedProviderMessageMapping,
     ProviderImportStatus, ProviderMessageSeen, find_local_mapping_by_content_sha256,
@@ -990,5 +991,5 @@ async fn audit_message_failed(
 }
 
 fn safe_error_message(error: &impl std::fmt::Display) -> String {
-    hail_db::provider_error_redaction::safe_provider_error_message(error)
+    safe_provider_account_error_message(error)
 }

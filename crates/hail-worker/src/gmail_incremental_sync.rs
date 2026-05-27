@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
+use hail_db::provider_audit_sanitizer::safe_provider_account_error_message;
 use hail_db::provider_sync_audit::{
     NewProviderSyncAuditLog, ProviderSyncEventType, ProviderSyncOperationKind,
     ProviderSyncResultStatus, insert_provider_sync_audit_log,
@@ -649,5 +650,5 @@ async fn audit_expired_cursor_fallback(
 }
 
 fn safe_error_message(error: &impl std::fmt::Display) -> String {
-    hail_db::provider_error_redaction::safe_provider_error_message(error)
+    safe_provider_account_error_message(error)
 }

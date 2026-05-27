@@ -2,13 +2,13 @@
 //!
 //! The provider audit stream is intentionally UI-safe and operations-focused:
 //! rows identify the hail user, provider account, optional provider message id,
-//! operation/event kind, result, redacted error fields, and timestamps. Callers
-//! must not put access/refresh tokens, raw RFC822, message bodies, attachment
-//! bytes, or other secrets in `safe_error_*` or `metadata_json`.
+//! operation/event kind, result, redacted error fields, and timestamps. All
+//! caller-provided error fields and metadata pass through the centralized
+//! provider audit sanitizer before persistence.
 
 use sqlx::{Row, SqlitePool};
 
-use crate::provider_error_redaction::{safe_provider_error_message, safe_provider_metadata_json};
+use crate::provider_audit_sanitizer::{SafeProviderErrorFields, safe_provider_metadata_json_value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSyncOperationKind {
@@ -133,6 +133,11 @@ pub async fn insert_provider_sync_audit_log(
         .metadata_json
         .map(validate_and_sanitize_metadata_json)
         .transpose()?;
+    let safe_error = SafeProviderErrorFields::new(
+        log.safe_error_code,
+        log.safe_error_class,
+        log.safe_error_message.as_ref(),
+    );
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query_scalar(
         "INSERT INTO provider_sync_events \
@@ -147,11 +152,9 @@ pub async fn insert_provider_sync_audit_log(
     .bind(log.event_type.as_str())
     .bind(log.provider_message_id)
     .bind(log.result_status.as_str())
-    .bind(log.safe_error_code)
-    .bind(log.safe_error_class)
-    .bind(log.safe_error_message.map(|message| {
-        safe_provider_error_message(&message)
-    }))
+    .bind(safe_error.code.as_deref())
+    .bind(safe_error.class.as_deref())
+    .bind(safe_error.message.as_deref())
     .bind(metadata_json)
     .bind(now)
     .fetch_one(db)
@@ -159,12 +162,12 @@ pub async fn insert_provider_sync_audit_log(
 }
 
 fn validate_and_sanitize_metadata_json(metadata_json: &str) -> Result<String, sqlx::Error> {
-    serde_json::from_str::<serde_json::Value>(metadata_json).map_err(|err| {
+    let value = serde_json::from_str::<serde_json::Value>(metadata_json).map_err(|err| {
         sqlx::Error::Protocol(format!(
             "provider sync audit metadata_json must be valid JSON: {err}"
         ))
     })?;
-    Ok(safe_provider_metadata_json(metadata_json))
+    Ok(safe_provider_metadata_json_value(&value))
 }
 
 /// List provider sync/import audit rows for one user's provider account, newest

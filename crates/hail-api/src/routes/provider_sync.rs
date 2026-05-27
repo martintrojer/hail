@@ -14,7 +14,7 @@ use utoipa_axum::routes;
 use crate::middleware::auth::AuthUser;
 use crate::routes::response::{error_response, internal};
 use crate::state::AppState;
-use hail_db::provider_error_redaction::safe_provider_error_message;
+use hail_db::provider_audit_sanitizer::safe_provider_error_message;
 
 pub const TAG: &str = "provider-sync";
 

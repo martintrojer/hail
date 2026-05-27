@@ -15,7 +15,7 @@
 
 use sqlx::{Row, SqlitePool};
 
-use crate::provider_error_redaction::safe_provider_error_message;
+use crate::provider_audit_sanitizer::{safe_provider_error_key, safe_provider_error_message};
 
 macro_rules! mapping_select_sql {
     ($where_clause:literal) => {
@@ -356,8 +356,8 @@ pub async fn mark_provider_sent_copy_deduped(
     .bind(deduped.duplicate_jmap_thread_id)
     .bind(deduped.duplicate_jmap_mailbox_ids_json)
     .bind(&now)
-    .bind(deduped.reason_class)
-    .bind(deduped.reason_message)
+    .bind(safe_provider_error_key(deduped.reason_class))
+    .bind(deduped.reason_message.map(|message| safe_provider_error_message(&message)))
     .execute(db)
     .await?;
 
@@ -428,7 +428,7 @@ pub async fn mark_provider_message_skipped(
             rfc822_message_id: skipped.rfc822_message_id,
             content_sha256: skipped.content_sha256,
             import_status: ProviderImportStatus::Skipped,
-            error_class: skipped.reason_class,
+            error_class: safe_provider_error_key(skipped.reason_class),
             error_message: skipped
                 .reason_message
                 .map(|message| safe_provider_error_message(&message)),
@@ -451,7 +451,7 @@ pub async fn mark_provider_message_failed(
             rfc822_message_id: failed.rfc822_message_id,
             content_sha256: failed.content_sha256,
             import_status: ProviderImportStatus::Failed,
-            error_class: failed.error_class,
+            error_class: safe_provider_error_key(failed.error_class),
             error_message: failed
                 .error_message
                 .map(|message| safe_provider_error_message(&message)),
@@ -468,7 +468,7 @@ struct NonImportedMapping<'a> {
     rfc822_message_id: Option<&'a str>,
     content_sha256: Option<&'a [u8]>,
     import_status: ProviderImportStatus,
-    error_class: &'a str,
+    error_class: String,
     error_message: Option<String>,
 }
 
@@ -500,7 +500,7 @@ async fn upsert_non_imported_mapping(
     .bind(mapping.content_sha256)
     .bind(mapping.import_status.as_str())
     .bind(&now)
-    .bind(mapping.error_class)
+    .bind(mapping.error_class.as_str())
     .bind(mapping.error_message.as_deref())
     .execute(db)
     .await?;
