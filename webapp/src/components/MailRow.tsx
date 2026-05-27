@@ -1,7 +1,9 @@
 import type { MouseEvent, ReactNode } from 'react';
 import { formatDateTime } from '../lib/dates';
 import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
-import { Check, StickyNote, iconSizeProps } from './icons';
+import { Badge } from './ui/badge';
+import { Checkbox } from './ui/checkbox';
+import { StickyNote } from './icons';
 
 export interface MailRowProps {
   from: string;
@@ -18,14 +20,10 @@ export interface MailRowProps {
 
 function NewPill() {
   return (
-    <span className="shrink-0 rounded-full bg-accent-yellow px-2 py-0.5 text-[0.7rem] font-semibold uppercase leading-tight tracking-wider text-ink-primary">
+    <Badge variant="secondary" className="h-4 px-1.5 text-[0.65rem] uppercase tracking-wide">
       New
-    </span>
+    </Badge>
   );
-}
-
-function senderInitial(from: string) {
-  return (from.trim()[0] ?? '?').toUpperCase();
 }
 
 function SelectionToggle({
@@ -44,19 +42,12 @@ function SelectionToggle({
   }
 
   return (
-    <button
-      type="button"
+    <Checkbox
+      checked={selected}
       onClick={handleClick}
-      aria-pressed={selected}
       aria-label={`${selected ? 'Deselect' : 'Select'} ${from || 'Unknown sender'}`}
-      className={`grid h-9 w-9 shrink-0 place-items-center rounded-full border text-sm font-semibold transition focus-ring outline-none ${
-        selected
-          ? 'border-accent-blue bg-accent-blue text-white'
-          : 'border-border-menu bg-bg-hover text-ink-secondary hover:border-accent-blue hover:text-accent-blue'
-      }`}
-    >
-      {selected ? <Check {...iconSizeProps.sm} aria-hidden="true" /> : senderInitial(from)}
-    </button>
+      className="mt-0.5 shrink-0"
+    />
   );
 }
 
@@ -73,7 +64,7 @@ export function MailRow({
   children,
 }: MailRowProps) {
   const content = (
-    <div className="flex min-w-0 flex-1 items-start gap-3">
+    <div className="flex min-w-0 flex-1 items-start gap-2 px-3 py-2">
       {onToggleSelect ? (
         <SelectionToggle from={from} selected={selected} onToggleSelect={onToggleSelect} />
       ) : null}
@@ -91,8 +82,7 @@ export function MailRow({
           <span className="truncate">{subject || '(no subject)'}</span>
           {hasNotes ? (
             <StickyNote
-              {...iconSizeProps.sm}
-              className="ml-1.5 inline-block shrink-0 align-[-0.125em] text-ink-tertiary"
+              className="ml-1.5 inline-block shrink-0 align-[-0.125em] text-muted-foreground"
               aria-label="Thread has notes"
             />
           ) : null}
@@ -107,7 +97,7 @@ export function MailRow({
   }
 
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div className="flex items-start justify-between gap-3">
       {content}
       <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
         {children}

@@ -1,4 +1,4 @@
-export const senderNameClass = 'truncate text-base font-semibold leading-snug text-ink-primary';
-export const subjectClass = 'truncate text-[0.95rem] font-normal leading-snug text-ink-secondary';
-export const previewClass = 'truncate text-sm font-normal leading-snug text-ink-tertiary';
-export const timeClass = 'shrink-0 text-sm leading-snug text-ink-tertiary';
+export const senderNameClass = 'truncate text-sm font-medium leading-tight text-foreground';
+export const subjectClass = 'truncate text-sm font-normal leading-tight text-foreground';
+export const previewClass = 'truncate text-xs font-normal leading-tight text-muted-foreground';
+export const timeClass = 'shrink-0 text-xs leading-tight text-muted-foreground';
