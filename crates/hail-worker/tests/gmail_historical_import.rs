@@ -14,12 +14,17 @@ use hail_worker::gmail_client::{
     GmailClientError, ListMessage, ListMessagesParams, ListMessagesResponse, RawGmailMessage,
 };
 use hail_worker::gmail_historical_import::{
-    GmailHistoricalImportAccount, GmailHistoricalImportOptions, GmailHistoricalSource,
-    import_gmail_history,
+    GmailHistoricalImportAccount, GmailHistoricalImportError, GmailHistoricalImportOptions,
+    GmailHistoricalImporter, GmailHistoricalSource, import_gmail_history,
 };
-use hail_worker::provider_import_routing::{RoutingRfc822Importer, ScreenerRfc822ImportRouter};
-use hail_worker::rfc822_import::{FakeRfc822Importer, Rfc822ImportError};
+use hail_worker::provider_import_routing::{
+    RoutedImportedRfc822Message, RoutingRfc822Importer, ScreenerRfc822ImportRouter,
+};
+use hail_worker::rfc822_import::{
+    FakeRfc822Importer, ImportedRfc822Message, Rfc822ImportError, Rfc822ImportRequest,
+};
 use hail_worker::screener::{JmapOps, RouteError};
+use tokio::sync::Barrier;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -251,6 +256,103 @@ impl GmailHistoricalSource for FakeGmail {
     }
 }
 
+#[derive(Debug)]
+struct BlockingHistoricalGmail {
+    list_entered: Barrier,
+    raw_entered: Barrier,
+    block_list: bool,
+}
+
+impl BlockingHistoricalGmail {
+    fn list_blocked() -> Self {
+        Self {
+            list_entered: Barrier::new(2),
+            raw_entered: Barrier::new(1),
+            block_list: true,
+        }
+    }
+
+    fn raw_blocked() -> Self {
+        Self {
+            list_entered: Barrier::new(1),
+            raw_entered: Barrier::new(2),
+            block_list: false,
+        }
+    }
+}
+
+#[async_trait]
+impl GmailHistoricalSource for BlockingHistoricalGmail {
+    async fn list_messages(
+        &self,
+        _params: &ListMessagesParams,
+    ) -> Result<ListMessagesResponse, GmailClientError> {
+        self.list_entered.wait().await;
+        if self.block_list {
+            std::future::pending().await
+        } else {
+            Ok(ListMessagesResponse {
+                messages: vec![ListMessage {
+                    id: "gmail-block-raw".to_owned(),
+                    thread_id: Some("thread-block".to_owned()),
+                }],
+                next_page_token: None,
+                result_size_estimate: Some(1),
+            })
+        }
+    }
+
+    async fn get_raw_message(&self, message_id: &str) -> Result<RawGmailMessage, GmailClientError> {
+        self.raw_entered.wait().await;
+        Ok(match message_id {
+            "gmail-block-raw" => std::future::pending().await,
+            _ => raw_message(
+                message_id,
+                "thread-block",
+                "history-block",
+                "block@example.com",
+            ),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BlockingHistoricalImporter {
+    entered: Barrier,
+}
+
+#[async_trait]
+impl GmailHistoricalImporter for BlockingHistoricalImporter {
+    async fn import_gmail_rfc822(
+        &self,
+        _db: &sqlx::SqlitePool,
+        _user_id: i64,
+        _request: Rfc822ImportRequest,
+    ) -> Result<RoutedImportedRfc822Message, GmailHistoricalImportError> {
+        self.entered.wait().await;
+        std::future::pending().await
+    }
+}
+
+#[derive(Debug)]
+struct BlockingRouter {
+    entered: Barrier,
+}
+
+#[async_trait]
+impl hail_worker::provider_import_routing::Rfc822ImportRouter for BlockingRouter {
+    async fn route_imported_rfc822(
+        &self,
+        _conn: &mut sqlx::SqliteConnection,
+        _user_id: i64,
+        _imported: &ImportedRfc822Message,
+        _request: &Rfc822ImportRequest,
+    ) -> Result<hail_worker::screener::RouteOutcome, RouteError> {
+        self.entered.wait().await;
+        std::future::pending().await
+    }
+}
+
 fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) -> RawGmailMessage {
     RawGmailMessage {
         id: id.to_owned(),
@@ -305,6 +407,219 @@ fn assert_no_hostile_leak(surface: &str) {
             "surface leaked {forbidden:?}: {surface}"
         );
     }
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_historical_list_fetch() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = Arc::new(BlockingHistoricalGmail::list_blocked());
+    let importer = Arc::new(FakeRfc822Importer::default());
+    let cancel = CancellationToken::new();
+    let task_pool = pool.clone();
+    let task_gmail = gmail.clone();
+    let task_importer = importer.clone();
+    let task_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        import_gmail_history(
+            &task_pool,
+            GmailHistoricalImportAccount {
+                provider_account_id,
+                user_id,
+            },
+            task_gmail.as_ref(),
+            task_importer.as_ref(),
+            GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+            &task_cancel,
+        )
+        .await
+    });
+
+    gmail.list_entered.wait().await;
+    cancel.cancel();
+    let err = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+        .await
+        .expect("historical import should stop promptly")
+        .expect("join")
+        .expect_err("cancelled import");
+    assert!(matches!(err, GmailHistoricalImportError::Cancelled));
+    assert_eq!(
+        account_error_class(&pool, provider_account_id)
+            .await
+            .as_deref(),
+        Some("cancelled")
+    );
+    assert!(importer.imports().is_empty());
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_historical_raw_fetch() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = Arc::new(BlockingHistoricalGmail::raw_blocked());
+    let importer = Arc::new(FakeRfc822Importer::default());
+    let cancel = CancellationToken::new();
+    let task_pool = pool.clone();
+    let task_gmail = gmail.clone();
+    let task_importer = importer.clone();
+    let task_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        let options = GmailHistoricalImportOptions::into_mailboxes(["inbox"]);
+        import_gmail_history(
+            &task_pool,
+            GmailHistoricalImportAccount {
+                provider_account_id,
+                user_id,
+            },
+            task_gmail.as_ref(),
+            task_importer.as_ref(),
+            options,
+            &task_cancel,
+        )
+        .await
+    });
+
+    gmail.raw_entered.wait().await;
+    cancel.cancel();
+    let err = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+        .await
+        .expect("historical import should stop promptly")
+        .expect("join")
+        .expect_err("cancelled import");
+    assert!(matches!(err, GmailHistoricalImportError::Cancelled));
+    assert!(importer.imports().is_empty());
+    assert!(
+        get_provider_message_mapping(&pool, provider_account_id, "gmail-block-raw")
+            .await
+            .expect("mapping lookup")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_historical_stalwart_import() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = Arc::new(FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-block-import".to_owned(),
+                thread_id: Some("thread-block".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-block-import",
+            "thread-block",
+            "history-block",
+            "block-import@example.com",
+        )],
+    ));
+    let importer = Arc::new(BlockingHistoricalImporter {
+        entered: Barrier::new(2),
+    });
+    let cancel = CancellationToken::new();
+    let task_pool = pool.clone();
+    let task_gmail = gmail.clone();
+    let task_importer = importer.clone();
+    let task_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        import_gmail_history(
+            &task_pool,
+            GmailHistoricalImportAccount {
+                provider_account_id,
+                user_id,
+            },
+            task_gmail.as_ref(),
+            task_importer.as_ref(),
+            GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+            &task_cancel,
+        )
+        .await
+    });
+
+    importer.entered.wait().await;
+    cancel.cancel();
+    let err = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+        .await
+        .expect("historical import should stop promptly")
+        .expect("join")
+        .expect_err("cancelled import");
+    assert!(matches!(err, GmailHistoricalImportError::Cancelled));
+    let mapping = get_provider_message_mapping(&pool, provider_account_id, "gmail-block-import")
+        .await
+        .expect("mapping lookup")
+        .expect("seen mapping");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Pending);
+    assert!(mapping.jmap_email_id.is_none());
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_historical_routing() {
+    let (pool, _guard, user_id, provider_account_id) = setup().await;
+    let gmail = Arc::new(FakeGmail::new(
+        vec![ListMessagesResponse {
+            messages: vec![ListMessage {
+                id: "gmail-block-route".to_owned(),
+                thread_id: Some("thread-block".to_owned()),
+            }],
+            next_page_token: None,
+            result_size_estimate: Some(1),
+        }],
+        vec![raw_message(
+            "gmail-block-route",
+            "thread-block",
+            "history-block",
+            "block-route@example.com",
+        )],
+    ));
+    let importer = Arc::new(FakeRfc822Importer::default());
+    let router = Arc::new(BlockingRouter {
+        entered: Barrier::new(2),
+    });
+    let cancel = CancellationToken::new();
+    let task_pool = pool.clone();
+    let task_gmail = gmail.clone();
+    let task_importer = importer.clone();
+    let task_router = router.clone();
+    let task_cancel = cancel.clone();
+    let handle = tokio::spawn(async move {
+        let routed = RoutingRfc822Importer::new(task_importer.as_ref(), task_router.as_ref());
+        import_gmail_history(
+            &task_pool,
+            GmailHistoricalImportAccount {
+                provider_account_id,
+                user_id,
+            },
+            task_gmail.as_ref(),
+            &routed,
+            GmailHistoricalImportOptions::into_mailboxes(["inbox"]),
+            &task_cancel,
+        )
+        .await
+    });
+
+    router.entered.wait().await;
+    cancel.cancel();
+    let err = tokio::time::timeout(std::time::Duration::from_millis(200), handle)
+        .await
+        .expect("historical import should stop promptly")
+        .expect("join")
+        .expect_err("cancelled import");
+    assert!(matches!(err, GmailHistoricalImportError::Cancelled));
+    assert_eq!(importer.imports().len(), 1);
+    let mapping = get_provider_message_mapping(&pool, provider_account_id, "gmail-block-route")
+        .await
+        .expect("mapping lookup")
+        .expect("seen mapping");
+    assert_eq!(mapping.import_status, ProviderImportStatus::Pending);
+    assert!(mapping.jmap_email_id.is_none());
+}
+
+async fn account_error_class(pool: &sqlx::SqlitePool, provider_account_id: i64) -> Option<String> {
+    sqlx::query_scalar("SELECT last_error_class FROM provider_accounts WHERE id = ?1")
+        .bind(provider_account_id)
+        .fetch_one(pool)
+        .await
+        .expect("account error class")
 }
 
 #[tokio::test]

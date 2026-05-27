@@ -235,9 +235,19 @@ where
             history_types: options.history_types.clone(),
         };
 
-        let response = match gmail.list_history(&params).await {
-            Ok(response) => response,
-            Err(error) if is_expired_history_cursor(&error) => {
+        let response = match cancel_or_complete(cancel, gmail.list_history(&params)).await {
+            None => {
+                mark_sync_error(
+                    db,
+                    account.provider_account_id,
+                    "cancelled",
+                    "sync cancelled",
+                )
+                .await?;
+                return Err(GmailIncrementalSyncError::Cancelled);
+            }
+            Some(Ok(response)) => response,
+            Some(Err(error)) if is_expired_history_cursor(&error) => {
                 return run_expired_cursor_fallback(
                     db,
                     account,
@@ -250,7 +260,7 @@ where
                 )
                 .await;
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 let message = safe_error_message(&error);
                 audit_sync_failed(db, &account, "gmail_history_list", &message).await?;
                 mark_sync_error(
@@ -301,6 +311,7 @@ where
                         &options.historical_fallback,
                         listed,
                         &mut import_summary,
+                        cancel,
                     )
                     .await?;
                     summary.imported += import_summary.imported;
@@ -329,6 +340,17 @@ where
             audit_sync_completed(db, &account, &summary).await?;
             return Ok(summary);
         }
+    }
+}
+
+async fn cancel_or_complete<T>(
+    cancel: &CancellationToken,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        output = future => Some(output),
     }
 }
 
