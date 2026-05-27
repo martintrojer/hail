@@ -703,6 +703,282 @@ async fn thread_label_assignment_validates_payload_auth_and_csrf() {
 }
 
 #[tokio::test]
+async fn batch_assigns_existing_label_id_idempotently_and_user_scoped() {
+    let (state, key) = fixture_state().await;
+    let (alice_id, alice_sid) = seed_session(&state, &key, "alice-batch@example.org").await;
+    let (bob_id, bob_sid) = seed_session(&state, &key, "bob-batch@example.org").await;
+    let label = hail_db::labels::create_label(&state.db, alice_id, "Batch", None)
+        .await
+        .expect("create alice label");
+    let bob_label = hail_db::labels::create_label(&state.db, bob_id, "Batch", None)
+        .await
+        .expect("create bob label");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&alice_sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_id": label.id,
+                "thread_ids": ["thread-a", "thread-b", "thread-a"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let assigned = json_body(resp).await;
+    assert_eq!(assigned["label"]["id"], label.id);
+    assert_eq!(assigned["label"]["name"], "Batch");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&alice_sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_id": label.id,
+                "thread_ids": ["thread-a", "thread-b"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let alice_assignments: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM thread_labels WHERE user_id = ?1 AND label_id = ?2",
+    )
+    .bind(alice_id)
+    .bind(label.id)
+    .fetch_one(&state.db)
+    .await
+    .expect("count alice batch assignments");
+    assert_eq!(alice_assignments, 2);
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&bob_sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_id": label.id,
+                "thread_ids": ["thread-a"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = request(
+        state,
+        Method::POST,
+        "/api/threads/labels",
+        Some(&bob_sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_id": bob_label.id,
+                "thread_ids": ["thread-a"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn batch_inline_create_upserts_label_name_and_assigns_all_threads() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "batch-inline@example.org").await;
+    let existing = hail_db::labels::create_label(&state.db, user_id, "Work/Receipts", Some("blue"))
+        .await
+        .expect("create existing label");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_name": " work / receipts ",
+                "thread_ids": ["thread-1", "thread-2"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let assigned = json_body(resp).await;
+    assert_eq!(assigned["label"]["id"], existing.id);
+    assert_eq!(assigned["label"]["name"], "Work/Receipts");
+    assert_eq!(assigned["label"]["thread_count"], 2);
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_name": "Personal / Follow Up",
+                "thread_ids": ["thread-3", "thread-4", "thread-3"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created = json_body(resp).await;
+    let created_id = created["label"]["id"].as_i64().unwrap();
+    assert_ne!(created_id, existing.id);
+    assert_eq!(created["label"]["name"], "Personal/Follow Up");
+    assert_eq!(created["label"]["source"], "manual");
+    assert_eq!(created["label"]["thread_count"], 2);
+
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM thread_labels WHERE user_id = ?1 AND label_id = ?2",
+    )
+    .bind(user_id)
+    .bind(created_id)
+    .fetch_one(&state.db)
+    .await
+    .expect("count created batch assignments");
+    assert_eq!(rows, 2);
+}
+
+#[tokio::test]
+async fn batch_assignment_validates_payload_auth_and_csrf() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "batch-guard@example.org").await;
+    let label = hail_db::labels::create_label(&state.db, user_id, "Guarded Batch", None)
+        .await
+        .expect("create label");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        false,
+        Some(serde_json::json!({ "label_id": label.id, "thread_ids": ["thread-1"] }).to_string()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        None,
+        true,
+        Some(serde_json::json!({ "label_id": label.id, "thread_ids": ["thread-1"] }).to_string()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some("not json".to_owned()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"], "invalid_json");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(serde_json::json!({ "label_id": label.id, "thread_ids": [] }).to_string()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"], "empty_thread_ids");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(serde_json::json!({ "label_id": label.id, "thread_ids": ["bad id"] }).to_string()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"], "invalid_thread_id");
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(serde_json::json!({ "thread_ids": ["thread-1"] }).to_string()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(resp).await["error"],
+        "exactly_one_label_selector_required"
+    );
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(
+            serde_json::json!({
+                "label_id": label.id,
+                "label_name": "Guarded Batch",
+                "thread_ids": ["thread-1"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(resp).await["error"],
+        "exactly_one_label_selector_required"
+    );
+
+    let resp = request(
+        state,
+        Method::POST,
+        "/api/threads/labels",
+        Some(&sid),
+        true,
+        Some(
+            serde_json::json!({ "label_name": "Bad//Name", "thread_ids": ["thread-1"] })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["error"], "invalid_label_name");
+}
+
+#[tokio::test]
 async fn openapi_contains_label_paths() {
     let (state, _key) = fixture_state().await;
     let resp = request(state, Method::GET, "/api/openapi.json", None, false, None).await;
@@ -721,4 +997,5 @@ async fn openapi_contains_label_paths() {
             .get("/api/threads/{thread_id}/labels")
             .is_some()
     );
+    assert!(json["paths"].get("/api/threads/labels").is_some());
 }
