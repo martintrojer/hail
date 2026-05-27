@@ -28,6 +28,7 @@ import { ArchivePage } from './routes/ArchivePage';
 import { BubbleUpPage } from './routes/BubbleUpPage';
 import { ComposerPage } from './routes/ComposerPage';
 import { DraftsPage } from './routes/DraftsPage';
+import { LabelViewPage } from './routes/LabelViewPage';
 import { MailViewPage } from './routes/MailViewPage';
 import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
@@ -643,6 +644,16 @@ const threadReplyRoute = createRoute({
   },
 });
 
+const labelRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/labels/$labelId',
+  beforeLoad: requireAuth,
+  component: () => {
+    const { labelId } = labelRoute.useParams();
+    return <LabelViewPage labelId={Number(labelId)} />;
+  },
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/search',
@@ -737,6 +748,7 @@ const routeTree = rootRoute.addChildren([
   bubbleUpRoute,
   threadRoute,
   threadReplyRoute,
+  labelRoute,
   searchRoute,
   trashRoute,
   spamRoute,

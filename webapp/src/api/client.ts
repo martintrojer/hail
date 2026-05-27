@@ -62,6 +62,9 @@ type TrashGetSuccess = ResponseBody<
 type SearchGetSuccess = ResponseBody<
   paths['/api/views/search']['get']['responses']['200']
 >;
+type LabelThreadsGetSuccess = ResponseBody<
+  paths['/api/labels/{id}/threads']['get']['responses']['200']
+>;
 type BubbleUpGetSuccess = ResponseBody<
   paths['/api/views/bubble-up']['get']['responses']['200']
 >;
@@ -232,6 +235,9 @@ export type ArchiveViewKind = 'archive';
 export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
+export type LabelResponse = components['schemas']['LabelResponse'];
+export type LabelThreadItem = components['schemas']['LabelThreadItem'];
+export type LabelThreadsResponse = LabelThreadsGetSuccess;
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
 export type ViewCountsResponse = ViewCountsGetSuccess;
@@ -692,6 +698,27 @@ export class HailApiClient {
 
     return this.#json<SearchResponse>(
       await this.#request(`/api/views/search?${query.toString()}`),
+      200,
+    );
+  }
+
+  async getLabelThreads(
+    labelId: number,
+    params: { cursor?: string; limit?: number } = {},
+  ): Promise<LabelThreadsResponse> {
+    const query = new URLSearchParams();
+    if (params.cursor) {
+      query.set('cursor', params.cursor);
+    }
+    if (params.limit !== undefined) {
+      query.set('limit', String(params.limit));
+    }
+    const suffix = query.toString();
+
+    return this.#json<LabelThreadsResponse>(
+      await this.#request(
+        `/api/labels/${encodeURIComponent(String(labelId))}/threads${suffix ? `?${suffix}` : ''}`,
+      ),
       200,
     );
   }
