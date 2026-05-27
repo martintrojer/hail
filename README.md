@@ -66,7 +66,7 @@ open http://localhost:8080
 
 The setup wizard creates your first admin account and provisions your domain in Stalwart. After setup, log in and start using hail.
 
-See [docs/deployment.md](docs/deployment.md) for the deployment chooser, then [docs/quickstart.md](docs/quickstart.md) for the direct/simple path including DNS, TLS, and first-run setup.
+See [docs/deployment.md](docs/deployment.md) to choose a deployment shape and continue to the right setup guide.
 
 ## Documentation
 
@@ -83,19 +83,17 @@ Start here if you want to run hail.
 | [backup.md](docs/backup.md) | Backup/restore procedures, including optional Litestream hail.db replication |
 | [upgrade.md](docs/upgrade.md) | Upgrade guide between versions |
 
-### Development and design docs
+### Development docs
 
-These are for contributors and project planning; operators do not need them for a normal install.
+These are for contributors and maintainers; operators do not need them for a normal install.
 
 | Doc | Description |
 |-----|-------------|
-| [architecture.md](docs/architecture.md) | System map, hard decisions, rejected alternatives |
-| [design.md](docs/design.md) | Product design and v1 feature spec |
-| [roadmap.md](docs/roadmap.md) | Post-v1 backlog, release themes, TUI plans |
+| [architecture.md](docs/architecture.md) | System map and implementation boundaries |
+| [design.md](docs/design.md) | Product design and protocol decisions |
 | [testing.md](docs/testing.md) | Test strategy and running tests |
 | [provider-import-architecture.md](docs/provider-import-architecture.md) | Internal Gmail/provider import design |
 | [provider-outbound-strategy.md](docs/provider-outbound-strategy.md) | Internal provider smarthost/outbound strategy |
-| [provider-backed-modes.md](docs/provider-backed-modes.md) | Provider-backed alternatives and future modes |
 
 ## Features
 

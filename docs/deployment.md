@@ -20,7 +20,6 @@ hail has two separable surfaces:
 | Home server + VPS/WireGuard MX gateway | Home storage behind CGNAT/residential blocks | DNS-only MX points to a small VPS, then WireGuard to home Stalwart | Cloudflare Tunnel to `hail-api` | Medium | You want mail data at home while preserving normal SMTP delivery. |
 | Cloudflare Tunnel + Email Routing/import bridge | No public SMTP server and Cloudflare-managed domain | Cloudflare receives mail and forwards/imports into hail/Stalwart | Cloudflare Tunnel | Medium-high | You accept import/forwarding semantics instead of original SMTP sessions. |
 | Gmail/provider import into Stalwart | Existing Gmail/provider mailbox users | Gmail/provider remains public edge; hail imports via provider API | Cloudflare Tunnel or normal HTTPS | Medium | You want the hail UX and a local Stalwart archive without operating public MX first. |
-| Provider-backed client/cache | Future/non-v1.2 variant | Provider remains authoritative; hail caches/syncs directly | Cloudflare Tunnel or normal HTTPS | High/product change | You do not want Stalwart as the mail store. Not the current mainline. |
 
 ## Recommended shapes
 
@@ -123,7 +122,7 @@ hail compose
   --> provider smarthost --> recipients
 ```
 
-Current v1.2 design is **one-way import**: provider -> Stalwart. Hail actions
+Current provider import behavior is **one-way import**: provider -> Stalwart. Hail actions
 archive/delete/classify local Stalwart mail; they do not mutate Gmail labels,
 read state, archive state, Trash, or Spam.
 
@@ -152,10 +151,8 @@ To avoid duplicate deployment material:
   Email Routing/import bridge, and VPS/WireGuard MX implementation details.
 - [cloudflare-testbed.md](./cloudflare-testbed.md) is an operator smoke-test
   runbook, not conceptual guidance.
-- [provider-backed-modes.md](./provider-backed-modes.md) compares future/product
-  provider-backed modes.
 - [provider-import-architecture.md](./provider-import-architecture.md) specifies
-  the v1.2 Gmail/provider-import implementation.
+  the Gmail/provider-import implementation.
 - [provider-outbound-strategy.md](./provider-outbound-strategy.md) specifies
   outbound-through-provider behavior and smarthost examples.
 - [reverse-proxy.md](./reverse-proxy.md), [backup.md](./backup.md), and
@@ -167,6 +164,5 @@ The current docs are usable but still verbose. Follow-up cleanup should:
 
 - shorten Cloudflare concept material now that this chooser exists;
 - make `cloudflare-testbed.md` purely procedural;
-- keep provider mode comparison in `provider-backed-modes.md` and implementation
-  details in `provider-import-architecture.md`;
+- keep provider import implementation details in `provider-import-architecture.md`;
 - remove temporary hidden reflow files if they are not intentionally kept.
