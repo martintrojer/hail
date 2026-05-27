@@ -192,6 +192,46 @@ async fn opening_thread_marks_it_seen_for_current_user() {
 }
 
 #[tokio::test]
+async fn response_embeds_current_user_thread_labels() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "labels-owner@example.org").await;
+    let (other_user_id, _other_sid) = seed_session(&state, &key, "other-labels@example.org").await;
+    let receipts = hail_db::labels::create_label(&state.db, user_id, "Work/Receipts", Some("blue"))
+        .await
+        .expect("create receipts label");
+    let travel = hail_db::labels::create_label(&state.db, user_id, "Travel", None)
+        .await
+        .expect("create travel label");
+    let hidden = hail_db::labels::create_label(&state.db, other_user_id, "Hidden", None)
+        .await
+        .expect("create hidden label");
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-123", receipts.id)
+        .await
+        .expect("assign receipts");
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-123", travel.id)
+        .await
+        .expect("assign travel");
+    hail_db::labels::assign_label_to_thread(&state.db, other_user_id, "thread-123", hidden.id)
+        .await
+        .expect("assign hidden");
+
+    let (status, json) = get_json(state, &sid, default_assembler()).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let labels = json["labels"].as_array().expect("labels array");
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0]["name"], "Travel");
+    assert_eq!(labels[0]["leaf_name"], "Travel");
+    assert_eq!(labels[1]["name"], "Work/Receipts");
+    assert_eq!(labels[1]["leaf_name"], "Receipts");
+    assert_eq!(
+        labels[1]["path_segments"],
+        serde_json::json!(["Work", "Receipts"])
+    );
+    assert_eq!(labels[1]["color"], "blue");
+}
+
+#[tokio::test]
 async fn response_embeds_current_user_thread_notes_ordered_by_id() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "notes-owner@example.org").await;

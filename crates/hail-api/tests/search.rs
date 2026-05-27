@@ -149,6 +149,7 @@ fn mail_item() -> MailSearchResult {
         subject: "Project update".to_string(),
         preview: "Needle in mail".to_string(),
         received_at: Some(Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap()),
+        labels: Vec::new(),
     }
 }
 
