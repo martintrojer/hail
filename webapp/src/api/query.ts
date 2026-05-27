@@ -211,10 +211,42 @@ export function useConnectGmailMutation(
   client = defaultApiClient,
   options?: MutationConfig<void, GmailConnectResponse>,
 ) {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: () => client.connectGmail(),
     ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
+}
+
+function applyProviderAccountResponseToSyncStatus(
+  current: ProviderSyncStatusListResponse | undefined,
+  updated: ProviderAccountResponse,
+  fallbackId?: number,
+): ProviderSyncStatusListResponse | undefined {
+  if (!current) {
+    return current;
+  }
+
+  return {
+    accounts: current.accounts.map((account) =>
+      account.id === updated.id || (fallbackId !== undefined && account.id === fallbackId)
+        ? {
+            ...account,
+            display_email: updated.display_email,
+            last_profile_history_id: updated.last_profile_history_id,
+            provider_account_id: updated.provider_account_id,
+            provider_email: updated.provider_email,
+            provider_kind: updated.provider_kind,
+            sync_status: updated.sync_status,
+          }
+        : account,
+    ),
+  };
 }
 
 export function useDisconnectProviderAccountMutation(
@@ -227,6 +259,10 @@ export function useDisconnectProviderAccountMutation(
     mutationFn: (id) => client.disconnectProviderAccount(id),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ProviderSyncStatusListResponse>(
+        queryKeys.providerSyncStatuses(),
+        (current) => applyProviderAccountResponseToSyncStatus(current, data, variables),
+      );
       void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
