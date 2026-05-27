@@ -46,6 +46,13 @@ struct FakeGmailOAuthClient {
     auth_requests: Mutex<Vec<GmailAuthorizationRequest>>,
     exchange_codes: Mutex<Vec<String>>,
     revoked_tokens: Mutex<Vec<String>>,
+    exchange_error: Mutex<Option<String>>,
+}
+
+impl FakeGmailOAuthClient {
+    fn fail_next_exchange(&self, message: impl Into<String>) {
+        *self.exchange_error.lock().expect("exchange error") = Some(message.into());
+    }
 }
 
 impl GmailOAuthClient for FakeGmailOAuthClient {
@@ -72,6 +79,9 @@ impl GmailOAuthClient for FakeGmailOAuthClient {
                 .lock()
                 .expect("exchange codes")
                 .push(code.to_owned());
+            if let Some(message) = self.exchange_error.lock().expect("exchange error").take() {
+                return Err(GmailOAuthError::Exchange(message));
+            }
             Ok(GmailTokenExchange {
                 access_token: SecretString::from("ya29.access-token-secret"),
                 refresh_token: Some(SecretString::from("1//refresh-token-secret")),
@@ -198,6 +208,42 @@ async fn gmail_connect_returns_readonly_authorization_url_and_persists_state_has
     assert_eq!(requests[0].scopes, vec![GMAIL_READONLY.to_owned()]);
 }
 
+#[tokio::test]
+async fn gmail_connect_requires_auth_and_csrf() {
+    let (state, key) = app_state().await;
+    let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+
+    let no_csrf = app(state.clone(), client.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/provider-accounts/gmail/connect")
+                .header(header::COOKIE, format!("{SESSION_COOKIE}={session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_csrf.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(no_csrf).await["error"], "csrf_required");
+
+    let no_cookie = app(state, client.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/provider-accounts/gmail/connect")
+                .header(CSRF_HEADER, "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_cookie.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(no_cookie).await["error"], "unauthorized");
+    assert!(client.auth_requests.lock().expect("auth requests").is_empty());
+}
+
 fn redirect_location(headers: &HeaderMap) -> &str {
     headers
         .get(header::LOCATION)
@@ -214,6 +260,45 @@ async fn connected_account_id(state: &AppState, user_id: i64) -> i64 {
     .fetch_one(&state.db)
     .await
     .unwrap()
+}
+
+async fn provider_account_count(state: &AppState, user_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM provider_accounts WHERE user_id = ?1")
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+async fn consumed_state_count(state: &AppState) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM provider_oauth_states WHERE consumed_at IS NOT NULL")
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+}
+
+async fn seed_second_session_for_user(
+    state: &AppState,
+    key: &[u8; hail_core::KEY_LEN],
+    user_id: i64,
+) -> String {
+    let now = chrono::Utc::now();
+    let token_enc = hail_core::seal(b"dummy-token", key).expect("seal");
+    let session_id = format!("{:064x}", user_id + 10_000);
+    sqlx::query(
+        "INSERT INTO sessions (id, user_id, jmap_token_enc, user_agent, expires_at, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+    )
+    .bind(&session_id)
+    .bind(user_id)
+    .bind(&token_enc)
+    .bind(Some("test-ua-2"))
+    .bind(now + chrono::Duration::days(30))
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .expect("insert second session");
+    session_id
 }
 
 #[tokio::test]
@@ -368,6 +453,105 @@ async fn gmail_callback_concurrently_consumes_oauth_state_once() {
 }
 
 #[tokio::test]
+async fn gmail_callback_rejects_unauthenticated_cross_user_cross_session_and_expired_state() {
+    let (state, key) = app_state().await;
+    let (alice_id, alice_session) = seed_session(&state, &key, "alice@example.com").await;
+    let (_bob_id, bob_session) = seed_session(&state, &key, "bob@example.com").await;
+    let alice_second_session = seed_second_session_for_user(&state, &key, alice_id).await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &alice_session).await);
+    let uri = format!("/api/provider-accounts/gmail/callback?state={state_token}&code=oauth-code");
+
+    let no_cookie = app(state.clone(), client.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(&uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_cookie.status(), StatusCode::UNAUTHORIZED);
+
+    for session_id in [&bob_session, &alice_second_session] {
+        let resp = app(state.clone(), client.clone())
+            .oneshot(auth_request(Method::GET, &uri, session_id))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            redirect_location(resp.headers()),
+            "/provider-accounts?error=invalid_oauth_state"
+        );
+    }
+    assert_eq!(provider_account_count(&state, alice_id).await, 0);
+    assert_eq!(consumed_state_count(&state).await, 0);
+    assert!(client.exchange_codes.lock().expect("exchange codes").is_empty());
+
+    sqlx::query("UPDATE provider_oauth_states SET expires_at = ?1 WHERE consumed_at IS NULL")
+        .bind(chrono::Utc::now() - chrono::Duration::seconds(1))
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let expired = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &alice_session))
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(expired.headers()),
+        "/provider-accounts?error=invalid_oauth_state"
+    );
+    assert_eq!(provider_account_count(&state, alice_id).await, 0);
+    assert_eq!(consumed_state_count(&state).await, 0);
+    assert!(client.exchange_codes.lock().expect("exchange codes").is_empty());
+}
+
+#[tokio::test]
+async fn gmail_callback_exchange_failure_consumes_state_without_creating_account() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &session_id).await);
+    client.fail_next_exchange("temporary upstream failure");
+    let uri = format!("/api/provider-accounts/gmail/callback?state={state_token}&code=bad-code");
+
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &session_id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(resp.headers()),
+        "/provider-accounts?error=oauth_exchange_failed"
+    );
+    assert_eq!(
+        client.exchange_codes.lock().expect("exchange codes").as_slice(),
+        ["bad-code"]
+    );
+    assert_eq!(provider_account_count(&state, user_id).await, 0);
+    assert_eq!(consumed_state_count(&state).await, 1);
+
+    let replay = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &session_id))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redirect_location(replay.headers()),
+        "/provider-accounts?error=invalid_oauth_state"
+    );
+    assert_eq!(
+        client.exchange_codes.lock().expect("exchange codes").as_slice(),
+        ["bad-code"]
+    );
+    assert_eq!(provider_account_count(&state, user_id).await, 0);
+}
+
+#[tokio::test]
 async fn gmail_callback_redirects_safe_errors_to_provider_accounts_page() {
     let (state, key) = app_state().await;
     let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
@@ -515,13 +699,14 @@ async fn sync_status_output_redacts_hostile_error_fields() {
     let account_id: i64 = sqlx::query_scalar(
         "INSERT INTO provider_accounts \
          (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
-          granted_scopes_json, refresh_token_ref, sync_status, last_error_class, last_error_message, \
+          granted_scopes_json, refresh_token_enc, sync_status, last_error_class, last_error_message, \
           created_at, updated_at) \
          VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
-                 'kms://token/alice', 'error', 'hostile_error', ?2, ?3, ?3) \
+                 ?2, 'error', 'hostile_error', ?3, ?4, ?4) \
          RETURNING id",
     )
     .bind(user_id)
+    .bind(vec![9_u8; 29])
     .bind(hostile_leak_error())
     .bind(now)
     .fetch_one(&state.db)
@@ -650,7 +835,7 @@ async fn manual_sync_trigger_requires_csrf() {
     let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
     let client = Arc::new(FakeGmailOAuthClient::default());
 
-    let resp = app(state, client)
+    let resp = app(state.clone(), client.clone())
         .oneshot(
             Request::builder()
                 .method(Method::POST)
@@ -662,6 +847,80 @@ async fn manual_sync_trigger_requires_csrf() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn provider_account_mutations_require_auth() {
+    let (state, _key) = app_state().await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+
+    for uri in [
+        "/api/provider-accounts/123/sync",
+        "/api/provider-accounts/123/disconnect",
+    ] {
+        let resp = app(state.clone(), client.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header(CSRF_HEADER, "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        assert_eq!(json_body(resp).await["error"], "unauthorized", "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn disconnect_requires_csrf_and_owner_session() {
+    let (state, key) = app_state().await;
+    let (alice_id, alice_session) = seed_session(&state, &key, "alice@example.com").await;
+    let (_bob_id, bob_session) = seed_session(&state, &key, "bob@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let state_token =
+        state_from_connect_response(&connect(state.clone(), client.clone(), &alice_session).await);
+    let uri = format!("/api/provider-accounts/gmail/callback?state={state_token}&code=oauth-code");
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::GET, &uri, &alice_session))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let account_id = connected_account_id(&state, alice_id).await;
+    let disconnect_uri = format!("/api/provider-accounts/{account_id}/disconnect");
+
+    let no_csrf = app(state.clone(), client.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(&disconnect_uri)
+                .header(header::COOKIE, format!("{SESSION_COOKIE}={alice_session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_csrf.status(), StatusCode::FORBIDDEN);
+    assert!(client.revoked_tokens.lock().expect("revoked tokens").is_empty());
+
+    let other_user = app(state.clone(), client.clone())
+        .oneshot(auth_request(Method::POST, &disconnect_uri, &bob_session))
+        .await
+        .unwrap();
+    assert_eq!(other_user.status(), StatusCode::NOT_FOUND);
+    assert!(client.revoked_tokens.lock().expect("revoked tokens").is_empty());
+
+    let (status, token): (String, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT sync_status, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "active");
+    assert!(token.is_some());
 }
 
 #[tokio::test]
