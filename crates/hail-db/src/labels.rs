@@ -366,7 +366,7 @@ pub async fn list_label_thread_ids(
     offset: i64,
 ) -> Result<Vec<String>, LabelDbError> {
     let rows = sqlx::query_scalar::<_, String>(
-        "SELECT tl.thread_id FROM thread_labels tl INNER JOIN labels l ON l.user_id = tl.user_id AND l.id = tl.label_id WHERE tl.user_id = ?1 AND tl.label_id = ?2 ORDER BY tl.created_at DESC, tl.thread_id DESC LIMIT ?3 OFFSET ?4",
+        "SELECT tl.thread_id FROM thread_labels tl INNER JOIN labels l ON l.user_id = tl.user_id AND l.id = tl.label_id WHERE tl.user_id = ?1 AND tl.label_id = ?2 AND l.user_id = ?1 AND l.id = ?2 ORDER BY tl.created_at DESC, tl.thread_id DESC LIMIT ?3 OFFSET ?4",
     )
     .bind(user_id)
     .bind(label_id)

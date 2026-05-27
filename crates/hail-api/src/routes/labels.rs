@@ -5,7 +5,7 @@
 //! endpoints are tracked separately under `labels-api-thread-assignment`.
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -16,11 +16,15 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
+use crate::routes::jmap_helpers::hydrate_thread_previews;
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
 /// OpenAPI tag for label management endpoints.
 pub const TAG: &str = "labels";
+
+const DEFAULT_THREAD_LIMIT: usize = 50;
+const MAX_THREAD_LIMIT: usize = 100;
 
 /// Build protected label routes.
 pub fn router() -> Router<AppState> {
@@ -31,6 +35,7 @@ pub fn router() -> Router<AppState> {
 pub fn openapi_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_labels, create_label))
+        .routes(routes!(label_threads))
         .routes(routes!(rename_label, delete_label))
 }
 
@@ -42,6 +47,44 @@ struct LabelListResponse {
 #[derive(Debug, Serialize, ToSchema)]
 struct LabelItemResponse {
     label: LabelResponse,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct LabelThreadsResponse {
+    label: LabelResponse,
+    items: Vec<LabelThreadItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct LabelThreadItem {
+    thread_id: String,
+    from: String,
+    subject: String,
+    preview: String,
+    labels: Vec<LabelResponse>,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+struct LabelThreadsQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+impl LabelThreadsQuery {
+    fn normalized_limit(&self) -> usize {
+        self.limit
+            .unwrap_or(DEFAULT_THREAD_LIMIT)
+            .min(MAX_THREAD_LIMIT)
+    }
+
+    fn offset(&self) -> Result<usize, ()> {
+        match self.cursor.as_deref().map(str::trim) {
+            None | Some("") => Ok(0),
+            Some(value) => value.parse::<usize>().map_err(|_| ()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -198,6 +241,109 @@ async fn delete_label(
         Ok(false) => not_found("label"),
         Err(err) => label_db_error(err, user.id, "label delete failed"),
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/labels/{id}/threads",
+    tag = TAG,
+    params(
+        ("id" = i64, Path, description = "Label id."),
+        LabelThreadsQuery,
+    ),
+    responses(
+        (status = 200, description = "Threads assigned to this label for the current user.", body = LabelThreadsResponse),
+        (status = 400, description = "Invalid cursor."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 404, description = "Label not found."),
+        (status = 500, description = "Label thread lookup failed."),
+    ),
+)]
+async fn label_threads(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<i64>,
+    Query(query): Query<LabelThreadsQuery>,
+) -> Response {
+    if id <= 0 {
+        return not_found("label");
+    }
+    let offset = match query.offset() {
+        Ok(offset) => offset,
+        Err(()) => return bad_request("invalid_cursor"),
+    };
+    let limit = query.normalized_limit();
+
+    let label = match labels::get_label(&state.db, user.id, id).await {
+        Ok(label) => label,
+        Err(err) => return label_db_error(err, user.id, "label lookup failed"),
+    };
+
+    let mut thread_ids = match labels::list_label_thread_ids(
+        &state.db,
+        user.id,
+        id,
+        if limit == 0 { 0 } else { (limit + 1) as i64 },
+        offset as i64,
+    )
+    .await
+    {
+        Ok(thread_ids) => thread_ids,
+        Err(err) => return label_db_error(err, user.id, "label thread lookup failed"),
+    };
+    let has_more = thread_ids.len() > limit;
+    if has_more {
+        thread_ids.truncate(limit);
+    }
+
+    let previews = hydrate_thread_previews(
+        &state,
+        user.id,
+        user.jmap_token.clone(),
+        "label_threads",
+        thread_ids.clone(),
+    )
+    .await;
+
+    let labels_by_thread_id =
+        match labels::list_labels_for_threads(&state.db, user.id, &thread_ids).await {
+            Ok(labels_by_thread_id) => labels_by_thread_id,
+            Err(err) => return label_db_error(err, user.id, "label thread label lookup failed"),
+        };
+
+    let items = thread_ids
+        .iter()
+        .map(|thread_id| {
+            let preview = previews.get(thread_id);
+            LabelThreadItem {
+                thread_id: thread_id.clone(),
+                from: preview
+                    .map(|preview| preview.from.clone())
+                    .unwrap_or_default(),
+                subject: preview
+                    .map(|preview| preview.subject.clone())
+                    .unwrap_or_default(),
+                preview: preview
+                    .map(|preview| preview.preview.clone())
+                    .unwrap_or_default(),
+                labels: labels_by_thread_id
+                    .get(thread_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(LabelResponse::from)
+                    .collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let next_cursor = has_more.then(|| (offset + thread_ids.len()).to_string());
+
+    Json(LabelThreadsResponse {
+        label: LabelResponse::from(label),
+        items,
+        next_cursor,
+    })
+    .into_response()
 }
 
 impl From<Label> for LabelResponse {
