@@ -4,6 +4,8 @@ import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/m
 import { Badge } from './ui/badge';
 import { Checkbox } from './ui/checkbox';
 import { StickyNote } from './icons';
+import { LabelChips } from './LabelChips';
+import type { components } from '../api/types';
 
 export interface MailRowProps {
   from: string;
@@ -15,6 +17,7 @@ export interface MailRowProps {
   hasNotes?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
+  labels?: components['schemas']['LabelResponse'][];
   children?: ReactNode;
 }
 
@@ -61,6 +64,7 @@ export function MailRow({
   hasNotes = false,
   selected = false,
   onToggleSelect,
+  labels = [],
   children,
 }: MailRowProps) {
   const content = (
@@ -88,6 +92,7 @@ export function MailRow({
           ) : null}
         </p>
         {preview ? <p className={`mt-1 ${previewClass}`}>{preview}</p> : null}
+        <LabelChips labels={labels} className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1" />
       </div>
     </div>
   );

@@ -289,6 +289,28 @@ describe('ThreadPage', () => {
 
 
 
+  it('renders thread labels as leaf chips with full-path titles', async () => {
+    renderThread(
+      sampleThread({
+        labels: [
+          {
+            id: 12,
+            name: 'Work/Receipts',
+            leaf_name: 'Receipts',
+            path_segments: ['Work', 'Receipts'],
+            source: 'gmail',
+            color: 'blue',
+            thread_count: 8,
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
+    expect(screen.getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
+    expect(screen.getByLabelText('Label Work/Receipts')).toBeInTheDocument();
+  });
+
   it('shows remote images on demand while keeping the sanitized default', async () => {
     const { container } = renderThread(
       sampleThread({

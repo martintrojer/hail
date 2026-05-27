@@ -149,6 +149,7 @@ function MailThreadRow({
         hasNotes={item.has_notes}
         selected={selected}
         onToggleSelect={onToggleSelect}
+        labels={item.labels}
       />
     </ThreadLink>
   );
