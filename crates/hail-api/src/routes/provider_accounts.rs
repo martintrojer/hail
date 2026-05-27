@@ -636,6 +636,7 @@ async fn upsert_provider_account(
         "UPDATE provider_accounts \
          SET refresh_token_enc = ?1, refresh_token_ref = NULL, refresh_token_key_id = ?2, \
              sync_status = 'active', disconnected_at = NULL, revoked_at = NULL, \
+             next_sync_after = NULL, sync_backoff_secs = NULL, \
              last_error_class = NULL, last_error_message = NULL, updated_at = ?3 \
          WHERE id = ?4",
     )
@@ -654,14 +655,16 @@ async fn load_refresh_token_for_disconnect(
     user_id: i64,
     provider_account_id: i64,
 ) -> Result<Option<SecretString>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (String, Vec<u8>)>(
+    let row = sqlx::query_as::<_, (String, Option<Vec<u8>>)>(
         "SELECT provider_account_id, refresh_token_enc FROM provider_accounts WHERE id = ?1 AND user_id = ?2 AND sync_status != 'disconnected'",
     )
     .bind(provider_account_id)
     .bind(user_id)
     .fetch_one(&state.db)
     .await?;
-    let (provider_external_id, ciphertext) = row;
+    let (provider_external_id, Some(ciphertext)) = row else {
+        return Ok(None);
+    };
     let context = hail_core::ProviderTokenContext::new(
         user_id,
         provider_account_id,
