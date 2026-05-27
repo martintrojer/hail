@@ -1,8 +1,9 @@
-//! Local label CRUD endpoints.
+//! Local label endpoints.
 //!
 //! Labels are local, per-user, thread-level tags stored in the hail sidecar DB.
-//! This module intentionally owns only label management; thread assignment
-//! endpoints are tracked separately under `labels-api-thread-assignment`.
+//! This module owns label management plus thread assignment/removal. Assignment
+//! is scoped solely by the authenticated hail user and sidecar label ownership;
+//! it does not mutate provider labels.
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, Query, State};
@@ -16,7 +17,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::hydrate_thread_previews;
+use crate::routes::jmap_helpers::{hydrate_thread_previews, validate_thread_id};
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
@@ -37,6 +38,8 @@ pub fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_labels, create_label))
         .routes(routes!(label_threads))
         .routes(routes!(rename_label, delete_label))
+        .routes(routes!(assign_label_to_thread, remove_label_from_thread))
+        .routes(routes!(assign_label_name_to_thread))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -115,6 +118,11 @@ struct CreateLabelRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 struct RenameLabelRequest {
     name: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct AssignLabelNameRequest {
+    label_name: String,
 }
 
 #[utoipa::path(
@@ -346,6 +354,126 @@ async fn label_threads(
     .into_response()
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/labels/{label_id}",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+        ("label_id" = i64, Path, description = "Label id."),
+    ),
+    responses(
+        (status = 200, description = "Label assigned to the thread. Duplicate assignment is idempotent.", body = LabelItemResponse),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 403, description = "Missing CSRF header."),
+        (status = 404, description = "Label not found for the current user."),
+        (status = 500, description = "Label assignment failed."),
+    ),
+)]
+async fn assign_label_to_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path((thread_id, label_id)): Path<(String, i64)>,
+) -> Response {
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
+    }
+    if label_id <= 0 {
+        return not_found("label");
+    }
+
+    let label = match labels::get_label(&state.db, user.id, label_id).await {
+        Ok(label) => label,
+        Err(err) => return label_db_error(err, user.id, "label assignment lookup failed"),
+    };
+
+    match labels::assign_label_to_thread(&state.db, user.id, &thread_id, label.id).await {
+        Ok(_) => Json(LabelItemResponse {
+            label: LabelResponse::from(label),
+        })
+        .into_response(),
+        Err(err) => label_db_error(err, user.id, "label assignment failed"),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/threads/{thread_id}/labels/{label_id}",
+    tag = TAG,
+    params(
+        ("thread_id" = String, Path, description = "JMAP thread id."),
+        ("label_id" = i64, Path, description = "Label id."),
+    ),
+    responses(
+        (status = 204, description = "Label assignment removed. Removing a non-assigned current-user label is idempotent."),
+        (status = 400, description = "Invalid thread id."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 403, description = "Missing CSRF header."),
+        (status = 404, description = "Label not found for the current user."),
+        (status = 500, description = "Label assignment removal failed."),
+    ),
+)]
+async fn remove_label_from_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path((thread_id, label_id)): Path<(String, i64)>,
+) -> Response {
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
+    }
+    if label_id <= 0 {
+        return not_found("label");
+    }
+
+    if let Err(err) = labels::get_label(&state.db, user.id, label_id).await {
+        return label_db_error(err, user.id, "label removal lookup failed");
+    }
+
+    match labels::remove_label_from_thread(&state.db, user.id, &thread_id, label_id).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => label_db_error(err, user.id, "label assignment removal failed"),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/threads/{thread_id}/labels",
+    tag = TAG,
+    params(("thread_id" = String, Path, description = "JMAP thread id.")),
+    request_body(content = AssignLabelNameRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Existing normalized label reused or a manual label created, then assigned idempotently.", body = LabelItemResponse),
+        (status = 400, description = "Invalid thread id, JSON, or label name."),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 403, description = "Missing CSRF header."),
+        (status = 500, description = "Inline label assignment failed."),
+    ),
+)]
+async fn assign_label_name_to_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Path(thread_id): Path<String>,
+    body: Result<Json<AssignLabelNameRequest>, JsonRejection>,
+) -> Response {
+    if let Err(response) = validate_thread_id(&thread_id) {
+        return response;
+    }
+    let Ok(Json(body)) = body else {
+        return bad_request("invalid_json");
+    };
+
+    match labels::assign_label_name_to_thread(&state.db, user.id, &thread_id, &body.label_name)
+        .await
+    {
+        Ok(label) => Json(LabelItemResponse {
+            label: LabelResponse::from(label),
+        })
+        .into_response(),
+        Err(err) => label_db_error(err, user.id, "inline label assignment failed"),
+    }
+}
+
 impl From<Label> for LabelResponse {
     fn from(label: Label) -> Self {
         Self {
@@ -372,6 +500,7 @@ impl From<LabelSource> for LabelSourceResponse {
 fn label_db_error(err: LabelDbError, user_id: i64, message: &'static str) -> Response {
     match err {
         LabelDbError::InvalidName(_) => bad_request("invalid_label_name"),
+        LabelDbError::InvalidThreadId(_) => bad_request("invalid_thread_id"),
         LabelDbError::Sqlx(sqlx::Error::RowNotFound) => not_found("label"),
         LabelDbError::Sqlx(err) if is_unique_constraint(&err) => {
             bad_request("duplicate_label_name")
