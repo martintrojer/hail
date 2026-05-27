@@ -14,7 +14,7 @@ use tokio::time::Instant;
 
 use async_trait::async_trait;
 use base64::Engine;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use base64::prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD};
 use reqwest::header::RETRY_AFTER;
 use reqwest::{StatusCode, Url};
 use secrecy::{ExposeSecret, SecretString};
@@ -447,7 +447,7 @@ where
         let path = format!("users/me/messages/{message_id}");
         let response: GetMessageResponse = self.get_json(&path, &[("format", "raw")]).await?;
         let raw = response.raw.ok_or(GmailClientError::MissingRawMessage)?;
-        let rfc822 = BASE64_URL_SAFE_NO_PAD.decode(raw.as_bytes())?;
+        let rfc822 = decode_raw_rfc822(&raw)?;
         Ok(RawGmailMessage {
             id: response.id,
             thread_id: response.thread_id,
@@ -655,6 +655,12 @@ struct GmailErrorBody {
 struct GmailErrorDetail {
     reason: Option<String>,
     message: Option<String>,
+}
+
+fn decode_raw_rfc822(raw: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    BASE64_URL_SAFE_NO_PAD
+        .decode(raw.as_bytes())
+        .or_else(|_| BASE64_URL_SAFE.decode(raw.as_bytes()))
 }
 
 pub(super) fn parse_gmail_error(body: &str) -> ParsedGmailError {
