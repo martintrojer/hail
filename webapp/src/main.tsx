@@ -8,6 +8,7 @@ import './index.css';
 import { queryClient } from './lib/queryClient';
 import { router } from './router';
 import { registerServiceWorker } from './pwa';
+import { TooltipProvider } from './components/ui/tooltip';
 
 registerServiceWorker();
 
@@ -30,7 +31,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ApiClientProvider client={apiClient}>
-        <RouterProvider router={router} />
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
       </ApiClientProvider>
     </QueryClientProvider>
   </StrictMode>,
