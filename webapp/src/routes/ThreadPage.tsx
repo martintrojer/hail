@@ -50,6 +50,35 @@ interface LocalNote extends InlineNoteProps {
   messageId: string;
 }
 
+const remoteImagesStorageKeyPrefix = 'hail.thread.remote-images.';
+
+function remoteImagesStorageKey(threadId: string, messageId: string) {
+  return `${remoteImagesStorageKeyPrefix}${threadId}.${messageId}`;
+}
+
+function storedRemoteImagesPreference(threadId: string, messageId: string) {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(remoteImagesStorageKey(threadId, messageId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function storeRemoteImagesPreference(threadId: string, messageId: string, enabled: boolean) {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = remoteImagesStorageKey(threadId, messageId);
+    if (enabled) {
+      window.localStorage.setItem(key, '1');
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // localStorage may be unavailable in hardened/private browser contexts.
+  }
+}
+
 function TrackerBadge({ message }: { message: ThreadMessage }) {
   const count = message.blocked_trackers.length;
   if (count === 0) {
@@ -184,6 +213,7 @@ function toLocalNote(note: ThreadNote): LocalNote {
 
 
 function MessageCard({
+  threadId,
   message,
   notes,
   addingNote,
@@ -197,6 +227,7 @@ function MessageCard({
   hiddenActions,
   actionBusy,
 }: {
+  threadId: string;
   message: ThreadMessage;
   notes: LocalNote[];
   addingNote: boolean;
@@ -212,8 +243,25 @@ function MessageCard({
 }) {
   const sender = firstSender(message);
   const remoteImagesAvailable = message.html_with_remote_images !== message.html;
-  const [showRemoteImages, setShowRemoteImages] = useState(false);
+  const [showRemoteImages, setShowRemoteImages] = useState(() =>
+    storedRemoteImagesPreference(threadId, message.email_id),
+  );
   const renderedHtml = showRemoteImages ? message.html_with_remote_images : message.html;
+
+  useEffect(() => {
+    if (!remoteImagesAvailable && showRemoteImages) {
+      setShowRemoteImages(false);
+      storeRemoteImagesPreference(threadId, message.email_id, false);
+    }
+  }, [message.email_id, remoteImagesAvailable, showRemoteImages, threadId]);
+
+  function toggleRemoteImages() {
+    setShowRemoteImages((current) => {
+      const next = !current;
+      storeRemoteImagesPreference(threadId, message.email_id, next);
+      return next;
+    });
+  }
 
   function togglePopup(event: MouseEvent<HTMLButtonElement>) {
     onTogglePopup(message.email_id, event.currentTarget.getBoundingClientRect());
@@ -270,7 +318,7 @@ function MessageCard({
               <button
                 type="button"
                 className="font-semibold text-accent-blue underline"
-                onClick={() => setShowRemoteImages((value) => !value)}
+                onClick={toggleRemoteImages}
               >
                 {showRemoteImages ? 'Hide remote images' : 'Show remote images'}
               </button>
@@ -661,6 +709,7 @@ function ThreadDocument({
           {messages.map((message) => (
             <MessageCard
               key={message.email_id}
+              threadId={thread.thread_id}
               message={message}
               notes={notes.filter(
                 (note) => note.messageId === message.email_id,
