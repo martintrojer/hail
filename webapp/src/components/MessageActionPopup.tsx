@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 import {
   Archive,
   Bookmark,
@@ -16,14 +16,17 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
 export interface MessageActionPopupProps {
   open: boolean;
   onClose: () => void;
   onAction: (action: string, payload?: unknown) => void;
-  anchorRect?: DOMRect | null;
+  /** Optional trigger lets Radix anchor the menu to the shadcn Button. */
+  trigger?: ReactNode;
   /** Actions to hide based on context (e.g. hide bubble-up in pile views). */
   hiddenActions?: string[];
 }
@@ -33,6 +36,7 @@ interface ActionItem {
   label: string;
   icon: LucideIcon;
   payload?: unknown;
+  variant?: 'default' | 'destructive';
 }
 
 const actionGroups: ActionItem[][] = [
@@ -49,8 +53,8 @@ const actionGroups: ActionItem[][] = [
   ],
   [{ action: 'add-note', label: 'Add a Note', icon: StickyNote }],
   [
-    { action: 'mark-spam', label: 'Mark as spam', icon: X },
-    { action: 'trash', label: 'Trash', icon: Trash2 },
+    { action: 'mark-spam', label: 'Mark as spam', icon: X, variant: 'destructive' },
+    { action: 'trash', label: 'Trash', icon: Trash2, variant: 'destructive' },
   ],
 ];
 
@@ -64,49 +68,11 @@ export function MessageActionPopup({
   open,
   onClose,
   onAction,
-  anchorRect,
+  trigger,
   hiddenActions = [],
 }: MessageActionPopupProps) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    }
-
-    function handlePointerDown(event: MouseEvent) {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        contentRef.current &&
-        !contentRef.current.contains(target)
-      ) {
-        onClose();
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('mousedown', handlePointerDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('mousedown', handlePointerDown);
-    };
-  }, [onClose, open]);
-
-  if (!open) {
-    return null;
-  }
-
   function runAction(action: string, payload?: unknown) {
     onAction(action, payload);
-    onClose();
   }
 
   const hidden = new Set(hiddenActions);
@@ -115,22 +81,17 @@ export function MessageActionPopup({
   );
 
   return (
-    <DropdownMenu modal={false} open={open}>
-      <DropdownMenuContent
-        ref={contentRef}
-        align="end"
-        aria-label="Message actions"
-        className="w-60 border-border-menu bg-bg-surface"
-        style={
-          anchorRect
-            ? {
-                position: 'fixed',
-                top: anchorRect.bottom + 8,
-                left: anchorRect.right - 240,
-              }
-            : undefined
+    <DropdownMenu
+      modal={false}
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          onClose();
         }
-      >
+      }}
+    >
+      {trigger ? <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger> : null}
+      <DropdownMenuContent align="end" aria-label="Message actions" className="w-56">
         <DropdownMenuGroup>
           {filteredGroups[0].map((item) => (
             <MessageMenuItem
@@ -153,19 +114,17 @@ export function MessageActionPopup({
           ))}
         </DropdownMenuGroup>
 
-        <DropdownMenuItem onSelect={(event) => event.preventDefault()}>
-          Move to
-        </DropdownMenuItem>
-        <DropdownMenuGroup aria-label="Move targets">
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Move to</DropdownMenuLabel>
+        <DropdownMenuGroup>
           {moveTargets.map((target) => (
-            <button
+            <DropdownMenuItem
               key={target.value}
-              type="button"
-              className="block w-full rounded-md px-6 py-1 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-              onClick={() => runAction('move-to', target.value)}
+              inset
+              onSelect={() => runAction('move-to', target.value)}
             >
               {target.label}
-            </button>
+            </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
 
@@ -207,7 +166,7 @@ function MessageMenuItem({
   const Icon = item.icon;
 
   return (
-    <DropdownMenuItem onSelect={onSelect}>
+    <DropdownMenuItem variant={item.variant} onSelect={onSelect}>
       <Icon aria-hidden="true" />
       <span>{item.label}</span>
     </DropdownMenuItem>

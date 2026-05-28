@@ -2,32 +2,16 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BubbleUpSubmenu } from './BubbleUpSubmenu';
 
-function anchorRect(overrides: Partial<DOMRect> = {}): DOMRect {
-  return {
-    x: 100,
-    y: 40,
-    width: 32,
-    height: 32,
-    top: 40,
-    right: 132,
-    bottom: 72,
-    left: 100,
-    toJSON: () => ({}),
-    ...overrides,
-  };
-}
-
 afterEach(() => {
   cleanup();
 });
 
 describe('BubbleUpSubmenu', () => {
-  it('renders preset bubble up time options in a portal', () => {
+  it('renders preset bubble up time options in a shadcn portal menu', () => {
     render(
       <div data-testid="app-root">
         <BubbleUpSubmenu
           open
-          anchorRect={anchorRect()}
           onClose={() => undefined}
           onSelect={() => undefined}
         />
@@ -37,13 +21,7 @@ describe('BubbleUpSubmenu', () => {
     const submenu = screen.getByRole('menu', { name: 'Bubble up time options' });
     expect(submenu).toBeInTheDocument();
     expect(document.body).toContainElement(submenu);
-    expect(submenu).toHaveStyle({ top: '40px', left: '140px' });
-    expect(submenu).toHaveClass(
-      'bg-bg-surface',
-      'border-border-menu',
-      'rounded-lg',
-      'shadow-md',
-    );
+    expect(submenu).toHaveClass('bg-popover', 'rounded-lg', 'shadow-md');
 
     expect(screen.getByRole('menuitem', { name: 'Later today' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Tomorrow morning' })).toBeInTheDocument();
@@ -59,7 +37,6 @@ describe('BubbleUpSubmenu', () => {
     render(
       <BubbleUpSubmenu
         open
-        anchorRect={anchorRect()}
         onClose={onClose}
         onSelect={onSelect}
       />,
@@ -71,26 +48,19 @@ describe('BubbleUpSubmenu', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('closes on outside click or Escape', () => {
+  it('closes on Escape', () => {
     const onClose = vi.fn();
 
     render(
-      <div>
-        <button type="button">Outside</button>
-        <BubbleUpSubmenu
-          open
-          anchorRect={anchorRect()}
-          onClose={onClose}
-          onSelect={() => undefined}
-        />
-      </div>,
+      <BubbleUpSubmenu
+        open
+        onClose={onClose}
+        onSelect={() => undefined}
+      />,
     );
 
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Outside' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
-
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('does not render when closed', () => {

@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   HailApiClient,
   type ThreadMessage,
@@ -22,15 +22,16 @@ import { AddNoteForm } from '../components/AddNoteForm';
 import { BubbleUpSubmenu } from '../components/BubbleUpSubmenu';
 import { ErrorState } from '../components/ErrorState';
 import { InlineNote, type InlineNoteProps } from '../components/InlineNote';
-import {
-  ArrowLeft,
-  MoreHorizontal,
-  iconSizeProps,
-} from '../components/icons';
+import { ArrowLeft, MoreHorizontal, ShieldOff, StickyNote } from '../components/icons';
 import { LabelChips } from '../components/LabelChips';
 import { ThreadLabelPicker } from '../components/ThreadLabelPicker';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
+import { Alert, AlertAction, AlertDescription } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Separator } from '../components/ui/separator';
 import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { useGoBack } from '../hooks/useGoBack';
@@ -88,14 +89,15 @@ function TrackerBadge({ message }: { message: ThreadMessage }) {
   }
 
   return (
-    <span
-      className="rounded-full bg-bg-banner px-2 py-0.5 text-xs font-semibold text-ink-secondary"
+    <Badge
+      variant="secondary"
+      className="max-w-40 truncate"
       title={message.blocked_trackers
         .map((tracker) => tracker.reason)
         .join('\n')}
     >
       {count} tracker{count === 1 ? '' : 's'} blocked
-    </span>
+    </Badge>
   );
 }
 
@@ -220,7 +222,6 @@ function MessageCard({
   notes,
   addingNote,
   popupOpen,
-  popupAnchor,
   onTogglePopup,
   onClosePopup,
   onPopupAction,
@@ -234,9 +235,8 @@ function MessageCard({
   notes: LocalNote[];
   addingNote: boolean;
   popupOpen: boolean;
-  popupAnchor: DOMRect | null;
   actionBusy: boolean;
-  onTogglePopup: (messageId: string, anchorRect: DOMRect) => void;
+  onTogglePopup: (messageId: string) => void;
   onClosePopup: () => void;
   onPopupAction: (message: ThreadMessage, action: string, payload?: unknown) => void;
   onCancelAddNote: () => void;
@@ -265,8 +265,8 @@ function MessageCard({
     });
   }
 
-  function togglePopup(event: MouseEvent<HTMLButtonElement>) {
-    onTogglePopup(message.email_id, event.currentTarget.getBoundingClientRect());
+  function togglePopup() {
+    onTogglePopup(message.email_id);
   }
 
   function handlePopupAction(action: string, payload?: unknown) {
@@ -274,75 +274,83 @@ function MessageCard({
   }
 
   return (
-    <article className="border-b border-border-hairline pb-8 last:border-b-0">
+    <article className="py-5">
       <header className="flex items-start gap-3">
-        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-bg-hover text-xs font-semibold text-ink-secondary">
+        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
           <span aria-hidden="true">{participantInitial(sender)}</span>
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate font-semibold text-ink-primary">
+              <p className="truncate font-semibold text-foreground">
                 {sender ? formatParticipantName(sender) : 'Unknown sender'}
               </p>
-              <p className="mt-0.5 truncate text-sm text-ink-tertiary">
+              <p className="mt-0.5 truncate text-sm text-muted-foreground">
                 To {formatParticipantList(message.to)} ·{' '}
                 <time>{formatFullDateTime(message.received_at)}</time>
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <TrackerBadge message={message} />
-              <button
-                type="button"
-                aria-label="Message actions"
-                aria-haspopup="menu"
-                aria-expanded={popupOpen}
-                disabled={actionBusy}
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={togglePopup}
-                className="rounded-full p-1 text-ink-tertiary focus-ring outline-none hover:bg-hover hover:text-ink-primary"
-              >
-                <MoreHorizontal {...iconSizeProps.sm} aria-hidden="true" />
-              </button>
               <MessageActionPopup
                 open={popupOpen}
-                anchorRect={popupAnchor}
                 onClose={onClosePopup}
                 onAction={handlePopupAction}
                 hiddenActions={hiddenActions}
+                trigger={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Message actions"
+                    aria-haspopup="menu"
+                    aria-expanded={popupOpen}
+                    disabled={actionBusy}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={togglePopup}
+                  >
+                    <MoreHorizontal aria-hidden="true" />
+                  </Button>
+                }
               />
             </div>
           </div>
 
           {remoteImagesAvailable ? (
-            <div className="mt-4 rounded-lg border border-accent-yellow/30 bg-bg-banner px-3 py-2 text-sm text-ink-secondary">
-              Remote images are hidden by default. Tracking pixels stay blocked.{' '}
-              <button
-                type="button"
-                className="font-semibold text-accent-blue underline"
-                onClick={toggleRemoteImages}
-              >
-                {showRemoteImages ? 'Hide remote images' : 'Show remote images'}
-              </button>
-            </div>
+            <Alert className="mt-4 pr-40">
+              <ShieldOff aria-hidden="true" />
+              <AlertDescription>
+                Remote images are hidden by default. Tracking pixels stay blocked.
+              </AlertDescription>
+              <AlertAction>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={toggleRemoteImages}
+                >
+                  {showRemoteImages ? 'Hide remote images' : 'Show remote images'}
+                </Button>
+              </AlertAction>
+            </Alert>
           ) : null}
 
           {renderedHtml.trim().length > 0 ? (
             <div
-              className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-ink-primary [&_a]:text-accent-blue [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border-hairline [&_blockquote]:pl-4 [&_blockquote]:text-ink-secondary [&_code]:rounded [&_code]:bg-bg-hover [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top"
+              className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top"
               // Server owns the mail-render trust boundary: hail-api strips quoted
               // history, removes trackers, and sanitizes HTML before this field is
               // exposed to the SPA. The client renders only that sanitized fragment.
               dangerouslySetInnerHTML={{ __html: renderedHtml }}
             />
           ) : (
-            <p className="mt-5 whitespace-pre-wrap text-base leading-relaxed text-ink-primary">
+            <p className="mt-5 whitespace-pre-wrap text-base leading-relaxed text-foreground">
               {message.preview || 'This message has no renderable body.'}
             </p>
           )}
 
           {notes.length > 0 ? (
-            <div className="mt-5 space-y-3">
+            <div className="mt-5 flex flex-col gap-3">
               {notes.map((note) => (
                 <InlineNote
                   key={note.id}
@@ -355,12 +363,20 @@ function MessageCard({
           ) : null}
 
           {addingNote ? (
-            <div className="mt-5 rounded-r-lg border-l-4 border-accent-yellow bg-bg-banner p-4">
-              <AddNoteForm
-                onSave={(text) => onSaveNote(message.email_id, text)}
-                onCancel={onCancelAddNote}
-              />
-            </div>
+            <Card size="sm" className="mt-5 rounded-r-lg border-l-4 border-l-primary">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <StickyNote aria-hidden="true" />
+                  Add note
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AddNoteForm
+                  onSave={(text) => onSaveNote(message.email_id, text)}
+                  onCancel={onCancelAddNote}
+                />
+              </CardContent>
+            </Card>
           ) : null}
         </div>
       </header>
@@ -379,21 +395,21 @@ function ThreadHeader({
   const firstMessage = sortedMessages(thread.messages)[0];
 
   return (
-    <header className="space-y-3">
-      <h2 className="text-2xl font-bold leading-tight tracking-tight text-ink-primary sm:text-[1.75rem]">
+    <header className="flex flex-col gap-3">
+      <h2 className="text-2xl font-bold leading-tight tracking-tight text-foreground sm:text-[1.75rem]">
         {thread.subject || '(no subject)'}
       </h2>
-      <p className="text-sm leading-6 text-ink-secondary">
-        <span className="font-semibold text-ink-primary">
+      <p className="text-sm leading-6 text-muted-foreground">
+        <span className="font-semibold text-foreground">
           {sender ? formatParticipantName(sender) : 'Unknown'}
         </span>{' '}
-        <span className="text-ink-tertiary">
+        <span className="text-muted-foreground">
           &lt;{formatParticipantEmail(sender)}&gt;
         </span>
         {firstMessage ? (
           <>
-            <span className="text-ink-tertiary"> · </span>
-            <time className="text-ink-tertiary">
+            <span className="text-muted-foreground"> · </span>
+            <time className="text-muted-foreground">
               {formatFullDateTime(firstMessage.received_at)}
             </time>
           </>
@@ -403,7 +419,7 @@ function ThreadHeader({
         {thread.labels.length > 0 ? (
           <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1.5" />
         ) : (
-          <span className="text-xs text-ink-tertiary">No labels</span>
+          <span className="text-xs text-muted-foreground">No labels</span>
         )}
         <ThreadLabelPicker
           threadId={thread.thread_id}
@@ -438,12 +454,8 @@ function ThreadDocument({
     ? ['bubble-up', 'set-aside', 'reply-later']
     : [];
   const [addingNoteFor, setAddingNoteFor] = useState<string | null>(null);
-  const [messagePopup, setMessagePopup] = useState<{
-    messageId: string;
-    anchorRect: DOMRect;
-  } | null>(null);
+  const [messagePopup, setMessagePopup] = useState<string | null>(null);
   const [bubbleUpOpen, setBubbleUpOpen] = useState(false);
-  const [bubbleUpAnchor, setBubbleUpAnchor] = useState<DOMRect | null>(null);
   const [notes, setNotes] = useState<LocalNote[]>(() => thread.notes.map(toLocalNote));
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -467,10 +479,8 @@ function ThreadDocument({
     setNotes(thread.notes.map(toLocalNote));
   }, [thread.notes]);
 
-  function toggleMessagePopup(messageId: string, anchorRect: DOMRect) {
-    setMessagePopup((current) =>
-      current?.messageId === messageId ? null : { messageId, anchorRect },
-    );
+  function toggleMessagePopup(messageId: string) {
+    setMessagePopup((current) => (current === messageId ? null : messageId));
   }
 
   function closeMessagePopup() {
@@ -605,7 +615,6 @@ function ThreadDocument({
       }
       case 'bubble-up':
         setActionError(null);
-        setBubbleUpAnchor(messagePopup?.anchorRect ?? null);
         setBubbleUpOpen(true);
         return;
       case 'mark-spam': {
@@ -701,22 +710,24 @@ function ThreadDocument({
   }
 
   return (
-    <div className="space-y-8">
-      <button
+    <div className="flex flex-col gap-6">
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={goBack}
-        className="inline-flex items-center gap-2 rounded-md text-sm font-medium text-ink-secondary focus-ring outline-none hover:text-accent-blue"
+        className="w-fit"
       >
-        <ArrowLeft {...iconSizeProps.sm} aria-hidden="true" />
+        <ArrowLeft data-icon="inline-start" aria-hidden="true" />
         Back
-      </button>
+      </Button>
 
       <ThreadHeader thread={thread} client={client} />
 
       {actionError ? (
-        <p role="alert" className="rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">
-          {actionError}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{actionError}</AlertDescription>
+        </Alert>
       ) : null}
 
       {messages.length === 0 ? (
@@ -725,41 +736,37 @@ function ThreadDocument({
           body="The server returned the thread but did not include any messages."
         />
       ) : (
-        <div className="space-y-8">
-          {messages.map((message) => (
-            <MessageCard
-              key={message.email_id}
-              threadId={thread.thread_id}
-              message={message}
-              notes={notes.filter(
-                (note) => note.messageId === message.email_id,
-              )}
-              addingNote={addingNoteFor === message.email_id}
-              popupOpen={messagePopup?.messageId === message.email_id}
-              popupAnchor={
-                messagePopup?.messageId === message.email_id
-                  ? messagePopup.anchorRect
-                  : null
-              }
-              actionBusy={actionBusy}
-              onTogglePopup={toggleMessagePopup}
-              onClosePopup={closeMessagePopup}
-              onPopupAction={(message, action, payload) => {
-                void handlePopupAction(message, action, payload);
-              }}
-              onCancelAddNote={() => setAddingNoteFor(null)}
-              onSaveNote={(messageId, text) => {
-                void saveNote(messageId, text);
-              }}
-              hiddenActions={hiddenPopupActions}
-            />
+        <div className="flex flex-col">
+          {messages.map((message, index) => (
+            <div key={message.email_id}>
+              {index > 0 ? <Separator /> : null}
+              <MessageCard
+                threadId={thread.thread_id}
+                message={message}
+                notes={notes.filter(
+                  (note) => note.messageId === message.email_id,
+                )}
+                addingNote={addingNoteFor === message.email_id}
+                popupOpen={messagePopup === message.email_id}
+                actionBusy={actionBusy}
+                onTogglePopup={toggleMessagePopup}
+                onClosePopup={closeMessagePopup}
+                onPopupAction={(message, action, payload) => {
+                  void handlePopupAction(message, action, payload);
+                }}
+                onCancelAddNote={() => setAddingNoteFor(null)}
+                onSaveNote={(messageId, text) => {
+                  void saveNote(messageId, text);
+                }}
+                hiddenActions={hiddenPopupActions}
+              />
+            </div>
           ))}
         </div>
       )}
 
       <BubbleUpSubmenu
         open={bubbleUpOpen}
-        anchorRect={bubbleUpAnchor}
         onClose={() => setBubbleUpOpen(false)}
         onSelect={(option) => {
           void handleBubbleUpSelect(option);

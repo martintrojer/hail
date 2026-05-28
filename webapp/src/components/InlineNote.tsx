@@ -9,7 +9,7 @@ export interface InlineNoteProps {
 
 export function InlineNote({ text, author, timestamp }: InlineNoteProps) {
   return (
-    <Card size="sm" role="article" className="rounded-r-lg border-l-4 border-accent-yellow bg-bg-banner p-4">
+    <Card size="sm" role="article" className="rounded-r-lg border-l-4 border-l-primary bg-muted/40">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
           <StickyNote aria-hidden="true" />
