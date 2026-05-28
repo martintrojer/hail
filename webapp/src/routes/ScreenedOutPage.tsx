@@ -8,8 +8,20 @@ import {
   ScreenerRoutingDropdown,
   type ScreenerRoutingDestination,
 } from '../components/ScreenerRoutingDropdown';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { AppShell } from '../layout/AppShell';
-import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDate } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
@@ -44,17 +56,17 @@ function AllowButton({
 
   return (
     <>
-      <button
+      <Button
         ref={buttonRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={routingOpen}
         onClick={showRoutingDropdown}
         disabled={undo.isPending}
-        className={`${pillButtonClass('primary', 'md')} self-start sm:self-auto`}
+        size="sm"
       >
         {undo.isPending ? 'Allowing…' : label}
-      </button>
+      </Button>
       <ScreenerRoutingDropdown
         open={routingOpen}
         anchorRect={routingAnchor}
@@ -62,9 +74,11 @@ function AllowButton({
         onSelect={allow}
       />
       {undo.isError ? (
-        <p role="alert" className="text-sm text-accent-red sm:col-span-2">
-          {actionErrorMessage(undo.error, 'Decision')}
-        </p>
+        <Alert variant="destructive" className="sm:col-span-2">
+          <AlertDescription>
+            {actionErrorMessage(undo.error, 'Decision')}
+          </AlertDescription>
+        </Alert>
       ) : null}
     </>
   );
@@ -82,24 +96,22 @@ function ScreenedOutSenderCard({
   client?: HailApiClient;
 }) {
   return (
-    <article className="rounded-lg bg-bg-surface p-4">
-      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-ink-primary">
-            {sender.sender_address}
-          </h3>
-          <p className="mt-1 text-xs text-ink-tertiary">
-            Denied {formatDate(sender.denied_at)}
-          </p>
-          <p className="mt-2 line-clamp-2 text-sm text-ink-secondary">
-            Individual screened-out email previews are not indexed here yet. Allowing
-            this sender approves them and moves matching Trash/Screener mail to the
-            selected destination.
-          </p>
-        </div>
-        <AllowButton sender={sender.sender_address} client={client} />
-      </div>
-    </article>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle className="truncate">{sender.sender_address}</CardTitle>
+        <CardDescription>Denied {formatDate(sender.denied_at)}</CardDescription>
+        <CardAction>
+          <AllowButton sender={sender.sender_address} client={client} />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <p className="line-clamp-2 text-sm text-muted-foreground">
+          Individual screened-out email previews are not indexed here yet. Allowing
+          this sender approves them and moves matching Trash/Screener mail to the
+          selected destination.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -111,17 +123,15 @@ function BlockedSenderRow({
   client?: HailApiClient;
 }) {
   return (
-    <div className="grid gap-3 rounded-lg bg-bg-surface px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-semibold text-ink-primary">
-          {sender.sender_address}
-        </p>
-        <p className="mt-1 text-xs text-ink-tertiary">
-          Denied {formatDate(sender.denied_at)}
-        </p>
-      </div>
-      <AllowButton sender={sender.sender_address} client={client} />
-    </div>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle className="truncate">{sender.sender_address}</CardTitle>
+        <CardDescription>Denied {formatDate(sender.denied_at)}</CardDescription>
+        <CardAction>
+          <AllowButton sender={sender.sender_address} client={client} />
+        </CardAction>
+      </CardHeader>
+    </Card>
   );
 }
 
@@ -142,27 +152,41 @@ function TabBar({
   ];
 
   return (
-    <div className="mb-4 flex gap-1 rounded-lg bg-bg-canvas p-1" role="tablist">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          role="tab"
-          type="button"
-          aria-selected={active === tab.id}
-          onClick={() => onChange(tab.id)}
-          className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-            active === tab.id
-              ? 'bg-bg-surface text-ink-primary shadow-sm'
-              : 'text-ink-tertiary hover:text-ink-secondary'
-          }`}
-        >
-          {tab.label}
-          {tab.count > 0 ? (
-            <span className="ml-1.5 text-xs text-ink-tertiary">({tab.count})</span>
-          ) : null}
-        </button>
-      ))}
-    </div>
+    <Tabs
+      value={active}
+      onValueChange={(value) => {
+        if (value === 'emails' || value === 'senders') {
+          onChange(value);
+        }
+      }}
+      className="mb-4"
+    >
+      <TabsList>
+        {tabs.map((tab) => (
+          <TabsTrigger
+            key={tab.id}
+            value={tab.id}
+            onClick={() => onChange(tab.id)}
+          >
+            {tab.label}
+            {tab.count > 0 ? <Badge variant="secondary">{tab.count}</Badge> : null}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  );
+}
+
+function EmptyScreenedOutState({ message }: { message: string }) {
+  return (
+    <Empty className="min-h-[220px]">
+      <EmptyHeader>
+        <EmptyTitle>{message}</EmptyTitle>
+        <EmptyDescription>
+          Denied sender decisions will appear here if you change your mind.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -207,11 +231,7 @@ export function ScreenedOutPage({ client }: ScreenedOutPageProps) {
             hasMore={false}
             isLoadingMore={false}
             onLoadMore={() => {}}
-            emptyState={
-              <p className="rounded-lg bg-bg-surface p-6 text-center text-sm text-ink-tertiary">
-                {emptyMessage}
-              </p>
-            }
+            emptyState={<EmptyScreenedOutState message={emptyMessage} />}
           />
         ) : (
           <ListView
@@ -223,11 +243,7 @@ export function ScreenedOutPage({ client }: ScreenedOutPageProps) {
             hasMore={false}
             isLoadingMore={false}
             onLoadMore={() => {}}
-            emptyState={
-              <p className="rounded-lg bg-bg-surface p-6 text-center text-sm text-ink-tertiary">
-                {emptyMessage}
-              </p>
-            }
+            emptyState={<EmptyScreenedOutState message={emptyMessage} />}
           />
         )}
       </div>

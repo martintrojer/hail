@@ -12,6 +12,8 @@ import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { useUndoToast } from '../components/UndoToastProvider';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { AppShell } from '../layout/AppShell';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
@@ -67,9 +69,9 @@ function ScheduledSendRow({ item, client }: { item: ScheduledSend; client: HailA
           <p className="min-w-0 truncate text-base font-semibold text-ink-primary">
             Draft {item.draft_email_id}
           </p>
-          <span className="rounded-full border border-border-menu px-2.5 py-0.5 text-xs font-semibold text-ink-secondary">
+          <Badge variant="outline">
             {statusLabel(item.status)}
-          </span>
+          </Badge>
         </div>
         <p className="mt-1 text-sm leading-snug text-ink-secondary">
           <time dateTime={item.send_at}>
@@ -85,15 +87,17 @@ function ScheduledSendRow({ item, client }: { item: ScheduledSend; client: HailA
           </p>
         ) : null}
       </div>
-      <button
+      <Button
         type="button"
-        className="shrink-0 rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary opacity-90 focus-ring outline-none hover:bg-bg-selected hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-60 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+        variant="outline"
+        size="xs"
+        className="shrink-0 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
         onClick={() => cancel.mutate(item.id)}
         disabled={cancelDisabled}
         title={cancel.error ? actionErrorMessage(cancel.error, 'Cancel scheduled send') : undefined}
       >
         {cancel.isPending ? 'Cancelling…' : item.status === 'cancelled' ? 'Cancelled' : 'Cancel'}
-      </button>
+      </Button>
     </article>
   );
 }
