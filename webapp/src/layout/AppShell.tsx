@@ -609,6 +609,11 @@ export function AppShell({
   const viewCounts = useViewCounts();
   const sidebarCounts: SidebarCounts = viewCounts.data ?? {};
   const hasContent = Boolean(list || reading);
+  const contentWidthClass = wide
+    ? 'max-w-6xl'
+    : list && !reading
+      ? 'max-w-7xl'
+      : 'max-w-4xl';
 
   useKeyboardShortcuts({
     onNextThread: () => focusMailListItem(1),
@@ -702,7 +707,7 @@ export function AppShell({
           </header>
 
           <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8">
-            <div className={wide ? 'mx-auto w-full max-w-6xl' : 'mx-auto w-full max-w-4xl'}>
+            <div className={`mx-auto w-full ${contentWidthClass}`}>
               <div className="mb-5 flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
                 <div className="min-w-0">
                   <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
