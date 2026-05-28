@@ -152,6 +152,53 @@ fn env_overrides_toml() {
 }
 
 #[test]
+fn empty_initial_import_max_env_is_treated_as_unset() {
+    let _guard = env_lock();
+    clear_hail_env();
+    unsafe {
+        std::env::set_var(
+            "HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES",
+            "",
+        );
+    }
+    let toml = r#"
+database_url = "sqlite::memory:"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let cfg = Config::load_from(Some(&path)).expect("load with empty optional numeric env");
+    assert_eq!(cfg.provider_import.gmail.initial_import_max_messages, None);
+
+    clear_hail_env();
+}
+
+#[test]
+fn numeric_initial_import_max_env_still_overrides_toml() {
+    let _guard = env_lock();
+    clear_hail_env();
+    unsafe {
+        std::env::set_var(
+            "HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES",
+            "250",
+        );
+    }
+    let (_dir, path) = write_toml(FULL_TOML);
+    let cfg = Config::load_from(Some(&path)).expect("load with numeric optional env");
+    assert_eq!(
+        cfg.provider_import.gmail.initial_import_max_messages,
+        Some(250)
+    );
+
+    clear_hail_env();
+}
+
+#[test]
 fn missing_server_key_errors_clearly() {
     let _guard = env_lock();
     clear_hail_env();

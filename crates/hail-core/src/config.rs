@@ -24,7 +24,7 @@ use figment::{
     providers::{Env, Format, Toml},
 };
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de};
 
 /// Default TOML location for production / container deployments.
 const DEFAULT_CONFIG_PATH: &str = "/etc/hail/hail.toml";
@@ -118,7 +118,7 @@ pub struct GmailProviderConfig {
     /// window. Set this for live smoke/dev environments with small local
     /// Stalwart blob quotas; the worker leaves the account in `initial_sync`
     /// with a durable backfill cursor when the bound is reached.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none_usize")]
     pub initial_import_max_messages: Option<usize>,
 }
 
@@ -241,6 +241,81 @@ fn resolve_config_path() -> Option<PathBuf> {
 /// file" from "parse error" when both layers fail to produce a config.
 fn env_layer_empty() -> bool {
     std::env::vars().all(|(k, _)| !k.starts_with(ENV_PREFIX))
+}
+
+/// Deserialize an optional usize while accepting an empty string as unset.
+///
+/// Compose entries like `VAR=${VAR:-}` materialize an unset env var as `""`.
+/// Figment then feeds that string into Serde; without this helper an optional
+/// numeric field fails to parse before application defaults can apply.
+fn empty_string_as_none_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptionalUsizeVisitor;
+
+    impl<'de> de::Visitor<'de> for OptionalUsizeVisitor {
+        type Value = Option<usize>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a non-negative integer, null, or an empty string")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            usize::try_from(value).map(Some).map_err(E::custom)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            usize::try_from(value).map(Some).map_err(E::custom)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                value.parse::<usize>().map(Some).map_err(E::custom)
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    deserializer.deserialize_any(OptionalUsizeVisitor)
 }
 
 /// Validate the server key by using the same parser that runtime crypto uses.
