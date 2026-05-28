@@ -8,6 +8,7 @@ import type {
   LabelListResponse,
   RenameLabelRequest,
 } from '../api/client';
+import { ApiClientProvider } from '../api/ApiClientProvider';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import {
@@ -136,11 +137,13 @@ function renderLabelsPage(client = new LabelsManagementPageTestClient()) {
   const queryClient = createTestQueryClient();
   seedMe(queryClient);
   currentTestBody = (
-    <AuthProvider>
-      <UndoToastProvider>
-        <LabelsManagementPage client={client} />
-      </UndoToastProvider>
-    </AuthProvider>
+    <ApiClientProvider client={client}>
+      <AuthProvider>
+        <UndoToastProvider>
+          <LabelsManagementPage client={client} />
+        </UndoToastProvider>
+      </AuthProvider>
+    </ApiClientProvider>
   );
   restoreLabelsRoute = installTestRoute(router, '/labels', {
     component: TestBody,
@@ -189,7 +192,7 @@ describe('LabelsManagementPage', () => {
     await waitFor(() => {
       expect(client.createCalls).toEqual([{ name: 'Projects/Hail' }]);
     });
-    expect(await screen.findByText('Projects / Hail')).toBeInTheDocument();
+    expect(await within(await screen.findByTestId('labels-list')).findByText('Projects / Hail')).toBeInTheDocument();
   });
 
   it('shows newly created labels from the mutation response before the labels refetch completes', async () => {
@@ -204,13 +207,13 @@ describe('LabelsManagementPage', () => {
     await waitFor(() => {
       expect(client.createCalls).toEqual([{ name: 'Projects/Hail' }]);
     });
-    expect(await screen.findByText('Projects / Hail')).toBeInTheDocument();
+    expect(await within(await screen.findByTestId('labels-list')).findByText('Projects / Hail')).toBeInTheDocument();
   });
 
   it('renames labels', async () => {
     const client = renderLabelsPage();
 
-    const receiptsRow = await screen.findByText('Work / Receipts');
+    const receiptsRow = await within(await screen.findByTestId('labels-list')).findByText('Work / Receipts');
     fireEvent.click(within(receiptsRow.closest('li') as HTMLElement).getByRole('button', { name: 'Rename' }));
     const input = screen.getByLabelText('Label name or path');
     fireEvent.change(input, { target: { value: 'Work/Invoices' } });
@@ -219,7 +222,7 @@ describe('LabelsManagementPage', () => {
     await waitFor(() => {
       expect(client.renameCalls).toEqual([{ id: 3, request: { name: 'Work/Invoices' } }]);
     });
-    expect(await screen.findByText('Work / Invoices')).toBeInTheDocument();
+    expect(await within(await screen.findByTestId('labels-list')).findByText('Work / Invoices')).toBeInTheDocument();
   });
 
   it('deletes labels only after warning confirmation', async () => {

@@ -282,6 +282,28 @@ describe('SPA auth/router flows', () => {
     expect(screen.queryByRole('link', { name: /allowed senders/i })).not.toBeInTheDocument();
   });
 
+  it('shows live labels in the sidebar and links to label mail views', async () => {
+    api.user = adminUser;
+
+    renderRouterAt('/imbox');
+
+    const manageLabels = await screen.findByRole('link', { name: 'Manage labels' });
+    expect(manageLabels).toHaveAttribute('href', '/labels');
+    const receiptsLinks = await screen.findAllByRole('link', { name: /Work \/ Receipts/ });
+    const sidebarReceiptsLink = receiptsLinks.find(
+      (link) => link.getAttribute('href') === '/labels/42',
+    );
+    expect(sidebarReceiptsLink).toBeInTheDocument();
+    expect(sidebarReceiptsLink).toHaveAttribute('title', 'Work/Receipts · 0 threads');
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === `${window.location.origin}/api/labels` &&
+          (init as RequestInit | undefined)?.credentials === 'include',
+      ),
+    ).toBe(true);
+  });
+
   it('lets authenticated users reach labels management', async () => {
     api.user = adminUser;
 
@@ -289,7 +311,7 @@ describe('SPA auth/router flows', () => {
 
     await expectLocation('/labels');
     expect(await screen.findByRole('heading', { name: 'Labels' })).toBeInTheDocument();
-    expect(await screen.findByText('Work / Receipts')).toBeInTheDocument();
+    expect((await screen.findAllByText('Work / Receipts')).length).toBeGreaterThan(0);
     expect(
       fetchMock.mock.calls.some(
         ([url, init]) =>
