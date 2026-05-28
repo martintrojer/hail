@@ -97,6 +97,34 @@ class LabelsManagementPageTestClient extends TestHailApiClient {
   }
 }
 
+class CreateResponseOnlyLabelsClient extends LabelsManagementPageTestClient {
+  private readonly afterCreateRefetch = new Promise<LabelListResponse>(() => {});
+  private listCalls = 0;
+
+  override async listLabels(): Promise<LabelListResponse> {
+    this.listCalls += 1;
+    if (this.listCalls > 1) {
+      return this.afterCreateRefetch;
+    }
+    return this.labels;
+  }
+
+  override async createLabel(request: CreateLabelRequest): Promise<LabelItemResponse> {
+    this.createCalls.push(request);
+    return {
+      label: {
+        id: 4,
+        name: request.name,
+        leaf_name: request.name.split('/').at(-1) ?? request.name,
+        path_segments: request.name.split('/'),
+        source: 'manual',
+        color: request.color ?? null,
+        thread_count: 0,
+      },
+    };
+  }
+}
+
 let currentTestBody: ReactNode = null;
 let restoreLabelsRoute: (() => void) | null = null;
 
@@ -151,6 +179,21 @@ describe('LabelsManagementPage', () => {
 
   it('creates labels by full path', async () => {
     const client = renderLabelsPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create label' }));
+    fireEvent.change(screen.getByLabelText('Label name or path'), {
+      target: { value: 'Projects/Hail' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create label' }));
+
+    await waitFor(() => {
+      expect(client.createCalls).toEqual([{ name: 'Projects/Hail' }]);
+    });
+    expect(await screen.findByText('Projects / Hail')).toBeInTheDocument();
+  });
+
+  it('shows newly created labels from the mutation response before the labels refetch completes', async () => {
+    const client = renderLabelsPage(new CreateResponseOnlyLabelsClient());
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create label' }));
     fireEvent.change(screen.getByLabelText('Label name or path'), {
