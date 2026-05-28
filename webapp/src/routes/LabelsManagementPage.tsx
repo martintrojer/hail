@@ -46,6 +46,7 @@ import {
   FieldLabel,
 } from '../components/ui/field';
 import { Input } from '../components/ui/input';
+import { Separator } from '../components/ui/separator';
 import { Skeleton } from '../components/ui/skeleton';
 import { AppShell } from '../layout/AppShell';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
@@ -278,9 +279,9 @@ function LabelRow({
   const { label } = row;
 
   return (
-    <li className="border-b last:border-b-0">
+    <li>
       <div
-        className="flex items-center gap-3 px-3 py-2"
+        className="flex items-center gap-3 px-3 py-1.5 hover:bg-muted/50"
         style={{ paddingLeft: `${0.75 + row.depth * 1.25}rem` }}
       >
         <Tags className="shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -293,14 +294,14 @@ function LabelRow({
               {label.source}
             </Badge>
           </div>
-          <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span className="truncate">{label.name}</span>
             <span aria-hidden="true">·</span>
             <span>{label.thread_count} {label.thread_count === 1 ? 'thread' : 'threads'}</span>
             {row.parentPath ? <span className="truncate">under {row.parentPath}</span> : null}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5">
           <Button type="button" variant="outline" size="sm" onClick={() => onRename(label)}>
             Rename
           </Button>
@@ -349,7 +350,8 @@ function LabelsList({
         </CardDescription>
       </CardHeader>
       <CardContent className="px-0">
-        <ul className="border-y" aria-label="Labels" data-testid="labels-list">
+        <Separator />
+        <ul aria-label="Labels" data-testid="labels-list">
           {rows.map((row) => (
             <LabelRow
               key={row.label.id}

@@ -12,6 +12,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  CommandShortcut,
 } from './ui/command';
 import {
   Popover,
@@ -132,6 +133,7 @@ export function BatchLabelPicker({
                 <CommandItem
                   key={label.id}
                   value={label.name}
+                  aria-label={`Assign label ${label.name}`}
                   disabled={busy}
                   onSelect={() => {
                     void assignExisting(label);
@@ -142,9 +144,9 @@ export function BatchLabelPicker({
                     {labelLeafText(label)}
                   </span>
                   {label.name !== labelLeafText(label) ? (
-                    <span className="max-w-28 truncate text-xs text-muted-foreground">
+                    <CommandShortcut className="max-w-28 truncate normal-case tracking-normal">
                       {label.name}
-                    </span>
+                    </CommandShortcut>
                   ) : null}
                 </CommandItem>
               ))}
