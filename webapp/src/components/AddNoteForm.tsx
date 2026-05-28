@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Button } from './ui/button';
+import { Field, FieldGroup, FieldLabel } from './ui/field';
 import { Textarea } from './ui/textarea';
 
 export interface AddNoteFormProps {
@@ -22,14 +23,22 @@ export function AddNoteForm({ onSave, onCancel }: AddNoteFormProps) {
 
   return (
     <form className="flex flex-col gap-3" onSubmit={handleSubmit} aria-label="Add note">
-      <Textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        className="min-h-28 resize-y"
-        autoFocus
-        placeholder="Add a note…"
-        aria-label="Note text"
-      />
+      <FieldGroup className="gap-3">
+        <Field>
+          <FieldLabel htmlFor="thread-note-text" className="sr-only">
+            Note text
+          </FieldLabel>
+          <Textarea
+            id="thread-note-text"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            className="min-h-28 resize-y"
+            autoFocus
+            placeholder="Add a note…"
+            aria-label="Note text"
+          />
+        </Field>
+      </FieldGroup>
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={!trimmedText}>
           Save

@@ -646,7 +646,7 @@ describe('ThreadPage', () => {
     expect(await screen.findByText('Thread added to Set Aside.')).toBeInTheDocument();
 
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Feed' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Feed' }));
 
     await waitFor(() => {
       expect(client.classifyCalls).toEqual([{ threadId: 'thread-1', to: 'feed' }]);
@@ -691,7 +691,7 @@ describe('ThreadPage', () => {
     await waitFor(() => expect(client.archiveCalls).toEqual(['thread-1']));
 
     fireEvent.click(actionButtons[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Paper Trail' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
     await waitFor(() => {
       expect(client.classifyCalls).toContainEqual({
         threadId: 'thread-1',

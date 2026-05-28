@@ -22,15 +22,14 @@ describe('InlineNote', () => {
     expect(screen.getByText(/Mina/)).toHaveTextContent('Mina · Today at 10:15');
   });
 
-  it('uses the warm inline note treatment', () => {
+  it('uses compact shadcn card styling for inline notes', () => {
     render(<InlineNote text="Private thread context" author="Ari" timestamp="Yesterday" />);
 
     expect(screen.getByRole('article')).toHaveClass(
       'border-l-4',
-      'border-accent-yellow',
-      'bg-bg-banner',
+      'border-l-primary',
+      'bg-muted/40',
       'rounded-r-lg',
-      'p-4',
     );
   });
 });

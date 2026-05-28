@@ -1,33 +1,18 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Button } from './ui/button';
 import { MessageActionPopup } from './MessageActionPopup';
-
-function anchorRect(overrides: Partial<DOMRect> = {}): DOMRect {
-  return {
-    x: 100,
-    y: 40,
-    width: 32,
-    height: 32,
-    top: 40,
-    right: 132,
-    bottom: 72,
-    left: 100,
-    toJSON: () => ({}),
-    ...overrides,
-  };
-}
 
 afterEach(() => {
   cleanup();
 });
 
 describe('MessageActionPopup', () => {
-  it('renders message actions in a portal near the anchor', () => {
+  it('renders shadcn message actions in a portal', () => {
     render(
       <div data-testid="app-root">
         <MessageActionPopup
           open
-          anchorRect={anchorRect()}
           onClose={() => undefined}
           onAction={() => undefined}
         />
@@ -37,7 +22,7 @@ describe('MessageActionPopup', () => {
     const popup = screen.getByRole('menu', { name: 'Message actions' });
     expect(popup).toBeInTheDocument();
     expect(document.body).toContainElement(popup);
-    expect(popup).toHaveStyle({ top: '80px' });
+    expect(popup).toHaveClass('bg-popover', 'rounded-lg', 'shadow-md');
 
     expect(screen.getByRole('menuitem', { name: 'Reply' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Reply All' })).toBeInTheDocument();
@@ -45,10 +30,10 @@ describe('MessageActionPopup', () => {
     expect(screen.getByRole('menuitem', { name: 'Set Aside' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Reply Later' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Bubble Up' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Move to' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Imbox' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Feed' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Paper Trail' })).toBeInTheDocument();
+    expect(screen.getByText('Move to')).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Imbox' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Feed' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Paper Trail' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Add a Note' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Mark as spam' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Trash' })).toBeInTheDocument();
@@ -61,7 +46,6 @@ describe('MessageActionPopup', () => {
     render(
       <MessageActionPopup
         open
-        anchorRect={anchorRect()}
         onClose={onClose}
         onAction={onAction}
       />,
@@ -78,36 +62,31 @@ describe('MessageActionPopup', () => {
     render(
       <MessageActionPopup
         open
-        anchorRect={anchorRect()}
         onClose={() => undefined}
         onAction={onAction}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Paper Trail' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
     expect(onAction).toHaveBeenCalledWith('move-to', 'papertrail');
   });
 
-  it('closes on outside click or Escape', () => {
+  it('closes on Escape and when Radix requests close through a trigger', () => {
     const onClose = vi.fn();
 
     render(
       <div>
-        <button type="button">Outside</button>
         <MessageActionPopup
           open
-          anchorRect={anchorRect()}
           onClose={onClose}
           onAction={() => undefined}
+          trigger={<Button>Actions</Button>}
         />
       </div>,
     );
 
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'Outside' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
-
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('does not render when closed', () => {
