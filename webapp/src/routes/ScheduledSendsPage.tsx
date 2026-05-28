@@ -57,32 +57,32 @@ function ScheduledSendRow({ item, client }: { item: ScheduledSend; client: HailA
   const cancelDisabled = cancel.isPending || !isCancellable(item) || item.status === 'cancelled';
 
   return (
-    <article className="group flex items-center gap-3 border-b border-border-hairline py-4 pl-3 pr-1 hover:bg-bg-hover focus-within:bg-bg-selected sm:py-5 sm:pr-0">
+    <article className="group flex items-center gap-3 border-b border-border py-4 pl-3 pr-1 hover:bg-muted/50 focus-within:bg-muted/50 sm:py-5 sm:pr-0">
       <div
-        className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none"
+        className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-primary focus-visible:outline-none"
         tabIndex={0}
         data-hail-mail-list-item="true"
         data-hail-thread-id={String(item.id)}
         aria-label={`Scheduled send ${item.draft_email_id} for ${formatDateTime(item.send_at)}`}
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <p className="min-w-0 truncate text-base font-semibold text-ink-primary">
+          <p className="min-w-0 truncate text-base font-semibold text-foreground">
             Draft {item.draft_email_id}
           </p>
           <Badge variant="outline">
             {statusLabel(item.status)}
           </Badge>
         </div>
-        <p className="mt-1 text-sm leading-snug text-ink-secondary">
+        <p className="mt-1 text-sm leading-snug text-muted-foreground">
           <time dateTime={item.send_at}>
             Sends at {formatDateTime(item.send_at)}
           </time>
         </p>
-        <p className="mt-1 text-xs leading-snug text-ink-tertiary">
+        <p className="mt-1 text-xs leading-snug text-muted-foreground">
           Created {formatDateTime(item.created_at)}
         </p>
         {item.error ? (
-          <p role="alert" className="mt-2 text-sm text-accent-red">
+          <p role="alert" className="mt-2 text-sm text-destructive">
             {item.error}
           </p>
         ) : null}

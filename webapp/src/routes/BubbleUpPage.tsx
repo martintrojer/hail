@@ -4,11 +4,11 @@ import { useBubbleUpView, useCancelBubbleUpMutation } from '../api/query';
 import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
+import { MailRow } from '../components/MailRow';
 import { StateCard } from '../components/StateCard';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { Button } from '../components/ui/button';
 import { AppShell } from '../layout/AppShell';
-import { senderNameClass } from '../lib/mailRowStyles';
 
 function formatBubbleTime(value: string) {
   const date = new Date(value);
@@ -46,26 +46,21 @@ function BubbleUpRow({ item }: { item: BubbleUpViewItem }) {
   });
 
   return (
-    <div className="group flex items-center gap-3 border-b border-border-hairline py-4 pl-3 pr-1 hover:bg-bg-hover focus-within:bg-bg-selected sm:py-5 sm:pr-0">
+    <div className="group flex items-center gap-3 border-b border-border py-4 pl-3 pr-1 hover:bg-muted/50 focus-within:bg-muted/50 sm:py-5 sm:pr-0">
       <Link
         to="/thread/$threadId"
         search={{ from: undefined }} params={{ threadId: item.thread_id }}
-        className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none"
+        className="min-w-0 flex-1 border-l-[3px] border-l-transparent pl-3 outline-none focus-visible:border-l-primary focus-visible:outline-none"
         data-hail-mail-list-item="true"
         data-hail-thread-id={item.thread_id}
         aria-label={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
       >
-        <p className={senderNameClass}>
-          {item.from || 'Unknown sender'}
-        </p>
-        <p className="mt-1 truncate text-[0.95rem] font-normal leading-snug text-ink-secondary">
-          {item.subject || '(no subject)'}
-        </p>
-        <p className="mt-1 text-sm leading-snug text-ink-tertiary">
-          <time dateTime={item.surface_at}>
-            Bubbles up at {formatBubbleTime(item.surface_at)}
-          </time>
-        </p>
+        <MailRow
+          from={item.from || 'Unknown sender'}
+          subject={item.subject || '(no subject)'}
+          preview={`Bubbles up at ${formatBubbleTime(item.surface_at)}`}
+          receivedAt={item.surface_at}
+        />
       </Link>
       <Button
         type="button"

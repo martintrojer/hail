@@ -24,7 +24,7 @@ function SpamRow({
   onToggleSelect?: () => void;
 }) {
   return (
-    <div className="border-b border-border-hairline py-4 pl-3 pr-0 hover:bg-bg-hover sm:py-5">
+    <div className="border-b border-border py-4 pl-3 pr-0 hover:bg-muted/50 sm:py-5">
       <ThreadLink
         threadId={item.thread_id}
         mailListItem

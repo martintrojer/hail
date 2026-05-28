@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
+import { Separator } from './ui/separator';
+import { Spinner } from './ui/spinner';
 
 interface ListViewProps<T> {
   items: T[];
@@ -62,16 +64,17 @@ export function ListView<T>({
         <div
           role="status"
           aria-label="Loading more"
-          className="flex items-center justify-center py-5 text-sm text-ink-tertiary"
+          className="flex items-center justify-center py-5 text-sm text-muted-foreground"
         >
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-border-hairline border-t-ink-tertiary" />
+          <Spinner aria-hidden="true" />
+          <span className="sr-only">Loading more</span>
         </div>
       ) : null}
 
       {!hasMore && items.length > 0 ? (
         <div className="py-6 text-center">
-          <div className="border-t border-border-hairline" />
-          <p className="mt-4 text-xs text-ink-tertiary">You&apos;re all caught up</p>
+          <Separator />
+          <p className="mt-4 text-xs text-muted-foreground">You&apos;re all caught up</p>
         </div>
       ) : null}
 

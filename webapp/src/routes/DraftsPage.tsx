@@ -48,7 +48,7 @@ function DeleteDraftButton({ draftId, client }: { draftId: string; client: HailA
 
 function DraftRow({ item, client }: { item: MailViewItem; client: HailApiClient }) {
   return (
-    <div className="relative flex items-center gap-3 border-b border-border-hairline py-4 pl-3 pr-0 hover:bg-bg-hover sm:py-5">
+    <div className="relative flex items-center gap-3 border-b border-border py-4 pl-3 pr-0 hover:bg-muted/50 sm:py-5">
       <Link
         to="/compose"
         search={{ draftId: item.email_id }}

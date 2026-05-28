@@ -123,7 +123,7 @@ function ReplyPanel({
         <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-1 flex-col py-4">
         {sent ? (
           <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm font-semibold text-ink-secondary">Reply sent ✓</p>
+            <p className="text-sm font-semibold text-muted-foreground">Reply sent ✓</p>
           </div>
         ) : (
           <>
@@ -205,15 +205,15 @@ function PileRow({
   );
 
   const rowClassName = cn(
-    'block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 outline-none focus-visible:border-l-accent-blue focus-visible:outline-none sm:py-5',
+    'block min-w-0 flex-1 border-l-[3px] border-l-transparent py-4 pl-3 outline-none focus-visible:border-l-primary focus-visible:outline-none sm:py-5',
     onSelect && 'text-left',
   );
 
   return (
     <div
       className={cn(
-        'group flex items-stretch gap-3 border-b border-border-hairline hover:bg-bg-hover focus-within:bg-bg-selected',
-        (active || selected) && 'bg-bg-selected',
+        'group flex items-stretch gap-3 border-b border-border hover:bg-muted/50 focus-within:bg-muted/50',
+        (active || selected) && 'bg-muted',
       )}
     >
       {onToggleSelect ? (
@@ -227,17 +227,18 @@ function PileRow({
       ) : null}
       {onSelect ? (
         // Reply Later: clicking selects the row to show reply panel
-        <button
-          type="button"
-          onClick={onSelect}
-          className={rowClassName}
-          aria-label={`Select ${preview.subject} from ${preview.sender} to reply`}
-          aria-pressed={active}
-          data-hail-mail-list-item="true"
-          data-hail-thread-id={item.thread_id}
-        >
-          {rowContent}
-        </button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onSelect}
+            className={cn(rowClassName, 'h-auto justify-start rounded-none px-0')}
+            aria-label={`Select ${preview.subject} from ${preview.sender} to reply`}
+            aria-pressed={active}
+            data-hail-mail-list-item="true"
+            data-hail-thread-id={item.thread_id}
+          >
+            {rowContent}
+          </Button>
       ) : (
         // Set Aside: clicking navigates to thread
         <Link
@@ -307,7 +308,7 @@ function ReplyLaterList({
   return (
     <div className="flex min-h-[400px] gap-0">
       {/* Left: thread list */}
-      <div className={`min-w-0 ${selectedItem ? 'w-2/5 border-r border-border-hairline' : 'w-full'}`}>
+        <div className={`min-w-0 ${selectedItem ? 'w-2/5 border-r border-border' : 'w-full'}`}>
         <ActionableList
           items={data.items}
           actions={{ client, availableActions: ['archive', 'trash', 'classify'] }}

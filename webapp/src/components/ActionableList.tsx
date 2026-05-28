@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { HailApiClient } from '../api/client';
 import { actionErrorMessage } from '../lib/errorMessages';
+import { Button } from './ui/button';
 import { BatchActionBar } from './BatchActionBar';
 import { ListView } from './ListView';
 import { useListActions, type ListActionConfig, type ListAction } from '../hooks/useListActions';
@@ -32,8 +33,10 @@ function ShortcutActionButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       data-hail-shortcut-action={action}
       disabled={busy}
       onClick={(event) => {
@@ -45,7 +48,7 @@ function ShortcutActionButton({
       tabIndex={-1}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 

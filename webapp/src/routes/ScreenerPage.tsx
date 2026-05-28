@@ -22,6 +22,11 @@ import { Alert, AlertDescription } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '../components/ui/collapsible';
+import {
   Card,
   CardContent,
   CardFooter,
@@ -150,70 +155,75 @@ function PendingSenderCard({
 
   return (
     <Card size="sm">
-      <CardHeader>
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          aria-controls={expandedId}
-          className="block w-full rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <CardTitle className="truncate">
-                {senderIdentity.name}
-              </CardTitle>
-              <p className="mt-1 truncate text-sm text-muted-foreground">
-                {senderIdentity.email}
-              </p>
-            </div>
-            <Badge variant="outline" className="shrink-0">
-              {expanded ? 'Hide' : 'Show'} · {emailCountLabel}
-            </Badge>
-          </div>
-
-          <div className="mt-4 flex flex-col gap-2">
-            <p className="text-sm leading-6 text-card-foreground">{subject}</p>
-            <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">
-              {preview}
-            </p>
-          </div>
-        </button>
-      </CardHeader>
-
-      {expanded ? (
-        <CardContent id={expandedId} className="border-t pt-3">
-          {emails.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Pending email details are unavailable right now.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {emails.map((email) => (
-                <li
-                  key={email.email_id}
-                  className="rounded-lg border bg-muted/30 px-3 py-2"
-                >
-                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                    <p className="min-w-0 text-sm font-medium text-foreground">
-                      {email.subject || 'No subject'}
+      <Collapsible open={expanded} onOpenChange={setExpanded}>
+        <CardHeader>
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              className="block h-auto w-full justify-start rounded-md p-0 text-left hover:bg-transparent"
+              aria-controls={expandedId}
+            >
+              <div className="w-full">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <CardTitle className="truncate">
+                      {senderIdentity.name}
+                    </CardTitle>
+                    <p className="mt-1 truncate text-sm text-muted-foreground">
+                      {senderIdentity.email}
                     </p>
-                    <time
-                      dateTime={email.received_at ?? undefined}
-                      className="shrink-0 text-xs text-muted-foreground"
-                    >
-                      {formatDate(email.received_at)}
-                    </time>
                   </div>
-                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
-                    {email.preview || 'Preview unavailable.'}
+                  <Badge variant="outline" className="shrink-0">
+                    {expanded ? 'Hide' : 'Show'} · {emailCountLabel}
+                  </Badge>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-2">
+                  <p className="text-sm leading-6 text-card-foreground">{subject}</p>
+                  <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">
+                    {preview}
                   </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      ) : null}
+                </div>
+              </div>
+            </Button>
+          </CollapsibleTrigger>
+        </CardHeader>
+
+        <CollapsibleContent>
+          <CardContent id={expandedId} className="border-t pt-3">
+            {emails.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Pending email details are unavailable right now.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {emails.map((email) => (
+                  <li
+                    key={email.email_id}
+                    className="rounded-lg border bg-muted/30 px-3 py-2"
+                  >
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                      <p className="min-w-0 text-sm font-medium text-foreground">
+                        {email.subject || 'No subject'}
+                      </p>
+                      <time
+                        dateTime={email.received_at ?? undefined}
+                        className="shrink-0 text-xs text-muted-foreground"
+                      >
+                        {formatDate(email.received_at)}
+                      </time>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                      {email.preview || 'Preview unavailable.'}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
 
       <CardFooter className="flex-wrap gap-2">
         <Button
