@@ -118,8 +118,8 @@ describe('SearchPage', () => {
     await screen.findByLabelText('Label');
     const content = screen.getByTestId('app-shell-content');
     expect(content).toHaveAttribute('data-hail-content-layout', 'split');
-    expect(content).toHaveClass('max-w-full', 'xl:max-w-7xl', 'min-w-0');
-    expect(content.className).toContain('calc(100vw-var(--sidebar-width-icon)-3rem)');
+    expect(content).toHaveClass('max-w-none', 'xl:max-w-7xl', 'min-w-0');
+    expect(content.className).not.toContain('vw');
   });
 
   it('shows one concise help section before a search', async () => {

@@ -10,20 +10,11 @@ const expectedLayouts: Array<{
 }> = [
   {
     layout: 'list',
-    classes: [
-      'max-w-full',
-      'md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))]',
-      'lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))]',
-    ],
+    classes: ['max-w-none'],
   },
   {
     layout: 'split',
-    classes: [
-      'max-w-full',
-      'md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))]',
-      'lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))]',
-      'xl:max-w-7xl',
-    ],
+    classes: ['max-w-none', 'xl:max-w-7xl'],
   },
   {
     layout: 'reading',
@@ -48,8 +39,17 @@ describe('AppShell content containers', () => {
     }
   });
 
-  it('keeps list and split layouts responsive to the collapsed sidebar instead of hard-coding page widths', () => {
-    expect(appShellContentWidthClass('list')).toContain('calc(100vw-var(--sidebar-width-icon)-3rem)');
-    expect(appShellContentWidthClass('split')).toContain('calc(100vw-var(--sidebar-width-icon)-3rem)');
+  it('keeps list and split layouts inside the flex-owned AppShell inset without viewport math', () => {
+    expect(appShellContentWidthClass('list')).toBe('max-w-none');
+    expect(appShellContentWidthClass('split')).toBe('max-w-none xl:max-w-7xl');
+  });
+
+  it('does not use viewport width calculations that can double-count the sidebar and pin horizontal scrolling', () => {
+    for (const layout of ['list', 'split'] satisfies AppShellContentLayout[]) {
+      const resolved = appShellContentWidthClass(layout);
+
+      expect(resolved).not.toContain('vw');
+      expect(resolved).not.toContain('calc(');
+    }
   });
 });
