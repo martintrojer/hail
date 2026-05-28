@@ -112,15 +112,19 @@ export function ThreadLabelPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" size="sm" aria-label="Edit thread labels">
+        <Button type="button" variant="default" size="sm" aria-label="Manage thread labels">
           <Tags data-icon="inline-start" />
-          Labels
+          Manage labels
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-2">
         <PopoverHeader>
-          <PopoverTitle>Thread labels</PopoverTitle>
+          <PopoverTitle>Manage labels</PopoverTitle>
         </PopoverHeader>
+        <p className="px-2 pb-2 text-xs leading-5 text-muted-foreground">
+          Check every label that should stay on this thread. Adding one label keeps
+          the others assigned.
+        </p>
         <Command shouldFilter>
           <CommandInput
             value={search}
@@ -130,7 +134,7 @@ export function ThreadLabelPicker({
           />
           <CommandList>
             <CommandEmpty>No labels found.</CommandEmpty>
-            <CommandGroup heading="Labels">
+            <CommandGroup heading="Add or remove labels">
               {allLabels.map((label) => {
                 const checked = assignedIds.has(label.id);
                 return (
