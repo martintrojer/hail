@@ -1,4 +1,6 @@
+import type { HailApiClient } from '../api/client';
 import { Button } from './ui/button';
+import { BatchLabelPicker } from './BatchLabelPicker';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,9 +48,11 @@ const destructiveActions = new Set<ListAction>(['trash', 'delete', 'delete-forev
 
 export interface BatchActionBarProps {
   count: number;
+  selectedThreadIds: string[];
   onDeselectAll: () => void;
   availableActions: ListAction[];
   onAction: (action: ListAction) => void;
+  client?: HailApiClient;
 }
 
 function ActionButton({
@@ -75,9 +79,11 @@ function ActionButton({
 
 export function BatchActionBar({
   count,
+  selectedThreadIds,
   onDeselectAll,
   availableActions,
   onAction,
+  client,
 }: BatchActionBarProps) {
   const visibleActions = availableActions.filter((action) => primaryActions.includes(action));
   const overflowActions = availableActions.filter((action) => !primaryActions.includes(action));
@@ -93,6 +99,12 @@ export function BatchActionBar({
         Deselect All
       </Button>
       <div className="flex flex-wrap items-center gap-1">
+        <BatchLabelPicker
+          client={client}
+          count={count}
+          threadIds={selectedThreadIds}
+          onAssigned={onDeselectAll}
+        />
         {visibleActions.map((action) => (
           <ActionButton key={action} action={action} onAction={onAction} />
         ))}

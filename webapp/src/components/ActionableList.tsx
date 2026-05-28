@@ -164,9 +164,11 @@ export function ActionableList<T>({
       {selected.size > 0 ? (
         <BatchActionBar
           count={selected.size}
+          selectedThreadIds={[...selected]}
           availableActions={availableActions}
           onDeselectAll={() => setSelected(new Set())}
           onAction={onBatch}
+          client={actions.client ?? client}
         />
       ) : null}
       <ListView

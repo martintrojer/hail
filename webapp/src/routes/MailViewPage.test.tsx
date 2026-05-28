@@ -4,12 +4,15 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ImboxSectionedResponse,
+  LabelItemResponse,
+  LabelListResponse,
   MailClassification,
   MailViewKind,
   MailViewResponse,
   ThreadVerbResponse,
 } from '../api/client';
 import { HailApiError } from '../api/client';
+import { ApiClientProvider } from '../api/ApiClientProvider';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
@@ -41,6 +44,7 @@ class MailViewPageTestClient extends TestHailApiClient {
   readonly setAsideCalls: string[] = [];
   readonly markThreadCalls: Array<{ threadId: string; read: boolean }> = [];
   readonly replyLaterCalls: string[] = [];
+  readonly assignLabelToThreadsCalls: Array<{ threadIds: string[]; labelId?: number | null; labelName?: string | null }> = [];
   failingActions = new Set<string>();
 
   constructor(
@@ -116,6 +120,45 @@ class MailViewPageTestClient extends TestHailApiClient {
     return this.threadVerbResponse('reply-later');
   }
 
+  override async listLabels(): Promise<LabelListResponse> {
+    return {
+      labels: [
+        {
+          id: 41,
+          name: 'Work/Receipts',
+          leaf_name: 'Receipts',
+          path_segments: ['Work', 'Receipts'],
+          source: 'manual',
+          color: null,
+          thread_count: 0,
+        },
+      ],
+    };
+  }
+
+  override async assignLabelToThreads(body: {
+    thread_ids: string[];
+    label_id?: number | null;
+    label_name?: string | null;
+  }): Promise<LabelItemResponse> {
+    this.assignLabelToThreadsCalls.push({
+      threadIds: body.thread_ids,
+      labelId: body.label_id,
+      labelName: body.label_name,
+    });
+    return {
+      label: {
+        id: body.label_id ?? 42,
+        name: body.label_name ?? 'Work/Receipts',
+        leaf_name: body.label_name ?? 'Receipts',
+        path_segments: [body.label_name ?? 'Work/Receipts'],
+        source: 'manual',
+        color: null,
+        thread_count: body.thread_ids.length,
+      },
+    };
+  }
+
   private threadVerbResponse(action: string): ThreadVerbResponse {
     if (this.failingActions.has(action)) {
       throw new HailApiError(500, { error: 'boom' }, response(500));
@@ -173,16 +216,18 @@ function renderMailView(
   seedMe(queryClient);
 
   currentTestBody = (
-    <AuthProvider>
-      <UndoToastProvider>
-        <MailViewPage
-          view={view}
-          title={viewTitles[view]}
-          description={`${viewTitles[view]} description`}
-          client={client}
-        />
-      </UndoToastProvider>
-    </AuthProvider>
+    <ApiClientProvider client={client}>
+      <AuthProvider>
+        <UndoToastProvider>
+          <MailViewPage
+            view={view}
+            title={viewTitles[view]}
+            description={`${viewTitles[view]} description`}
+            client={client}
+          />
+        </UndoToastProvider>
+      </AuthProvider>
+    </ApiClientProvider>
   );
   installTestRouteComponent(view);
   window.history.pushState({}, '', viewRoutes[view]);
@@ -460,6 +505,97 @@ describe('MailViewPage', () => {
     await waitFor(() => expect(client.setAsideCalls).toEqual(['thread-one', 'thread-two']));
     expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
     expect(screen.getByText('2 threads added to Set Aside.')).toBeInTheDocument();
+  });
+
+  it('assigns an existing label to selected threads without replacing labels', async () => {
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-one',
+              from: 'Alice Sender',
+              subject: 'First thread',
+              labels: [
+                {
+                  id: 7,
+                  name: 'Existing',
+                  leaf_name: 'Existing',
+                  path_segments: ['Existing'],
+                  source: 'manual',
+                  color: null,
+                  thread_count: 1,
+                },
+              ],
+            }),
+            mailItem('imbox', {
+              thread_id: 'thread-two',
+              from: 'Bob Sender',
+              subject: 'Second thread',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    const firstLink = await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
+    });
+    const secondLink = screen.getByRole('link', {
+      name: 'Open Second thread from Bob Sender',
+    });
+
+    expect(within(firstLink).getByText('Existing')).toBeInTheDocument();
+
+    fireEvent.click(within(firstLink).getByRole('checkbox', { name: 'Select Alice Sender' }));
+    fireEvent.click(within(secondLink).getByRole('checkbox', { name: 'Select Bob Sender' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Label' }));
+    fireEvent.click(await screen.findByText('Receipts'));
+
+    await waitFor(() =>
+      expect(client.assignLabelToThreadsCalls).toEqual([
+        { threadIds: ['thread-one', 'thread-two'], labelId: 41, labelName: undefined },
+      ]),
+    );
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
+    expect(screen.getByText('Existing')).toBeInTheDocument();
+  });
+
+  it('creates a label inline while assigning selected threads', async () => {
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', { thread_id: 'thread-one', from: 'Alice Sender', subject: 'First thread' }),
+            mailItem('imbox', { thread_id: 'thread-two', from: 'Bob Sender', subject: 'Second thread' }),
+          ]),
+        ),
+      }),
+    );
+
+    const firstLink = await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
+    });
+    const secondLink = screen.getByRole('link', {
+      name: 'Open Second thread from Bob Sender',
+    });
+
+    fireEvent.click(within(firstLink).getByRole('checkbox', { name: 'Select Alice Sender' }));
+    fireEvent.click(within(secondLink).getByRole('checkbox', { name: 'Select Bob Sender' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Label' }));
+    fireEvent.change(screen.getByPlaceholderText('Search or create label…'), {
+      target: { value: 'Projects/Hail' },
+    });
+    fireEvent.click(await screen.findByText('Create and assign “Projects/Hail”'));
+
+    await waitFor(() =>
+      expect(client.assignLabelToThreadsCalls).toEqual([
+        { threadIds: ['thread-one', 'thread-two'], labelId: undefined, labelName: 'Projects/Hail' },
+      ]),
+    );
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
   });
 
   it('powers through Imbox threads with thread actions and advances through the batch', async () => {
