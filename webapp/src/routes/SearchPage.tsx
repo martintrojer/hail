@@ -18,16 +18,31 @@ import type {
 import { useApiClient } from '../api/ApiClientProvider';
 import { useLabels, useSearch } from '../api/query';
 import { ListView } from '../components/ListView';
-import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
 import { LabelChips } from '../components/LabelChips';
+import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '../components/ui/empty';
 import {
   Field,
   FieldGroup,
   FieldLabel,
 } from '../components/ui/field';
 import { Input } from '../components/ui/input';
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import {
   Select,
   SelectContent,
@@ -36,6 +51,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../components/ui/select';
+import { Skeleton } from '../components/ui/skeleton';
 import { AppShell } from '../layout/AppShell';
 import { formatDateTime } from '../lib/dates';
 import { viewErrorMessage } from '../lib/errorMessages';
@@ -76,19 +92,20 @@ function sortLabelsForPicker(labels: LabelResponse[]) {
 
 function SearchSkeleton() {
   return (
-    <div className="space-y-5" aria-label="Loading search results">
+    <div className="flex flex-col gap-5" aria-label="Loading search results" role="status">
       {['Mail', 'Notes'].map((group) => (
-        <section key={group} className="space-y-3">
-          <div className="h-4 w-24 animate-pulse rounded bg-bg-hover" />
+        <section key={group} className="flex flex-col gap-3">
+          <Skeleton className="h-4 w-24" />
           {Array.from({ length: 2 }, (_, index) => (
-            <div
-              key={index}
-              className="animate-pulse rounded-lg bg-bg-surface p-4"
-            >
-              <div className="h-4 w-2/3 rounded bg-bg-hover" />
-              <div className="mt-3 h-3 w-full rounded bg-bg-hover" />
-              <div className="mt-2 h-3 w-1/2 rounded bg-bg-hover" />
-            </div>
+            <Card key={index} size="sm">
+              <CardHeader>
+                <Skeleton className="h-4 w-2/3" />
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2">
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-1/2" />
+              </CardContent>
+            </Card>
           ))}
         </section>
       ))}
@@ -96,54 +113,74 @@ function SearchSkeleton() {
   );
 }
 
+function SearchEmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{body}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+function SearchErrorState({ message }: { message: string }) {
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>Could not search</AlertTitle>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
+}
+
 function MailResultCard({ item }: { item: MailSearchResult }) {
   return (
     <ThreadLink
       threadId={item.thread_id}
-      className="group block rounded-lg bg-bg-surface p-4 transition hover:bg-bg-hover focus:outline-none focus:ring-2 focus:ring-accent-blue"
+      className="group block rounded-xl outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-ink-primary">
+      <Card size="sm" className="transition-colors group-hover:bg-accent/50">
+        <CardHeader>
+          <CardTitle className="truncate">{item.subject || '(no subject)'}</CardTitle>
+          <CardDescription className="truncate">
             {item.from || 'Unknown sender'}
+          </CardDescription>
+          <CardAction>
+            <time className="text-xs text-muted-foreground">
+              {formatDateTime(item.received_at)}
+            </time>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">
+            {item.preview || 'No preview available.'}
           </p>
-          <p className="mt-1 truncate text-base font-semibold text-ink-primary">
-            {item.subject || '(no subject)'}
-          </p>
-        </div>
-        <time className="shrink-0 text-xs text-ink-tertiary">
-          {formatDateTime(item.received_at)}
-        </time>
-      </div>
-      <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-secondary">
-        {item.preview || 'No preview available.'}
-      </p>
-      <LabelChips labels={item.labels} className="mt-2 flex min-w-0 flex-wrap items-center gap-1" />
+          <LabelChips labels={item.labels} className="flex min-w-0 flex-wrap items-center gap-1" />
+        </CardContent>
+      </Card>
     </ThreadLink>
   );
 }
 
 function ContactNoteResultCard({ item }: { item: ContactNoteSearchResult }) {
   return (
-    <article className="rounded-lg bg-bg-surface p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-accent-blue">
-            {item.address || 'Unknown contact'}
-          </p>
-          <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-ink-tertiary">
-            Contact note
-          </p>
-        </div>
-        <time className="shrink-0 text-xs text-ink-tertiary">
-          {formatDateTime(item.updated_at)}
-        </time>
-      </div>
-      <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-ink-secondary">
-        {item.markdown || 'Empty note.'}
-      </p>
-    </article>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle className="truncate">{item.address || 'Unknown contact'}</CardTitle>
+        <CardDescription>Contact note</CardDescription>
+        <CardAction>
+          <time className="text-xs text-muted-foreground">
+            {formatDateTime(item.updated_at)}
+          </time>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <p className="line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
+          {item.markdown || 'Empty note.'}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -163,14 +200,12 @@ function ResultGroup<T>({
   }
 
   return (
-    <section className="space-y-3">
-      <h2 className="flex items-center justify-between text-sm font-semibold uppercase tracking-[0.2em] text-ink-secondary">
+    <section className="flex flex-col gap-3">
+      <h2 className="flex items-center justify-between text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">
         <span>{title}</span>
-        <span className="rounded-full bg-bg-hover px-2 py-0.5 text-xs tracking-normal text-ink-tertiary">
-          {items.length}
-        </span>
+        <Badge variant="secondary">{items.length}</Badge>
       </h2>
-      <div className="space-y-3">
+      <div className="flex flex-col gap-3">
         <ListView
           items={items}
           renderItem={renderItem}
@@ -187,18 +222,18 @@ function ResultGroup<T>({
 
 function SearchReading({ submittedQuery }: { submittedQuery: string }) {
   return (
-    <div className="rounded-lg bg-bg-surface p-6">
-      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-accent-blue">
-        Search
-      </p>
-      <h2 className="mt-3 text-3xl font-semibold tracking-tight text-ink-primary">
-        {submittedQuery}
-      </h2>
-      <p className="mt-3 text-sm leading-6 text-ink-secondary">
-        Results are grouped by source. Mail opens the matching thread; notes show
-        the matched contact note inline.
-      </p>
-    </div>
+    <Card size="sm">
+      <CardHeader>
+        <CardDescription className="text-primary">Search</CardDescription>
+        <CardTitle className="text-3xl tracking-tight">{submittedQuery}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm leading-6 text-muted-foreground">
+          Results are grouped by source. Mail opens the matching thread; notes show
+          the matched contact note inline.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -249,7 +284,7 @@ export function SearchPage({ client }: { client?: HailApiClient } = {}) {
   let list;
   if (!hasSearch) {
     list = (
-      <StateCard
+      <SearchEmptyState
         title="Ready when you are"
         body="Search requires at least 2 characters. Try a sender, subject, receipt ID, or something from a contact note."
       />
@@ -257,17 +292,17 @@ export function SearchPage({ client }: { client?: HailApiClient } = {}) {
   } else if (query.isPending) {
     list = <SearchSkeleton />;
   } else if (query.isError) {
-    list = <StateCard title="Could not search" body={viewErrorMessage(query.error, 'Search')} />;
+    list = <SearchErrorState message={viewErrorMessage(query.error, 'Search')} />;
   } else if (resultCount === 0) {
     list = (
-      <StateCard
+      <SearchEmptyState
         title="No results"
         body={`Nothing matched “${submittedQuery}” in ${scope}.`}
       />
     );
   } else {
     list = (
-      <div className="space-y-6">
+      <div className="flex flex-col gap-6">
         <ResultGroup
           title="Mail"
           items={grouped.mail}
@@ -285,9 +320,9 @@ export function SearchPage({ client }: { client?: HailApiClient } = {}) {
   }
 
   const actions = (
-    <span className="hidden rounded-full border border-border-hairline px-3 py-1 text-xs font-semibold text-ink-secondary sm:inline-flex">
+    <Badge variant="outline" className="hidden sm:inline-flex">
       Ctrl/Cmd-K or / to focus
-    </span>
+    </Badge>
   );
 
   const form = (
