@@ -112,14 +112,14 @@ export function ThreadLabelPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button type="button" variant="default" size="sm" aria-label="Manage thread labels">
+        <Button type="button" variant="outline" size="xs" aria-label="Manage thread labels">
           <Tags data-icon="inline-start" />
-          Manage labels
+          Labels
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-2">
         <PopoverHeader>
-          <PopoverTitle>Manage labels</PopoverTitle>
+          <PopoverTitle role="heading" aria-level={2}>Manage labels</PopoverTitle>
         </PopoverHeader>
         <p className="px-2 pb-2 text-xs leading-5 text-muted-foreground">
           Check every label that should stay on this thread. Adding one label keeps

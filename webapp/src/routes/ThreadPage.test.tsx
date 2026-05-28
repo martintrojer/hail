@@ -372,12 +372,17 @@ describe('ThreadPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
-    expect(screen.getByText('Assign one or more labels to this thread.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Manage labels' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Assign one or more labels to this thread.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Manage thread labels' })).toBeInTheDocument();
-    expect(screen.getByText('Currently assigned:')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manage thread labels' })).toHaveTextContent('Labels');
+    expect(screen.getByLabelText('Thread labels')).toBeInTheDocument();
     expect(screen.getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
     expect(screen.getByLabelText('Label Work/Receipts')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage thread labels' }));
+    expect(await screen.findByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
+    expect(screen.getByText(/Adding one label keeps/)).toBeInTheDocument();
   });
 
   it('adds, removes, and inline-creates labels without replacing existing labels', async () => {
@@ -389,7 +394,8 @@ describe('ThreadPage', () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     expect(await screen.findByText('Receipts')).toBeInTheDocument();
-    expect(screen.getByText('Assign one or more labels to this thread.')).toBeInTheDocument();
+    expect(screen.queryByText('Assign one or more labels to this thread.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Manage labels' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Manage thread labels' }));
     expect(await screen.findByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
     expect(screen.getByText(/Adding one label keeps/)).toBeInTheDocument();
