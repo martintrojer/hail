@@ -229,6 +229,22 @@ function response(status: number, body: unknown = {}) {
 }
 
 describe('MailViewPage', () => {
+  it('uses a responsive full-width shell for list-only mail views', async () => {
+    renderMailView('imbox');
+
+    expect(
+      await screen.findByRole('link', {
+        name: 'Open Quarterly update from Alice Sender',
+      }),
+    ).toBeInTheDocument();
+
+    const content = screen.getByTestId('app-shell-content');
+    expect(content).toHaveAttribute('data-hail-content-layout', 'list');
+    expect(content).toHaveClass('max-w-full');
+    expect(content.className).toContain('calc(100vw-var(--sidebar-width-icon)-3rem)');
+    expect(content.className).not.toContain('max-w-7xl');
+  });
+
   it('renders Imbox loading, error, empty, and result states', async () => {
     const pendingClient = renderMailView(
       'imbox',

@@ -73,6 +73,7 @@ import {
 import { TooltipProvider } from '../components/ui/tooltip';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
+import { cn } from '../lib/utils';
 
 interface AppShellProps {
   title: string;
@@ -695,11 +696,12 @@ export function AppShell({
   const viewCounts = useViewCounts();
   const sidebarCounts: SidebarCounts = viewCounts.data ?? {};
   const hasContent = Boolean(list || reading);
-  const contentWidthClass = wide
-    ? 'max-w-6xl'
-    : list && !reading
-      ? 'max-w-7xl'
-      : 'max-w-4xl';
+  const contentLayout = wide ? 'wide' : list && !reading ? 'list' : 'reading';
+  const contentWidthClass = {
+    wide: 'max-w-6xl',
+    list: 'max-w-full md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))] lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))]',
+    reading: 'max-w-4xl',
+  }[contentLayout];
 
   useKeyboardShortcuts({
     onNextThread: () => focusMailListItem(1),
@@ -758,7 +760,7 @@ export function AppShell({
           logoutLoading={logoutLoading}
         />
         <SidebarInset>
-            <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-backdrop-filter:bg-background/80">
+          <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-backdrop-filter:bg-background/80">
             <SidebarTrigger aria-label="Toggle navigation">
               <Menu />
             </SidebarTrigger>
@@ -793,7 +795,11 @@ export function AppShell({
           </header>
 
           <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8">
-            <div className={`mx-auto w-full ${contentWidthClass}`}>
+            <div
+              data-testid="app-shell-content"
+              data-hail-content-layout={contentLayout}
+              className={cn('mx-auto w-full', contentWidthClass)}
+            >
               <div className="mb-5 flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
                 <div className="min-w-0">
                   <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
