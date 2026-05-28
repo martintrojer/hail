@@ -9,6 +9,8 @@ import {
   type BubbleUpResponse,
   type CreateThreadNoteRequest,
   type ContactResponse,
+  type LabelItemResponse,
+  type LabelResponse,
   type MailClassification,
   type ThreadVerbResponse,
   type ThreadViewResponse,
@@ -44,6 +46,9 @@ class ThreadPageTestClient extends TestHailApiClient {
     threadId: string;
     request: BubbleUpRequest;
   }> = [];
+  readonly assignLabelCalls: Array<{ threadId: string; labelId: number }> = [];
+  readonly assignLabelNameCalls: Array<{ threadId: string; label_name: string }> = [];
+  readonly removeLabelCalls: Array<{ threadId: string; labelId: number }> = [];
   readonly markThreadCalls: Array<{ threadId: string; read: boolean }> = [];
 
   failingActions = new Set<string>();
@@ -62,6 +67,53 @@ class ThreadPageTestClient extends TestHailApiClient {
       note: null,
       threads: [],
     };
+  }
+
+  override async listLabels() {
+    return {
+      labels: [
+        ...this.thread.labels,
+        labelResponse(13, 'Projects/Hail'),
+        labelResponse(14, 'Personal'),
+      ].filter(
+        (label, index, labels) =>
+          labels.findIndex((candidate) => candidate.id === label.id) === index,
+      ),
+    };
+  }
+
+  override async assignLabelToThread(
+    threadId: string,
+    labelId: number,
+  ): Promise<LabelItemResponse> {
+    this.assignLabelCalls.push({ threadId, labelId });
+    const label = (await this.listLabels()).labels.find((candidate) => candidate.id === labelId);
+    if (!label) {
+      throw new HailApiError(
+        404,
+        { error: 'missing label' },
+        new Response(JSON.stringify({ error: 'missing label' }), { status: 404 }),
+      );
+    }
+    if (!this.thread.labels.some((existing) => existing.id === label.id)) {
+      this.thread.labels = [...this.thread.labels, label];
+    }
+    return { label };
+  }
+
+  override async assignLabelNameToThread(
+    threadId: string,
+    request: { label_name: string },
+  ): Promise<LabelItemResponse> {
+    this.assignLabelNameCalls.push({ threadId, label_name: request.label_name });
+    const label = labelResponse(99, request.label_name);
+    this.thread.labels = [...this.thread.labels, label];
+    return { label };
+  }
+
+  override async removeLabelFromThread(threadId: string, labelId: number): Promise<void> {
+    this.removeLabelCalls.push({ threadId, labelId });
+    this.thread.labels = this.thread.labels.filter((label) => label.id !== labelId);
   }
 
   override async markThread(threadId: string, read: boolean): Promise<void> {
@@ -228,6 +280,19 @@ function renderThread(thread: ThreadViewResponse) {
   };
 }
 
+function labelResponse(id: number, name: string): LabelResponse {
+  const pathSegments = name.split('/');
+  return {
+    id,
+    name,
+    leaf_name: pathSegments.at(-1) ?? name,
+    path_segments: pathSegments,
+    source: 'manual',
+    color: null,
+    thread_count: 0,
+  };
+}
+
 function sampleThread(
   overrides: Partial<ThreadViewResponse> = {},
 ): ThreadViewResponse {
@@ -309,6 +374,63 @@ describe('ThreadPage', () => {
     expect(await screen.findByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
     expect(screen.getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
     expect(screen.getByLabelText('Label Work/Receipts')).toBeInTheDocument();
+  });
+
+  it('adds, removes, and inline-creates labels without replacing existing labels', async () => {
+    const { client, queryClient } = renderThread(
+      sampleThread({
+        labels: [labelResponse(12, 'Work/Receipts')],
+      }),
+    );
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    expect(await screen.findByText('Receipts')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit thread labels' }));
+    fireEvent.click(await screen.findByText('Hail'));
+
+    await waitFor(() => {
+      expect(client.assignLabelCalls).toEqual([{ threadId: 'thread-1', labelId: 13 }]);
+    });
+    await waitFor(() => {
+      expect(
+        queryClient
+          .getQueryData<ThreadViewResponse>(queryKeys.thread('thread-1'))
+          ?.labels.map((label) => label.name),
+      ).toEqual(['Work/Receipts', 'Projects/Hail']);
+    });
+
+    fireEvent.click(screen.getAllByText('Receipts').at(-1)!);
+    await waitFor(() => {
+      expect(client.removeLabelCalls).toEqual([{ threadId: 'thread-1', labelId: 12 }]);
+    });
+    await waitFor(() => {
+      expect(
+        queryClient
+          .getQueryData<ThreadViewResponse>(queryKeys.thread('thread-1'))
+          ?.labels.map((label) => label.name),
+      ).toEqual(['Projects/Hail']);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Search or create label…'), {
+      target: { value: 'Family/Kids' },
+    });
+    fireEvent.click(await screen.findByText('Create “Family/Kids”'));
+
+    await waitFor(() => {
+      expect(client.assignLabelNameCalls).toEqual([
+        { threadId: 'thread-1', label_name: 'Family/Kids' },
+      ]);
+    });
+    expect(await screen.findByText('Kids')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        queryClient
+          .getQueryData<ThreadViewResponse>(queryKeys.thread('thread-1'))
+          ?.labels.map((label) => label.name),
+      ).toEqual(['Projects/Hail', 'Family/Kids']);
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
   });
 
   it('shows remote images on demand while keeping the sanitized default', async () => {

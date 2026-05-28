@@ -248,6 +248,7 @@ export type LabelResponse = components['schemas']['LabelResponse'];
 export type LabelItemResponse = LabelItemSuccess | LabelRenameSuccess;
 export type CreateLabelRequest = components['schemas']['CreateLabelRequest'];
 export type RenameLabelRequest = components['schemas']['RenameLabelRequest'];
+export type AssignLabelNameRequest = components['schemas']['AssignLabelNameRequest'];
 export type LabelThreadItem = components['schemas']['LabelThreadItem'];
 export type LabelThreadsResponse = LabelThreadsGetSuccess;
 export type MailViewItem = components['schemas']['MailViewItem'];
@@ -778,6 +779,49 @@ export class HailApiClient {
         method: 'DELETE',
         mutating: true,
       }),
+      204,
+    );
+  }
+
+  async assignLabelToThread(
+    threadId: string,
+    labelId: number,
+  ): Promise<LabelItemResponse> {
+    return this.#json<LabelItemResponse>(
+      await this.#request(
+        `/api/threads/${encodeURIComponent(threadId)}/labels/${encodeURIComponent(String(labelId))}`,
+        {
+          method: 'POST',
+          mutating: true,
+        },
+      ),
+      200,
+    );
+  }
+
+  async assignLabelNameToThread(
+    threadId: string,
+    body: AssignLabelNameRequest,
+  ): Promise<LabelItemResponse> {
+    return this.#json<LabelItemResponse>(
+      await this.#request(`/api/threads/${encodeURIComponent(threadId)}/labels`, {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async removeLabelFromThread(threadId: string, labelId: number): Promise<void> {
+    await this.#empty(
+      await this.#request(
+        `/api/threads/${encodeURIComponent(threadId)}/labels/${encodeURIComponent(String(labelId))}`,
+        {
+          method: 'DELETE',
+          mutating: true,
+        },
+      ),
       204,
     );
   }

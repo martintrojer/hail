@@ -13,6 +13,7 @@ import {
   type AdminDomainsResponse,
   type AdminStatsResponse,
   type AdminUsersResponse,
+  type AssignLabelNameRequest,
   type AttachmentsResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
@@ -629,6 +630,104 @@ export function useCreateLabelMutation(
         upsertLabelInList(current, data),
       );
       refreshLabelCaches(queryClient, data.label.id);
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+function addThreadLabel(
+  current: ThreadViewResponse | undefined,
+  label: LabelItemResponse['label'],
+): ThreadViewResponse | undefined {
+  if (!current) {
+    return current;
+  }
+  if (current.labels.some((existing) => existing.id === label.id)) {
+    return current;
+  }
+  return {
+    ...current,
+    labels: [...current.labels, label],
+  };
+}
+
+function removeThreadLabel(
+  current: ThreadViewResponse | undefined,
+  labelId: number,
+): ThreadViewResponse | undefined {
+  if (!current) {
+    return current;
+  }
+  return {
+    ...current,
+    labels: current.labels.filter((label) => label.id !== labelId),
+  };
+}
+
+export function useAssignLabelToThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<{ threadId: string; labelId: number }, LabelItemResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId, labelId }) => client.assignLabelToThread(threadId, labelId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ThreadViewResponse | undefined>(
+        queryKeys.thread(variables.threadId),
+        (current) => addThreadLabel(current, data.label),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.thread(variables.threadId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreads(data.label.id) });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useAssignLabelNameToThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<{ threadId: string; request: AssignLabelNameRequest }, LabelItemResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId, request }) => client.assignLabelNameToThread(threadId, request),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ThreadViewResponse | undefined>(
+        queryKeys.thread(variables.threadId),
+        (current) => addThreadLabel(current, data.label),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.thread(variables.threadId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreads(data.label.id) });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useRemoveLabelFromThreadMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<{ threadId: string; labelId: number }, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ threadId, labelId }) => client.removeLabelFromThread(threadId, labelId),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ThreadViewResponse | undefined>(
+        queryKeys.thread(variables.threadId),
+        (current) => removeThreadLabel(current, variables.labelId),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.thread(variables.threadId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreads(variables.labelId) });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
