@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { Button } from './ui/button';
 import {
   Dialog,
   DialogContent,
@@ -118,14 +119,16 @@ export function KeyboardShortcutHelp({
           </h2>
         </DialogHeader>
 
-        <button
+        <Button
           ref={closeButtonRef}
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={onClose}
           className="sr-only"
         >
           Close
-        </button>
+        </Button>
 
         <div className="grid gap-6 sm:grid-cols-2">
           {shortcutGroups.map((group) => (

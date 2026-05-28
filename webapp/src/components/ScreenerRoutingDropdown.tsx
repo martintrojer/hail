@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Check } from './icons';
+import { cn } from '../lib/utils';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,7 +87,7 @@ export function ScreenerRoutingDropdown({
       <DropdownMenuContent
         ref={contentRef}
         aria-label="Screener routing destinations"
-        className="w-[180px] border-border-menu bg-bg-surface"
+        className="w-[180px]"
         style={
           anchorRect
             ? {
@@ -105,7 +106,7 @@ export function ScreenerRoutingDropdown({
               <DropdownMenuItem
                 key={option.value}
                 onSelect={() => selectDestination(option.value)}
-                className={isSelected ? 'bg-bg-selected' : undefined}
+                className={cn(isSelected && 'bg-muted')}
               >
                 <span className="flex-1">{option.label}</span>
                 {isSelected ? <Check aria-hidden="true" /> : null}

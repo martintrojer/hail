@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useContact, useContactNoteMutation } from '../api/query';
 import { contactErrorMessage, contactNoteMutationErrorMessage } from '../lib/errorMessages';
 import { useUndoToast } from './UndoToastProvider';
@@ -13,6 +14,11 @@ import {
   CardHeader,
   CardTitle,
 } from './ui/card';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from './ui/collapsible';
 import { Skeleton } from './ui/skeleton';
 import { Textarea } from './ui/textarea';
 
@@ -90,36 +96,42 @@ export function ContactNotePanel({
   }
 
   return (
-    <Card size="sm">
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="w-full text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        aria-expanded={isOpen}
-        aria-controls={textareaId}
-      >
-        <CardHeader className="transition hover:bg-muted/50">
-          <CardTitle className="truncate">{title}</CardTitle>
-          <CardDescription className="truncate">{address}</CardDescription>
-          <CardAction>
-            <Badge variant="secondary">{isOpen ? 'Hide' : hasSavedNote ? 'Edit' : 'Add'}</Badge>
-          </CardAction>
-          {!isOpen ? (
-            <CardDescription className="line-clamp-2">
-              {contact.isPending
-                ? 'Loading note…'
-                : contact.isError
-                  ? contactErrorMessage(contact.error)
-                  : hasNoteText
-                    ? serverMarkdown
-                    : 'No note yet. Add private markdown context for this sender.'}
-            </CardDescription>
-          ) : null}
-        </CardHeader>
-      </button>
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} asChild>
+      <Card size="sm">
+        <CollapsibleTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-auto w-full justify-start rounded-none p-0 text-left hover:bg-transparent"
+            aria-controls={textareaId}
+          >
+            <CardHeader className="w-full transition hover:bg-muted/50">
+              <CardTitle className="truncate">{title}</CardTitle>
+              <CardDescription className="truncate">{address}</CardDescription>
+              <CardAction className="flex items-center gap-2">
+                <Badge variant="secondary">{isOpen ? 'Hide' : hasSavedNote ? 'Edit' : 'Add'}</Badge>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                />
+              </CardAction>
+              {!isOpen ? (
+                <CardDescription className="line-clamp-2">
+                  {contact.isPending
+                    ? 'Loading note…'
+                    : contact.isError
+                      ? contactErrorMessage(contact.error)
+                      : hasNoteText
+                        ? serverMarkdown
+                        : 'No note yet. Add private markdown context for this sender.'}
+                </CardDescription>
+              ) : null}
+            </CardHeader>
+          </Button>
+        </CollapsibleTrigger>
 
-      {isOpen ? (
-        <CardContent>
+        <CollapsibleContent>
+          <CardContent>
           {contact.isPending ? (
             <div className="flex flex-col gap-3" aria-label="Loading contact note">
               <Skeleton className="h-4 w-1/3" />
@@ -198,8 +210,9 @@ export function ContactNotePanel({
               ) : null}
             </form>
           )}
-        </CardContent>
-      ) : null}
-    </Card>
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   );
 }

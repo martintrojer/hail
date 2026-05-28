@@ -41,14 +41,13 @@ describe('ScreenerRoutingDropdown', () => {
     expect(document.body).toContainElement(dropdown);
     expect(dropdown).toHaveStyle({ top: '80px', left: '100px' });
     expect(dropdown).toHaveClass(
-      'bg-bg-surface',
-      'border-border-menu',
+      'bg-popover',
       'rounded-lg',
       'shadow-md',
     );
 
     const imbox = screen.getByRole('menuitem', { name: 'The Imbox' });
-    expect(imbox).toHaveClass('bg-bg-selected');
+    expect(imbox).toHaveClass('bg-muted');
     expect(screen.getByRole('menuitem', { name: 'The Feed' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Paper Trail' })).toBeInTheDocument();
   });

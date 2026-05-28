@@ -203,7 +203,7 @@ describe('ScreenerPage', () => {
       screen.getByRole('menu', { name: 'Screener routing destinations' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'The Imbox' })).toHaveClass(
-      'bg-bg-selected',
+      'bg-muted',
     );
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
