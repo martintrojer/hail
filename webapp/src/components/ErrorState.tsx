@@ -1,3 +1,7 @@
+import { AlertTriangle } from 'lucide-react';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from './ui/alert';
+import { Button } from './ui/button';
+
 interface ErrorStateProps {
   onRetry?: () => void;
   message?: string;
@@ -5,25 +9,19 @@ interface ErrorStateProps {
 
 export function ErrorState({ onRetry, message }: ErrorStateProps) {
   return (
-    <div
-      role="alert"
-      className="flex min-h-[300px] flex-col items-center justify-center text-center"
-    >
-      <p className="text-base text-ink-primary">Something went wrong.</p>
-      {message ? (
-        <p className="mt-2 max-w-sm text-sm leading-6 text-ink-secondary">
-          {message}
-        </p>
-      ) : null}
-      {onRetry ? (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="mt-2 text-sm font-semibold text-accent-blue focus-ring outline-none hover:underline focus-visible:rounded-sm"
-        >
-          Retry
-        </button>
-      ) : null}
+    <div className="flex min-h-[300px] items-center justify-center p-4">
+      <Alert variant="destructive" className="max-w-md">
+        <AlertTriangle aria-hidden="true" />
+        <AlertTitle>Something went wrong.</AlertTitle>
+        {message ? <AlertDescription>{message}</AlertDescription> : null}
+        {onRetry ? (
+          <AlertAction>
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              Retry
+            </Button>
+          </AlertAction>
+        ) : null}
+      </Alert>
     </div>
   );
 }

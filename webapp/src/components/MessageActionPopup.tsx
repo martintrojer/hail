@@ -1,10 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
+import { useEffect, useRef } from 'react';
 import {
   Archive,
   Bookmark,
-  ChevronDown,
   Clock,
   Forward,
   Reply,
@@ -12,9 +9,15 @@ import {
   Trash2,
   X,
   icons,
-  iconSizeProps,
   type LucideIcon,
 } from './icons';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from './ui/dropdown-menu';
 
 export interface MessageActionPopupProps {
   open: boolean;
@@ -57,53 +60,6 @@ const moveTargets = [
   { label: 'Paper Trail', value: 'papertrail' },
 ] as const;
 
-function popupPosition(anchorRect: DOMRect | null | undefined) {
-  if (!anchorRect || typeof window === 'undefined') {
-    return { top: 96, left: 24 };
-  }
-
-  const width = 240;
-  const gutter = 12;
-  const top = anchorRect.bottom + window.scrollY + 8;
-  const preferredLeft = anchorRect.right + window.scrollX - width;
-  const maxLeft = window.scrollX + window.innerWidth - width - gutter;
-  const minLeft = window.scrollX + gutter;
-
-  return {
-    top,
-    left: Math.max(minLeft, Math.min(preferredLeft, maxLeft)),
-  };
-}
-
-function Divider() {
-  return <div className="my-1 border-t border-border-menu" role="separator" />;
-}
-
-function MenuButton({
-  icon: Icon,
-  label,
-  children,
-  onClick,
-}: {
-  icon: LucideIcon;
-  label: string;
-  children?: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-[0.875rem] font-medium text-ink-primary hover:bg-bg-hover focus:bg-bg-hover focus:outline-none"
-    >
-      <Icon {...iconSizeProps.sm} className="shrink-0 text-ink-secondary" aria-hidden="true" />
-      <span className="flex-1">{label}</span>
-      {children}
-    </button>
-  );
-}
-
 export function MessageActionPopup({
   open,
   onClose,
@@ -111,39 +67,42 @@ export function MessageActionPopup({
   anchorRect,
   hiddenActions = [],
 }: MessageActionPopupProps) {
-  const popupRef = useRef<HTMLDivElement | null>(null);
-  const [moveOpen, setMoveOpen] = useState(true);
-
-  const navMenuRef = useMenuKeyboardNav({ open, onClose });
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) {
       return undefined;
     }
 
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    }
+
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
       if (
         target instanceof Node &&
-        popupRef.current &&
-        !popupRef.current.contains(target)
+        contentRef.current &&
+        !contentRef.current.contains(target)
       ) {
         onClose();
       }
     }
 
+    document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('mousedown', handlePointerDown);
 
     return () => {
+      document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [onClose, open]);
 
-  if (!open || typeof document === 'undefined') {
+  if (!open) {
     return null;
   }
-
-  const position = popupPosition(anchorRect);
 
   function runAction(action: string, payload?: unknown) {
     onAction(action, payload);
@@ -155,83 +114,102 @@ export function MessageActionPopup({
     group.filter((item) => !hidden.has(item.action)),
   );
 
-  const popup = (
-    <div
-      ref={(node: HTMLDivElement | null) => { popupRef.current = node; navMenuRef.current = node; }}
-      role="menu"
-      aria-label="Message actions"
-      className="absolute z-50 w-60 rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
-      style={{ top: position.top, left: position.left }}
-    >
-      {filteredGroups[0].map((item) => (
-        <MenuButton
-          key={item.action}
-          icon={item.icon}
-          label={item.label}
-          onClick={() => runAction(item.action, item.payload)}
-        />
-      ))}
-
-      <Divider />
-
-      {filteredGroups[1].map((item) => (
-        <MenuButton
-          key={item.action}
-          icon={item.icon}
-          label={item.label}
-          onClick={() => runAction(item.action, item.payload)}
-        />
-      ))}
-
-      <MenuButton
-        icon={ChevronDown}
-        label="Move to"
-        onClick={() => setMoveOpen((current) => !current)}
+  return (
+    <DropdownMenu modal={false} open={open}>
+      <DropdownMenuContent
+        ref={contentRef}
+        align="end"
+        aria-label="Message actions"
+        className="w-60 border-border-menu bg-bg-surface"
+        style={
+          anchorRect
+            ? {
+                position: 'fixed',
+                top: anchorRect.bottom + 8,
+                left: anchorRect.right - 240,
+              }
+            : undefined
+        }
       >
-        <ChevronDown
-          {...iconSizeProps.sm}
-          aria-hidden="true"
-          className={`text-ink-secondary transition-transform ${moveOpen ? 'rotate-180' : ''}`}
-        />
-      </MenuButton>
-      {moveOpen ? (
-        <div className="mb-1 ml-7 border-l border-border-hairline pl-2" role="group" aria-label="Move targets">
+        <DropdownMenuGroup>
+          {filteredGroups[0].map((item) => (
+            <MessageMenuItem
+              key={item.action}
+              item={item}
+              onSelect={() => runAction(item.action, item.payload)}
+            />
+          ))}
+        </DropdownMenuGroup>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuGroup>
+          {filteredGroups[1].map((item) => (
+            <MessageMenuItem
+              key={item.action}
+              item={item}
+              onSelect={() => runAction(item.action, item.payload)}
+            />
+          ))}
+        </DropdownMenuGroup>
+
+        <DropdownMenuItem onSelect={(event) => event.preventDefault()}>
+          Move to
+        </DropdownMenuItem>
+        <DropdownMenuGroup aria-label="Move targets">
           {moveTargets.map((target) => (
             <button
               key={target.value}
               type="button"
-              className="block w-full rounded-md px-3 py-2 text-left text-[0.875rem] font-medium text-ink-primary hover:bg-bg-hover focus:bg-bg-hover focus:outline-none"
+              className="block w-full rounded-md px-6 py-1 text-left text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
               onClick={() => runAction('move-to', target.value)}
             >
               {target.label}
             </button>
           ))}
-        </div>
-      ) : null}
+        </DropdownMenuGroup>
 
-      <Divider />
+        <DropdownMenuSeparator />
 
-      {filteredGroups[2].map((item) => (
-        <MenuButton
-          key={item.action}
-          icon={item.icon}
-          label={item.label}
-          onClick={() => runAction(item.action, item.payload)}
-        />
-      ))}
+        <DropdownMenuGroup>
+          {filteredGroups[2].map((item) => (
+            <MessageMenuItem
+              key={item.action}
+              item={item}
+              onSelect={() => runAction(item.action, item.payload)}
+            />
+          ))}
+        </DropdownMenuGroup>
 
-      <Divider />
+        <DropdownMenuSeparator />
 
-      {filteredGroups[3].map((item) => (
-        <MenuButton
-          key={item.action}
-          icon={item.icon}
-          label={item.label}
-          onClick={() => runAction(item.action, item.payload)}
-        />
-      ))}
-    </div>
+        <DropdownMenuGroup>
+          {filteredGroups[3].map((item) => (
+            <MessageMenuItem
+              key={item.action}
+              item={item}
+              onSelect={() => runAction(item.action, item.payload)}
+            />
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
 
-  return createPortal(popup, document.body);
+function MessageMenuItem({
+  item,
+  onSelect,
+}: {
+  item: ActionItem;
+  onSelect: () => void;
+}) {
+  const Icon = item.icon;
+
+  return (
+    <DropdownMenuItem onSelect={onSelect}>
+      <Icon aria-hidden="true" />
+      <span>{item.label}</span>
+    </DropdownMenuItem>
+  );
 }

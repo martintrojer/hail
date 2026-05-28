@@ -1,4 +1,11 @@
 import type { ReactNode } from 'react';
+import { cn } from '../lib/utils';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from './ui/empty';
 
 interface StateCardProps {
   title: string;
@@ -10,13 +17,17 @@ interface StateCardProps {
 export function StateCard({
   title,
   body,
-  className = 'flex min-h-[300px] flex-col items-center justify-center p-8 text-center',
-  bodyClassName = 'mt-2 max-w-sm text-sm leading-6 text-ink-secondary',
+  className = '',
+  bodyClassName,
 }: StateCardProps) {
   return (
-    <div className={className}>
-      <p className="text-lg font-semibold text-ink-primary">{title}</p>
-      {body ? <p className={bodyClassName}>{body}</p> : null}
-    </div>
+    <Empty className={cn('min-h-[300px]', className)}>
+      <EmptyHeader>
+        <EmptyTitle>{title}</EmptyTitle>
+        {body ? (
+          <EmptyDescription className={bodyClassName}>{body}</EmptyDescription>
+        ) : null}
+      </EmptyHeader>
+    </Empty>
   );
 }
