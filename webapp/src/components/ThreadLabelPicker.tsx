@@ -6,8 +6,7 @@ import {
   useLabels,
   useRemoveLabelFromThreadMutation,
 } from '../api/query';
-import { cn } from '../lib/utils';
-import { Check, Plus, Tags } from './icons';
+import { Plus, Tags } from './icons';
 import { Button } from './ui/button';
 import {
   Command,
@@ -17,6 +16,7 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  CommandShortcut,
 } from './ui/command';
 import {
   Popover,
@@ -142,22 +142,20 @@ export function ThreadLabelPicker({
                     key={label.id}
                     value={label.name}
                     data-checked={checked}
+                    aria-checked={checked}
+                    aria-label={`${checked ? 'Remove' : 'Add'} label ${label.name}`}
                     disabled={busy}
                     onSelect={() => {
                       void toggleLabel(label);
                     }}
                   >
-                    <Check
-                      data-icon="inline-start"
-                      className={cn('opacity-0', checked && 'opacity-100')}
-                    />
                     <span className="min-w-0 flex-1 truncate" title={label.name}>
                       {labelLeafText(label)}
                     </span>
                     {label.name !== labelLeafText(label) ? (
-                      <span className="max-w-28 truncate text-xs text-muted-foreground">
+                      <CommandShortcut className="max-w-28 truncate normal-case tracking-normal">
                         {label.name}
-                      </span>
+                      </CommandShortcut>
                     ) : null}
                   </CommandItem>
                 );
