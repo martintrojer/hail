@@ -140,6 +140,22 @@ beforeEach(() => {
       return jsonResponse(imbox);
     }
 
+    if (url.pathname === '/api/labels' && method === 'GET') {
+      return jsonResponse({
+        labels: [
+          {
+            id: 42,
+            name: 'Work/Receipts',
+            leaf_name: 'Receipts',
+            path_segments: ['Work', 'Receipts'],
+            source: 'manual',
+            color: null,
+            thread_count: 0,
+          },
+        ],
+      });
+    }
+
     if (url.pathname === '/api/labels/42/threads' && method === 'GET') {
       return jsonResponse({
         label: {
@@ -252,6 +268,23 @@ describe('SPA auth/router flows', () => {
         await screen.findByRole('link', { name: `${name}, ${count} items` }),
       ).toBeInTheDocument();
     }
+  });
+
+  it('lets authenticated users reach labels management', async () => {
+    api.user = adminUser;
+
+    renderRouterAt('/labels');
+
+    await expectLocation('/labels');
+    expect(await screen.findByRole('heading', { name: 'Labels' })).toBeInTheDocument();
+    expect(await screen.findByText('Work / Receipts')).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url) === `${window.location.origin}/api/labels` &&
+          (init as RequestInit | undefined)?.credentials === 'include',
+      ),
+    ).toBe(true);
   });
 
   it('lets authenticated users reach a label mail view', async () => {
