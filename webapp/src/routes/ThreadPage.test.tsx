@@ -372,6 +372,10 @@ describe('ThreadPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
+    expect(screen.getByText('Assign one or more labels to this thread.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manage thread labels' })).toBeInTheDocument();
+    expect(screen.getByText('Currently assigned:')).toBeInTheDocument();
     expect(screen.getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
     expect(screen.getByLabelText('Label Work/Receipts')).toBeInTheDocument();
   });
@@ -385,7 +389,11 @@ describe('ThreadPage', () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     expect(await screen.findByText('Receipts')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit thread labels' }));
+    expect(screen.getByText('Assign one or more labels to this thread.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage thread labels' }));
+    expect(await screen.findByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
+    expect(screen.getByText(/Adding one label keeps/)).toBeInTheDocument();
+    expect(screen.getByText('Add or remove labels')).toBeInTheDocument();
     fireEvent.click(await screen.findByText('Hail'));
 
     await waitFor(() => {
