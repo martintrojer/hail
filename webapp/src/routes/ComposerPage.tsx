@@ -25,10 +25,16 @@ import {
 import { useAuth } from '../auth/AuthProvider';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { InlineNote } from '../components/InlineNote';
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Field, FieldGroup, FieldLabel } from '../components/ui/field';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { useGoBack } from '../hooks/useGoBack';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { AppShell } from '../layout/AppShell';
-import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDate, formatFullDateTime } from '../lib/dates';
 import { composeErrorMessage } from '../lib/errorMessages';
 
@@ -59,7 +65,7 @@ interface AttachmentDraft {
 
 const autosaveIntervalMs = 5000;
 const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
-const lineInputClass = 'min-w-0 flex-1 border-0 bg-transparent py-3 text-base text-ink-primary outline-none placeholder:text-ink-tertiary focus:ring-0';
+const lineInputClass = 'h-11 border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0';
 
 function splitAddresses(value: string) {
   return value.split(/[;,]/).map((address) => address.trim()).filter(Boolean);
@@ -417,140 +423,155 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       contentLayout="composer"
       reading={
         <section className="flex min-h-[calc(100vh-11rem)] flex-col" aria-labelledby="composer-title">
-          <button
+          <Button
             type="button"
             onClick={closeComposer}
-            className="mb-8 inline-flex w-fit items-center gap-2 hail-chrome text-ink-secondary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md"
+            variant="ghost"
+            size="sm"
+            className="mb-6 w-fit"
           >
-            <ArrowLeft {...iconSizeProps.sm} />
+            <ArrowLeft data-icon="inline-start" {...iconSizeProps.sm} />
             <span>Cancel</span>
-          </button>
+          </Button>
 
           <div className="sr-only">
             <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : 'Compose message'}</h2>
           </div>
 
           {prefillLoading ? (
-            <div className="flex min-h-[22rem] flex-1 items-center justify-center hail-chrome text-ink-secondary">
-              {draftQuery.isLoading ? 'Loading draft…' : 'Loading reply details…'}
-            </div>
+            <Card className="flex min-h-[22rem] flex-1 items-center justify-center text-muted-foreground">
+              <CardContent>
+                {draftQuery.isLoading ? 'Loading draft…' : 'Loading reply details…'}
+              </CardContent>
+            </Card>
           ) : (
           <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
-            <div className="space-y-1">
-              <div className="flex items-center gap-3 border-b border-border-hairline">
-                <label htmlFor="compose-to" className="w-16 shrink-0 hail-chrome text-ink-tertiary">To</label>
-                <input
-                  id="compose-to"
-                  type="text"
-                  value={form.to}
-                  onChange={(event) => updateField('to', event.target.value)}
-                  placeholder="alice@example.com, bob@example.com"
-                  className={lineInputClass}
-                  autoComplete="email"
-                  autoFocus={!replyToThreadId && !initialDraftId}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowCarbonCopyFields((shown) => !shown)}
-                  className="shrink-0 hail-chrome text-ink-tertiary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md"
-                  aria-expanded={showCarbonCopyFields}
-                  aria-controls="compose-carbon-copy-fields"
-                >
-                  Cc / Bcc
-                </button>
-              </div>
+            <Card>
+              <CardContent>
+                <FieldGroup className="gap-0">
+                  <Field orientation="horizontal" className="items-center gap-3 border-b border-border py-1">
+                    <FieldLabel htmlFor="compose-to" className="w-16 shrink-0 text-muted-foreground">To</FieldLabel>
+                    <Input
+                      id="compose-to"
+                      type="text"
+                      value={form.to}
+                      onChange={(event) => updateField('to', event.target.value)}
+                      placeholder="alice@example.com, bob@example.com"
+                      className={lineInputClass}
+                      autoComplete="email"
+                      autoFocus={!replyToThreadId && !initialDraftId}
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => setShowCarbonCopyFields((shown) => !shown)}
+                      variant="ghost"
+                      size="sm"
+                      aria-expanded={showCarbonCopyFields}
+                      aria-controls="compose-carbon-copy-fields"
+                    >
+                      Cc / Bcc
+                    </Button>
+                  </Field>
 
-              <div id="compose-carbon-copy-fields" className={showCarbonCopyFields ? 'grid gap-1' : 'hidden'}>
-                <div className="flex items-center gap-3 border-b border-border-hairline">
-                  <label htmlFor="compose-cc" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Cc</label>
-                  <input
-                    id="compose-cc"
-                    type="text"
-                    value={form.cc}
-                    onChange={(event) => updateField('cc', event.target.value)}
-                    className={lineInputClass}
-                    autoComplete="email"
-                  />
-                </div>
-                <div className="flex items-center gap-3 border-b border-border-hairline">
-                  <label htmlFor="compose-bcc" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Bcc</label>
-                  <input
-                    id="compose-bcc"
-                    type="text"
-                    value={form.bcc}
-                    onChange={(event) => updateField('bcc', event.target.value)}
-                    className={lineInputClass}
-                    autoComplete="email"
-                  />
-                </div>
-              </div>
+                  <div id="compose-carbon-copy-fields" className={showCarbonCopyFields ? 'grid gap-0' : 'hidden'}>
+                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border py-1">
+                      <FieldLabel htmlFor="compose-cc" className="w-16 shrink-0 text-muted-foreground">Cc</FieldLabel>
+                      <Input
+                        id="compose-cc"
+                        type="text"
+                        value={form.cc}
+                        onChange={(event) => updateField('cc', event.target.value)}
+                        className={lineInputClass}
+                        autoComplete="email"
+                      />
+                    </Field>
+                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border py-1">
+                      <FieldLabel htmlFor="compose-bcc" className="w-16 shrink-0 text-muted-foreground">Bcc</FieldLabel>
+                      <Input
+                        id="compose-bcc"
+                        type="text"
+                        value={form.bcc}
+                        onChange={(event) => updateField('bcc', event.target.value)}
+                        className={lineInputClass}
+                        autoComplete="email"
+                      />
+                    </Field>
+                  </div>
 
-              <div className="flex items-center gap-3 border-b border-border-hairline">
-                <label htmlFor="compose-subject" className="w-16 shrink-0 hail-chrome text-ink-tertiary">Subject</label>
-                <input
-                  id="compose-subject"
-                  type="text"
-                  value={form.subject}
-                  onChange={(event) => updateField('subject', event.target.value)}
-                  className={lineInputClass}
-                  placeholder="Subject"
-                />
-              </div>
-            </div>
+                  <Field orientation="horizontal" className="items-center gap-3 py-1">
+                    <FieldLabel htmlFor="compose-subject" className="w-16 shrink-0 text-muted-foreground">Subject</FieldLabel>
+                    <Input
+                      id="compose-subject"
+                      type="text"
+                      value={form.subject}
+                      onChange={(event) => updateField('subject', event.target.value)}
+                      className={lineInputClass}
+                      placeholder="Subject"
+                    />
+                  </Field>
+                </FieldGroup>
+              </CardContent>
+            </Card>
 
-            <div className="mt-8 flex min-h-[22rem] flex-1 flex-col">
+            <div className="mt-6 flex min-h-[22rem] flex-1 flex-col">
               {threadNotes.length > 0 && (
-                <div className="mb-4 space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-ink-tertiary">Notes on this thread</p>
+                <div className="mb-4 flex flex-col gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notes on this thread</p>
                   {threadNotes.map((note) => (
                     <InlineNote key={note.id} text={note.body} author="You" timestamp={formatDate(note.created_at)} />
                   ))}
                 </div>
               )}
-              <label htmlFor="compose-body" className="sr-only">Body</label>
-              <textarea
-                ref={bodyRef}
-                id="compose-body"
-                value={form.body}
-                onChange={(event) => updateField('body', event.target.value)}
-                className="min-h-[22rem] flex-1 resize-none border-0 bg-transparent text-base leading-relaxed text-ink-primary outline-none placeholder:text-ink-tertiary focus:ring-0"
-                placeholder="Write your email…"
-                autoFocus={Boolean(replyToThreadId)}
-              />
+              <Field className="min-h-[22rem] flex-1">
+                <FieldLabel htmlFor="compose-body" className="sr-only">Body</FieldLabel>
+                <Textarea
+                  ref={bodyRef}
+                  id="compose-body"
+                  value={form.body}
+                  onChange={(event) => updateField('body', event.target.value)}
+                  className="min-h-[22rem] flex-1 resize-none border-0 bg-transparent px-0 text-base leading-relaxed shadow-none focus-visible:ring-0"
+                  placeholder="Write your email…"
+                  autoFocus={Boolean(replyToThreadId)}
+                />
+              </Field>
             </div>
 
             <div className="mt-3 flex min-h-6 items-center justify-between gap-4">
-              <div className="flex items-center gap-3 text-ink-tertiary">
-                <label htmlFor="compose-attachments" className="inline-flex cursor-pointer items-center gap-2 hail-chrome focus-ring outline-none hover:text-accent-blue">
-                  <Paperclip {...iconSizeProps.sm} />
-                  <span>Attachments</span>
-                </label>
-                <input id="compose-attachments" type="file" multiple onChange={onAttachmentsChange} className="sr-only" />
-                <label htmlFor="compose-send-at" className="sr-only">Send later</label>
-                <input
-                  id="compose-send-at"
-                  type="datetime-local"
-                  value={form.sendAt}
-                  min={minSendAt}
-                  onChange={(event) => updateField('sendAt', event.target.value)}
-                  className="w-40 border-0 bg-transparent hail-chrome text-ink-tertiary outline-none focus:ring-0"
-                />
+              <div className="flex items-center gap-3 text-muted-foreground">
+                <Button type="button" variant="ghost" size="sm" asChild>
+                  <label htmlFor="compose-attachments" className="cursor-pointer">
+                    <Paperclip data-icon="inline-start" {...iconSizeProps.sm} />
+                    <span>Attachments</span>
+                  </label>
+                </Button>
+                <Input id="compose-attachments" type="file" multiple onChange={onAttachmentsChange} className="sr-only" />
+                <Field className="w-44">
+                  <FieldLabel htmlFor="compose-send-at" className="sr-only">Send later</FieldLabel>
+                  <Input
+                    id="compose-send-at"
+                    type="datetime-local"
+                    value={form.sendAt}
+                    min={minSendAt}
+                    onChange={(event) => updateField('sendAt', event.target.value)}
+                    className="h-8 text-xs text-muted-foreground"
+                  />
+                </Field>
               </div>
-              <p className={`hail-badge text-ink-tertiary transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId ? 'opacity-100' : 'opacity-0'}`}>
+              <Badge variant="outline" className={`transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId ? 'opacity-100' : 'opacity-0'}`}>
                 {autosaveText}
-              </p>
+              </Badge>
             </div>
 
             {attachments.length > 0 ? <AttachmentNotice attachments={attachments} /> : null}
 
-            <div className="mt-8 flex items-center gap-4 border-t border-border-hairline pt-5">
-              <button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending} className={pillButtonClass('primary', 'md')}>{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</button>
-              <button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} className="hail-chrome text-ink-secondary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md disabled:cursor-not-allowed disabled:opacity-50">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</button>
-              {!replyToThreadId ? <button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} className="hail-chrome text-ink-tertiary focus-ring outline-none hover:text-accent-blue focus-visible:rounded-md disabled:cursor-not-allowed disabled:opacity-50">{savingDraft ? 'Saving…' : 'Save draft'}</button> : null}
-              <button type="button" onClick={closeComposer} className="ml-auto hail-chrome text-ink-tertiary focus-ring outline-none hover:text-accent-red focus-visible:rounded-md">Discard</button>
+            <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-border pt-5">
+              <Button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending}>{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</Button>
+              <Button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} variant="secondary">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</Button>
+              {!replyToThreadId ? <Button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} variant="outline">{savingDraft ? 'Saving…' : 'Save draft'}</Button> : null}
+              <Button type="button" onClick={closeComposer} variant="ghost" className="ml-auto">Discard</Button>
             </div>
 
-            <div className="mt-4 space-y-2">
+            <div className="mt-4 flex flex-col gap-2">
               {autosaveError ? <Status kind="warn" message={composeErrorMessage(autosaveError, 'Draft autosave failed.')} /> : null}
               {sendError ? <Status kind="error" message={sendError} /> : null}
               {successMessage ? <Status kind="success" message={successMessage} /> : null}
@@ -565,20 +586,23 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
 function AttachmentNotice({ attachments }: { attachments: AttachmentDraft[] }) {
   return (
-    <div className="mt-4 rounded-lg border border-border-menu bg-bg-banner p-3 hail-chrome text-ink-secondary">
-      <p className="font-semibold text-ink-primary">Attachments are not supported for sending or saving yet.</p>
-      <ul className="mt-2 space-y-1 text-ink-secondary">
-        {attachments.map((attachment) => <li key={attachment.id}>{attachment.name} · {fileSizeLabel(attachment.size)} · {attachment.type}</li>)}
-      </ul>
-    </div>
+    <Alert className="mt-4">
+      <AlertTitle>
+        Attachments are not supported for sending or saving yet.
+        <AlertDescription>
+          <ul className="mt-2 flex flex-col gap-1">
+            {attachments.map((attachment) => <li key={attachment.id}>{attachment.name} · {fileSizeLabel(attachment.size)} · {attachment.type}</li>)}
+          </ul>
+        </AlertDescription>
+      </AlertTitle>
+    </Alert>
   );
 }
 
 function Status({ kind, message }: { kind: 'error' | 'success' | 'warn'; message: string }) {
-  const className = kind === 'success'
-    ? 'border-border-menu bg-bg-surface text-ink-primary'
-    : kind === 'warn'
-      ? 'border-border-menu bg-bg-banner text-ink-primary'
-      : 'border-accent-red/40 bg-bg-surface text-accent-red';
-  return <p className={`rounded-lg border px-3 py-2 hail-chrome ${className}`}>{message}</p>;
+  return (
+    <Alert variant={kind === 'error' ? 'destructive' : 'default'}>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
 }
