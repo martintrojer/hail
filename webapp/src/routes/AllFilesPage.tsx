@@ -5,6 +5,16 @@ import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { Paperclip } from '../components/icons';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
 import { AppShell } from '../layout/AppShell';
 import { formatDateTime } from '../lib/dates';
 import { viewErrorMessage } from '../lib/errorMessages';
@@ -41,86 +51,86 @@ function fileKind(type: string) {
   return major.charAt(0).toUpperCase() + major.slice(1);
 }
 
+function SummaryCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardDescription className="text-xs font-semibold uppercase tracking-[0.2em]">
+          {label}
+        </CardDescription>
+        <CardTitle className="text-2xl">{value}</CardTitle>
+      </CardHeader>
+    </Card>
+  );
+}
+
 function AllFilesSummary({ items }: { items: AttachmentItem[] }) {
   const totalBytes = items.reduce((sum, item) => sum + (item.size || 0), 0);
   const threadCount = new Set(items.map((item) => item.context.thread_id)).size;
 
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <div className="rounded-2xl bg-bg-surface p-4 shadow-sm shadow-ink-primary/5">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-ink-tertiary">Files</p>
-        <p className="mt-2 text-2xl font-semibold text-ink-primary">{items.length}</p>
-      </div>
-      <div className="rounded-2xl bg-bg-surface p-4 shadow-sm shadow-ink-primary/5">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-ink-tertiary">Threads</p>
-        <p className="mt-2 text-2xl font-semibold text-ink-primary">{threadCount}</p>
-      </div>
-      <div className="rounded-2xl bg-bg-surface p-4 shadow-sm shadow-ink-primary/5">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-ink-tertiary">Storage shown</p>
-        <p className="mt-2 text-2xl font-semibold text-ink-primary">{fileSize(totalBytes)}</p>
-      </div>
+      <SummaryCard label="Files" value={items.length} />
+      <SummaryCard label="Threads" value={threadCount} />
+      <SummaryCard label="Storage shown" value={fileSize(totalBytes)} />
     </div>
   );
 }
 
 function AttachmentRow({ item }: { item: AttachmentItem }) {
   return (
-    <article className="group rounded-2xl bg-bg-surface p-4 shadow-sm shadow-ink-primary/5 transition hover:bg-bg-hover">
-      <div className="flex items-start gap-4">
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-bg-selected text-accent-blue">
-          <Paperclip aria-hidden="true" size={22} strokeWidth={1.5} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <h2 className="truncate text-lg font-semibold text-ink-primary">{item.name || 'Attachment'}</h2>
-              <p className="mt-1 text-sm text-ink-secondary">
-                {fileKind(item.type)} · {fileSize(item.size)}
-              </p>
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <a
-                href={item.download_url}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-full bg-accent-blue px-3 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover"
-              >
-                Open
-              </a>
-              <a
-                href={item.download_url}
-                download={item.name || undefined}
-                className="rounded-full border border-border-menu px-3 py-1.5 text-sm font-semibold text-ink-secondary focus-ring outline-none hover:bg-bg-page hover:text-ink-primary"
-              >
-                Download
-              </a>
-            </div>
+    <Card size="sm" className="transition hover:bg-muted/50">
+      <CardHeader>
+        <div className="flex min-w-0 items-start gap-4">
+          <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-primary">
+            <Paperclip aria-hidden="true" strokeWidth={1.5} />
           </div>
+          <div className="min-w-0 flex-1">
+            <CardTitle className="truncate">{item.name || 'Attachment'}</CardTitle>
+            <CardDescription className="mt-1">
+              <Badge variant="outline">{fileKind(item.type)}</Badge>{' '}
+              <span aria-label={`Attachment size ${fileSize(item.size)}`}>File size</span>
+            </CardDescription>
+          </div>
+        </div>
+        <CardAction className="flex gap-2">
+          <Button asChild size="sm">
+            <a href={item.download_url} target="_blank" rel="noreferrer">
+              Open
+            </a>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <a href={item.download_url} download={item.name || undefined}>
+              Download
+            </a>
+          </Button>
+        </CardAction>
+      </CardHeader>
 
-          <div className="mt-4 rounded-xl border border-border-hairline bg-bg-page/60 p-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <Link
-                to="/thread/$threadId"
-                params={{ threadId: item.context.thread_id }}
-                search={{ from: undefined }}
-                className="min-w-0 truncate font-semibold text-ink-primary focus-ring outline-none hover:text-accent-blue"
-              >
-                {item.context.subject || '(no subject)'}
-              </Link>
-              <time className="shrink-0 text-xs text-ink-tertiary">
-                {formatDateTime(item.context.received_at)}
-              </time>
-            </div>
-            <p className="mt-1 truncate text-sm text-ink-secondary">
-              {item.context.from || 'Unknown sender'}
-            </p>
-            <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-tertiary">
-              {item.context.preview || 'No message preview available.'}
-            </p>
+      <CardContent>
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <Link
+              to="/thread/$threadId"
+              params={{ threadId: item.context.thread_id }}
+              search={{ from: undefined }}
+              className="min-w-0 truncate font-medium text-foreground outline-none hover:text-primary focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {item.context.subject || '(no subject)'}
+            </Link>
+            <time className="shrink-0 text-xs text-muted-foreground">
+              {formatDateTime(item.context.received_at)}
+            </time>
           </div>
+          <p className="mt-1 truncate text-sm text-muted-foreground">
+            {item.context.from || 'Unknown sender'}
+          </p>
+          <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+            {item.context.preview || 'No message preview available.'}
+          </p>
         </div>
-      </div>
-    </article>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -135,7 +145,7 @@ function AllFilesList({ items }: { items: AttachmentItem[] }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {items.map((item) => (
         <AttachmentRow
           key={`${item.context.email_id}:${item.blob_id}:${item.name}`}
@@ -171,7 +181,7 @@ export function AllFilesPage({ client }: AllFilesPageProps) {
     <AppShell
       title="All Files"
       description="Every recent attachment in one place, with the mail thread it came from."
-      list={<div className="space-y-5">{list}</div>}
+      list={<div className="flex flex-col gap-5">{list}</div>}
       wide
     />
   );

@@ -12,14 +12,17 @@ import {
 import { queryKeys } from '../api/queryKeys';
 import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
-import { Send, iconSizeProps } from '../components/icons';
+import { Send } from '../components/icons';
 import { MailRow } from '../components/MailRow';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { AppShell } from '../layout/AppShell';
 import { pilePreview } from '../lib/pilePreview';
 import { cn } from '../lib/utils';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Checkbox } from '../components/ui/checkbox';
+import { Textarea } from '../components/ui/textarea';
 
 interface PileSectionPageProps {
   kind: 'set-aside' | 'reply-later';
@@ -105,47 +108,49 @@ function ReplyPanel({
   const sending = sendReply.isPending || moveBack.isPending;
 
   return (
-    <div className="flex h-full flex-col">
+    <Card className="h-full rounded-none border-0 ring-0" size="sm">
       {/* Thread context */}
-      <div className="border-b border-border-hairline px-4 py-4">
-        <p className="text-sm font-semibold text-ink-primary">{preview.sender}</p>
-        <p className="mt-1 text-sm text-ink-secondary">{preview.subject}</p>
-        <p className="mt-2 text-sm leading-relaxed text-ink-tertiary">
+      <CardHeader className="border-b">
+        <CardTitle className="text-sm">{preview.sender}</CardTitle>
+        <p className="text-sm text-muted-foreground">{preview.subject}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground">
           {preview.snippet || 'No preview available.'}
         </p>
-      </div>
+      </CardHeader>
 
       {/* Reply input */}
-      <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-1 flex-col px-4 py-4">
+      <CardContent className="flex flex-1">
+        <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-1 flex-col py-4">
         {sent ? (
           <div className="flex flex-1 items-center justify-center">
             <p className="text-sm font-semibold text-ink-secondary">Reply sent ✓</p>
           </div>
         ) : (
           <>
-            <textarea
+            <Textarea
               data-hail-reply-box="true"
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder="Write your reply…"
               disabled={sending}
-              className="flex-1 resize-none rounded-md border border-border-hairline bg-bg-canvas px-3 py-3 text-sm leading-relaxed text-ink-primary outline-none placeholder:text-ink-tertiary focus-visible:border-accent-blue focus-visible:ring-1 focus-visible:ring-accent-blue disabled:opacity-60"
+              className="flex-1 resize-none"
             />
-            <div className="mt-3 flex items-center justify-between">
-              <button
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <Button
                 type="submit"
                 disabled={!body.trim() || sending}
-                className="inline-flex items-center gap-1.5 rounded-full bg-accent-blue px-4 py-1.5 text-sm font-semibold text-white focus-ring outline-none hover:bg-accent-blue-hover disabled:opacity-60"
+                size="sm"
               >
-                <Send {...iconSizeProps.sm} aria-hidden="true" />
+                <Send data-icon="inline-start" aria-hidden="true" />
                 {sending ? (moveBack.isPending ? 'Moving…' : 'Sending…') : 'Reply'}
-              </button>
-              {error ? <p className="text-xs text-accent-red">{error}</p> : null}
+              </Button>
+              {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
             </div>
           </>
         )}
-      </form>
-    </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -248,14 +253,16 @@ function PileRow({
         </Link>
       )}
       <div className="flex shrink-0 items-center pr-1 sm:pr-0">
-        <button
+        <Button
           type="button"
-          className="rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary opacity-90 focus-ring outline-none hover:bg-bg-selected hover:text-accent-blue sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          variant="outline"
+          size="xs"
+          className="opacity-90 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
           onClick={() => moveBack.mutate({ threadId: item.thread_id, to: 'imbox' })}
           disabled={moveBack.isPending}
         >
           {moveBack.isPending ? 'Moving…' : config.actionLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );

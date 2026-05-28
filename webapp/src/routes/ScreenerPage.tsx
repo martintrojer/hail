@@ -18,8 +18,18 @@ import {
   type ScreenerRoutingDestination,
 } from '../components/ScreenerRoutingDropdown';
 import { useUndoToast } from '../components/UndoToastProvider';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
+import { Empty, EmptyHeader, EmptyTitle } from '../components/ui/empty';
 import { AppShell } from '../layout/AppShell';
-import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDate } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
@@ -66,12 +76,12 @@ function previewText(preview: unknown) {
 
 function EmptyState() {
   return (
-    <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
-      <p className="text-lg font-semibold text-ink-primary">
-        All clear. No one new is waiting.
-      </p>
-      <span className="sr-only">No unknown senders</span>
-    </div>
+    <Empty className="min-h-[300px]">
+      <EmptyHeader>
+        <EmptyTitle>All clear. No one new is waiting.</EmptyTitle>
+        <span className="sr-only">No unknown senders</span>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -139,72 +149,74 @@ function PendingSenderCard({
   }
 
   return (
-    <article className="rounded-lg bg-bg-surface p-5">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        aria-controls={expandedId}
-        className="block w-full rounded-md text-left focus:outline-none focus:ring-2 focus:ring-accent-blue focus:ring-offset-2 focus:ring-offset-bg-surface"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="hail-sender truncate text-ink-primary">
-              {senderIdentity.name}
-            </h2>
-            <p className="mt-1 truncate text-sm text-ink-secondary">
-              {senderIdentity.email}
+    <Card size="sm">
+      <CardHeader>
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          aria-controls={expandedId}
+          className="block w-full rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <CardTitle className="truncate">
+                {senderIdentity.name}
+              </CardTitle>
+              <p className="mt-1 truncate text-sm text-muted-foreground">
+                {senderIdentity.email}
+              </p>
+            </div>
+            <Badge variant="outline" className="shrink-0">
+              {expanded ? 'Hide' : 'Show'} · {emailCountLabel}
+            </Badge>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-2">
+            <p className="text-sm leading-6 text-card-foreground">{subject}</p>
+            <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">
+              {preview}
             </p>
           </div>
-          <span className="shrink-0 rounded-full border border-border-menu px-3 py-1 text-xs font-semibold text-ink-secondary">
-            {expanded ? 'Hide' : 'Show'} · {emailCountLabel}
-          </span>
-        </div>
-
-        <div className="mt-5 space-y-2">
-          <p className="text-[0.95rem] leading-6 text-ink-secondary">{subject}</p>
-          <p className="line-clamp-2 text-sm leading-6 text-ink-tertiary">
-            {preview}
-          </p>
-        </div>
-      </button>
+        </button>
+      </CardHeader>
 
       {expanded ? (
-        <div id={expandedId} className="mt-5 border-t border-border-subtle pt-4">
+        <CardContent id={expandedId} className="border-t pt-3">
           {emails.length === 0 ? (
-            <p className="text-sm text-ink-tertiary">
+            <p className="text-sm text-muted-foreground">
               Pending email details are unavailable right now.
             </p>
           ) : (
-            <ul className="space-y-3">
+            <ul className="flex flex-col gap-3">
               {emails.map((email) => (
                 <li
                   key={email.email_id}
-                  className="rounded-md border border-border-subtle bg-bg-canvas/50 px-4 py-3"
+                  className="rounded-lg border bg-muted/30 px-3 py-2"
                 >
                   <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                    <p className="min-w-0 text-sm font-semibold text-ink-primary">
+                    <p className="min-w-0 text-sm font-medium text-foreground">
                       {email.subject || 'No subject'}
                     </p>
                     <time
                       dateTime={email.received_at ?? undefined}
-                      className="shrink-0 text-xs text-ink-tertiary"
+                      className="shrink-0 text-xs text-muted-foreground"
                     >
                       {formatDate(email.received_at)}
                     </time>
                   </div>
-                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-ink-tertiary">
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
                     {email.preview || 'Preview unavailable.'}
                   </p>
                 </li>
               ))}
             </ul>
           )}
-        </div>
+        </CardContent>
       ) : null}
 
-      <div className="mt-5 flex flex-wrap gap-3">
-        <button
+      <CardFooter className="flex-wrap gap-2">
+        <Button
           ref={approveButtonRef}
           type="button"
           aria-label={isPending ? 'Saving…' : 'Approve'}
@@ -212,20 +224,21 @@ function PendingSenderCard({
           aria-expanded={routingOpen}
           onClick={showRoutingDropdown}
           disabled={isPending}
-          className={pillButtonClass('primary', 'md')}
+          size="sm"
         >
           {isPending ? 'Saving…' : 'Yes'}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           aria-label="Deny"
           onClick={deny}
           disabled={isPending}
-          className={pillButtonClass('outline', 'md')}
+          variant="outline"
+          size="sm"
         >
           No
-        </button>
-      </div>
+        </Button>
+      </CardFooter>
 
       <ScreenerRoutingDropdown
         open={routingOpen}
@@ -235,11 +248,15 @@ function PendingSenderCard({
       />
 
       {decision.isError ? (
-        <p role="alert" className="mt-4 text-sm text-accent-red">
-          {actionErrorMessage(decision.error, 'Decision')}
-        </p>
+        <CardContent>
+          <Alert variant="destructive">
+            <AlertDescription>
+              {actionErrorMessage(decision.error, 'Decision')}
+            </AlertDescription>
+          </Alert>
+        </CardContent>
       ) : null}
-    </article>
+    </Card>
   );
 }
 
@@ -258,38 +275,31 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
     );
   } else {
     list = (
-      <div className="space-y-5">
-        <ListView
-          items={query.data.senders}
-          renderItem={(sender) => <PendingSenderCard sender={sender} client={client} />}
-          keyExtractor={(sender) => sender.sender}
-          hasMore={false}
-          isLoadingMore={false}
-          onLoadMore={() => {}}
-          emptyState={<EmptyState />}
-        />
-      </div>
+      <ListView
+        items={query.data.senders}
+        renderItem={(sender) => <PendingSenderCard sender={sender} client={client} />}
+        keyExtractor={(sender) => sender.sender}
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={() => {}}
+        emptyState={<EmptyState />}
+      />
     );
   }
-
-  const pendingList = list;
 
   return (
     <AppShell
       title="The Screener"
       description="New senders end up here. Decide if they get in."
       actions={
-        <div className="flex items-center gap-4">
-          <Link
-            to="/screened-out"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-secondary hover:text-ink-primary"
-          >
-            <ShieldOff size={14} />
+        <Button asChild variant="outline" size="sm">
+          <Link to="/screened-out">
+            <ShieldOff data-icon="inline-start" aria-hidden="true" />
             Screened Out
           </Link>
-        </div>
+        </Button>
       }
-      list={pendingList}
+      list={list}
     />
   );
 }

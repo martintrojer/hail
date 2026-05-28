@@ -7,11 +7,12 @@ import {
 } from '../api/client';
 import { useDeleteDraftMutation, useDraftsView } from '../api/query';
 import { ActionableList } from '../components/ActionableList';
-import { Trash2, iconSizeProps } from '../components/icons';
+import { Trash2 } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { ErrorState } from '../components/ErrorState';
 import { StateCard } from '../components/StateCard';
 import { MailRow } from '../components/MailRow';
+import { Button } from '../components/ui/button';
 import { AppShell } from '../layout/AppShell';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
@@ -27,7 +28,7 @@ function DeleteDraftButton({ draftId, client }: { draftId: string; client: HailA
   const deleteDraft = useDeleteDraftMutation(client);
 
   return (
-    <button
+    <Button
       type="button"
       onClick={(event) => {
         event.preventDefault();
@@ -35,12 +36,13 @@ function DeleteDraftButton({ draftId, client }: { draftId: string; client: HailA
         deleteDraft.mutate(draftId);
       }}
       disabled={deleteDraft.isPending}
-      className="rounded-full p-2 text-ink-tertiary focus-ring outline-none hover:bg-bg-hover hover:text-accent-red disabled:cursor-not-allowed disabled:opacity-60"
+      variant="ghost"
+      size="icon-sm"
       aria-label="Delete draft"
       title={deleteDraft.error ? actionErrorMessage(deleteDraft.error) : 'Delete draft'}
     >
-      <Trash2 {...iconSizeProps.sm} aria-hidden="true" />
-    </button>
+      <Trash2 aria-hidden="true" />
+    </Button>
   );
 }
 
