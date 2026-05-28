@@ -18,6 +18,16 @@ import {
 } from '../test-utils';
 import { WorkflowsPage } from './WorkflowsPage';
 
+if (!HTMLElement.prototype.hasPointerCapture) {
+  HTMLElement.prototype.hasPointerCapture = () => false;
+}
+if (!HTMLElement.prototype.setPointerCapture) {
+  HTMLElement.prototype.setPointerCapture = () => undefined;
+}
+if (!HTMLElement.prototype.scrollIntoView) {
+  HTMLElement.prototype.scrollIntoView = () => undefined;
+}
+
 class WorkflowsTestClient extends TestHailApiClient {
   readonly createCalls: WorkflowRulePayload[] = [];
   readonly updateCalls: Array<{ id: number; body: WorkflowRulePayload }> = [];
@@ -138,9 +148,12 @@ describe('WorkflowsPage', () => {
     fireEvent.change(screen.getByLabelText('Condition 1 value'), {
       target: { value: 'vip@example.com' },
     });
-    fireEvent.change(screen.getByLabelText('Route to'), {
-      target: { value: 'imbox' },
+    fireEvent.pointerDown(screen.getByLabelText('Route to'), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
     });
+    fireEvent.click(await screen.findByRole('option', { name: 'Imbox' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create workflow' }));
 
     await waitFor(() => expect(client.createCalls).toHaveLength(1));

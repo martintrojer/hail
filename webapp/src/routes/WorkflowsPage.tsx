@@ -18,8 +18,37 @@ import {
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
+import { Checkbox } from '../components/ui/checkbox';
+import {
+  Field,
+  FieldContent,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+  FieldLegend,
+} from '../components/ui/field';
+import { Input } from '../components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
+import { Textarea } from '../components/ui/textarea';
 import { AppShell } from '../layout/AppShell';
-import { pillButtonClass } from '../lib/buttonStyles';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
@@ -62,6 +91,7 @@ const conditionOps = Object.keys(opLabels) as WorkflowConditionOp[];
 const classifications = Object.keys(
   classificationLabels,
 ) as MailClassification[];
+const NO_ROUTE_VALUE = 'none';
 let nextConditionId = 0;
 
 function newCondition(condition?: WorkflowCondition): ConditionDraft {
@@ -130,21 +160,21 @@ function actionSummary(action: WorkflowAction) {
 
 function WorkflowsIntro({ count }: { count: number }) {
   return (
-    <section className="rounded-2xl border border-border-subtle bg-bg-surface p-5 shadow-sm shadow-ink-primary/5">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink-tertiary">
-        Workflows
-      </p>
-      <h2 className="mt-2 text-xl font-semibold text-ink-primary">
-        Teach hail how to sort recurring mail.
-      </h2>
-      <p className="mt-2 max-w-3xl text-sm leading-6 text-ink-secondary">
-        Build simple mail rules from header conditions. When a message matches,
-        hail can route it to a mailbox, apply a label, or prepare an auto-reply.
-      </p>
-      <p className="mt-4 text-sm font-medium text-ink-primary">
-        {count} {count === 1 ? 'rule' : 'rules'} configured
-      </p>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardDescription>Workflows</CardDescription>
+        <CardTitle>Teach hail how to sort recurring mail.</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+          Build simple mail rules from header conditions. When a message matches,
+          hail can route it to a mailbox, apply a label, or prepare an auto-reply.
+        </p>
+        <Badge variant="outline" className="w-fit">
+          {count} {count === 1 ? 'rule' : 'rules'} configured
+        </Badge>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -162,50 +192,43 @@ function WorkflowRuleCard({
   onDelete: () => void;
 }) {
   return (
-    <article
-      className={`rounded-2xl border bg-bg-surface p-4 shadow-sm shadow-ink-primary/5 transition ${selected ? 'border-accent-blue' : 'border-border-subtle hover:border-border-menu'}`}
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-lg font-semibold text-ink-primary">
-              {rule.name}
-            </h3>
-            <span
-              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${rule.enabled ? 'bg-bg-selected text-accent-blue' : 'border border-border-menu text-ink-tertiary'}`}
+    <Card className={selected ? 'ring-primary/40' : undefined}>
+      <CardHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle>{rule.name}</CardTitle>
+          <Badge variant={rule.enabled ? 'secondary' : 'outline'}>
+            {rule.enabled ? 'On' : 'Off'}
+          </Badge>
+        </div>
+        <CardDescription>
+          If {rule.conditions.map(describeCondition).join(' and ')}
+        </CardDescription>
+        <CardAction>
+          <div className="flex shrink-0 gap-2">
+            <Button type="button" onClick={onEdit} variant="outline" size="sm">
+              Edit
+            </Button>
+            <Button
+              type="button"
+              onClick={onDelete}
+              disabled={deleting}
+              variant="destructive"
+              size="sm"
             >
-              {rule.enabled ? 'On' : 'Off'}
-            </span>
+              {deleting ? 'Deleting…' : 'Delete'}
+            </Button>
           </div>
-          <p className="mt-2 text-sm text-ink-secondary">
-            If {rule.conditions.map(describeCondition).join(' and ')}
-          </p>
-          <p className="mt-1 text-sm font-medium text-ink-primary">
-            Then {actionSummary(rule.action)}
-          </p>
-          <p className="mt-3 text-xs text-ink-tertiary">
-            Updated {formatDateTime(rule.updated_at)}
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={onEdit}
-            className={pillButtonClass('outline', 'md')}
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            disabled={deleting}
-            className={pillButtonClass('danger', 'md')}
-          >
-            {deleting ? 'Deleting…' : 'Delete'}
-          </button>
-        </div>
-      </div>
-    </article>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        <p className="text-sm font-medium">
+          Then {actionSummary(rule.action)}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Updated {formatDateTime(rule.updated_at)}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -250,236 +273,232 @@ function WorkflowForm({
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      className="rounded-2xl border border-border-subtle bg-bg-surface p-5 shadow-sm shadow-ink-primary/5"
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink-tertiary">
-            Rule builder
-          </p>
-          <h2 className="mt-2 text-xl font-semibold text-ink-primary">
-            {editing ? 'Edit workflow' : 'Create workflow'}
-          </h2>
-        </div>
-        {editing ? (
-          <button
-            type="button"
-            onClick={onReset}
-            className={pillButtonClass('ghost', 'md')}
-          >
-            New rule
-          </button>
-        ) : null}
-      </div>
-
-      <div className="mt-5 grid gap-4">
-        <label
-          className="block text-sm font-medium text-ink-secondary"
-          htmlFor="workflow-name"
-        >
-          Name
-          <input
-            id="workflow-name"
-            value={form.name}
-            onChange={(event) => setForm({ ...form, name: event.target.value })}
-            required
-            placeholder="Receipts to Paper Trail"
-            className="mt-2 w-full rounded-lg border border-border-menu bg-bg-page px-3 py-2 text-ink-primary outline-none ring-accent-blue transition placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2"
-          />
-        </label>
-
-        <label className="flex items-center gap-3 text-sm font-medium text-ink-secondary">
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            onChange={(event) =>
-              setForm({ ...form, enabled: event.target.checked })
-            }
-            className="h-4 w-4 rounded border-border-menu accent-accent-blue"
-          />
-          Enabled
-        </label>
-
-        <section className="rounded-xl border border-border-hairline bg-bg-page/60 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="font-semibold text-ink-primary">Conditions</h3>
-            <button
-              type="button"
-              onClick={() =>
-                setForm({
-                  ...form,
-                  conditions: [...form.conditions, newCondition()],
-                })
-              }
-              className={pillButtonClass('outline', 'sm')}
-            >
-              Add condition
-            </button>
-          </div>
-          <div className="mt-4 space-y-3">
-            {form.conditions.map((condition, index) => (
-              <div
-                key={condition.id}
-                className="grid gap-2 sm:grid-cols-[1fr_1fr_minmax(0,2fr)_auto] sm:items-end"
-              >
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-tertiary">
-                  Field
-                  <select
-                    value={condition.field}
-                    onChange={(event) =>
-                      updateCondition(condition.id, {
-                        field: event.target.value as WorkflowConditionField,
-                      })
-                    }
-                    className="mt-1 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-sm text-ink-primary outline-none focus:border-accent-blue focus:ring-2 focus:ring-accent-blue"
-                    aria-label={`Condition ${index + 1} field`}
-                  >
-                    {conditionFields.map((field) => (
-                      <option key={field} value={field}>
-                        {fieldLabels[field]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-tertiary">
-                  Match
-                  <select
-                    value={condition.op}
-                    onChange={(event) =>
-                      updateCondition(condition.id, {
-                        op: event.target.value as WorkflowConditionOp,
-                      })
-                    }
-                    className="mt-1 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-sm text-ink-primary outline-none focus:border-accent-blue focus:ring-2 focus:ring-accent-blue"
-                    aria-label={`Condition ${index + 1} operator`}
-                  >
-                    {conditionOps.map((op) => (
-                      <option key={op} value={op}>
-                        {opLabels[op]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-tertiary">
-                  Value
-                  <input
-                    value={condition.value}
-                    onChange={(event) =>
-                      updateCondition(condition.id, {
-                        value: event.target.value,
-                      })
-                    }
-                    required
-                    placeholder="billing@example.com"
-                    className="mt-1 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-sm text-ink-primary outline-none placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2 focus:ring-accent-blue"
-                    aria-label={`Condition ${index + 1} value`}
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => removeCondition(condition.id)}
-                  disabled={form.conditions.length === 1}
-                  className={pillButtonClass('ghost', 'sm')}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-xl border border-border-hairline bg-bg-page/60 p-4">
-          <h3 className="font-semibold text-ink-primary">Actions</h3>
-          <div className="mt-4 grid gap-4">
-            <label
-              className="block text-sm font-medium text-ink-secondary"
-              htmlFor="workflow-classify"
-            >
-              Route to
-              <select
-                id="workflow-classify"
-                value={form.classifyAs}
-                onChange={(event) =>
-                  setForm({
-                    ...form,
-                    classifyAs: event.target.value as MailClassification | '',
-                  })
-                }
-                className="mt-2 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-ink-primary outline-none focus:border-accent-blue focus:ring-2 focus:ring-accent-blue"
-              >
-                <option value="">Do not route</option>
-                {classifications.map((classification) => (
-                  <option key={classification} value={classification}>
-                    {classificationLabels[classification]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label
-              className="block text-sm font-medium text-ink-secondary"
-              htmlFor="workflow-label"
-            >
-              Add label
-              <input
-                id="workflow-label"
-                value={form.addLabel}
-                onChange={(event) =>
-                  setForm({ ...form, addLabel: event.target.value })
-                }
-                placeholder="Receipts"
-                className="mt-2 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-ink-primary outline-none placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2 focus:ring-accent-blue"
-              />
-            </label>
-            <label
-              className="block text-sm font-medium text-ink-secondary"
-              htmlFor="workflow-auto-reply"
-            >
-              Auto-reply text
-              <textarea
-                id="workflow-auto-reply"
-                value={form.autoReply}
-                onChange={(event) =>
-                  setForm({ ...form, autoReply: event.target.value })
-                }
-                placeholder="Thanks — I got this and will reply soon."
-                rows={4}
-                className="mt-2 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-ink-primary outline-none placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2 focus:ring-accent-blue"
-              />
-            </label>
-          </div>
-          {!hasAction ? (
-            <p className="mt-3 text-sm text-accent-red" role="alert">
-              Choose at least one action before saving.
-            </p>
+    <Card>
+      <form onSubmit={onSubmit}>
+        <CardHeader>
+          <CardDescription>Rule builder</CardDescription>
+          <CardTitle>{editing ? 'Edit workflow' : 'Create workflow'}</CardTitle>
+          {editing ? (
+            <CardAction>
+              <Button type="button" onClick={onReset} variant="ghost" size="sm">
+                New rule
+              </Button>
+            </CardAction>
           ) : null}
-        </section>
+        </CardHeader>
 
-        {error ? (
-          <p
-            role="alert"
-            className="rounded-lg border border-red-800 bg-red-950/70 px-3 py-2 text-sm text-red-100"
-          >
-            {actionErrorMessage(
-              error,
-              editing ? 'Update workflow' : 'Create workflow',
-            )}
-          </p>
-        ) : null}
+        <CardContent>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="workflow-name">Name</FieldLabel>
+              <Input
+                id="workflow-name"
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                required
+                placeholder="Receipts to Paper Trail"
+              />
+            </Field>
 
-        <button
-          type="submit"
-          disabled={saving || !hasAction}
-          className="rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {saving ? 'Saving…' : editing ? 'Save workflow' : 'Create workflow'}
-        </button>
-      </div>
-    </form>
+            <Field orientation="horizontal" data-disabled={saving ? true : undefined}>
+              <Checkbox
+                id="workflow-enabled"
+                checked={form.enabled}
+                onCheckedChange={(checked) =>
+                  setForm({ ...form, enabled: checked === true })
+                }
+                disabled={saving}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="workflow-enabled">Enabled</FieldLabel>
+              </FieldContent>
+            </Field>
+
+            <FieldSet className="rounded-lg border border-border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <FieldLegend>Conditions</FieldLegend>
+                <Button
+                  type="button"
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      conditions: [...form.conditions, newCondition()],
+                    })
+                  }
+                  variant="outline"
+                  size="sm"
+                >
+                  Add condition
+                </Button>
+              </div>
+              <div className="flex flex-col gap-3">
+                {form.conditions.map((condition, index) => (
+                  <div
+                    key={condition.id}
+                    className="grid gap-2 sm:grid-cols-[1fr_1fr_minmax(0,2fr)_auto] sm:items-end"
+                  >
+                    <Field>
+                      <FieldLabel>Field</FieldLabel>
+                      <Select
+                        value={condition.field}
+                        onValueChange={(value) =>
+                          updateCondition(condition.id, {
+                            field: value as WorkflowConditionField,
+                          })
+                        }
+                      >
+                        <SelectTrigger aria-label={`Condition ${index + 1} field`} className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {conditionFields.map((field) => (
+                              <SelectItem key={field} value={field}>
+                                {fieldLabels[field]}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field>
+                      <FieldLabel>Match</FieldLabel>
+                      <Select
+                        value={condition.op}
+                        onValueChange={(value) =>
+                          updateCondition(condition.id, {
+                            op: value as WorkflowConditionOp,
+                          })
+                        }
+                      >
+                        <SelectTrigger aria-label={`Condition ${index + 1} operator`} className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {conditionOps.map((op) => (
+                              <SelectItem key={op} value={op}>
+                                {opLabels[op]}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor={`${condition.id}-value`}>Value</FieldLabel>
+                      <Input
+                        id={`${condition.id}-value`}
+                        value={condition.value}
+                        onChange={(event) =>
+                          updateCondition(condition.id, {
+                            value: event.target.value,
+                          })
+                        }
+                        required
+                        placeholder="billing@example.com"
+                        aria-label={`Condition ${index + 1} value`}
+                      />
+                    </Field>
+                    <Button
+                      type="button"
+                      onClick={() => removeCondition(condition.id)}
+                      disabled={form.conditions.length === 1}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </FieldSet>
+
+            <FieldSet className="rounded-lg border border-border p-4">
+              <FieldLegend>Actions</FieldLegend>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel>Route to</FieldLabel>
+                  <Select
+                    value={form.classifyAs || NO_ROUTE_VALUE}
+                    onValueChange={(value) =>
+                      setForm({
+                        ...form,
+                        classifyAs:
+                          value === NO_ROUTE_VALUE
+                            ? ''
+                            : (value as MailClassification),
+                      })
+                    }
+                  >
+                    <SelectTrigger aria-label="Route to" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={NO_ROUTE_VALUE}>Do not route</SelectItem>
+                        {classifications.map((classification) => (
+                          <SelectItem key={classification} value={classification}>
+                            {classificationLabels[classification]}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="workflow-label">Add label</FieldLabel>
+                  <Input
+                    id="workflow-label"
+                    value={form.addLabel}
+                    onChange={(event) =>
+                      setForm({ ...form, addLabel: event.target.value })
+                    }
+                    placeholder="Receipts"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="workflow-auto-reply">Auto-reply text</FieldLabel>
+                  <Textarea
+                    id="workflow-auto-reply"
+                    value={form.autoReply}
+                    onChange={(event) =>
+                      setForm({ ...form, autoReply: event.target.value })
+                    }
+                    placeholder="Thanks — I got this and will reply soon."
+                    rows={4}
+                  />
+                </Field>
+              </FieldGroup>
+              {!hasAction ? (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    Choose at least one action before saving.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </FieldSet>
+
+            {error ? (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {actionErrorMessage(
+                    error,
+                    editing ? 'Update workflow' : 'Create workflow',
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            <Button type="submit" disabled={saving || !hasAction}>
+              {saving ? 'Saving…' : editing ? 'Save workflow' : 'Create workflow'}
+            </Button>
+          </FieldGroup>
+        </CardContent>
+      </form>
+    </Card>
   );
 }
-
 export function WorkflowsPage({ client }: WorkflowsPageProps) {
   const query = useWorkflows(client);
   const createWorkflow = useCreateWorkflowMutation(client);
@@ -547,20 +566,19 @@ export function WorkflowsPage({ client }: WorkflowsPageProps) {
     );
   } else {
     list = (
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         <WorkflowsIntro count={rules.length} />
         {notice ? (
-          <p className="rounded-lg border border-border-subtle bg-bg-selected px-3 py-2 text-sm font-medium text-ink-primary">
-            {notice}
-          </p>
+          <Alert>
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
         ) : null}
         {deleteWorkflow.error ? (
-          <p
-            role="alert"
-            className="rounded-lg border border-red-800 bg-red-950/70 px-3 py-2 text-sm text-red-100"
-          >
-            {actionErrorMessage(deleteWorkflow.error, 'Delete workflow')}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription>
+              {actionErrorMessage(deleteWorkflow.error, 'Delete workflow')}
+            </AlertDescription>
+          </Alert>
         ) : null}
         {rules.length === 0 ? (
           <StateCard
@@ -568,7 +586,7 @@ export function WorkflowsPage({ client }: WorkflowsPageProps) {
             body="Create your first rule to route recurring mail automatically."
           />
         ) : (
-          <div className="space-y-3">
+          <div className="flex flex-col gap-3">
             {rules.map((rule) => (
               <WorkflowRuleCard
                 key={rule.id}
