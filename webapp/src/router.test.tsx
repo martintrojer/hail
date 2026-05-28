@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   LoginRequest,
@@ -144,6 +144,24 @@ beforeEach(() => {
       return jsonResponse({
         labels: [
           {
+            id: 41,
+            name: 'Family',
+            leaf_name: 'Family',
+            path_segments: ['Family'],
+            source: 'manual',
+            color: null,
+            thread_count: 1,
+          },
+          {
+            id: 40,
+            name: 'Work',
+            leaf_name: 'Work',
+            path_segments: ['Work'],
+            source: 'manual',
+            color: null,
+            thread_count: 3,
+          },
+          {
             id: 42,
             name: 'Work/Receipts',
             leaf_name: 'Receipts',
@@ -282,18 +300,26 @@ describe('SPA auth/router flows', () => {
     expect(screen.queryByRole('link', { name: /allowed senders/i })).not.toBeInTheDocument();
   });
 
-  it('shows live labels in the sidebar and links to label mail views', async () => {
+  it('shows live labels in the sidebar as a nested tree and links to label mail views', async () => {
     api.user = adminUser;
 
     renderRouterAt('/imbox');
 
     const manageLabels = await screen.findByRole('link', { name: 'Manage labels' });
     expect(manageLabels).toHaveAttribute('href', '/labels');
-    const receiptsLinks = await screen.findAllByRole('link', { name: /Work \/ Receipts/ });
-    const sidebarReceiptsLink = receiptsLinks.find(
-      (link) => link.getAttribute('href') === '/labels/42',
-    );
-    expect(sidebarReceiptsLink).toBeInTheDocument();
+    expect(await screen.findByText('All labels')).toBeInTheDocument();
+    const allLabelsTree = screen.getByRole('list', { name: 'All labels' });
+    const sidebarLinks = within(allLabelsTree).getAllByRole('link');
+    expect(sidebarLinks.map((link) => link.textContent)).toEqual([
+      'Family1',
+      'Work3',
+      'Work / Receipts',
+    ]);
+
+    const sidebarReceiptsLink = within(allLabelsTree).getByRole('link', {
+      name: /Work \/ Receipts/,
+    });
+    expect(sidebarReceiptsLink).toHaveAttribute('href', '/labels/42');
     expect(sidebarReceiptsLink).toHaveAttribute('title', 'Work/Receipts · 0 threads');
     expect(
       fetchMock.mock.calls.some(
