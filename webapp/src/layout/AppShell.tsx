@@ -1,7 +1,8 @@
 import { Link, useLocation, useNavigate } from '@tanstack/react-router';
-import { type ComponentType, type ReactNode, useState } from 'react';
-import type { ViewCountsResponse } from '../api/client';
-import { useViewCounts } from '../api/query';
+import { type ComponentType, type ReactNode, useMemo, useState } from 'react';
+import type { LabelResponse, ViewCountsResponse } from '../api/client';
+import { useApiClient } from '../api/ApiClientProvider';
+import { useLabels, useViewCounts } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
 import { KeyboardShortcutHelp } from '../components/KeyboardShortcutHelp';
 import {
@@ -415,18 +416,66 @@ function SidebarNavGroup({
   );
 }
 
-function LabelsNavPlaceholder() {
+function labelSegments(label: LabelResponse) {
+  const segments = label.path_segments.length > 0 ? label.path_segments : label.name.split('/');
+  return segments.map((segment) => segment.trim()).filter(Boolean);
+}
+
+function labelDisplayPath(label: LabelResponse) {
+  const segments = labelSegments(label);
+  return segments.length > 0 ? segments.join(' / ') : label.name;
+}
+
+function labelDepth(label: LabelResponse) {
+  return Math.max(labelSegments(label).length - 1, 0);
+}
+
+function sortLabelsForNav(labels: LabelResponse[]) {
+  return [...labels].sort((left, right) => {
+    const leftSegments = labelSegments(left).map((segment) => segment.toLocaleLowerCase());
+    const rightSegments = labelSegments(right).map((segment) => segment.toLocaleLowerCase());
+    const length = Math.max(leftSegments.length, rightSegments.length);
+
+    for (let index = 0; index < length; index += 1) {
+      const leftSegment = leftSegments[index];
+      const rightSegment = rightSegments[index];
+
+      if (leftSegment === undefined) {
+        return -1;
+      }
+      if (rightSegment === undefined) {
+        return 1;
+      }
+      const segmentOrder = leftSegment.localeCompare(rightSegment);
+      if (segmentOrder !== 0) {
+        return segmentOrder;
+      }
+    }
+
+    return left.id - right.id;
+  });
+}
+
+function LabelsNav({ activePath }: { activePath: string }) {
+  const apiClient = useApiClient();
+  const labelsQuery = useLabels(apiClient);
+  const labels = useMemo(
+    () => sortLabelsForNav(labelsQuery.data?.labels ?? []),
+    [labelsQuery.data?.labels],
+  );
+
   return (
     <SidebarGroup>
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
             asChild
+            isActive={activePath === '/labels'}
             tooltip={{
               children: (
                 <div className="flex max-w-64 flex-col gap-1 text-left">
                   <span className="font-medium">Labels</span>
-                  <span className="text-xs opacity-85">Browse and filter mail by labels.</span>
+                  <span className="text-xs opacity-85">Manage local thread labels.</span>
                 </div>
               ),
               hidden: false,
@@ -434,7 +483,7 @@ function LabelsNavPlaceholder() {
           >
             <Link to="/labels">
               <Tags />
-              <span>Labels</span>
+              <span>Manage labels</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -444,18 +493,55 @@ function LabelsNavPlaceholder() {
           <CollapsibleTrigger className="group/labels flex w-full items-center gap-2">
             <FolderOpen />
             <span>All labels</span>
-            <ChevronDown className="ml-auto transition-transform group-data-[state=open]/labels:rotate-180" />
+            {labels.length > 0 ? (
+              <Badge variant="secondary" className="ml-auto h-5 min-w-5 px-1 text-[0.7rem] tabular-nums">
+                {labels.length}
+              </Badge>
+            ) : null}
+            <ChevronDown className="transition-transform group-data-[state=open]/labels:rotate-180" />
           </CollapsibleTrigger>
         </SidebarGroupLabel>
         <CollapsibleContent>
-          <SidebarMenuSub>
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton asChild>
-                <Link to="/search" search={{}}>
-                  <span>Uncategorized</span>
-                </Link>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
+          <SidebarMenuSub aria-label="All labels">
+            {labelsQuery.isPending ? (
+              <SidebarMenuSubItem>
+                <span className="block px-2 py-1 text-xs text-muted-foreground">Loading labels…</span>
+              </SidebarMenuSubItem>
+            ) : labels.length === 0 ? (
+              <SidebarMenuSubItem>
+                <span className="block px-2 py-1 text-xs text-muted-foreground">No labels yet</span>
+              </SidebarMenuSubItem>
+            ) : (
+              labels.map((label) => {
+                const path = labelDisplayPath(label);
+                const isActive = activePath === `/labels/${label.id}`;
+
+                return (
+                  <SidebarMenuSubItem key={label.id}>
+                    <SidebarMenuSubButton
+                      asChild
+                      isActive={isActive}
+                      title={`${label.name} · ${label.thread_count} ${label.thread_count === 1 ? 'thread' : 'threads'}`}
+                      className="h-auto min-h-7"
+                    >
+                      <Link to="/labels/$labelId" params={{ labelId: String(label.id) }}>
+                        <span
+                          className="min-w-0 truncate"
+                          style={{ paddingLeft: `${labelDepth(label) * 0.75}rem` }}
+                        >
+                          {path}
+                        </span>
+                        {label.thread_count > 0 ? (
+                          <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                            {label.thread_count}
+                          </span>
+                        ) : null}
+                      </Link>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                );
+              })
+            )}
           </SidebarMenuSub>
         </CollapsibleContent>
       </Collapsible>
@@ -503,7 +589,7 @@ function AppSidebar({
         <SidebarNavGroup label="Mail" items={primaryNavItems} activePath={activePath} counts={counts} />
         <SidebarNavGroup label="Pile" items={pileNavItems} activePath={activePath} counts={counts} />
         <SidebarNavGroup label="Folders" items={mailboxNavItems} activePath={activePath} counts={counts} />
-        <LabelsNavPlaceholder />
+        <LabelsNav activePath={activePath} />
         <SidebarNavGroup label="Tools" items={workflowNavItems} activePath={activePath} counts={counts} />
       </SidebarContent>
 
