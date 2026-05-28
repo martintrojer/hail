@@ -28,6 +28,7 @@ import {
   iconSizeProps,
 } from '../components/icons';
 import { LabelChips } from '../components/LabelChips';
+import { ThreadLabelPicker } from '../components/ThreadLabelPicker';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { MessageActionPopup } from '../components/MessageActionPopup';
@@ -367,7 +368,13 @@ function MessageCard({
   );
 }
 
-function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
+function ThreadHeader({
+  thread,
+  client,
+}: {
+  thread: ThreadViewResponse;
+  client: HailApiClient;
+}) {
   const sender = primarySender(thread);
   const firstMessage = sortedMessages(thread.messages)[0];
 
@@ -392,7 +399,14 @@ function ThreadHeader({ thread }: { thread: ThreadViewResponse }) {
           </>
         ) : null}
       </p>
-      <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1" />
+      <div className="flex flex-wrap items-center gap-2">
+        <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1" />
+        <ThreadLabelPicker
+          threadId={thread.thread_id}
+          assignedLabels={thread.labels}
+          client={client}
+        />
+      </div>
       {thread.messages.length === 0 ? (
         <p className="sr-only">0 messages with Unknown</p>
       ) : null}
@@ -693,7 +707,7 @@ function ThreadDocument({
         Back
       </button>
 
-      <ThreadHeader thread={thread} />
+      <ThreadHeader thread={thread} client={client} />
 
       {actionError ? (
         <p role="alert" className="rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">
