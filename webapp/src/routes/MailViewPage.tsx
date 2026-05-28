@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/utils';
 import {
+  type FeedBlockedTracker,
   type HailApiClient,
   type MailViewItem,
   type MailViewKind,
@@ -72,6 +73,200 @@ function useMailView(view: MailViewKind, client?: HailApiClient) {
 
 function classificationLabel(classification: string) {
   return (viewLabels as Record<string, string>)[classification] ?? classification;
+}
+
+const FEED_COLLAPSED_MAX_HEIGHT = 420;
+
+function useFeedSeenObserver({
+  items,
+  client,
+}: {
+  items: MailViewItem[];
+  client: HailApiClient;
+}) {
+  const markedRef = useRef<Set<string>>(new Set());
+  const elementsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const [errors, setErrors] = useState<Record<string, Error>>({});
+
+  useEffect(() => {
+    markedRef.current = new Set(
+      [...markedRef.current].filter((threadId) =>
+        items.some((item) => item.thread_id === threadId),
+      ),
+    );
+  }, [items]);
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting || entry.boundingClientRect.bottom > 0) {
+            continue;
+          }
+          const threadId = (entry.target as HTMLElement).dataset.hailFeedThreadId;
+          if (!threadId || markedRef.current.has(threadId)) {
+            continue;
+          }
+          markedRef.current.add(threadId);
+          void client.markThread(threadId, true).catch((error: Error) => {
+            markedRef.current.delete(threadId);
+            setErrors((current) => ({ ...current, [threadId]: error }));
+          });
+        }
+      },
+      { threshold: 0 },
+    );
+
+    for (const element of elementsRef.current.values()) {
+      observer.observe(element);
+    }
+
+    return () => observer.disconnect();
+  }, [client, items]);
+
+  function register(threadId: string) {
+    return (element: HTMLElement | null) => {
+      if (element) {
+        elementsRef.current.set(threadId, element);
+      } else {
+        elementsRef.current.delete(threadId);
+      }
+    };
+  }
+
+  return { errors, register };
+}
+
+function TrackerSummary({ trackers }: { trackers: FeedBlockedTracker[] }) {
+  if (trackers.length === 0) {
+    return null;
+  }
+
+  return (
+    <span
+      className="rounded-full bg-bg-banner px-2 py-0.5 text-xs font-semibold text-ink-secondary"
+      title={trackers.map((tracker) => tracker.reason).join('\n')}
+    >
+      {trackers.length} tracker{trackers.length === 1 ? '' : 's'} blocked
+    </span>
+  );
+}
+
+function isLongFeedHtml(html: string) {
+  return html.length > 1200;
+}
+
+function FeedCard({
+  item,
+  register,
+  markError,
+}: {
+  item: MailViewItem;
+  register: (threadId: string) => (element: HTMLElement | null) => void;
+  markError?: Error;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const feedHtml = item.feed_html?.trim() || '';
+  const trackers = item.feed_blocked_trackers ?? [];
+  const shouldClamp = isLongFeedHtml(feedHtml);
+  const clamped = shouldClamp && !expanded;
+
+  return (
+    <article
+      ref={register(item.thread_id)}
+      data-hail-feed-thread-id={item.thread_id}
+      className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6"
+    >
+      <header className="space-y-3 border-b border-border-hairline pb-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-ink-secondary">
+              {item.from || 'Unknown sender'}
+            </p>
+            <h2 className="mt-1 text-xl font-bold leading-tight tracking-tight text-ink-primary">
+              <ThreadLink
+                threadId={item.thread_id}
+                className="focus-ring rounded-sm outline-none hover:text-accent-blue"
+                ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
+              >
+                {item.subject || '(no subject)'}
+              </ThreadLink>
+            </h2>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            {item.unread ? <Badge>New</Badge> : null}
+            <TrackerSummary trackers={trackers} />
+          </div>
+        </div>
+        <ScreenReaderThreadMetadata item={item} />
+      </header>
+
+      {feedHtml.length > 0 ? (
+        <div className="relative mt-5">
+          <div
+            className={cn(
+              'max-w-none overflow-hidden text-base leading-relaxed text-ink-primary [&_a]:text-accent-blue [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border-hairline [&_blockquote]:pl-4 [&_blockquote]:text-ink-secondary [&_code]:rounded [&_code]:bg-bg-hover [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top',
+              clamped && 'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-20 after:bg-gradient-to-b after:from-transparent after:to-card',
+            )}
+            style={clamped ? { maxHeight: FEED_COLLAPSED_MAX_HEIGHT } : undefined}
+            // Server owns the mail-render trust boundary for Feed excerpts: hail-api
+            // strips quoted history, blocks remote images/trackers, and sanitizes HTML.
+            dangerouslySetInnerHTML={{ __html: feedHtml }}
+          />
+          {clamped ? (
+            <div className="mt-4 flex justify-center">
+              <Button type="button" variant="outline" onClick={() => setExpanded(true)}>
+                Show more
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-5 whitespace-pre-wrap text-base leading-relaxed text-ink-primary">
+          {item.preview || 'This message has no renderable body.'}
+        </p>
+      )}
+
+      {markError ? (
+        <p role="alert" className="mt-4 text-sm text-destructive">
+          {actionErrorMessage(markError, 'Mark read')}
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function FeedReadingStream({
+  items,
+  client,
+  emptyState,
+}: {
+  items: MailViewItem[];
+  client: HailApiClient;
+  emptyState: { title: string; body: string };
+}) {
+  const { errors, register } = useFeedSeenObserver({ items, client });
+
+  if (items.length === 0) {
+    return <StateCard title={emptyState.title} body={emptyState.body} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      {items.map((item) => (
+        <FeedCard
+          key={item.thread_id}
+          item={item}
+          register={register}
+          markError={errors[item.thread_id]}
+        />
+      ))}
+    </div>
+  );
 }
 
 function MailListRow({
@@ -630,6 +825,12 @@ export function MailViewPage({
             onStartPowerThrough={startPowerThrough}
             onPowerThroughAction={handlePowerThroughAction}
             onExitPowerThrough={exitPowerThrough}
+          />
+        ) : view === 'feed' ? (
+          <FeedReadingStream
+            items={getFlatViewItems(query.data)}
+            client={apiClient}
+            emptyState={emptyState}
           />
         ) : (
           <ActionableList

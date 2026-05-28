@@ -1,7 +1,7 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   ImboxSectionedResponse,
   LabelItemResponse,
@@ -255,6 +255,8 @@ function mailItem(
     classification,
     has_notes: false,
     labels: [],
+    feed_html: null,
+    feed_blocked_trackers: null,
     ...overrides,
   };
 }
@@ -264,6 +266,10 @@ function mailViewResponse(
   items: MailViewResponse['items'] = [mailItem(classification)],
 ): MailViewResponse {
   return { items, next_cursor: null };
+}
+
+function longHtml() {
+  return `<p>${'Long newsletter section. '.repeat(80)}</p>`;
 }
 
 function response(status: number, body: unknown = {}) {
@@ -421,12 +427,110 @@ describe('MailViewPage', () => {
     });
     expect(client.calls).toEqual(['feed']);
     expect(link).toHaveAttribute('href', '/thread/feed-thread');
-    expect(within(link).getByText('Feed')).toBeInTheDocument();
-    expect(within(link).getByText('New')).toBeInTheDocument();
+    expect(screen.getAllByText('Feed').length).toBeGreaterThan(0);
+    expect(screen.getByText('New')).toBeInTheDocument();
     expect(screen.getByLabelText('Unread thread')).toBeInTheDocument();
     expect(
-      within(link).getByText('Links worth reading this weekend.'),
+      screen.getByText('Links worth reading this weekend.'),
     ).toBeInTheDocument();
+  });
+
+  it('renders Feed as large sanitized reading cards with show more controls', async () => {
+    renderMailView(
+      'feed',
+      new MailViewPageTestClient({
+        feed: Promise.resolve(
+          mailViewResponse('feed', [
+            mailItem('feed', {
+              thread_id: 'feed-reader-thread',
+              from: 'Daily Newsletter',
+              subject: 'Today in self-hosting',
+              preview: 'Fallback summary.',
+              feed_html: longHtml(),
+              feed_blocked_trackers: [
+                { src: 'https://tracker.example/open.gif', reason: 'remote image blocked by default' },
+              ],
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    expect(await screen.findByText('Today in self-hosting')).toBeInTheDocument();
+    expect(screen.getByText(/Long newsletter section/)).toBeInTheDocument();
+    expect(screen.getByText('1 tracker blocked')).toBeInTheDocument();
+    expect(screen.queryByText('Fallback summary.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
+  it('marks Feed cards read after they scroll past the viewport', async () => {
+    const observerInstances: Array<{
+      callback: IntersectionObserverCallback;
+      observed: Element[];
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    const originalObserver = window.IntersectionObserver;
+    window.IntersectionObserver = vi.fn(function MockIntersectionObserver(
+      this: IntersectionObserver,
+      callback: IntersectionObserverCallback,
+    ) {
+      const instance = {
+        callback,
+        observed: [] as Element[],
+        disconnect: vi.fn(),
+      };
+      observerInstances.push(instance);
+      this.observe = (element: Element) => instance.observed.push(element);
+      this.unobserve = vi.fn();
+      this.disconnect = instance.disconnect;
+      this.takeRecords = () => [];
+      Object.defineProperties(this, {
+        root: { value: null },
+        rootMargin: { value: '' },
+        thresholds: { value: [] },
+      });
+    }) as unknown as typeof IntersectionObserver;
+
+    try {
+      const client = renderMailView(
+        'feed',
+        new MailViewPageTestClient({
+          feed: Promise.resolve(
+            mailViewResponse('feed', [
+              mailItem('feed', {
+                thread_id: 'thread-scroll-seen',
+                subject: 'Scroll past me',
+                feed_html: '<p>Readable inline body.</p>',
+              }),
+            ]),
+          ),
+        }),
+      );
+
+      expect(await screen.findByText('Scroll past me')).toBeInTheDocument();
+      await waitFor(() => expect(observerInstances[0]?.observed.length).toBe(1));
+      const target = observerInstances[0].observed[0];
+      observerInstances[0].callback(
+        [
+          {
+            target,
+            isIntersecting: false,
+            boundingClientRect: { bottom: -1 } as DOMRectReadOnly,
+          } as IntersectionObserverEntry,
+        ],
+        {} as IntersectionObserver,
+      );
+
+      await waitFor(() =>
+        expect(client.markThreadCalls).toEqual([
+          { threadId: 'thread-scroll-seen', read: true },
+        ]),
+      );
+    } finally {
+      window.IntersectionObserver = originalObserver;
+    }
   });
 
   it('uses the Paper Trail hook and renders paper trail-specific result details', async () => {

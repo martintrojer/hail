@@ -18,6 +18,9 @@ use axum::extract::{Extension, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
+use hail_core::mail_render::{
+    plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history,
+};
 use hail_core::{HAIL_SPAM_KEYWORD, MailClassification, SPAM_KEYWORD};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -105,11 +108,22 @@ impl MailViewProvider for JmapMailViewProvider {
                 return Ok(Vec::new());
             }
 
+            let mut properties = MAIL_VIEW_PROPERTIES.to_vec();
+            if view == MailView::Feed {
+                properties.extend([
+                    hail_jmap::jmap_client::email::Property::HtmlBody,
+                    hail_jmap::jmap_client::email::Property::TextBody,
+                    hail_jmap::jmap_client::email::Property::BodyValues,
+                ]);
+            }
+
             let mut request = session.client().build();
-            request
-                .get_email()
-                .ids(ids)
-                .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
+            let get_email = request.get_email();
+            get_email.ids(ids).properties(properties);
+            if view == MailView::Feed {
+                get_email.arguments().fetch_html_body_values(true);
+                get_email.arguments().fetch_text_body_values(true);
+            }
             let mut response = request
                 .send_get_email()
                 .await
@@ -124,6 +138,12 @@ impl MailViewProvider for JmapMailViewProvider {
                         .map_err(|err| MailViewError::malformed_email(err.field))?;
                     let email_id = required_jmap_field(email.id(), "id")
                         .map_err(|err| MailViewError::malformed_email(err.field))?;
+
+                    let feed_render = (view == MailView::Feed).then(|| render_feed_body(&email));
+                    let (feed_html, feed_blocked_trackers) = match feed_render {
+                        Some(render) => (Some(render.html), Some(render.blocked_trackers)),
+                        None => (None, None),
+                    };
 
                     Ok(MailViewItem {
                         thread_id,
@@ -141,6 +161,8 @@ impl MailViewProvider for JmapMailViewProvider {
                         classification,
                         has_notes: false,
                         labels: Vec::new(),
+                        feed_html,
+                        feed_blocked_trackers,
                     })
                 })
                 .collect()
@@ -599,6 +621,12 @@ impl MailView {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FeedBlockedTrackerResponse {
+    pub src: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MailViewItem {
     pub thread_id: String,
     pub email_id: String,
@@ -614,6 +642,13 @@ pub struct MailViewItem {
     pub classification: MailViewClassification,
     pub has_notes: bool,
     pub labels: Vec<LabelResponse>,
+    /// Sanitized, tracker-stripped HTML excerpt/body for Feed reader cards.
+    /// Only populated by `/api/views/feed`; compact list views should use `preview`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_html: Option<String>,
+    /// Tracker/remote-image removals observed while rendering `feed_html`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_blocked_trackers: Option<Vec<FeedBlockedTrackerResponse>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -1522,6 +1557,53 @@ fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> 
     from.and_then(|addresses| addresses.first())
         .map(format_address)
         .unwrap_or_default()
+}
+
+struct RenderedFeedBody {
+    html: String,
+    blocked_trackers: Vec<FeedBlockedTrackerResponse>,
+}
+
+fn render_feed_body(email: &hail_jmap::jmap_client::email::Email) -> RenderedFeedBody {
+    let body_html = if let Some(html_body) =
+        body_from_parts(email, email.html_body()).filter(|body| !body.trim().is_empty())
+    {
+        html_body
+    } else {
+        let text = body_from_parts(email, email.text_body()).unwrap_or_default();
+        plaintext_body_to_html(&text)
+    };
+    let stripped = strip_quoted_history(&body_html);
+    let sanitized = sanitize_and_strip_trackers(&stripped.html);
+
+    RenderedFeedBody {
+        html: sanitized.html,
+        blocked_trackers: sanitized
+            .blocked_trackers
+            .into_iter()
+            .map(|tracker| FeedBlockedTrackerResponse {
+                src: tracker.src,
+                reason: tracker.reason,
+            })
+            .collect(),
+    }
+}
+
+fn body_from_parts(
+    email: &hail_jmap::jmap_client::email::Email,
+    parts: Option<&[hail_jmap::jmap_client::email::EmailBodyPart]>,
+) -> Option<String> {
+    let mut body = String::new();
+    for part in parts? {
+        let Some(part_id) = part.part_id() else {
+            continue;
+        };
+        let Some(value) = email.body_value(part_id) else {
+            continue;
+        };
+        body.push_str(value.value());
+    }
+    Some(body)
 }
 
 fn format_addresses(

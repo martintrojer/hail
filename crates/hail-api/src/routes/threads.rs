@@ -1106,7 +1106,14 @@ async fn mark_thread(
         .mark(&state, user.jmap_token.clone(), &thread_id, body.read)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if body.read
+                && let Err(err) = hail_db::mark_thread_seen(&state.db, user.id, &thread_id).await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, error = %err, "failed to mark thread seen in sidecar");
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(ThreadActionError::NotFound) => not_found("not_found"),
         Err(ThreadActionError::Provider(err)) => action_internal(user.id, &thread_id, err),
     }
