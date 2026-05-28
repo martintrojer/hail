@@ -2,6 +2,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseMutationOptions,
   type UseQueryOptions,
 } from '@tanstack/react-query';
@@ -577,6 +578,43 @@ export function useLabels(
   });
 }
 
+function upsertLabelInList(
+  current: LabelListResponse | undefined,
+  updated: LabelItemResponse,
+): LabelListResponse | undefined {
+  if (!current) {
+    return current;
+  }
+
+  const exists = current.labels.some((label) => label.id === updated.label.id);
+  return {
+    labels: exists
+      ? current.labels.map((label) => (label.id === updated.label.id ? updated.label : label))
+      : [...current.labels, updated.label],
+  };
+}
+
+function removeLabelFromList(
+  current: LabelListResponse | undefined,
+  labelId: number,
+): LabelListResponse | undefined {
+  if (!current) {
+    return current;
+  }
+
+  return {
+    labels: current.labels.filter((label) => label.id !== labelId),
+  };
+}
+
+function refreshLabelCaches(queryClient: QueryClient, labelId?: number) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+  if (labelId !== undefined) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreadsRoot(labelId) });
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+}
+
 export function useCreateLabelMutation(
   client = defaultApiClient,
   options?: MutationConfig<CreateLabelRequest, LabelItemResponse>,
@@ -587,7 +625,10 @@ export function useCreateLabelMutation(
     mutationFn: (body) => client.createLabel(body),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      queryClient.setQueryData<LabelListResponse | undefined>(queryKeys.labels(), (current) =>
+        upsertLabelInList(current, data),
+      );
+      refreshLabelCaches(queryClient, data.label.id);
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
@@ -608,8 +649,10 @@ export function useRenameLabelMutation(
     mutationFn: ({ id, request }) => client.renameLabel(id, request),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreads(variables.id) });
+      queryClient.setQueryData<LabelListResponse | undefined>(queryKeys.labels(), (current) =>
+        upsertLabelInList(current, data),
+      );
+      refreshLabelCaches(queryClient, variables.id);
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
@@ -625,9 +668,11 @@ export function useDeleteLabelMutation(
     mutationFn: (id) => client.deleteLabel(id),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
-      void queryClient.removeQueries({ queryKey: queryKeys.labelThreads(variables) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      queryClient.setQueryData<LabelListResponse | undefined>(queryKeys.labels(), (current) =>
+        removeLabelFromList(current, variables),
+      );
+      void queryClient.removeQueries({ queryKey: queryKeys.labelThreadsRoot(variables) });
+      refreshLabelCaches(queryClient, variables);
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
