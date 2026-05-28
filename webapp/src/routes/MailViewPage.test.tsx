@@ -291,7 +291,7 @@ describe('MailViewPage', () => {
 
     const content = screen.getByTestId('app-shell-content');
     expect(content).toHaveAttribute('data-hail-content-layout', 'list');
-    expect(content).toHaveClass('max-w-full');
+    expect(content).toHaveClass('max-w-full', 'min-w-0');
     expect(content.className).toContain('calc(100vw-var(--sidebar-width-icon)-3rem)');
     expect(content.className).not.toContain('max-w-7xl');
   });

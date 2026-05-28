@@ -417,6 +417,7 @@ export function SearchPage({ client }: { client?: HailApiClient } = {}) {
         </>
       }
       reading={hasSearch ? <SearchReading submittedQuery={submittedQuery} /> : null}
+      contentLayout="split"
     />
   );
 }

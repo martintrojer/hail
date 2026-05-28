@@ -112,6 +112,16 @@ function renderSearchPage() {
 }
 
 describe('SearchPage', () => {
+  it('uses the centralized AppShell split container for search list plus reading content', async () => {
+    renderSearchPage();
+
+    await screen.findByLabelText('Label');
+    const content = screen.getByTestId('app-shell-content');
+    expect(content).toHaveAttribute('data-hail-content-layout', 'split');
+    expect(content).toHaveClass('max-w-full', 'xl:max-w-7xl', 'min-w-0');
+    expect(content.className).toContain('calc(100vw-var(--sidebar-width-icon)-3rem)');
+  });
+
   it('shows one concise help section before a search', async () => {
     renderSearchPage();
 

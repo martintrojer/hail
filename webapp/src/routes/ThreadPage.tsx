@@ -701,7 +701,7 @@ function ThreadDocument({
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-8 lg:max-w-4xl xl:max-w-5xl">
+    <div className="space-y-8">
       <button
         type="button"
         onClick={goBack}
@@ -797,5 +797,5 @@ export function ThreadPage({ threadId, client, sourceView }: ThreadPageProps) {
     reading = <ThreadDocument thread={query.data} client={apiClient} sourceView={sourceView} />;
   }
 
-  return <AppShell title="Thread" description={undefined} reading={reading} />;
+  return <AppShell title="Thread" description={undefined} reading={reading} contentLayout="reading" />;
 }
