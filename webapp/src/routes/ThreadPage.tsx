@@ -399,34 +399,18 @@ function ThreadHeader({
           </>
         ) : null}
       </p>
-      <section
-        aria-labelledby="thread-labels-heading"
-        className="rounded-xl border border-border-hairline bg-bg-card p-3 shadow-sm"
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
-            <h3 id="thread-labels-heading" className="text-sm font-semibold text-ink-primary">
-              Manage labels
-            </h3>
-            <p className="text-xs leading-5 text-ink-secondary">
-              Assign one or more labels to this thread.
-            </p>
-          </div>
-          <ThreadLabelPicker
-            threadId={thread.thread_id}
-            assignedLabels={thread.labels}
-            client={client}
-          />
-        </div>
+      <div className="flex flex-wrap items-center gap-2" aria-label="Thread labels">
         {thread.labels.length > 0 ? (
-          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2" aria-label="Assigned labels">
-            <span className="text-xs font-medium text-ink-secondary">Currently assigned:</span>
-            <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1.5" />
-          </div>
+          <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1.5" />
         ) : (
-          <p className="mt-3 text-xs text-ink-tertiary">No labels assigned yet.</p>
+          <span className="text-xs text-ink-tertiary">No labels</span>
         )}
-      </section>
+        <ThreadLabelPicker
+          threadId={thread.thread_id}
+          assignedLabels={thread.labels}
+          client={client}
+        />
+      </div>
       {thread.messages.length === 0 ? (
         <p className="sr-only">0 messages with Unknown</p>
       ) : null}
