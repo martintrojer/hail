@@ -426,7 +426,7 @@ function LabelsNavPlaceholder() {
               hidden: false,
             }}
           >
-            <Link to="/search" search={{}}>
+            <Link to="/labels">
               <Tags />
               <span>Labels</span>
             </Link>

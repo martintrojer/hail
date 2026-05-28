@@ -22,6 +22,7 @@ import {
   type ComposeResponse,
   type CreateAdminUserRequest,
   type CreateInviteRequest,
+  type CreateLabelRequest,
   type CreatedInviteEnvelope,
   type DeniedSendersResponse,
   type DestroyThreadResponse,
@@ -33,6 +34,7 @@ import {
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
+  type RenameLabelRequest,
   type RotateSpeakeasyResponse,
   type ScheduledSend,
   type ScheduledSendsResponse,
@@ -54,6 +56,7 @@ import {
   type InvitePreview,
   type GmailConnectResponse,
   type LabelListResponse,
+  type LabelItemResponse,
   type ProviderAccountResponse,
   type ProviderSyncStatusListResponse,
   type ProviderSyncTriggerResponse,
@@ -571,6 +574,62 @@ export function useLabels(
     queryKey: queryKeys.labels(),
     queryFn: () => client.listLabels(),
     ...options,
+  });
+}
+
+export function useCreateLabelMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<CreateLabelRequest, LabelItemResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.createLabel(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export interface RenameLabelMutationVariables {
+  id: number;
+  request: RenameLabelRequest;
+}
+
+export function useRenameLabelMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<RenameLabelMutationVariables, LabelItemResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, request }) => client.renameLabel(id, request),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreads(variables.id) });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useDeleteLabelMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, void>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id) => client.deleteLabel(id),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      void queryClient.removeQueries({ queryKey: queryKeys.labelThreads(variables) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
 }
 

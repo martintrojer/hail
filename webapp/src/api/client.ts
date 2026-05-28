@@ -68,6 +68,12 @@ type LabelThreadsGetSuccess = ResponseBody<
 type LabelListSuccess = ResponseBody<
   paths['/api/labels']['get']['responses']['200']
 >;
+type LabelItemSuccess = ResponseBody<
+  paths['/api/labels']['post']['responses']['201']
+>;
+type LabelRenameSuccess = ResponseBody<
+  paths['/api/labels/{id}']['patch']['responses']['200']
+>;
 type BubbleUpGetSuccess = ResponseBody<
   paths['/api/views/bubble-up']['get']['responses']['200']
 >;
@@ -239,6 +245,9 @@ export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
 export type LabelResponse = components['schemas']['LabelResponse'];
+export type LabelItemResponse = LabelItemSuccess | LabelRenameSuccess;
+export type CreateLabelRequest = components['schemas']['CreateLabelRequest'];
+export type RenameLabelRequest = components['schemas']['RenameLabelRequest'];
 export type LabelThreadItem = components['schemas']['LabelThreadItem'];
 export type LabelThreadsResponse = LabelThreadsGetSuccess;
 export type MailViewItem = components['schemas']['MailViewItem'];
@@ -735,6 +744,41 @@ export class HailApiClient {
     return this.#json<LabelListResponse>(
       await this.#request('/api/labels'),
       200,
+    );
+  }
+
+  async createLabel(body: CreateLabelRequest): Promise<LabelItemResponse> {
+    return this.#json<LabelItemResponse>(
+      await this.#request('/api/labels', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      201,
+    );
+  }
+
+  async renameLabel(
+    labelId: number,
+    body: RenameLabelRequest,
+  ): Promise<LabelItemResponse> {
+    return this.#json<LabelItemResponse>(
+      await this.#request(`/api/labels/${encodeURIComponent(String(labelId))}`, {
+        method: 'PATCH',
+        body,
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async deleteLabel(labelId: number): Promise<void> {
+    await this.#empty(
+      await this.#request(`/api/labels/${encodeURIComponent(String(labelId))}`, {
+        method: 'DELETE',
+        mutating: true,
+      }),
+      204,
     );
   }
 

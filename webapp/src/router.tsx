@@ -29,6 +29,7 @@ import { BubbleUpPage } from './routes/BubbleUpPage';
 import { ComposerPage } from './routes/ComposerPage';
 import { DraftsPage } from './routes/DraftsPage';
 import { LabelViewPage } from './routes/LabelViewPage';
+import { LabelsManagementPage } from './routes/LabelsManagementPage';
 import { MailViewPage } from './routes/MailViewPage';
 import { PileSectionPage } from './routes/PileSectionPage';
 import { ScreenerPage } from './routes/ScreenerPage';
@@ -644,6 +645,13 @@ const threadReplyRoute = createRoute({
   },
 });
 
+const labelsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/labels',
+  beforeLoad: requireAuth,
+  component: LabelsManagementPage,
+});
+
 const labelRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/labels/$labelId',
@@ -748,6 +756,7 @@ const routeTree = rootRoute.addChildren([
   bubbleUpRoute,
   threadRoute,
   threadReplyRoute,
+  labelsRoute,
   labelRoute,
   searchRoute,
   trashRoute,
