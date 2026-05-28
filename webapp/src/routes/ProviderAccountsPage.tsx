@@ -7,6 +7,10 @@ import {
   useTriggerProviderSyncMutation,
 } from '../api/query';
 import { StateCard } from '../components/StateCard';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { AppShell } from '../layout/AppShell';
 import { actionErrorMessage } from '../lib/errorMessages';
 
@@ -42,20 +46,16 @@ function canTriggerSync(status: ProviderSyncStatusValue) {
   return !['disabled', 'disconnected', 'revoked'].includes(status);
 }
 
-function healthTone(status: ProviderSyncStatusValue) {
+function statusVariant(status: ProviderSyncStatusValue): 'secondary' | 'destructive' | 'outline' {
   switch (status) {
     case 'active':
     case 'initial_sync':
-      return 'bg-accent-green';
+      return 'secondary';
     case 'error':
     case 'revoked':
-      return 'bg-accent-red';
-    case 'disabled':
-      return 'bg-accent-yellow';
-    case 'disconnected':
-      return 'bg-ink-tertiary';
+      return 'destructive';
     default:
-      return 'bg-ink-tertiary';
+      return 'outline';
   }
 }
 
@@ -106,10 +106,12 @@ function providerCallbackNotice(search: string | undefined) {
 
 function DetailTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-hairline bg-page p-3">
-      <dt className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">{label}</dt>
-      <dd className="mt-1 break-words text-sm text-ink-primary">{value}</dd>
-    </div>
+    <Card size="sm" className="bg-muted/40 shadow-none">
+      <CardContent>
+        <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
+        <dd className="mt-1 break-words text-sm">{value}</dd>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -120,37 +122,41 @@ function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
   onSync: () => void;
 }) {
   return (
-    <section className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Gmail import health</p>
-          <h2 className="mt-1 text-xl font-semibold text-ink-primary">{status.display_email || status.provider_email}</h2>
-          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-hairline bg-page px-3 py-1 text-sm font-medium text-ink-primary">
-            <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${healthTone(status.sync_status)}`} />
-            {statusLabel(status.sync_status)}
+    <section>
+      <Card>
+        <CardHeader>
+          <div>
+            <CardDescription className="text-xs font-semibold uppercase tracking-wide">Gmail import health</CardDescription>
+            <CardTitle role="heading" aria-level={2}>{status.display_email || status.provider_email}</CardTitle>
+            <Badge variant={statusVariant(status.sync_status)} className="mt-3">{statusLabel(status.sync_status)}</Badge>
           </div>
-        </div>
-        <button type="button" onClick={onSync} disabled={syncing || !canTriggerSync(status.sync_status)} className="rounded-full bg-accent-blue px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60">
-          {syncing ? 'Requesting sync…' : 'Sync now'}
-        </button>
-      </div>
+          <CardAction>
+            <Button type="button" onClick={onSync} disabled={syncing || !canTriggerSync(status.sync_status)}>
+              {syncing ? 'Requesting sync…' : 'Sync now'}
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <DetailTile label="Last sync attempt" value={formatDateTime(status.last_sync_attempted_at)} />
+            <DetailTile label="Last successful sync" value={formatDateTime(status.last_sync_succeeded_at)} />
+            <DetailTile label="Next retry" value={formatDateTime(status.next_sync_after)} />
+            <DetailTile label="Retry backoff" value={formatBackoff(status.sync_backoff_secs)} />
+            <DetailTile label="Gmail history cursor" value={status.last_profile_history_id || 'Not captured yet'} />
+            <DetailTile label="Profile synced" value={formatDateTime(status.profile_synced_at)} />
+          </dl>
 
-      <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <DetailTile label="Last sync attempt" value={formatDateTime(status.last_sync_attempted_at)} />
-        <DetailTile label="Last successful sync" value={formatDateTime(status.last_sync_succeeded_at)} />
-        <DetailTile label="Next retry" value={formatDateTime(status.next_sync_after)} />
-        <DetailTile label="Retry backoff" value={formatBackoff(status.sync_backoff_secs)} />
-        <DetailTile label="Gmail history cursor" value={status.last_profile_history_id || 'Not captured yet'} />
-        <DetailTile label="Profile synced" value={formatDateTime(status.profile_synced_at)} />
-      </dl>
+          <Card size="sm" className="mt-4 bg-muted/40 shadow-none">
+            <CardContent>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Last failure</p>
+              <p className="mt-1 text-sm">{failureText(status)}</p>
+              {status.last_error_event ? <p className="mt-1 text-xs text-muted-foreground">Recorded {formatDateTime(status.last_error_event.created_at)} during {status.last_error_event.event_type}.</p> : null}
+            </CardContent>
+          </Card>
 
-      <div className="mt-4 rounded-lg border border-hairline bg-page p-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Last failure</p>
-        <p className="mt-1 text-sm text-ink-primary">{failureText(status)}</p>
-        {status.last_error_event ? <p className="mt-1 text-xs text-ink-secondary">Recorded {formatDateTime(status.last_error_event.created_at)} during {status.last_error_event.event_type}.</p> : null}
-      </div>
-
-      {syncError ? <p role="alert" className="mt-4 rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">{actionErrorMessage(syncError, 'Sync Gmail now')}</p> : null}
+          {syncError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(syncError, 'Sync Gmail now')}</AlertDescription></Alert> : null}
+        </CardContent>
+      </Card>
     </section>
   );
 }
@@ -164,29 +170,27 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
   const connected = account.sync_status !== 'disconnected';
 
   return (
-    <section className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <Card>
+      <CardHeader>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Gmail account</p>
-          <p className="mt-1 text-xl font-semibold text-ink-primary">{account.display_email || account.provider_email}</p>
-          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-hairline bg-page px-3 py-1 text-sm font-medium text-ink-primary">
-            <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${healthTone(account.sync_status)}`} />
-            {statusLabel(account.sync_status)}
-          </div>
+          <CardDescription className="text-xs font-semibold uppercase tracking-wide">Gmail account</CardDescription>
+          <CardTitle>{account.display_email || account.provider_email}</CardTitle>
+          <Badge variant={statusVariant(account.sync_status)} className="mt-3">{statusLabel(account.sync_status)}</Badge>
         </div>
-        <button type="button" onClick={onDisconnect} disabled={disconnecting || !connected} className="rounded-full border border-accent-red/40 px-4 py-2 text-sm font-semibold text-accent-red transition hover:bg-accent-red/10 disabled:cursor-not-allowed disabled:opacity-60">
+        <CardAction><Button type="button" variant="destructive" onClick={onDisconnect} disabled={disconnecting || !connected}>
           {disconnecting ? 'Disconnecting…' : connected ? 'Disconnect' : 'Disconnected'}
-        </button>
-      </div>
-
-      <dl className="mt-5 grid gap-3 sm:grid-cols-2">
+        </Button></CardAction>
+      </CardHeader>
+      <CardContent>
+      <dl className="grid gap-3 sm:grid-cols-2">
         <DetailTile label="Provider id" value={account.provider_account_id} />
         <DetailTile label="Gmail history cursor" value={account.last_profile_history_id || 'Not captured yet'} />
         <DetailTile label="Profile synced" value={formatDateTime(account.profile_synced_at)} />
       </dl>
 
-      {disconnectError ? <p role="alert" className="mt-4 rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">{actionErrorMessage(disconnectError, 'Disconnect Gmail')}</p> : null}
-    </section>
+      {disconnectError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(disconnectError, 'Disconnect Gmail')}</AlertDescription></Alert> : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -216,51 +220,53 @@ export function ProviderAccountsPage({ client, location = window.location, confi
   }
 
   const list = (
-    <div className="space-y-5">
-      <section className="rounded-2xl border border-hairline bg-surface p-5 shadow-sm">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">Provider import mode</p>
-            <h2 className="mt-1 text-2xl font-semibold text-ink-primary">Connect Gmail</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-secondary">Gmail remains your public mailbox and spam filter. Hail imports a local Stalwart copy and the normal hail UI reads that local copy. During v1.2 import, hail actions do not archive, delete, mark read, or relabel Gmail mail.</p>
+            <CardDescription className="text-xs font-semibold uppercase tracking-wide">Provider import mode</CardDescription>
+            <CardTitle role="heading" aria-level={2}>Connect Gmail</CardTitle>
+            <CardDescription className="max-w-2xl leading-6">Gmail remains your public mailbox and spam filter. Hail imports a local Stalwart copy and the normal hail UI reads that local copy. During v1.2 import, hail actions do not archive, delete, mark read, or relabel Gmail mail.</CardDescription>
           </div>
-          <button type="button" onClick={onConnect} disabled={connectGmail.isPending} className="rounded-full bg-accent-blue px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60">
-            {connectGmail.isPending ? 'Opening Google…' : gmailStatuses.length > 0 ? 'Reconnect Gmail' : 'Connect Gmail'}
-          </button>
-        </div>
+          <CardAction>
+            <Button type="button" onClick={onConnect} disabled={connectGmail.isPending}>
+              {connectGmail.isPending ? 'Opening Google…' : gmailStatuses.length > 0 ? 'Reconnect Gmail' : 'Connect Gmail'}
+            </Button>
+          </CardAction>
+        </CardHeader>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-hairline bg-page p-3"><p className="text-sm font-semibold text-ink-primary">Read-only scope</p><p className="mt-1 text-sm leading-6 text-ink-secondary">Hail requests Gmail read-only access for one-way import.</p></div>
-          <div className="rounded-lg border border-hairline bg-page p-3"><p className="text-sm font-semibold text-ink-primary">Tokens stay server-side</p><p className="mt-1 text-sm leading-6 text-ink-secondary">The browser only receives an authorization URL, never OAuth tokens.</p></div>
-          <div className="rounded-lg border border-hairline bg-page p-3"><p className="text-sm font-semibold text-ink-primary">Local truth</p><p className="mt-1 text-sm leading-6 text-ink-secondary">Imported messages are viewed and routed from Stalwart, not Gmail labels.</p></div>
-        </div>
+        <CardContent className="grid gap-3 sm:grid-cols-3">
+          <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Read-only scope</CardTitle><CardDescription>Hail requests Gmail read-only access for one-way import.</CardDescription></CardHeader></Card>
+          <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Tokens stay server-side</CardTitle><CardDescription>The browser only receives an authorization URL, never OAuth tokens.</CardDescription></CardHeader></Card>
+          <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Local truth</CardTitle><CardDescription>Imported messages are viewed and routed from Stalwart, not Gmail labels.</CardDescription></CardHeader></Card>
+        </CardContent>
 
-        {connectGmail.error ? <p role="alert" className="mt-4 rounded-lg border border-accent-red/30 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">{actionErrorMessage(connectGmail.error, 'Connect Gmail')}</p> : null}
-      </section>
+        {connectGmail.error ? <CardContent><Alert variant="destructive"><AlertDescription>{actionErrorMessage(connectGmail.error, 'Connect Gmail')}</AlertDescription></Alert></CardContent> : null}
+      </Card>
 
       {callbackNotice ? (
         callbackNotice.kind === 'connected' ? (
-          <p role="status" className="rounded-2xl border border-accent-green/30 bg-accent-green/10 p-4 text-sm text-ink-primary">{callbackNotice.message}</p>
+          <Alert role="status"><AlertDescription>{callbackNotice.message}</AlertDescription></Alert>
         ) : (
-          <p role="alert" className="rounded-2xl border border-accent-red/30 bg-accent-red/10 p-4 text-sm text-accent-red">{callbackNotice.message}</p>
+          <Alert variant="destructive"><AlertDescription>{callbackNotice.message}</AlertDescription></Alert>
         )
       ) : null}
 
       {syncStatuses.isPending ? (
-        <StateCard title="Checking Gmail import status" body="Loading Gmail sync health from hail-api." className="rounded-2xl border border-hairline bg-surface p-8 text-center" />
+        <StateCard title="Checking Gmail import status" body="Loading Gmail sync health from hail-api." />
       ) : syncStatuses.isError ? (
-        <p role="alert" className="rounded-2xl border border-accent-red/30 bg-accent-red/10 p-4 text-sm text-accent-red">{actionErrorMessage(syncStatuses.error, 'Load Gmail import status')}</p>
+        <Alert variant="destructive"><AlertDescription>{actionErrorMessage(syncStatuses.error, 'Load Gmail import status')}</AlertDescription></Alert>
       ) : gmailStatuses.length > 0 ? (
         <>
           {gmailStatuses.map((status) => (
-            <div key={status.id} className="space-y-5">
+            <div key={status.id} className="flex flex-col gap-5">
               <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} onSync={() => triggerSync.mutate(status.id)} />
               <ProviderAccountCard account={status} disconnecting={disconnectProviderAccount.isPending && disconnectProviderAccount.variables === status.id} disconnectError={disconnectProviderAccount.variables === status.id ? disconnectProviderAccount.error : null} onDisconnect={() => onDisconnect(status)} />
             </div>
           ))}
         </>
       ) : (
-        <StateCard title="No Gmail account connected" body="Connect Gmail to start the server-side OAuth flow. Once Google redirects back, import status will appear here." className="rounded-2xl border border-hairline bg-surface p-8 text-center" />
+        <StateCard title="No Gmail account connected" body="Connect Gmail to start the server-side OAuth flow. Once Google redirects back, import status will appear here." />
       )}
     </div>
   );
