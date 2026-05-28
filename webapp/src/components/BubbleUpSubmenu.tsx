@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+} from './ui/dropdown-menu';
 
 export interface BubbleUpSubmenuProps {
   open: boolean;
@@ -17,89 +21,78 @@ const bubbleUpOptions = [
   'Pick a date…',
 ] as const;
 
-function submenuPosition(anchorRect: DOMRect | null | undefined) {
-  if (!anchorRect || typeof window === 'undefined') {
-    return { top: 96, left: 24 };
-  }
-
-  const width = 220;
-  const gutter = 12;
-  const top = anchorRect.top + window.scrollY;
-  const preferredLeft = anchorRect.right + window.scrollX + 8;
-  const maxLeft = window.scrollX + window.innerWidth - width - gutter;
-  const minLeft = window.scrollX + gutter;
-
-  return {
-    top,
-    left: Math.max(minLeft, Math.min(preferredLeft, maxLeft)),
-  };
-}
-
 export function BubbleUpSubmenu({
   open,
   onClose,
   onSelect,
   anchorRect,
 }: BubbleUpSubmenuProps) {
-  const submenuRef = useRef<HTMLDivElement | null>(null);
-
-  const navMenuRef = useMenuKeyboardNav({ open, onClose });
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) {
       return undefined;
     }
 
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    }
+
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
       if (
         target instanceof Node &&
-        submenuRef.current &&
-        !submenuRef.current.contains(target)
+        contentRef.current &&
+        !contentRef.current.contains(target)
       ) {
         onClose();
       }
     }
 
+    document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('mousedown', handlePointerDown);
 
     return () => {
+      document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [onClose, open]);
 
-  if (!open || typeof document === 'undefined') {
+  if (!open) {
     return null;
   }
-
-  const position = submenuPosition(anchorRect);
 
   function selectOption(option: string) {
     onSelect(option);
     onClose();
   }
 
-  const submenu = (
-    <div
-      ref={(node: HTMLDivElement | null) => { submenuRef.current = node; navMenuRef.current = node; }}
-      role="menu"
-      aria-label="Bubble up time options"
-      className="absolute z-50 w-[220px] rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
-      style={{ top: position.top, left: position.left }}
-    >
-      {bubbleUpOptions.map((option) => (
-        <button
-          key={option}
-          type="button"
-          role="menuitem"
-          className="block w-full rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-primary hover:bg-bg-hover focus:bg-bg-hover focus:outline-none"
-          onClick={() => selectOption(option)}
-        >
-          {option}
-        </button>
-      ))}
-    </div>
+  return (
+    <DropdownMenu modal={false} open={open}>
+      <DropdownMenuContent
+        ref={contentRef}
+        aria-label="Bubble up time options"
+        className="w-[220px] border-border-menu bg-bg-surface"
+        style={
+          anchorRect
+            ? {
+                position: 'fixed',
+                top: anchorRect.top,
+                left: anchorRect.right + 8,
+              }
+            : undefined
+        }
+      >
+        <DropdownMenuGroup>
+          {bubbleUpOptions.map((option) => (
+            <DropdownMenuItem key={option} onSelect={() => selectOption(option)}>
+              {option}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
-
-  return createPortal(submenu, document.body);
 }

@@ -1,5 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 
 interface ShortcutGroup {
   title: string;
@@ -61,7 +67,7 @@ const shortcutGroups: ShortcutGroup[] = [
 
 function Keycap({ children }: { children: string }) {
   return (
-    <kbd className="inline-block rounded border border-border-hairline bg-bg-hover px-1.5 py-0.5 font-mono text-sm font-normal leading-tight text-ink-primary">
+    <kbd className="inline-flex min-w-6 items-center justify-center rounded-md border bg-muted px-1.5 py-0.5 font-mono text-xs font-medium leading-tight text-foreground shadow-xs">
       {children}
     </kbd>
   );
@@ -94,41 +100,43 @@ export function KeyboardShortcutHelp({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="keyboard-shortcuts-title"
-      onClick={onClose}
-    >
-      <section
-        className="w-full max-w-2xl rounded-lg bg-bg-surface p-6 text-ink-primary shadow-lg"
-        onClick={(event) => event.stopPropagation()}
+    <Dialog modal={false} open={open} onOpenChange={(nextOpen) => {
+      if (!nextOpen) {
+        onClose();
+      }
+    }}>
+      <DialogContent
+        aria-describedby={undefined}
+        aria-label="Keyboard Shortcuts"
+        className="max-h-[min(42rem,calc(100vh-2rem))] overflow-y-auto sm:max-w-2xl"
+        showCloseButton={false}
       >
-        <div className="flex items-start justify-between gap-4">
-          <h2 id="keyboard-shortcuts-title" className="text-lg font-bold">
+        <DialogHeader>
+          <DialogTitle id="keyboard-shortcuts-title" className="sr-only">Keyboard Shortcuts</DialogTitle>
+          <h2 aria-hidden="true" className="font-heading text-base leading-none font-medium">
             Keyboard Shortcuts
           </h2>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm font-semibold text-ink-secondary focus-ring outline-none hover:bg-bg-hover hover:text-ink-primary"
-          >
-            Close
-          </button>
-        </div>
+        </DialogHeader>
 
-        <div className="mt-6 grid gap-6 sm:grid-cols-2">
+        <button
+          ref={closeButtonRef}
+          type="button"
+          onClick={onClose}
+          className="sr-only"
+        >
+          Close
+        </button>
+
+        <div className="grid gap-6 sm:grid-cols-2">
           {shortcutGroups.map((group) => (
             <section key={group.title} aria-labelledby={`shortcut-group-${group.title}`}>
               <h3
                 id={`shortcut-group-${group.title}`}
-                className="text-sm font-semibold text-ink-secondary"
+                className="text-sm font-semibold text-muted-foreground"
               >
                 {group.title}
               </h3>
-              <dl className="mt-3 space-y-3">
+              <dl className="mt-3 flex flex-col gap-3">
                 {group.shortcuts.map((shortcut) => (
                   <div
                     key={`${shortcut.keys.join('-')}-${shortcut.description}`}
@@ -138,13 +146,13 @@ export function KeyboardShortcutHelp({
                       {shortcut.keys.map((key, index) => (
                         <span key={`${key}-${index}`} className="flex items-center gap-1">
                           {index > 0 ? (
-                            <span className="text-xs text-ink-tertiary">{shortcut.combo ? '+' : 'then'}</span>
+                            <span className="text-xs text-muted-foreground">{shortcut.combo ? '+' : 'then'}</span>
                           ) : null}
                           <Keycap>{key}</Keycap>
                         </span>
                       ))}
                     </dt>
-                    <dd className="text-sm leading-6 text-ink-secondary">
+                    <dd className="text-sm leading-6 text-muted-foreground">
                       {shortcut.description}
                     </dd>
                   </div>
@@ -153,7 +161,7 @@ export function KeyboardShortcutHelp({
             </section>
           ))}
         </div>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

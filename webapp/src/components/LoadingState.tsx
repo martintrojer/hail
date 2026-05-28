@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { cn } from '../lib/utils';
+import { Skeleton } from './ui/skeleton';
 
 interface LoadingStateProps {
   className?: string;
@@ -21,12 +23,18 @@ export function LoadingState({
     <div
       role="status"
       aria-label={label}
-      className={[
-        'flex min-h-[300px] flex-col items-center justify-center text-center text-sm text-ink-tertiary',
+      className={cn(
+        'flex min-h-[300px] flex-col items-center justify-center gap-3 p-4 text-center text-sm text-muted-foreground',
         className,
-      ].filter(Boolean).join(' ')}
+      )}
     >
-      {showLoading ? 'Loading…' : null}
+      {showLoading ? (
+        <>
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-3 w-48" />
+          <span className="sr-only">Loading…</span>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -1,3 +1,6 @@
+import { StickyNote } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+
 export interface InlineNoteProps {
   text: string;
   author: string;
@@ -6,14 +9,19 @@ export interface InlineNoteProps {
 
 export function InlineNote({ text, author, timestamp }: InlineNoteProps) {
   return (
-    <article className="rounded-r-lg border-l-4 border-accent-yellow bg-bg-banner p-4">
-      <p className="text-xs font-semibold uppercase tracking-wider text-ink-tertiary">
-        Note
-      </p>
-      <p className="mt-2 whitespace-pre-wrap hail-body text-ink-primary">{text}</p>
-      <p className="mt-3 text-sm text-ink-tertiary">
-        {author} · <time>{timestamp}</time>
-      </p>
-    </article>
+    <Card size="sm" role="article" className="rounded-r-lg border-l-4 border-accent-yellow bg-bg-banner p-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+          <StickyNote aria-hidden="true" />
+          Note
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="whitespace-pre-wrap hail-body text-foreground">{text}</p>
+        <p className="mt-3 text-sm text-muted-foreground">
+          {author} · <time>{timestamp}</time>
+        </p>
+      </CardContent>
+    </Card>
   );
 }

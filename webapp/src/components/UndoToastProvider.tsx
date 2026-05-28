@@ -8,8 +8,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { X } from 'lucide-react';
 import { useApiClient } from '../api/ApiClientProvider';
 import { queryClient } from '../lib/queryClient';
+import { Button } from './ui/button';
 
 interface UndoToastAction {
   id: string;
@@ -168,29 +170,32 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
           <div
             role="status"
             aria-live="polite"
-            className={`pointer-events-auto flex w-full max-w-md items-center justify-between gap-4 rounded-lg bg-[#1a1a1a] px-4 py-3 text-sm text-[#f5f0eb] opacity-0 shadow-lg shadow-black/25 transition-opacity duration-150 ease-out ${
+            className={`pointer-events-auto flex w-full max-w-md items-center justify-between gap-3 rounded-lg bg-popover px-4 py-3 text-sm text-popover-foreground opacity-0 shadow-lg ring-1 ring-foreground/10 transition-opacity duration-150 ease-out ${
               isShown ? 'opacity-100' : 'opacity-0'
             }`}
           >
             <span className="min-w-0 flex-1 leading-5">{toast.message}</span>
             {toast.undo ? (
-              <button
+              <Button
                 type="button"
+                variant="link"
+                size="sm"
                 onClick={() => void undoCurrent()}
                 disabled={toast.undoing}
-                className="shrink-0 text-sm font-semibold text-accent-blue underline underline-offset-4 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                className="shrink-0 px-0"
               >
                 {toast.undoing ? 'Undoing…' : (toast.undo.label ?? 'Undo')}
-              </button>
+              </Button>
             ) : null}
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-sm"
               onClick={dismiss}
-              className="shrink-0 rounded text-sm font-semibold text-white/70 transition hover:text-white focus:outline-none focus:ring-2 focus:ring-white/60"
               aria-label="Dismiss notification"
             >
-              ×
-            </button>
+              <X aria-hidden="true" />
+            </Button>
           </div>
         </div>
       ) : null}

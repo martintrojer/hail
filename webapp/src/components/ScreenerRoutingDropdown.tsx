@@ -1,6 +1,11 @@
 import { useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { useMenuKeyboardNav } from '../hooks/useMenuKeyboardNav';
+import { Check } from './icons';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+} from './ui/dropdown-menu';
 
 export type ScreenerRoutingDestination = 'imbox' | 'feed' | 'papertrail';
 
@@ -27,24 +32,6 @@ const routingOptions: Array<{
   { value: 'papertrail', label: routingDestinationLabels.papertrail },
 ];
 
-function dropdownPosition(anchorRect: DOMRect | null | undefined) {
-  if (!anchorRect || typeof window === 'undefined') {
-    return { top: 96, left: 24 };
-  }
-
-  const width = 180;
-  const gutter = 12;
-  const top = anchorRect.bottom + window.scrollY + 8;
-  const preferredLeft = anchorRect.left + window.scrollX;
-  const maxLeft = window.scrollX + window.innerWidth - width - gutter;
-  const minLeft = window.scrollX + gutter;
-
-  return {
-    top,
-    left: Math.max(minLeft, Math.min(preferredLeft, maxLeft)),
-  };
-}
-
 export function ScreenerRoutingDropdown({
   open,
   onClose,
@@ -52,76 +39,81 @@ export function ScreenerRoutingDropdown({
   anchorRect,
   value = 'imbox',
 }: ScreenerRoutingDropdownProps) {
-  const dropdownRef = useRef<HTMLDivElement | null>(null);
-
-  const navMenuRef = useMenuKeyboardNav({ open, onClose });
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) {
       return undefined;
     }
 
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    }
+
     function handlePointerDown(event: MouseEvent) {
       const target = event.target;
       if (
         target instanceof Node &&
-        dropdownRef.current &&
-        !dropdownRef.current.contains(target)
+        contentRef.current &&
+        !contentRef.current.contains(target)
       ) {
         onClose();
       }
     }
 
+    document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('mousedown', handlePointerDown);
 
     return () => {
+      document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handlePointerDown);
     };
   }, [onClose, open]);
 
-  if (!open || typeof document === 'undefined') {
+  if (!open) {
     return null;
   }
-
-  const position = dropdownPosition(anchorRect);
 
   function selectDestination(destination: ScreenerRoutingDestination) {
     onSelect(destination);
     onClose();
   }
 
-  const dropdown = (
-    <div
-      ref={(node: HTMLDivElement | null) => { dropdownRef.current = node; navMenuRef.current = node; }}
-      role="menu"
-      aria-label="Screener routing destinations"
-      className="absolute z-50 w-[180px] rounded-lg border border-border-menu bg-bg-surface p-1.5 shadow-md"
-      style={{ top: position.top, left: position.left }}
-    >
-      {routingOptions.map((option) => {
-        const isSelected = option.value === value;
+  return (
+    <DropdownMenu modal={false} open={open}>
+      <DropdownMenuContent
+        ref={contentRef}
+        aria-label="Screener routing destinations"
+        className="w-[180px] border-border-menu bg-bg-surface"
+        style={
+          anchorRect
+            ? {
+                position: 'fixed',
+                top: anchorRect.bottom + 8,
+                left: anchorRect.left,
+              }
+            : undefined
+        }
+      >
+        <DropdownMenuGroup>
+          {routingOptions.map((option) => {
+            const isSelected = option.value === value;
 
-        return (
-          <button
-            key={option.value}
-            type="button"
-            role="menuitem"
-            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium text-ink-primary hover:bg-bg-hover focus:bg-bg-hover focus:outline-none ${
-              isSelected ? 'bg-bg-selected' : ''
-            }`}
-            onClick={() => selectDestination(option.value)}
-          >
-            <span className="flex-1">{option.label}</span>
-            {isSelected ? (
-              <span aria-hidden="true" className="text-ink-secondary">
-                ✓
-              </span>
-            ) : null}
-          </button>
-        );
-      })}
-    </div>
+            return (
+              <DropdownMenuItem
+                key={option.value}
+                onSelect={() => selectDestination(option.value)}
+                className={isSelected ? 'bg-bg-selected' : undefined}
+              >
+                <span className="flex-1">{option.label}</span>
+                {isSelected ? <Check aria-hidden="true" /> : null}
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
-
-  return createPortal(dropdown, document.body);
 }
