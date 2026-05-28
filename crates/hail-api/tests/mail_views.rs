@@ -128,6 +128,8 @@ fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
         classification,
         has_notes: false,
         labels: Vec::new(),
+        feed_html: None,
+        feed_blocked_trackers: None,
     }
 }
 

@@ -248,6 +248,7 @@ export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
 export type LabelResponse = components['schemas']['LabelResponse'];
+export type FeedBlockedTracker = components['schemas']['FeedBlockedTrackerResponse'];
 export type LabelItemResponse = LabelItemSuccess | LabelRenameSuccess | BatchAssignLabelSuccess;
 export type CreateLabelRequest = components['schemas']['CreateLabelRequest'];
 export type RenameLabelRequest = components['schemas']['RenameLabelRequest'];

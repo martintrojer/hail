@@ -174,6 +174,8 @@ function mailItem(overrides: Partial<MailViewItem>): MailViewItem {
     classification: 'imbox',
     has_notes: false,
     labels: [],
+    feed_html: null,
+    feed_blocked_trackers: null,
     ...overrides,
   };
 }

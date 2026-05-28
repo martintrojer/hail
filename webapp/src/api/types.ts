@@ -1305,6 +1305,8 @@ export interface components {
             thread_id: string;
             to: string[];
             unread: boolean;
+            feed_html?: string | null;
+            feed_blocked_trackers?: components["schemas"]["FeedBlockedTrackerResponse"][] | null;
         };
         MailViewResponse: {
             items: components["schemas"]["MailViewItem"][];
@@ -1598,6 +1600,10 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
+        };
+        FeedBlockedTrackerResponse: {
+            src: string;
+            reason: string;
         };
     };
     responses: never;
