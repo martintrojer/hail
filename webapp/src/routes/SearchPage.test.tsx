@@ -112,6 +112,17 @@ function renderSearchPage() {
 }
 
 describe('SearchPage', () => {
+  it('shows one concise help section before a search', async () => {
+    renderSearchPage();
+
+    await screen.findByLabelText('Label');
+
+    expect(screen.getByText('Ready when you are')).toBeInTheDocument();
+    expect(screen.getByText(/Search requires at least 2 characters/)).toBeInTheDocument();
+    expect(screen.queryByText('Search mail and notes', { selector: 'p' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enter at least 2 characters/)).not.toBeInTheDocument();
+  });
+
   it('defaults label filter to All and omits label_id from search calls', async () => {
     const { client } = renderSearchPage();
 
