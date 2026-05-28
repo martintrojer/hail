@@ -270,6 +270,18 @@ describe('SPA auth/router flows', () => {
     }
   });
 
+  it('links to the Speakeasy passphrase bypass page from the sidebar tools', async () => {
+    api.user = adminUser;
+
+    renderRouterAt('/imbox');
+
+    const speakeasyLink = await screen.findByRole('link', {
+      name: 'Speakeasy Passphrase',
+    });
+    expect(speakeasyLink).toHaveAttribute('href', '/screener/speakeasy');
+    expect(screen.queryByRole('link', { name: /allowed senders/i })).not.toBeInTheDocument();
+  });
+
   it('lets authenticated users reach labels management', async () => {
     api.user = adminUser;
 

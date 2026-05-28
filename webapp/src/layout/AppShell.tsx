@@ -199,6 +199,12 @@ const workflowNavItems: NavItem[] = [
     Icon: Search,
   },
   {
+    to: '/screener/speakeasy',
+    label: 'Speakeasy Passphrase',
+    description: 'Monthly password/passphrase bypass for one message at a time.',
+    Icon: KeyRound,
+  },
+  {
     to: '/screened-out',
     label: 'Screened Out',
     description: 'Review blocked senders and allow mistakes into the right place.',
