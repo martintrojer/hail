@@ -78,8 +78,8 @@ import { cn } from '../lib/utils';
 export type AppShellContentLayout = 'list' | 'split' | 'reading' | 'composer' | 'wide';
 
 const appShellContentWidthClasses: Record<AppShellContentLayout, string> = {
-  list: 'max-w-full md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))] lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))]',
-  split: 'max-w-full md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))] lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))] xl:max-w-7xl',
+  list: 'max-w-none',
+  split: 'max-w-none xl:max-w-7xl',
   reading: 'max-w-3xl lg:max-w-4xl xl:max-w-5xl',
   composer: 'max-w-3xl lg:max-w-4xl xl:max-w-5xl',
   wide: 'max-w-6xl',
