@@ -186,15 +186,6 @@ function ResultGroup<T>({
 }
 
 function SearchReading({ submittedQuery }: { submittedQuery: string }) {
-  if (submittedQuery.trim().length < 2) {
-    return (
-      <StateCard
-        title="Search mail and notes"
-        body="Enter at least 2 characters to search message text and contact notes."
-      />
-    );
-  }
-
   return (
     <div className="rounded-lg bg-bg-surface p-6">
       <p className="text-xs font-semibold uppercase tracking-[0.3em] text-accent-blue">
@@ -390,7 +381,7 @@ export function SearchPage({ client }: { client?: HailApiClient } = {}) {
           {list}
         </>
       }
-      reading={<SearchReading submittedQuery={submittedQuery} />}
+      reading={hasSearch ? <SearchReading submittedQuery={submittedQuery} /> : null}
     />
   );
 }
