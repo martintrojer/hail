@@ -414,8 +414,9 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   return (
     <AppShell
       title={replyToThreadId ? 'Reply' : 'Compose'}
+      contentLayout="composer"
       reading={
-        <section className="mx-auto flex min-h-[calc(100vh-11rem)] w-full max-w-3xl flex-col lg:max-w-4xl xl:max-w-5xl" aria-labelledby="composer-title">
+        <section className="flex min-h-[calc(100vh-11rem)] flex-col" aria-labelledby="composer-title">
           <button
             type="button"
             onClick={closeComposer}

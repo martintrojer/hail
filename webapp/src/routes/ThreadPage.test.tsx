@@ -334,6 +334,15 @@ function sampleThread(
 }
 
 describe('ThreadPage', () => {
+  it('uses the centralized AppShell reading container instead of a route max-width wrapper', async () => {
+    renderThread(sampleThread());
+
+    expect(await screen.findByRole('button', { name: 'Back' })).toBeInTheDocument();
+    const content = screen.getByTestId('app-shell-content');
+    expect(content).toHaveAttribute('data-hail-content-layout', 'reading');
+    expect(content).toHaveClass('max-w-3xl', 'lg:max-w-4xl', 'xl:max-w-5xl', 'min-w-0');
+  });
+
   it('renders sanitized HTML at the trust boundary and shows blocked trackers', async () => {
     const { container } = renderThread(sampleThread());
 

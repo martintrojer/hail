@@ -266,6 +266,15 @@ function apiError(status: number, body: unknown) {
 }
 
 describe('ComposerPage', () => {
+  it('uses the centralized AppShell composer container instead of a route max-width wrapper', async () => {
+    renderComposer();
+
+    expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    const content = screen.getByTestId('app-shell-content');
+    expect(content).toHaveAttribute('data-hail-content-layout', 'composer');
+    expect(content).toHaveClass('max-w-3xl', 'lg:max-w-4xl', 'xl:max-w-5xl', 'min-w-0');
+  });
+
   it('blocks sending while attachments are selected', async () => {
     const client = renderComposer();
     await fillSendableFields();

@@ -75,6 +75,31 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { cn } from '../lib/utils';
 
+export type AppShellContentLayout = 'list' | 'split' | 'reading' | 'composer' | 'wide';
+
+const appShellContentWidthClasses: Record<AppShellContentLayout, string> = {
+  list: 'max-w-full md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))] lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))]',
+  split: 'max-w-full md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))] lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))] xl:max-w-7xl',
+  reading: 'max-w-3xl lg:max-w-4xl xl:max-w-5xl',
+  composer: 'max-w-3xl lg:max-w-4xl xl:max-w-5xl',
+  wide: 'max-w-6xl',
+};
+
+export function appShellContentWidthClass(layout: AppShellContentLayout) {
+  return appShellContentWidthClasses[layout];
+}
+
+function defaultContentLayout({
+  list,
+  reading,
+  wide,
+}: Pick<AppShellProps, 'list' | 'reading' | 'wide'>): AppShellContentLayout {
+  if (wide) return 'wide';
+  if (list && reading) return 'split';
+  if (list) return 'list';
+  return 'reading';
+}
+
 interface AppShellProps {
   title: string;
   description?: string;
@@ -83,6 +108,8 @@ interface AppShellProps {
   actions?: ReactNode;
   /** Use wider content area (e.g. for two-column layouts). */
   wide?: boolean;
+  /** Named content sizing variant; defaults from provided list/reading content. */
+  contentLayout?: AppShellContentLayout;
 }
 
 interface NavItem {
@@ -687,6 +714,7 @@ export function AppShell({
   reading,
   actions,
   wide,
+  contentLayout: requestedContentLayout,
 }: AppShellProps) {
   const { user, logout, logoutLoading } = useAuth();
   const navigate = useNavigate();
@@ -696,12 +724,8 @@ export function AppShell({
   const viewCounts = useViewCounts();
   const sidebarCounts: SidebarCounts = viewCounts.data ?? {};
   const hasContent = Boolean(list || reading);
-  const contentLayout = wide ? 'wide' : list && !reading ? 'list' : 'reading';
-  const contentWidthClass = {
-    wide: 'max-w-6xl',
-    list: 'max-w-full md:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-3rem))] lg:max-w-[min(100%,calc(100vw-var(--sidebar-width-icon)-4rem))]',
-    reading: 'max-w-4xl',
-  }[contentLayout];
+  const contentLayout = requestedContentLayout ?? defaultContentLayout({ list, reading, wide });
+  const contentWidthClass = appShellContentWidthClass(contentLayout);
 
   useKeyboardShortcuts({
     onNextThread: () => focusMailListItem(1),
@@ -794,11 +818,11 @@ export function AppShell({
             />
           </header>
 
-          <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8">
+          <main className="min-w-0 flex-1 overflow-x-hidden px-4 py-5 sm:px-6 lg:px-8">
             <div
               data-testid="app-shell-content"
               data-hail-content-layout={contentLayout}
-              className={cn('mx-auto w-full', contentWidthClass)}
+              className={cn('mx-auto w-full min-w-0', contentWidthClass)}
             >
               <div className="mb-5 flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
                 <div className="min-w-0">
