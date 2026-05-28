@@ -71,6 +71,9 @@ type LabelListSuccess = ResponseBody<
 type LabelItemSuccess = ResponseBody<
   paths['/api/labels']['post']['responses']['201']
 >;
+type BatchAssignLabelSuccess = ResponseBody<
+  paths['/api/threads/labels']['post']['responses']['200']
+>;
 type LabelRenameSuccess = ResponseBody<
   paths['/api/labels/{id}']['patch']['responses']['200']
 >;
@@ -245,10 +248,11 @@ export type PileViewKind = 'set-aside' | 'reply-later';
 export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
 export type LabelResponse = components['schemas']['LabelResponse'];
-export type LabelItemResponse = LabelItemSuccess | LabelRenameSuccess;
+export type LabelItemResponse = LabelItemSuccess | LabelRenameSuccess | BatchAssignLabelSuccess;
 export type CreateLabelRequest = components['schemas']['CreateLabelRequest'];
 export type RenameLabelRequest = components['schemas']['RenameLabelRequest'];
 export type AssignLabelNameRequest = components['schemas']['AssignLabelNameRequest'];
+export type BatchAssignLabelRequest = components['schemas']['BatchAssignLabelRequest'];
 export type LabelThreadItem = components['schemas']['LabelThreadItem'];
 export type LabelThreadsResponse = LabelThreadsGetSuccess;
 export type MailViewItem = components['schemas']['MailViewItem'];
@@ -805,6 +809,19 @@ export class HailApiClient {
   ): Promise<LabelItemResponse> {
     return this.#json<LabelItemResponse>(
       await this.#request(`/api/threads/${encodeURIComponent(threadId)}/labels`, {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      200,
+    );
+  }
+
+  async assignLabelToThreads(
+    body: BatchAssignLabelRequest,
+  ): Promise<LabelItemResponse> {
+    return this.#json<LabelItemResponse>(
+      await this.#request('/api/threads/labels', {
         method: 'POST',
         body,
         mutating: true,

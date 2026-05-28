@@ -14,6 +14,7 @@ import {
   type AdminStatsResponse,
   type AdminUsersResponse,
   type AssignLabelNameRequest,
+  type BatchAssignLabelRequest,
   type AttachmentsResponse,
   type BubbleUpRequest,
   type BubbleUpResponse,
@@ -705,6 +706,34 @@ export function useAssignLabelNameToThreadMutation(
       void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreads(data.label.id) });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useAssignLabelToThreadsMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<BatchAssignLabelRequest, LabelItemResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request) => client.assignLabelToThreads(request),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<LabelListResponse | undefined>(queryKeys.labels(), (current) =>
+        upsertLabelInList(current, data),
+      );
+      for (const threadId of variables.thread_ids) {
+        queryClient.setQueryData<ThreadViewResponse | undefined>(
+          queryKeys.thread(threadId),
+          (current) => addThreadLabel(current, data.label),
+        );
+        void queryClient.invalidateQueries({ queryKey: queryKeys.thread(threadId) });
+      }
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labels() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.labelThreadsRoot(data.label.id) });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
   });
