@@ -735,6 +735,7 @@ describe('MailViewPage', () => {
     firstActions.focus();
     expect(firstActions).toHaveFocus();
 
+    fireEvent.pointerDown(firstActions, { button: 0, pointerType: 'mouse' });
     fireEvent.click(firstActions);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Trash' }));
 
@@ -816,7 +817,9 @@ describe('MailViewPage', () => {
       within(firstLink).queryByRole('button', { name: 'Actions for First thread' }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Actions for Second thread' }));
+    const secondActions = screen.getByRole('button', { name: 'Actions for Second thread' });
+    fireEvent.pointerDown(secondActions, { button: 0, pointerType: 'mouse' });
+    fireEvent.click(secondActions);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
 
     await waitFor(() => expect(client.archiveCalls).toEqual(['thread-two']));
@@ -846,6 +849,7 @@ describe('MailViewPage', () => {
     const actions = screen.getByRole('button', { name: 'Actions for First thread' });
 
     actions.focus();
+    fireEvent.pointerDown(actions, { button: 0, pointerType: 'mouse' });
     fireEvent.click(actions);
     await screen.findByRole('menuitem', { name: 'Mark read' });
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -854,6 +858,7 @@ describe('MailViewPage', () => {
     );
 
     actions.focus();
+    fireEvent.pointerDown(actions, { button: 0, pointerType: 'mouse' });
     fireEvent.click(actions);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark read' }));
 

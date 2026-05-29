@@ -124,7 +124,6 @@ export function MailRowQuickActionsMenu({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              setOpen((value) => !value);
             }}
           >
             <MoreHorizontal aria-hidden="true" />
