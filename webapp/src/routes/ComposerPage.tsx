@@ -65,7 +65,7 @@ interface AttachmentDraft {
 
 const autosaveIntervalMs = 5000;
 const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
-const lineInputClass = 'h-11 border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0';
+const lineInputClass = 'h-12 border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0';
 
 function splitAddresses(value: string) {
   return value.split(/[;,]/).map((address) => address.trim()).filter(Boolean);
@@ -449,8 +449,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
             <Card>
               <CardContent>
                 <FieldGroup className="gap-0">
-                  <Field orientation="horizontal" className="items-center gap-3 border-b border-border py-1">
-                    <FieldLabel htmlFor="compose-to" className="w-16 shrink-0 text-muted-foreground">To</FieldLabel>
+                  <Field orientation="horizontal" className="items-center gap-3 border-b border-border px-1 py-1">
+                    <FieldLabel htmlFor="compose-to" className="w-16 shrink-0 pl-2 text-muted-foreground">To</FieldLabel>
                     <Input
                       id="compose-to"
                       type="text"
@@ -474,8 +474,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                   </Field>
 
                   <div id="compose-carbon-copy-fields" className={showCarbonCopyFields ? 'grid gap-0' : 'hidden'}>
-                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border py-1">
-                      <FieldLabel htmlFor="compose-cc" className="w-16 shrink-0 text-muted-foreground">Cc</FieldLabel>
+                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border px-1 py-1">
+                      <FieldLabel htmlFor="compose-cc" className="w-16 shrink-0 pl-2 text-muted-foreground">Cc</FieldLabel>
                       <Input
                         id="compose-cc"
                         type="text"
@@ -485,8 +485,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                         autoComplete="email"
                       />
                     </Field>
-                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border py-1">
-                      <FieldLabel htmlFor="compose-bcc" className="w-16 shrink-0 text-muted-foreground">Bcc</FieldLabel>
+                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border px-1 py-1">
+                      <FieldLabel htmlFor="compose-bcc" className="w-16 shrink-0 pl-2 text-muted-foreground">Bcc</FieldLabel>
                       <Input
                         id="compose-bcc"
                         type="text"
@@ -498,8 +498,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                     </Field>
                   </div>
 
-                  <Field orientation="horizontal" className="items-center gap-3 py-1">
-                    <FieldLabel htmlFor="compose-subject" className="w-16 shrink-0 text-muted-foreground">Subject</FieldLabel>
+                  <Field orientation="horizontal" className="items-center gap-3 px-1 py-1">
+                    <FieldLabel htmlFor="compose-subject" className="w-16 shrink-0 pl-2 text-muted-foreground">Subject</FieldLabel>
                     <Input
                       id="compose-subject"
                       type="text"
@@ -529,7 +529,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                   id="compose-body"
                   value={form.body}
                   onChange={(event) => updateField('body', event.target.value)}
-                  className="min-h-[22rem] flex-1 resize-none border-0 bg-transparent px-0 text-base leading-relaxed shadow-none focus-visible:ring-0"
+                  className="min-h-[22rem] flex-1 resize-none border-0 bg-transparent px-4 py-4 text-base leading-relaxed shadow-none focus-visible:ring-0"
                   placeholder="Write your email…"
                   autoFocus={Boolean(replyToThreadId)}
                 />
