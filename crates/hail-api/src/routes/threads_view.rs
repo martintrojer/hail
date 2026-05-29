@@ -16,7 +16,8 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use hail_core::mail_render::{
-    plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history,
+    build_reply_quote_html, plaintext_body_to_html, sanitize_and_strip_trackers,
+    strip_quoted_history,
 };
 use secrecy::SecretString;
 use serde::Serialize;
@@ -221,6 +222,7 @@ struct ThreadMessageResponse {
     received_at: Option<DateTime<Utc>>,
     html: String,
     html_with_remote_images: String,
+    reply_quote_html: String,
     preview: String,
     blocked_trackers: Vec<BlockedTrackerResponse>,
 }
@@ -321,13 +323,19 @@ fn render_message(message: AssembledMessage) -> ThreadMessageResponse {
     sanitized.html = rewrite_inline_image_sources(&sanitized.html, &message.inline_images);
     html_with_remote_images =
         rewrite_inline_image_sources(&html_with_remote_images, &message.inline_images);
+    let reply_quote_html = build_reply_quote_html(
+        &reply_quote_date_label(message.received_at),
+        &reply_quote_sender_label(&message.from),
+        &sanitized.html,
+    );
     ThreadMessageResponse {
         email_id: message.email_id,
         from: message.from,
         to: message.to,
         received_at: message.received_at,
-        html: sanitized.html,
+        html: sanitized.html.clone(),
         html_with_remote_images,
+        reply_quote_html,
         preview: message.preview,
         blocked_trackers: sanitized
             .blocked_trackers
@@ -338,6 +346,24 @@ fn render_message(message: AssembledMessage) -> ThreadMessageResponse {
             })
             .collect(),
     }
+}
+
+fn reply_quote_date_label(received_at: Option<DateTime<Utc>>) -> String {
+    received_at
+        .map(|date| date.to_rfc3339())
+        .unwrap_or_else(|| "an earlier message".to_string())
+}
+
+fn reply_quote_sender_label(participants: &[Participant]) -> String {
+    let Some(sender) = participants.first() else {
+        return "Unknown sender".to_string();
+    };
+    sender
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(&sender.email)
+        .to_string()
 }
 
 fn participants_for(messages: &[AssembledMessage]) -> Vec<Participant> {

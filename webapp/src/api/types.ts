@@ -1503,6 +1503,7 @@ export interface components {
             from: components["schemas"]["Participant"][];
             html: string;
             html_with_remote_images: string;
+            reply_quote_html: string;
             preview: string;
             /** Format: date-time */
             received_at?: string | null;

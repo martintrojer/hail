@@ -323,6 +323,31 @@ async fn html_is_sanitized_and_script_removed() {
 }
 
 #[tokio::test]
+async fn response_includes_sanitized_html_reply_quote() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "quote-owner@example.org").await;
+    let thread = sample_thread(vec![sample_message(
+        "email-a",
+        r#"<p onclick="alert(1)">Hello <strong>Bob</strong></p><script>alert('xss')</script><iframe src="https://evil.example"></iframe><img src="https://cdn.example/logo.png" alt="logo"><div class="gmail_quote">Old reply</div>"#,
+    )]);
+
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let quote = json["messages"][0]["reply_quote_html"].as_str().unwrap();
+    assert!(quote.starts_with("<p>On 2026-05-23T10:00:00+00:00, Alice wrote:</p><blockquote>"));
+    assert!(quote.ends_with("</blockquote>"));
+    assert!(quote.contains("<p>Hello <strong>Bob</strong></p>"));
+    assert!(!quote.contains("script"));
+    assert!(!quote.contains("iframe"));
+    assert!(!quote.contains("onclick"));
+    assert!(!quote.contains("cdn.example"));
+    assert!(!quote.contains("gmail_quote"));
+    assert!(!quote.contains("Old reply"));
+}
+
+#[tokio::test]
 async fn quoted_history_is_stripped() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;

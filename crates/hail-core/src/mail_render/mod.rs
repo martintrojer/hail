@@ -63,6 +63,31 @@ pub fn sanitize_outgoing_html(input_html: &str) -> String {
     outgoing_sanitizer().clean(input_html).to_string()
 }
 
+/// Build an HTML reply quote around already-sanitized message HTML.
+///
+/// The `previous_message_html` input must come from the inbound render pipeline
+/// (`strip_quoted_history` + `sanitize_and_strip_trackers`) so the blockquote
+/// cannot reintroduce scripts, event handlers, or remote-image loaders. This
+/// helper only escapes the human-readable attribution line and wraps the trusted
+/// fragment for composer prefill.
+pub fn build_reply_quote_html(
+    date_label: &str,
+    sender: &str,
+    previous_message_html: &str,
+) -> String {
+    let mut html = String::with_capacity(
+        date_label.len() + sender.len() + previous_message_html.len() + 42,
+    );
+    html.push_str("<p>On ");
+    escape_text_into(date_label, &mut html);
+    html.push_str(", ");
+    escape_text_into(sender, &mut html);
+    html.push_str(" wrote:</p><blockquote>");
+    html.push_str(previous_message_html);
+    html.push_str("</blockquote>");
+    html
+}
+
 /// Convert a plain-text mail body into a safe HTML fragment.
 ///
 /// The output escapes HTML metacharacters and preserves author line breaks with
@@ -407,6 +432,20 @@ fn normalize_url_for_scheme_detection(src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reply_quote_wraps_sanitized_html_and_escapes_attribution() {
+        let quote = build_reply_quote_html(
+            "2026-05-25T12:30:00Z",
+            "Alice <alice@example.org>",
+            "<p>Hello <strong>Bob</strong></p>",
+        );
+
+        assert_eq!(
+            quote,
+            "<p>On 2026-05-25T12:30:00Z, Alice &lt;alice@example.org&gt; wrote:</p><blockquote><p>Hello <strong>Bob</strong></p></blockquote>"
+        );
+    }
 
     #[test]
     fn sanitize_outgoing_drops_script_content() {

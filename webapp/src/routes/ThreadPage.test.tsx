@@ -308,6 +308,7 @@ function sampleThread(
         received_at: '2026-05-23T12:00:00Z',
         html: '<p><strong>Sanitized receipt</strong> ready.</p>',
         html_with_remote_images: '<p><strong>Sanitized receipt</strong> ready.</p>',
+        reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><p><strong>Sanitized receipt</strong> ready.</p></blockquote>',
         preview: 'Sanitized receipt ready.',
         blocked_trackers: [
           {
@@ -323,6 +324,7 @@ function sampleThread(
         received_at: null,
         html: '   ',
         html_with_remote_images: '   ',
+        reply_quote_html: '<p>On date, Unknown sender wrote:</p><blockquote></blockquote>',
         preview: 'Plaintext fallback line one.\nPlaintext fallback line two.',
         blocked_trackers: [],
       },
@@ -467,6 +469,7 @@ describe('ThreadPage', () => {
             received_at: '2026-05-23T12:00:00Z',
             html: '<p>Logo</p>',
             html_with_remote_images: '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
+            reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
             preview: 'Logo',
             blocked_trackers: [
               {
@@ -504,6 +507,7 @@ describe('ThreadPage', () => {
             received_at: '2026-05-23T12:00:00Z',
             html: '<p>Logo</p>',
             html_with_remote_images: '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
+            reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
             preview: 'Logo',
             blocked_trackers: [],
           },
@@ -526,6 +530,7 @@ describe('ThreadPage', () => {
             received_at: '2026-05-23T12:00:00Z',
             html: '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
             html_with_remote_images: '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
+            reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table></blockquote>',
             preview: 'Nested layout table',
             blocked_trackers: [],
           },

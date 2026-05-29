@@ -50,6 +50,7 @@ class ComposerPageTestClient extends TestHailApiClient {
         to: [{ email: 'composer@example.com', name: 'Composer' }],
         html: '<p>Can you review this?</p>',
         html_with_remote_images: '<p>Can you review this?</p>',
+        reply_quote_html: '<p>On 2026-05-25T12:30:00+00:00, Alice wrote:</p><blockquote><p>Can you review this?</p></blockquote>',
         preview: 'Can you review this?\nThanks!',
         received_at: '2026-05-25T12:30:00Z',
         blocked_trackers: [],
@@ -346,7 +347,7 @@ describe('ComposerPage', () => {
       cc: ['carol@example.com'],
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
-      body_markdown: 'Report attached.',
+      body_html: 'Report attached.',
       attachments: [],
     });
     expect(await screen.findByText('Sent.')).toBeInTheDocument();
@@ -398,7 +399,7 @@ describe('ComposerPage', () => {
     expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
     expect(screen.getByLabelText('Bcc')).toHaveValue('dave@example.com');
     expect(screen.getByLabelText('Subject')).toHaveValue('Saved draft subject');
-    expect(screen.getByLabelText('Body')).toHaveValue('Saved draft body.');
+    expect(screen.getByLabelText('Body')).toHaveValue('<p>Saved draft body.</p>');
     expect(client.getDraftCalls).toEqual(['draft-existing']);
 
     fireEvent.change(screen.getByLabelText('Body'), {
@@ -415,7 +416,7 @@ describe('ComposerPage', () => {
         cc: ['carol@example.com'],
         bcc: ['dave@example.com'],
         subject: 'Saved draft subject',
-        body_markdown: 'Updated resumed draft body.',
+        body_html: 'Updated resumed draft body.',
         attachments: [],
       },
     });
@@ -440,7 +441,7 @@ describe('ComposerPage', () => {
       cc: [],
       bcc: [],
       subject: 'Unfinished thought',
-      body_markdown: '',
+      body_html: '',
       attachments: [],
     });
   });
@@ -463,7 +464,7 @@ describe('ComposerPage', () => {
     expect(client.createDraftCalls[0]).toMatchObject({
       to: [],
       subject: '',
-      body_markdown: 'Needs a recipient and subject first.',
+      body_html: 'Needs a recipient and subject first.',
     });
   });
 
@@ -479,7 +480,7 @@ describe('ComposerPage', () => {
       cc: ['carol@example.com'],
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
-      body_markdown: 'Report attached.',
+      body_html: 'Report attached.',
       attachments: [],
     });
     expect(client.updateDraftCalls).toEqual([]);
@@ -498,7 +499,7 @@ describe('ComposerPage', () => {
         cc: ['carol@example.com'],
         bcc: ['dave@example.com', 'erin@example.com'],
         subject: 'Quarterly report',
-        body_markdown: 'Updated draft body.',
+        body_html: 'Updated draft body.',
         attachments: [],
       },
     });
@@ -519,7 +520,7 @@ describe('ComposerPage', () => {
       cc: ['carol@example.com'],
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
-      body_markdown: 'Report attached.',
+      body_html: 'Report attached.',
       attachments: [],
     });
     expect(await screen.findByText('Draft saved')).toBeInTheDocument();
@@ -539,7 +540,7 @@ describe('ComposerPage', () => {
         cc: ['carol@example.com'],
         bcc: ['dave@example.com', 'erin@example.com'],
         subject: 'Quarterly report',
-        body_markdown: 'Autosaved update.',
+        body_html: 'Autosaved update.',
         attachments: [],
       },
     });
@@ -584,7 +585,7 @@ describe('ComposerPage', () => {
     expect(client.sendReplyCalls[0]).toEqual({
       threadId: 'thread-123',
       body: {
-        body_markdown: 'Reply from the composer.',
+        body_html: 'Reply from the composer.',
         attachments: [],
         send_at: undefined,
       },
@@ -614,6 +615,7 @@ describe('ComposerPage', () => {
           ],
           html: '<p>Line one</p>',
           html_with_remote_images: '<p>Line one</p>',
+          reply_quote_html: '<p>On 2026-05-25T13:45:00+00:00, Bob Sender wrote:</p><blockquote><p>Line one</p></blockquote>',
           preview: 'Line one\nLine two',
           received_at: '2026-05-25T13:45:00Z',
           blocked_trackers: [],
@@ -632,7 +634,8 @@ describe('ComposerPage', () => {
     );
     const body = screen.getByLabelText('Body') as HTMLTextAreaElement;
     expect(body.value).toContain('Bob Sender wrote:');
-    expect(body.value).toContain('> Line one\n> Line two');
+    expect(body.value).toContain('<blockquote><p>Line one</p></blockquote>');
+    expect(body.value).not.toContain('> Line one');
     expect(client.getThreadCalls).toEqual(['thread-456']);
   });
 
@@ -672,7 +675,7 @@ describe('ComposerPage', () => {
     expect(screen.getByText('Loading reply details…')).toBeInTheDocument();
     expect(
       ((await screen.findByLabelText('Body')) as HTMLTextAreaElement).value,
-    ).toContain('> Can you review this?');
+    ).toContain('<blockquote><p>Can you review this?</p></blockquote>');
   });
 
   it('shows send mutation error messages from API failures', async () => {
