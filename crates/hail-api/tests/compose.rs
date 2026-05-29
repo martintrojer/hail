@@ -243,6 +243,70 @@ async fn compose_send_now_creates_draft_and_submits() {
 }
 
 #[tokio::test]
+async fn compose_accepts_body_html_and_sanitizes_before_send() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "html-compose@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(
+            r#"{"to":["bob@example.org"],"subject":"HTML","body_html":"<p>Hello <strong>Bob</strong></p><script>alert(1)</script><img src=\"https://evil.example/open.png\">"}"#
+                .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = composer.calls();
+    let Call::Create {
+        plain_text, html, ..
+    } = &calls[0]
+    else {
+        panic!("first call should create draft");
+    };
+    assert_eq!(plain_text, "Hello Bob");
+    assert_eq!(html, "<p>Hello <strong>Bob</strong></p>");
+}
+
+#[tokio::test]
+async fn compose_prefers_body_html_over_legacy_markdown() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "html-prefer@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(
+            r#"{"to":["bob@example.org"],"subject":"HTML","body_html":"<p>HTML body</p>","body_markdown":"Markdown body"}"#
+                .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = composer.calls();
+    let Call::Create {
+        plain_text, html, ..
+    } = &calls[0]
+    else {
+        panic!("first call should create draft");
+    };
+    assert_eq!(plain_text, "HTML body");
+    assert_eq!(html, "<p>HTML body</p>");
+}
+
+#[tokio::test]
 async fn provider_smarthost_mode_keeps_compose_on_existing_jmap_submit_path() {
     let (mut state, key) = fixture_state().await;
     state.config.provider_import.gmail.oauth_client_id = Some("gmail-client-id".to_string());
@@ -274,7 +338,7 @@ async fn provider_smarthost_mode_keeps_compose_on_existing_jmap_submit_path() {
                 cc: vec!["carol@example.org".to_string()],
                 bcc: Vec::new(),
                 subject: "Hello".to_string(),
-                plain_text: "Hi Bob alert(1)".to_string(),
+                plain_text: "Hi Bob".to_string(),
                 html: "<p>Hi <strong>Bob</strong></p>\n".to_string(),
                 reply: None,
             },
@@ -1016,7 +1080,7 @@ async fn compose_returns_clear_400_when_sender_identity_missing_on_submit() {
             cc: vec!["carol@example.org".to_string()],
             bcc: Vec::new(),
             subject: "Hello".to_string(),
-            plain_text: "Hi Bob alert(1)".to_string(),
+            plain_text: "Hi Bob".to_string(),
             html: "<p>Hi <strong>Bob</strong></p>\n".to_string(),
             reply: None,
         }]

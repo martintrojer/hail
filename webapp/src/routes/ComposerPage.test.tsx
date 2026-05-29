@@ -66,6 +66,7 @@ class ComposerPageTestClient extends TestHailApiClient {
     cc: ['carol@example.com'],
     bcc: ['dave@example.com'],
     subject: 'Saved draft subject',
+    body_html: '<p>Saved draft body.</p>',
     body_markdown: 'Saved draft body.',
   };
 

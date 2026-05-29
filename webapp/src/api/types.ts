@@ -1143,7 +1143,8 @@ export interface components {
         ComposePayload: {
             attachments?: unknown[] | null;
             bcc?: string[] | null;
-            body_markdown: string;
+            body_html?: string | null;
+            body_markdown?: string | null;
             cc?: string[] | null;
             /** Format: date-time */
             send_at?: string | null;
@@ -1210,6 +1211,7 @@ export interface components {
         };
         DraftDetails: {
             bcc: string[];
+            body_html: string;
             body_markdown: string;
             cc: string[];
             draft_id: string;
@@ -1219,6 +1221,7 @@ export interface components {
         DraftPayload: {
             attachments?: unknown[] | null;
             bcc?: string[] | null;
+            body_html?: string | null;
             body_markdown?: string | null;
             cc?: string[] | null;
             subject?: string | null;
@@ -1228,6 +1231,10 @@ export interface components {
             draft_id: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        FeedBlockedTrackerResponse: {
+            reason: string;
+            src: string;
         };
         GmailConnectResponse: {
             authorization_url: string;
@@ -1295,6 +1302,13 @@ export interface components {
             cc: string[];
             classification: components["schemas"]["MailViewClassification"];
             email_id: string;
+            /** @description Tracker/remote-image removals observed while rendering `feed_html`. */
+            feed_blocked_trackers?: components["schemas"]["FeedBlockedTrackerResponse"][] | null;
+            /**
+             * @description Sanitized, tracker-stripped HTML excerpt/body for Feed reader cards.
+             *     Only populated by `/api/views/feed`; compact list views should use `preview`.
+             */
+            feed_html?: string | null;
             from: string;
             has_notes: boolean;
             labels: components["schemas"]["LabelResponse"][];
@@ -1305,8 +1319,6 @@ export interface components {
             thread_id: string;
             to: string[];
             unread: boolean;
-            feed_html?: string | null;
-            feed_blocked_trackers?: components["schemas"]["FeedBlockedTrackerResponse"][] | null;
         };
         MailViewResponse: {
             items: components["schemas"]["MailViewItem"][];
@@ -1389,7 +1401,8 @@ export interface components {
         };
         ReplyPayload: {
             attachments?: unknown[] | null;
-            body_markdown: string;
+            body_html?: string | null;
+            body_markdown?: string | null;
             /** Format: date-time */
             send_at?: string | null;
         };
@@ -1600,10 +1613,6 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
-        };
-        FeedBlockedTrackerResponse: {
-            src: string;
-            reason: string;
         };
     };
     responses: never;

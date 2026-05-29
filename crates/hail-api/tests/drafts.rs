@@ -61,6 +61,7 @@ enum Call {
         bcc: Vec<String>,
         subject: String,
         body_markdown: String,
+        body_html: String,
     },
     Get {
         draft_id: String,
@@ -72,6 +73,7 @@ enum Call {
         bcc: Option<Vec<String>>,
         subject: Option<String>,
         body_markdown: Option<String>,
+        body_html: Option<String>,
     },
     Delete {
         draft_id: String,
@@ -125,6 +127,7 @@ impl DraftStore for FakeDraftStore {
                 bcc: draft.bcc,
                 subject: draft.subject,
                 body_markdown: draft.body_markdown,
+                body_html: draft.body_html,
             });
             Ok("draft-1".to_string())
         })
@@ -150,6 +153,7 @@ impl DraftStore for FakeDraftStore {
                 cc: vec!["carol@example.org".to_string()],
                 bcc: vec!["dana@example.org".to_string()],
                 subject: "Saved draft".to_string(),
+                body_html: "<p>Saved body</p>".to_string(),
                 body_markdown: "Saved body".to_string(),
             }))
         })
@@ -173,6 +177,7 @@ impl DraftStore for FakeDraftStore {
                 bcc: draft.bcc,
                 subject: draft.subject,
                 body_markdown: draft.body_markdown,
+                body_html: draft.body_html,
             });
             Ok(())
         })
@@ -309,12 +314,45 @@ async fn create_draft_calls_store_and_returns_id() {
             bcc: vec![],
             subject: "Hello".to_string(),
             body_markdown: "Hi Bob".to_string(),
+            body_html: "<p>Hi Bob</p>\n".to_string(),
         }]
     );
 }
 
 #[tokio::test]
-async fn create_draft_accepts_missing_send_fields() {
+async fn create_draft_accepts_body_html_and_derives_markdown() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "html-draft@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(r#"{"subject":"HTML","body_html":"<p>Hello <strong>Bob</strong></p><script>alert(1)</script>"}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Create {
+            from: "html-draft@example.org".to_string(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: "HTML".to_string(),
+            body_markdown: "Hello Bob".to_string(),
+            body_html: "<p>Hello <strong>Bob</strong></p>".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn create_draft_rejects_missing_body() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let store = Arc::new(FakeDraftStore::default());
@@ -330,24 +368,14 @@ async fn create_draft_accepts_missing_send_fields() {
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = json_body(resp).await;
-    assert_eq!(body["draft_id"], "draft-1");
-    assert_eq!(
-        store.calls(),
-        vec![Call::Create {
-            from: "alice@example.org".to_string(),
-            to: vec![],
-            cc: vec![],
-            bcc: vec![],
-            subject: String::new(),
-            body_markdown: String::new(),
-        }]
-    );
+    assert_eq!(body["error"], "body_required");
+    assert!(store.calls().is_empty());
 }
 
 #[tokio::test]
-async fn create_draft_accepts_empty_send_fields() {
+async fn create_draft_rejects_empty_body() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let store = Arc::new(FakeDraftStore::default());
@@ -363,18 +391,10 @@ async fn create_draft_accepts_empty_send_fields() {
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    assert_eq!(
-        store.calls(),
-        vec![Call::Create {
-            from: "alice@example.org".to_string(),
-            to: vec![],
-            cc: vec![],
-            bcc: vec![],
-            subject: String::new(),
-            body_markdown: String::new(),
-        }]
-    );
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(resp).await;
+    assert_eq!(body["error"], "body_required");
+    assert!(store.calls().is_empty());
 }
 
 #[tokio::test]
@@ -401,6 +421,7 @@ async fn get_draft_returns_saved_composer_fields() {
     assert_eq!(body["cc"], serde_json::json!(["carol@example.org"]));
     assert_eq!(body["bcc"], serde_json::json!(["dana@example.org"]));
     assert_eq!(body["subject"], "Saved draft");
+    assert_eq!(body["body_html"], "<p>Saved body</p>");
     assert_eq!(body["body_markdown"], "Saved body");
     assert_eq!(
         store.calls(),
@@ -440,6 +461,7 @@ async fn update_draft_calls_store_and_returns_id() {
             bcc: Some(vec!["blind@example.org".to_string()]),
             subject: Some("Revised".to_string()),
             body_markdown: Some("new body".to_string()),
+            body_html: Some("<p>new body</p>\n".to_string()),
         }]
     );
 }

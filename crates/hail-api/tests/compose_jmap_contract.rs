@@ -147,7 +147,7 @@ async fn create_autosave_draft(app: &axum::Router, cookie: &str) -> String {
             "cc": ["draft-cc.compose-contract@example.net"],
             "bcc": ["draft-bcc.compose-contract@example.net"],
             "subject": "Compose contract draft",
-            "body_markdown": "Draft body with *markdown* and Bcc.",
+            "body_html": "<p>Draft body with <em>HTML</em> and Bcc.</p><script>alert('x')</script>",
             "attachments": []
         }),
         StatusCode::CREATED,
@@ -227,7 +227,9 @@ async fn assert_draft_contract(
     );
     assert!(email.keywords().contains(&"$draft"));
     assert!(email.mailbox_ids().contains(&drafts_mailbox_id));
-    assert_text_body(&email, "Draft body with *markdown* and Bcc.");
+    assert_text_body(&email, "Draft body with HTML and Bcc.");
+    assert_html_body(&email, "<em>HTML</em>");
+    assert_html_body_absent(&email, "<script>");
 }
 
 async fn assert_sent_email_contract(
