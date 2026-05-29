@@ -307,6 +307,132 @@ async fn compose_prefers_body_html_over_legacy_markdown() {
 }
 
 #[tokio::test]
+async fn compose_accepts_rich_body_html_sanitizes_and_derives_plaintext() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "rich-compose@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let body_html = r#"<h2>Plan</h2><p>Hello <strong>Bob</strong> and <em>team</em>.</p><ul><li><p>First item</p></li><li><p><a href="https://example.org/report?x=1&y=2">Report</a></p></li></ul><blockquote><p>Prior context</p></blockquote><img src="https://tracker.example/open.png" onerror="alert(1)">"#;
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(
+            serde_json::json!({
+                "to": ["bob@example.org"],
+                "subject": "HTML",
+                "body_html": body_html,
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = composer.calls();
+    let Call::Create {
+        plain_text, html, ..
+    } = &calls[0]
+    else {
+        panic!("first call should create draft");
+    };
+    assert_eq!(
+        plain_text,
+        "Plan Hello Bob and team. First item Report Prior context"
+    );
+    assert!(html.contains("<h2>Plan</h2>"));
+    assert!(html.contains("<strong>Bob</strong>"));
+    assert!(html.contains("<em>team</em>"));
+    assert!(html.contains("<ul><li><p>First item</p></li><li><p><a href=\"https://example.org/report?x=1&amp;y=2\""));
+    assert!(html.contains("rel=\"noopener noreferrer\""));
+    assert!(html.contains("target=\"_blank\""));
+    assert!(html.contains("<blockquote><p>Prior context</p></blockquote>"));
+    assert!(!html.contains("<img"));
+    assert!(!html.contains("onerror"));
+    assert!(!html.contains("tracker.example"));
+}
+
+#[tokio::test]
+async fn compose_strips_script_body_html_but_preserves_remaining_text() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "script-compose@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/compose",
+        Some(&sid),
+        true,
+        Some(
+            r#"{"to":["bob@example.org"],"subject":"Script","body_html":"<p>Before</p><script>alert(1)</script><p>After</p>"}"#
+                .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = composer.calls();
+    let Call::Create {
+        plain_text, html, ..
+    } = &calls[0]
+    else {
+        panic!("first call should create draft");
+    };
+    assert_eq!(plain_text, "Before After");
+    assert_eq!(html, "<p>Before</p><p>After</p>");
+    assert!(!html.contains("script"));
+    assert!(!html.contains("alert"));
+}
+
+#[tokio::test]
+async fn reply_with_body_html_blockquote_keeps_client_quote_without_extra_server_nesting() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "reply-html@example.org").await;
+    let composer = Arc::new(FakeComposer::default());
+
+    let resp = request(
+        state,
+        composer.clone(),
+        Method::POST,
+        "/api/threads/thread-1/reply",
+        Some(&sid),
+        true,
+        Some(
+            r#"{"body_html":"<p>Thanks.</p><blockquote><p>Original note</p></blockquote>"}"#
+                .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let calls = composer.calls();
+    let Call::Create {
+        plain_text,
+        html,
+        reply,
+        ..
+    } = &calls[1]
+    else {
+        panic!("second call should create reply draft");
+    };
+    assert_eq!(plain_text, "Thanks. Original note");
+    assert_eq!(html, "<p>Thanks.</p><blockquote><p>Original note</p></blockquote>");
+    assert_eq!(html.matches("<blockquote>").count(), 1);
+    assert_eq!(
+        reply,
+        &Some(ReplyHeaders {
+            in_reply_to: vec!["m1@example.org".to_string()],
+            references: vec!["m0@example.org".to_string(), "m1@example.org".to_string()],
+        })
+    );
+}
+
+#[tokio::test]
 async fn provider_smarthost_mode_keeps_compose_on_existing_jmap_submit_path() {
     let (mut state, key) = fixture_state().await;
     state.config.provider_import.gmail.oauth_client_id = Some("gmail-client-id".to_string());

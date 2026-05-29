@@ -531,6 +531,78 @@ async fn update_draft_accepts_body_html_and_derives_markdown() {
 }
 
 #[tokio::test]
+async fn create_update_get_round_trip_body_html() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "roundtrip-draft@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let create = request(
+        state.clone(),
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(r#"{"subject":"HTML","body_html":"<p>Hello <strong>Bob</strong></p><ul><li><p>One</p></li></ul>"}"#),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+
+    let update = request(
+        state.clone(),
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(r#"{"body_html":"<p>Updated</p><blockquote><p>Quoted</p></blockquote>"}"#),
+    )
+    .await;
+    assert_eq!(update.status(), StatusCode::OK);
+
+    let get = request(
+        state,
+        store.clone(),
+        Method::GET,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = json_body(get).await;
+    assert_eq!(body["body_html"], "<p>Saved body</p>");
+
+    assert_eq!(
+        store.calls(),
+        vec![
+            Call::Create {
+                from: "roundtrip-draft@example.org".to_string(),
+                to: vec![],
+                cc: vec![],
+                bcc: vec![],
+                subject: "HTML".to_string(),
+                body_markdown: "Hello Bob One".to_string(),
+                body_html: "<p>Hello <strong>Bob</strong></p><ul><li><p>One</p></li></ul>".to_string(),
+            },
+            Call::Update {
+                draft_id: "draft-1".to_string(),
+                to: None,
+                cc: None,
+                bcc: None,
+                subject: None,
+                body_markdown: Some("Updated Quoted".to_string()),
+                body_html: Some("<p>Updated</p><blockquote><p>Quoted</p></blockquote>".to_string()),
+            },
+            Call::Get {
+                draft_id: "draft-1".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
 async fn invalid_recipient_returns_400_without_store_call() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
