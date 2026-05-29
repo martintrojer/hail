@@ -352,6 +352,38 @@ async fn create_draft_accepts_body_html_and_derives_markdown() {
 }
 
 #[tokio::test]
+async fn create_draft_prefers_body_html_over_legacy_markdown() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "prefer-html-draft@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::POST,
+        "/api/drafts",
+        Some(&sid),
+        true,
+        Some(r#"{"subject":"HTML wins","body_html":"<p>HTML draft</p>","body_markdown":"Markdown draft"}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Create {
+            from: "prefer-html-draft@example.org".to_string(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: "HTML wins".to_string(),
+            body_markdown: "HTML draft".to_string(),
+            body_html: "<p>HTML draft</p>".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn create_draft_rejects_missing_body() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
@@ -462,6 +494,38 @@ async fn update_draft_calls_store_and_returns_id() {
             subject: Some("Revised".to_string()),
             body_markdown: Some("new body".to_string()),
             body_html: Some("<p>new body</p>\n".to_string()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn update_draft_accepts_body_html_and_derives_markdown() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "update-html-draft@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(r#"{"body_html":"<p>Updated <em>HTML</em> draft</p><script>alert(1)</script>","body_markdown":"legacy text"}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Update {
+            draft_id: "draft-1".to_string(),
+            to: None,
+            cc: None,
+            bcc: None,
+            subject: None,
+            body_markdown: Some("Updated HTML draft".to_string()),
+            body_html: Some("<p>Updated <em>HTML</em> draft</p>".to_string()),
         }]
     );
 }

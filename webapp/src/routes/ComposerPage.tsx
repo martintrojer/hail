@@ -67,6 +67,33 @@ const autosaveIntervalMs = 5000;
 const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
 const lineInputClass = 'h-12 border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0';
 
+function htmlToPlainTextFallback(html: string) {
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  return document.body.textContent?.replace(/\u00a0/g, ' ').trim() ?? '';
+}
+
+function draftBodyFromResponse(draft: { body_html?: string | null; body_markdown?: string | null }) {
+  return draft.body_html ?? draft.body_markdown ?? '';
+}
+
+function draftSnapshot(payload: {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body_html: string;
+  attachments: unknown[];
+}) {
+  return JSON.stringify({
+    to: payload.to,
+    cc: payload.cc,
+    bcc: payload.bcc,
+    subject: payload.subject,
+    body_html: payload.body_html,
+    attachments: payload.attachments,
+  });
+}
+
 function htmlHasContent(html: string) {
   return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim().length > 0;
 }
@@ -235,14 +262,18 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     onError: (error) => setSendError(composeErrorMessage(error, 'Message could not be sent.')),
   });
 
-  const draftPayload = useMemo(() => ({
-    to: splitAddresses(form.to),
-    cc: splitAddresses(form.cc),
-    bcc: splitAddresses(form.bcc),
-    subject: form.subject,
-    body_html: form.body,
-    attachments: [],
-  }), [form]);
+  const draftPayload = useMemo(() => {
+    const bodyHtml = form.body;
+    return {
+      to: splitAddresses(form.to),
+      cc: splitAddresses(form.cc),
+      bcc: splitAddresses(form.bcc),
+      subject: form.subject,
+      body_html: bodyHtml,
+      body_markdown: htmlToPlainTextFallback(bodyHtml),
+      attachments: [],
+    };
+  }, [form]);
 
   const canSaveDraft = !replyToThreadId;
   const replyPrefillLoading = Boolean(replyToThreadId) && replyThreadQuery.isLoading;
@@ -283,7 +314,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     if (!dirty || !canSaveDraft) return;
     if (blockUnsupportedAttachments()) return;
 
-    const snapshot = JSON.stringify(draftPayload);
+    const snapshot = draftSnapshot(draftPayload);
     if (snapshot === snapshotRef.current) {
       setDirty(false);
       return;
@@ -306,23 +337,24 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   useEffect(() => {
     if (!initialDraftId || replyToThreadId || !draftQuery.data) return;
 
+    const loadedBody = draftBodyFromResponse(draftQuery.data);
     const nextForm = {
       to: draftQuery.data.to.join(', '),
       cc: draftQuery.data.cc.join(', '),
       bcc: draftQuery.data.bcc.join(', '),
       subject: draftQuery.data.subject,
-      body: draftQuery.data.body_html ?? draftQuery.data.body_markdown ?? '',
+      body: loadedBody,
       sendAt: '',
     };
     setForm(nextForm);
     setDraftId(draftQuery.data.draft_id);
     setShowCarbonCopyFields(nextForm.cc.length > 0 || nextForm.bcc.length > 0);
-    snapshotRef.current = JSON.stringify({
+    snapshotRef.current = draftSnapshot({
       to: draftQuery.data.to,
       cc: draftQuery.data.cc,
       bcc: draftQuery.data.bcc,
       subject: draftQuery.data.subject,
-      body_html: draftQuery.data.body_html ?? draftQuery.data.body_markdown ?? '',
+      body_html: loadedBody,
       attachments: [],
     });
     setDirty(false);
