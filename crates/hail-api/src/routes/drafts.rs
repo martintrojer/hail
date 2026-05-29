@@ -2,8 +2,8 @@
 //!
 //! The SPA posts composer snapshots here; handlers validate the public JSON
 //! surface, then delegate storage to an injectable [`DraftStore`]. The
-//! production store writes text-only drafts through JMAP `Email/set` with the
-//! `$draft` keyword and the user's Drafts mailbox. Tests inject a fake store so
+//! production store writes sanitized HTML drafts through JMAP `Email/set` with
+//! the `$draft` keyword and the user's Drafts mailbox. Tests inject a fake store so
 //! auth/CSRF/validation/provider failures are covered without Stalwart.
 
 use std::future::Future;

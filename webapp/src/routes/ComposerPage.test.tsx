@@ -90,7 +90,7 @@ class ComposerPageTestClient extends TestHailApiClient {
   override async getDraft(draftId: string) {
     this.getDraftCalls.push(draftId);
     if (this.getDraftError) throw this.getDraftError;
-    return this.draftResponse;
+    return this.draftResponse as Awaited<ReturnType<TestHailApiClient['getDraft']>>;
   }
 
   override async sendCompose(body: ComposeRequest): Promise<ComposeResponse> {
@@ -486,8 +486,30 @@ describe('ComposerPage', () => {
         bcc: ['dave@example.com'],
         subject: 'Saved draft subject',
         body_html: '<p>Updated resumed draft body.</p>',
+        body_markdown: 'Updated resumed draft body.',
         attachments: [],
       },
+    });
+  });
+
+  it('loads legacy body_markdown when a draft has no body_html', async () => {
+    const client = new ComposerPageTestClient();
+    client.draftResponse = {
+      ...client.draftResponse,
+      body_html: undefined as unknown as string,
+      body_markdown: 'Legacy markdown draft body.',
+    };
+    renderComposer({ client, draftId: 'draft-existing' });
+
+    expect(await getEditorText()).toBe('Legacy markdown draft body.');
+    await setEditorText('Migrated legacy body.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
+    expect(client.updateDraftCalls[0].body).toMatchObject({
+      body_html: '<p>Migrated legacy body.</p>',
+      body_markdown: 'Migrated legacy body.',
     });
   });
 
@@ -511,6 +533,7 @@ describe('ComposerPage', () => {
       bcc: [],
       subject: 'Unfinished thought',
       body_html: '',
+      body_markdown: '',
       attachments: [],
     });
   });
@@ -533,6 +556,7 @@ describe('ComposerPage', () => {
       to: [],
       subject: '',
       body_html: '<p>Needs a recipient and subject first.</p>',
+      body_markdown: 'Needs a recipient and subject first.',
     });
   });
 
@@ -549,6 +573,7 @@ describe('ComposerPage', () => {
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
       body_html: '<p>Report attached.</p>',
+      body_markdown: 'Report attached.',
       attachments: [],
     });
     expect(client.updateDraftCalls).toEqual([]);
@@ -567,6 +592,7 @@ describe('ComposerPage', () => {
         bcc: ['dave@example.com', 'erin@example.com'],
         subject: 'Quarterly report',
         body_html: '<p>Updated draft body.</p>',
+        body_markdown: 'Updated draft body.',
         attachments: [],
       },
     });
@@ -588,6 +614,7 @@ describe('ComposerPage', () => {
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
       body_html: '<p>Report attached.</p>',
+      body_markdown: 'Report attached.',
       attachments: [],
     });
     expect(await screen.findByText('Draft saved')).toBeInTheDocument();
@@ -606,6 +633,7 @@ describe('ComposerPage', () => {
         bcc: ['dave@example.com', 'erin@example.com'],
         subject: 'Quarterly report',
         body_html: '<p>Autosaved update.</p>',
+        body_markdown: 'Autosaved update.',
         attachments: [],
       },
     });
