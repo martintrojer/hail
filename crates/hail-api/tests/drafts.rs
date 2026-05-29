@@ -4,11 +4,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
+use axum::extract::State;
 use axum::http::{Method, Request, StatusCode, header};
+use axum::response::IntoResponse;
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
 use hail_api::routes::drafts::{
-    DraftCreate, DraftDetails, DraftStore, DraftStoreError, DraftUpdate,
+    DraftCreate, DraftDetails, DraftStore, DraftStoreError, DraftUpdate, JmapDraftStore,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -50,6 +52,154 @@ async fn request(
         )
         .await
         .unwrap()
+}
+
+fn production_app(state: AppState) -> Router {
+    let protected = hail_api::routes::drafts::router_with_store(Arc::new(JmapDraftStore)).layer(
+        axum::middleware::from_fn_with_state(state.clone(), require_auth),
+    );
+    Router::new().merge(protected).with_state(state)
+}
+
+#[derive(Debug)]
+struct FakeJmapDraft {
+    id: &'static str,
+    to: &'static str,
+    cc: &'static str,
+    bcc: &'static str,
+    subject: &'static str,
+    html_body: Option<&'static str>,
+    text_body: &'static str,
+}
+
+async fn start_fake_draft_jmap(draft: FakeJmapDraft) -> (String, tokio::task::JoinHandle<()>) {
+    let draft = Arc::new(draft);
+    let app = Router::new()
+        .route(
+            "/.well-known/jmap",
+            axum::routing::get(fake_draft_jmap_session),
+        )
+        .route("/jmap/", axum::routing::post(fake_draft_jmap_api))
+        .with_state(draft);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake draft jmap");
+    let addr = listener.local_addr().expect("fake draft jmap addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("fake draft jmap server");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+async fn fake_draft_jmap_session(headers: axum::http::HeaderMap) -> impl IntoResponse {
+    let base_url = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| format!("http://{host}"))
+        .unwrap_or_else(|| "http://127.0.0.1:0".to_owned());
+    axum::Json(serde_json::json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 50_000_000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10_000_000,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;unicode-casemap"]
+            },
+            "urn:ietf:params:jmap:mail": {
+                "maxMailboxesPerEmail": 16,
+                "maxMailboxDepth": 10,
+                "maxSizeMailboxName": 255,
+                "maxSizeAttachmentsPerEmail": 50_000_000,
+                "emailQuerySortOptions": ["receivedAt"],
+                "mayCreateTopLevelMailbox": true
+            }
+        },
+        "accounts": {
+            "account-test": {
+                "name": "Draft Test Account",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": { "urn:ietf:params:jmap:mail": {} }
+            }
+        },
+        "primaryAccounts": { "urn:ietf:params:jmap:mail": "account-test" },
+        "username": "drafts@example.org",
+        "apiUrl": format!("{base_url}/jmap/"),
+        "downloadUrl": format!("{base_url}/download/{{accountId}}/{{blobId}}/{{name}}?accept={{type}}"),
+        "uploadUrl": format!("{base_url}/upload/{{accountId}}/"),
+        "eventSourceUrl": format!("{base_url}/eventsource/?types={{types}}&closeafter={{closeafter}}&ping={{ping}}"),
+        "state": "fake-state"
+    }))
+}
+
+async fn fake_draft_jmap_api(
+    State(draft): State<Arc<FakeJmapDraft>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let request: Value = serde_json::from_slice(&body).expect("jmap request json");
+    let call = request["methodCalls"]
+        .as_array()
+        .and_then(|calls| calls.first())
+        .expect("single jmap method call");
+    let method = call[0].as_str().expect("jmap method name");
+    let tag = call[2].as_str().unwrap_or("s0");
+    assert_eq!(method, "Email/get");
+
+    let ids = call[1]["ids"]
+        .as_array()
+        .expect("Email/get ids")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let list = ids
+        .iter()
+        .filter(|id| **id == draft.id)
+        .map(|_| draft_email_json(&draft))
+        .collect::<Vec<_>>();
+
+    axum::Json(serde_json::json!({
+        "sessionState": "fake-state",
+        "methodResponses": [[method, {
+            "accountId": "account-test",
+            "state": "fake-get-state",
+            "list": list,
+            "notFound": []
+        }, tag]]
+    }))
+}
+
+fn draft_email_json(draft: &FakeJmapDraft) -> Value {
+    let mut body_values = serde_json::Map::new();
+    body_values.insert(
+        "text-1".to_owned(),
+        serde_json::json!({ "value": draft.text_body, "isTruncated": false }),
+    );
+    let mut html_body = Vec::new();
+    if let Some(html) = draft.html_body {
+        body_values.insert(
+            "html-1".to_owned(),
+            serde_json::json!({ "value": html, "isTruncated": false }),
+        );
+        html_body.push(serde_json::json!({ "partId": "html-1", "type": "text/html" }));
+    }
+
+    serde_json::json!({
+        "id": draft.id,
+        "keywords": { "$draft": true },
+        "to": [{ "name": "Bob", "email": draft.to }],
+        "cc": [{ "name": "Carol", "email": draft.cc }],
+        "bcc": [{ "name": "Dana", "email": draft.bcc }],
+        "subject": draft.subject,
+        "textBody": [{ "partId": "text-1", "type": "text/plain" }],
+        "htmlBody": html_body,
+        "bodyValues": body_values
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -558,6 +708,103 @@ async fn get_draft_returns_saved_composer_fields() {
             draft_id: "draft-1".to_string(),
         }]
     );
+}
+
+#[tokio::test]
+async fn jmap_get_sanitizes_saved_html_before_returning_draft() {
+    let (mut state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "jmap-html-draft@example.org").await;
+    let (_jmap_handle_guard, handle) = start_fake_draft_jmap(FakeJmapDraft {
+        id: "draft-malicious-1",
+        to: "bob@example.org",
+        cc: "carol@example.org",
+        bcc: "dana@example.org",
+        subject: "Saved unsafe draft",
+        html_body: Some(
+            r#"<p onclick="alert(2)">Hello <strong>Bob</strong></p><script>alert(1)</script><a href="javascript:alert(3)">bad link</a><img src="http://evil">"#,
+        ),
+        text_body: "Hello Bob text fallback",
+    })
+    .await;
+    state.config.stalwart.jmap_url = _jmap_handle_guard;
+
+    let resp = production_app(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/drafts/draft-malicious-1")
+                .header(header::COOKIE, format!("hail_session={sid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["draft_id"], "draft-malicious-1");
+    assert_eq!(body["to"], serde_json::json!(["bob@example.org"]));
+    assert_eq!(body["cc"], serde_json::json!(["carol@example.org"]));
+    assert_eq!(body["bcc"], serde_json::json!(["dana@example.org"]));
+    assert_eq!(body["subject"], "Saved unsafe draft");
+    assert_eq!(body["body_markdown"], "Hello Bob text fallback");
+
+    let body_html = body["body_html"].as_str().expect("body_html string");
+    assert!(body_html.contains("Hello <strong>Bob</strong>"));
+    assert!(body_html.contains(">bad link</a>"));
+    let lower_html = body_html.to_ascii_lowercase();
+    assert!(!lower_html.contains("<script"));
+    assert!(!lower_html.contains("alert(1)"));
+    assert!(!lower_html.contains("onclick"));
+    assert!(!lower_html.contains("javascript:"));
+    assert!(!lower_html.contains("<img"));
+    assert!(!lower_html.contains("http://evil"));
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn jmap_get_sanitizes_legacy_text_fallback_html_before_returning_draft() {
+    let (mut state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "jmap-text-draft@example.org").await;
+    let (_jmap_handle_guard, handle) = start_fake_draft_jmap(FakeJmapDraft {
+        id: "draft-text-only-1",
+        to: "bob@example.org",
+        cc: "carol@example.org",
+        bcc: "dana@example.org",
+        subject: "Text only draft",
+        html_body: None,
+        text_body: "Hello [link](javascript:alert(1)) and <b onclick=\"alert(2)\">raw</b>",
+    })
+    .await;
+    state.config.stalwart.jmap_url = _jmap_handle_guard;
+
+    let resp = production_app(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/drafts/draft-text-only-1")
+                .header(header::COOKIE, format!("hail_session={sid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(
+        body["body_markdown"],
+        "Hello [link](javascript:alert(1)) and <b onclick=\"alert(2)\">raw</b>"
+    );
+    let body_html = body["body_html"].as_str().expect("body_html string");
+    assert!(body_html.contains(">link</a>"));
+    assert!(body_html.contains("raw"));
+    let lower_html = body_html.to_ascii_lowercase();
+    assert!(!lower_html.contains("javascript:"));
+    assert!(!lower_html.contains("onclick=\""));
+
+    handle.abort();
 }
 
 #[tokio::test]
