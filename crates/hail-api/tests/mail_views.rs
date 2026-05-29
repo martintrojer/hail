@@ -5,11 +5,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::{Method, Request, StatusCode, header};
+use axum::response::IntoResponse;
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
-    MailView, MailViewClassification, MailViewError, MailViewItem, MailViewProvider,
+    JmapMailViewProvider, MailView, MailViewClassification, MailViewError, MailViewItem,
+    MailViewProvider,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -20,6 +22,14 @@ fn app(state: AppState, provider: Arc<FakeProvider>) -> Router {
     let protected = hail_api::routes::views::router_with_provider(provider).layer(
         axum::middleware::from_fn_with_state(state.clone(), require_auth),
     );
+    Router::new().merge(protected).with_state(state)
+}
+
+fn jmap_app(state: AppState) -> Router {
+    let protected =
+        hail_api::routes::views::router_with_provider(Arc::new(JmapMailViewProvider)).layer(
+            axum::middleware::from_fn_with_state(state.clone(), require_auth),
+        );
     Router::new().merge(protected).with_state(state)
 }
 
@@ -103,12 +113,16 @@ async fn get_view(
     sid: Option<&str>,
     path: &str,
 ) -> axum::response::Response {
+    let req = authed_get(path, sid);
+    app(state, provider).oneshot(req).await.unwrap()
+}
+
+fn authed_get(path: &str, sid: Option<&str>) -> Request<Body> {
     let mut builder = Request::builder().method(Method::GET).uri(path);
     if let Some(sid) = sid {
         builder = builder.header(header::COOKIE, format!("hail_session={sid}"));
     }
-    let req = builder.body(Body::empty()).unwrap();
-    app(state, provider).oneshot(req).await.unwrap()
+    builder.body(Body::empty()).unwrap()
 }
 
 fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
@@ -135,6 +149,169 @@ fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
 
 fn item_with_view(n: i64, view: MailView) -> MailViewItem {
     item(n, view.classification())
+}
+
+#[derive(Clone)]
+struct FakeFeedEmail {
+    id: String,
+    html: String,
+}
+
+struct FakeFeedJmapState {
+    emails: Vec<FakeFeedEmail>,
+    requests: Arc<Mutex<Vec<Value>>>,
+}
+
+async fn start_fake_feed_jmap(
+    emails: Vec<FakeFeedEmail>,
+    requests: Arc<Mutex<Vec<Value>>>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let state = Arc::new(FakeFeedJmapState { emails, requests });
+    let app = Router::new()
+        .route(
+            "/.well-known/jmap",
+            axum::routing::get(fake_feed_jmap_session),
+        )
+        .route("/jmap/", axum::routing::post(fake_feed_jmap_api))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake jmap");
+    let addr = listener.local_addr().expect("fake jmap addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("fake jmap server");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+async fn fake_feed_jmap_session(headers: axum::http::HeaderMap) -> impl IntoResponse {
+    let base_url = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| format!("http://{host}"))
+        .unwrap_or_else(|| "http://127.0.0.1:0".to_owned());
+    axum::Json(serde_json::json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 50_000_000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10_000_000,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;unicode-casemap"]
+            },
+            "urn:ietf:params:jmap:mail": {
+                "maxMailboxesPerEmail": 16,
+                "maxMailboxDepth": 10,
+                "maxSizeMailboxName": 255,
+                "maxSizeAttachmentsPerEmail": 50_000_000,
+                "emailQuerySortOptions": ["receivedAt"],
+                "mayCreateTopLevelMailbox": true
+            }
+        },
+        "accounts": {
+            "account-test": {
+                "name": "Test Account",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    "urn:ietf:params:jmap:mail": {}
+                }
+            }
+        },
+        "primaryAccounts": {
+            "urn:ietf:params:jmap:mail": "account-test"
+        },
+        "username": "feed@example.org",
+        "apiUrl": format!("{base_url}/jmap/"),
+        "downloadUrl": format!("{base_url}/download/{{accountId}}/{{blobId}}/{{name}}?accept={{type}}"),
+        "uploadUrl": format!("{base_url}/upload/{{accountId}}/"),
+        "eventSourceUrl": format!("{base_url}/eventsource/?types={{types}}&closeafter={{closeafter}}&ping={{ping}}"),
+        "state": "fake-state"
+    }))
+}
+
+async fn fake_feed_jmap_api(
+    axum::extract::State(state): axum::extract::State<Arc<FakeFeedJmapState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let request: Value = serde_json::from_slice(&body).expect("jmap request json");
+    state.requests.lock().unwrap().push(request.clone());
+    let call = request["methodCalls"]
+        .as_array()
+        .and_then(|calls| calls.first())
+        .expect("single jmap method call");
+    let method = call[0].as_str().expect("jmap method name");
+    let tag = call[2].as_str().unwrap_or("s0");
+    let response = match method {
+        "Email/query" => {
+            let limit = call[1]["limit"]
+                .as_u64()
+                .unwrap_or(state.emails.len() as u64) as usize;
+            let ids = state
+                .emails
+                .iter()
+                .take(limit)
+                .map(|email| email.id.as_str())
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "accountId": "account-test",
+                "queryState": "fake-email-query-state",
+                "canCalculateChanges": false,
+                "position": 0,
+                "total": ids.len(),
+                "ids": ids
+            })
+        }
+        "Email/get" => {
+            let ids = call[1]["ids"]
+                .as_array()
+                .expect("Email/get ids")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+            let list = ids
+                .iter()
+                .filter_map(|id| state.emails.iter().find(|email| email.id == *id))
+                .map(fake_feed_email_json)
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "accountId": "account-test",
+                "state": "fake-get-state",
+                "list": list,
+                "notFound": []
+            })
+        }
+        other => panic!("unexpected JMAP method {other}"),
+    };
+    axum::Json(serde_json::json!({
+        "sessionState": "fake-state",
+        "methodResponses": [[method, response, tag]]
+    }))
+}
+
+fn fake_feed_email_json(email: &FakeFeedEmail) -> Value {
+    serde_json::json!({
+        "id": email.id,
+        "threadId": format!("thread-{}", email.id),
+        "from": [{"name": "Feed Sender", "email": "feed@example.org"}],
+        "to": [{"name": "Reader", "email": "reader@example.org"}],
+        "cc": [],
+        "bcc": [],
+        "subject": format!("Subject {}", email.id),
+        "preview": "Provider preview",
+        "receivedAt": "2026-05-23T12:15:00Z",
+        "keywords": {"$hail_feed": true},
+        "htmlBody": [{"partId": "html-1", "type": "text/html"}],
+        "textBody": [],
+        "bodyValues": {
+            "html-1": {"value": email.html, "isTruncated": false}
+        }
+    })
 }
 
 #[tokio::test]
@@ -178,6 +355,96 @@ async fn imbox_feed_papertrail_map_to_correct_view_and_classification() {
     assert_eq!(MailView::Drafts.keyword(), "$draft");
     assert_eq!(MailView::Trash.keyword(), "$deleted");
     assert_eq!(MailView::Spam.keyword(), "$hail_spam");
+}
+
+#[tokio::test]
+async fn feed_view_returns_many_inline_body_items() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "feed-many@example.org").await;
+    let provider = Arc::new(FakeProvider::new(
+        (0..35)
+            .map(|n| {
+                let mut item = item_with_view(n, MailView::Feed);
+                item.feed_html = Some(format!("<p>Feed body {n}</p>"));
+                item.feed_blocked_trackers = Some(Vec::new());
+                item
+            })
+            .collect(),
+    ));
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&sid),
+        "/api/views/feed?limit=35",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(provider.calls(), vec![(MailView::Feed, 35)]);
+    let json = json_body(resp).await;
+    let items = json["items"].as_array().expect("feed items");
+    assert_eq!(items.len(), 35);
+    assert_eq!(items[0]["feed_html"], "<p>Feed body 0</p>");
+    assert_eq!(items[34]["feed_html"], "<p>Feed body 34</p>");
+}
+
+#[tokio::test]
+async fn jmap_feed_view_chunks_body_value_fetches() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (mut state, key) = fixture_state().await;
+    let (jmap_url, fake_jmap) = start_fake_feed_jmap(
+        (0..23)
+            .map(|n| FakeFeedEmail {
+                id: format!("feed-email-{n:02}"),
+                html: format!("<article><p>Feed body {n}</p></article>"),
+            })
+            .collect(),
+        requests.clone(),
+    )
+    .await;
+    state.config.stalwart.jmap_url = jmap_url;
+    let (_user_id, sid) = seed_session(&state, &key, "feed-jmap@example.org").await;
+
+    let resp = jmap_app(state)
+        .oneshot(authed_get("/api/views/feed?limit=23", Some(&sid)))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let items = json["items"].as_array().expect("feed items");
+    assert_eq!(items.len(), 23);
+    assert_eq!(
+        items[0]["feed_html"],
+        "<article><p>Feed body 0</p></article>"
+    );
+    assert_eq!(
+        items[22]["feed_html"],
+        "<article><p>Feed body 22</p></article>"
+    );
+
+    let requests = requests.lock().unwrap();
+    let email_gets = requests
+        .iter()
+        .filter_map(|request| {
+            let call = request["methodCalls"].as_array()?.first()?;
+            (call[0].as_str()? == "Email/get").then_some(&call[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(email_gets.len(), 3, "expected chunked Email/get calls");
+    let chunk_lengths = email_gets
+        .iter()
+        .map(|arguments| arguments["ids"].as_array().expect("ids").len())
+        .collect::<Vec<_>>();
+    assert_eq!(chunk_lengths, vec![10, 10, 3]);
+    for arguments in email_gets {
+        assert_eq!(arguments["fetchHTMLBodyValues"], true);
+        assert_eq!(arguments["fetchTextBodyValues"], true);
+        assert_eq!(arguments["maxBodyValueBytes"], 64 * 1024);
+    }
+
+    fake_jmap.abort();
 }
 
 #[tokio::test]

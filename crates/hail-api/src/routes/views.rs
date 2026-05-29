@@ -41,6 +41,8 @@ use crate::state::AppState;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
 const SEARCH_LIMIT: usize = 50;
+const FEED_EMAIL_GET_CHUNK_SIZE: usize = 10;
+const FEED_MAX_BODY_VALUE_BYTES: usize = 64 * 1024;
 
 /// OpenAPI tag for mail views and search endpoints.
 pub const TAG: &str = "views";
@@ -109,30 +111,10 @@ impl MailViewProvider for JmapMailViewProvider {
                 return Ok(Vec::new());
             }
 
-            let mut properties = MAIL_VIEW_PROPERTIES.to_vec();
-            if view == MailView::Feed {
-                properties.extend([
-                    hail_jmap::jmap_client::email::Property::HtmlBody,
-                    hail_jmap::jmap_client::email::Property::TextBody,
-                    hail_jmap::jmap_client::email::Property::BodyValues,
-                ]);
-            }
-
-            let mut request = session.client().build();
-            let get_email = request.get_email();
-            get_email.ids(ids).properties(properties);
-            if view == MailView::Feed {
-                get_email.arguments().fetch_html_body_values(true);
-                get_email.arguments().fetch_text_body_values(true);
-            }
-            let mut response = request
-                .send_get_email()
-                .await
-                .map_err(|err| MailViewError::provider(err.to_string()))?;
+            let emails = fetch_mail_view_emails(&session, ids, view).await?;
 
             let classification = view.classification();
-            response
-                .take_list()
+            emails
                 .into_iter()
                 .map(|email| {
                     let thread_id = required_jmap_field(email.thread_id(), "threadId")
@@ -271,6 +253,45 @@ async fn mail_view_filter(
     }
 
     Ok(Some(filter))
+}
+
+async fn fetch_mail_view_emails(
+    session: &hail_jmap::Session,
+    ids: Vec<String>,
+    view: MailView,
+) -> Result<Vec<hail_jmap::jmap_client::email::Email>, MailViewError> {
+    if view != MailView::Feed {
+        let mut request = session.client().build();
+        request
+            .get_email()
+            .ids(ids)
+            .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
+        let mut response = request
+            .send_get_email()
+            .await
+            .map_err(|err| MailViewError::provider(err.to_string()))?;
+        return Ok(response.take_list());
+    }
+
+    let mut emails = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(FEED_EMAIL_GET_CHUNK_SIZE) {
+        let mut request = session.client().build();
+        let get_email = request.get_email();
+        get_email
+            .ids(chunk.to_vec())
+            .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
+        get_email
+            .arguments()
+            .fetch_html_body_values(true)
+            .fetch_text_body_values(true)
+            .max_body_value_bytes(FEED_MAX_BODY_VALUE_BYTES);
+        let mut response = request
+            .send_get_email()
+            .await
+            .map_err(|err| MailViewError::provider(err.to_string()))?;
+        emails.extend(response.take_list());
+    }
+    Ok(emails)
 }
 
 #[derive(Debug)]
