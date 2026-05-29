@@ -488,8 +488,8 @@ function ScheduledRoutePage() {
 }
 
 function ComposePage() {
-  const { replyTo, replyAll, draftId } = composeRoute.useSearch();
-  return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} draftId={draftId} />;
+  const { replyTo, replyAll, draftId, forward } = composeRoute.useSearch();
+  return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} forwardThreadId={forward} draftId={draftId} />;
 }
 
 function ThreadReplyPage({ threadId }: { threadId: string }) {

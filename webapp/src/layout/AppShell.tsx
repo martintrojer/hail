@@ -322,6 +322,27 @@ function dispatchMailShortcut(action: string) {
   window.dispatchEvent(new CustomEvent('hail:mail-shortcut', { detail: { action } }));
 }
 
+function focusedMailListThreadId() {
+  if (!(document.activeElement instanceof HTMLElement)) {
+    return null;
+  }
+
+  if (document.activeElement.dataset.hailMailListItem === 'true') {
+    return document.activeElement.dataset.hailThreadId ?? null;
+  }
+
+  return null;
+}
+
+function dispatchFocusedMailShortcut(action: string) {
+  if (!focusedMailListThreadId()) {
+    return false;
+  }
+
+  dispatchMailShortcut(action);
+  return true;
+}
+
 function focusReplyBox() {
   const replyBox = document.querySelector<HTMLTextAreaElement>(
     '[data-hail-reply-box="true"]',
@@ -739,7 +760,23 @@ export function AppShell({
     onTrash: () => dispatchMailShortcut('trash'),
     onSetAside: () => dispatchMailShortcut('set-aside'),
     onReplyLater: () => dispatchMailShortcut('reply-later'),
-    onReply: focusReplyBox,
+    onReply: () => {
+      if (!dispatchFocusedMailShortcut('reply')) {
+        focusReplyBox();
+      }
+    },
+    onReplyAll: () => {
+      dispatchFocusedMailShortcut('reply-all');
+    },
+    onForward: () => {
+      dispatchFocusedMailShortcut('forward');
+    },
+    onAddNote: () => {
+      dispatchFocusedMailShortcut('add-note');
+    },
+    onOpenActionMenu: () => {
+      dispatchFocusedMailShortcut('open-menu');
+    },
     onCompose: () => void navigate({ to: '/compose', search: {} }),
     onFocusSearch: () => {
       void navigate({ to: '/search' });

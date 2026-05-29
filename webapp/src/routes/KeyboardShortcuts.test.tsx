@@ -326,4 +326,58 @@ describe('SPA keyboard shortcuts', () => {
     press('l');
     await waitFor(() => expect(client.replyLaterCalls).toEqual(['thread-two']));
   });
+
+  it('routes focused row reply shortcuts and opens the row action menu', async () => {
+    renderKeyboardShortcutPage();
+
+    const first = await screen.findByRole('link', {
+      name: 'Open First shortcut thread from Alice Sender',
+    });
+    press('j');
+    expect(first).toHaveFocus();
+
+    press('r');
+    await waitFor(() => expect(window.location.pathname).toBe('/compose'));
+    expect(window.location.search).toContain('replyTo=thread-one');
+    expect(window.location.search).toContain('replyAll=false');
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    const reloadedFirst = await screen.findByRole('link', {
+      name: 'Open First shortcut thread from Alice Sender',
+    });
+    reloadedFirst.focus();
+    press('a');
+    await waitFor(() => expect(window.location.pathname).toBe('/compose'));
+    expect(window.location.search).toContain('replyTo=thread-one');
+    expect(window.location.search).toContain('replyAll=true');
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    const firstForForward = await screen.findByRole('link', {
+      name: 'Open First shortcut thread from Alice Sender',
+    });
+    firstForForward.focus();
+    press('f');
+    await waitFor(() => expect(window.location.pathname).toBe('/compose'));
+    expect(window.location.search).toContain('forward=thread-one');
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    const firstForNote = await screen.findByRole('link', {
+      name: 'Open First shortcut thread from Alice Sender',
+    });
+    firstForNote.focus();
+    press('n');
+    await waitFor(() => expect(window.location.pathname).toBe('/thread/thread-one'));
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    const firstForMenu = await screen.findByRole('link', {
+      name: 'Open First shortcut thread from Alice Sender',
+    });
+    firstForMenu.focus();
+    press('.');
+    expect(await screen.findByRole('menuitem', { name: 'Reply' })).toBeInTheDocument();
+  });
 });

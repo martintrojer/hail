@@ -93,6 +93,10 @@ function findFocusedThreadId() {
     return null;
   }
 
+  if (document.activeElement.dataset.hailMailListItem !== 'true') {
+    return null;
+  }
+
   return document.activeElement.dataset.hailThreadId ?? null;
 }
 
@@ -149,6 +153,17 @@ export function ActionableList<T>({
       );
       const selectedThreadId = focusedThreadId ?? firstVisibleItem?.dataset.hailThreadId ?? null;
       if (!selectedThreadId || !itemIdSet.has(selectedThreadId)) {
+        return;
+      }
+
+      if (
+        action === 'reply' ||
+        action === 'reply-all' ||
+        action === 'forward' ||
+        action === 'add-note' ||
+        action === 'bubble-up' ||
+        action === 'open-menu'
+      ) {
         return;
       }
 
