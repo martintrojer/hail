@@ -85,7 +85,7 @@ function ReplyPanel({
       cc: [],
       bcc: [],
       subject: '',
-      body_markdown: body.trim(),
+      body_html: `<p>${body.trim()}</p>`,
       attachments: [],
     };
     try {

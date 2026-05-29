@@ -169,7 +169,7 @@ describe('PileSectionPage Reply Later panel', () => {
     expect(client.sendReplyCalls[0]).toEqual({
       threadId: 'thread-1',
       body: {
-        body_markdown: 'I will review this today.',
+        body_html: '<p>I will review this today.</p>',
         attachments: [],
         send_at: undefined,
       },
