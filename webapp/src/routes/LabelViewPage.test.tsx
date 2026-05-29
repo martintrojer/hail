@@ -128,6 +128,54 @@ describe('LabelViewPage', () => {
     expect(client.labelThreadCalls).toEqual([42]);
   });
 
+  it('renders hydrated label chips for multi-label rows', async () => {
+    renderLabelView(
+      42,
+      new LabelViewPageTestClient(
+        Promise.resolve(
+          labelThreadsResponse({
+            items: [
+              {
+                thread_id: 'thread-1',
+                from: 'Alice Sender',
+                subject: 'Invoice update',
+                preview: 'Your invoice is ready.',
+                labels: [
+                  {
+                    id: 42,
+                    name: 'Work/Receipts',
+                    leaf_name: 'Receipts',
+                    path_segments: ['Work', 'Receipts'],
+                    source: 'manual',
+                    color: null,
+                    thread_count: 1,
+                  },
+                  {
+                    id: 99,
+                    name: 'People/Alice',
+                    leaf_name: 'Alice',
+                    path_segments: ['People', 'Alice'],
+                    source: 'manual',
+                    color: null,
+                    thread_count: 3,
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const thread = await screen.findByRole('link', {
+      name: 'Open Invoice update from Alice Sender',
+    });
+    expect(within(thread).getByLabelText('Label Work/Receipts')).toBeInTheDocument();
+    expect(within(thread).getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
+    expect(within(thread).getByLabelText('Label People/Alice')).toBeInTheDocument();
+    expect(within(thread).getByText('Alice')).toHaveAttribute('title', 'People/Alice');
+  });
+
   it('renders an empty state for labels without assigned threads', async () => {
     renderLabelView(
       42,

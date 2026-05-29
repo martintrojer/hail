@@ -49,6 +49,7 @@ function LabelThreadRow({
         receivedAtFallback=""
         selected={selected}
         onToggleSelect={onToggleSelect}
+        labels={item.labels}
       />
     </ThreadLink>
   );
