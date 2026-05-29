@@ -8,6 +8,12 @@ import {
 } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+const closeComposerMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../hooks/useGoBack', () => ({
+  useGoBack: () => closeComposerMock,
+}));
 import type {
   ComposeRequest,
   ComposeResponse,
@@ -191,6 +197,7 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  closeComposerMock.mockReset();
   currentTestBody = null;
   restoreComposeRoute?.();
   restoreComposeRoute = null;
@@ -558,6 +565,66 @@ describe('ComposerPage', () => {
     tiptapEditor.commands.setTextSelection(1);
     fireEvent.keyDown(editor, { key: 'Enter' });
     await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<blockquote>'));
+  });
+
+  it.each([
+    ['Ctrl', { ctrlKey: true }],
+    ['Meta', { metaKey: true }],
+  ] as const)('sends the current editor HTML on %s+Enter from editor focus', async (_label, modifier) => {
+    const client = renderComposer();
+    fireEvent.change(await screen.findByLabelText('To'), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Subject'), {
+      target: { value: 'Shortcut message' },
+    });
+    const editor = await screen.findByLabelText('Body');
+    setEditorHtmlForTest(
+      editor,
+      '<p>Hello <strong>Alice</strong></p><blockquote><p>Previous context</p></blockquote>',
+    );
+    editor.focus();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled());
+    const currentBodyHtml = '<p>Hello <strong>Alice</strong></p><blockquote><p>Previous context</p></blockquote><p></p>';
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', target: editor, ...modifier });
+
+    await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
+    expect(client.sendComposeCalls[0]).toEqual({
+      to: ['alice@example.com'],
+      cc: [],
+      bcc: [],
+      subject: 'Shortcut message',
+      body_html: currentBodyHtml,
+      attachments: [],
+    });
+  });
+
+  it('closes the composer on Escape from editor focus', async () => {
+    renderComposer();
+    await setEditorText('Draft text before closing.');
+    const editor = await screen.findByLabelText('Body');
+    editor.focus();
+
+    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape', target: editor });
+
+    expect(closeComposerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send on Cmd/Ctrl+Enter from editor focus when the form cannot submit', async () => {
+    const client = renderComposer();
+    fireEvent.change(await screen.findByLabelText('Subject'), {
+      target: { value: 'Missing recipient' },
+    });
+    await setEditorText('This body still needs a recipient.');
+    const editor = await screen.findByLabelText('Body');
+    editor.focus();
+    expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', target: editor, ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', target: editor, metaKey: true });
+
+    expect(client.sendComposeCalls).toEqual([]);
   });
 
   it('still sends when no attachments are selected', async () => {
