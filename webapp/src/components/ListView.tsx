@@ -70,12 +70,6 @@ export function ListView<T>({
         </div>
       ) : null}
 
-      {!hasMore && items.length > 0 ? (
-        <p className="py-6 text-center text-xs text-muted-foreground">
-          You&apos;re all caught up
-        </p>
-      ) : null}
-
       <div ref={sentinelRef} aria-hidden="true" className="h-px" />
     </>
   );
