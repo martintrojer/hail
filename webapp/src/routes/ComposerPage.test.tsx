@@ -158,6 +158,7 @@ let restoreComposeRoute: (() => void) | null = null;
 declare global {
   interface Window {
     __HAIL_TEST_EDITOR_UPDATES__?: WeakMap<HTMLElement, (html: string) => void>;
+    __HAIL_TEST_EDITORS__?: WeakMap<HTMLElement, import('@tiptap/react').Editor>;
   }
 }
 
@@ -260,6 +261,12 @@ function setEditorHtmlForTest(editor: HTMLElement, html: string) {
   const update = window.__HAIL_TEST_EDITOR_UPDATES__?.get(editor);
   expect(update).toBeDefined();
   update?.(html);
+}
+
+function testEditorForElement(editor: HTMLElement) {
+  const tiptapEditor = window.__HAIL_TEST_EDITORS__?.get(editor);
+  expect(tiptapEditor).toBeDefined();
+  return tiptapEditor!;
 }
 
 async function setEditorText(text: string) {
@@ -430,6 +437,127 @@ describe('ComposerPage', () => {
       attachments: [],
     });
     expect(client.sendComposeCalls[0]).not.toHaveProperty('body_markdown');
+  });
+
+  it('pre-sanitizes pasted HTML before inserting it', async () => {
+    renderComposer();
+    const editor = await screen.findByLabelText('Body');
+
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (type: string) => {
+          if (type === 'text/html') {
+            return '<p onclick="alert(1)">Safe <strong>text</strong><script>alert(1)</script><iframe src="https://evil.example"></iframe><a href="javascript:alert(1)">bad</a><a href="https://example.com/path">good</a></p>';
+          }
+          return '';
+        },
+      },
+    });
+
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<strong>text</strong>'));
+    const html = await getEditorHtml();
+    expect(html).toContain('Safe');
+    expect(html).toContain('bad');
+    expect(html).toContain('href="https://example.com/path"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('target="_blank"');
+    expect(html).not.toContain('script');
+    expect(html).not.toContain('iframe');
+    expect(html).not.toContain('onclick');
+    expect(html).not.toContain('javascript:');
+  });
+
+  it('auto-links URLs when pasting plain text', async () => {
+    renderComposer();
+    const editor = await screen.findByLabelText('Body');
+
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (type: string) => (type === 'text/plain' ? 'Read https://example.com/docs.' : ''),
+      },
+    });
+
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<a'));
+    const html = await getEditorHtml();
+    expect(html).toContain('href="https://example.com/docs"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('docs</a>.');
+  });
+
+  it('applies and removes links from the link popover', async () => {
+    renderComposer();
+    const editor = await screen.findByLabelText('Body');
+    const tiptapEditor = testEditorForElement(editor);
+    tiptapEditor.commands.setContent('<p>Example link</p>');
+    tiptapEditor.commands.setTextSelection({ from: 1, to: 8 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link' }));
+    fireEvent.change(await screen.findByLabelText('Link URL'), {
+      target: { value: 'javascript:alert(1)' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(await screen.findByText('Enter an http, https, or mailto URL.')).toBeInTheDocument();
+    expect(await getEditorHtml()).not.toContain('javascript:');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link' }));
+    fireEvent.change(await screen.findByLabelText('Link URL'), {
+      target: { value: 'https://example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<a'));
+    let html = await getEditorHtml();
+    expect(html).toContain('href="https://example.com/"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+
+    tiptapEditor.commands.setTextSelection({ from: 1, to: 8 });
+    fireEvent.click(screen.getByRole('button', { name: 'Link' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<a'));
+    html = await getEditorHtml();
+    expect(html).not.toContain('href=');
+  });
+
+  it('supports rich-text keyboard shortcuts for bold, italic, and lists', async () => {
+    renderComposer();
+    const editor = await screen.findByLabelText('Body');
+    const tiptapEditor = testEditorForElement(editor);
+    tiptapEditor.commands.setContent('<p>Bold words</p>');
+    tiptapEditor.commands.setTextSelection({ from: 1, to: 11 });
+
+    fireEvent.keyDown(editor, { key: 'b', ctrlKey: true });
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<strong>Bold words</strong>'));
+
+    fireEvent.keyDown(editor, { key: 'i', ctrlKey: true });
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<strong><em>Bold words</em></strong>'));
+
+    tiptapEditor.commands.setContent('<p>List item</p>');
+    tiptapEditor.commands.setTextSelection(1);
+    fireEvent.keyDown(editor, { key: '8', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<ul>'));
+
+    fireEvent.keyDown(editor, { key: '7', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<ol>'));
+  });
+
+  it('lets Enter leave empty list and quote blocks', async () => {
+    renderComposer();
+    const editor = await screen.findByLabelText('Body');
+    const tiptapEditor = testEditorForElement(editor);
+
+    tiptapEditor.commands.setContent('<ul><li><p></p></li></ul>');
+    tiptapEditor.commands.setTextSelection(3);
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<ul>'));
+
+    tiptapEditor.commands.setContent('<blockquote><p></p></blockquote>');
+    tiptapEditor.commands.setTextSelection(1);
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<blockquote>'));
   });
 
   it('still sends when no attachments are selected', async () => {
