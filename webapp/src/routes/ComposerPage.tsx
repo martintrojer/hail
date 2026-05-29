@@ -124,16 +124,30 @@ function formatParticipant(participant: ThreadParticipant | undefined) {
   return name || participant?.email || 'Unknown sender';
 }
 
-function quotedPreview(message: ThreadMessage) {
-  const preview = message.preview.trim() || 'No preview available.';
-  return preview
-    .split(/\r?\n/)
-    .map((line) => `> ${line}`)
-    .join('\n');
+function escapeHtmlText(value: string) {
+  return value.replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&#39;';
+      default:
+        return character;
+    }
+  });
 }
 
-function buildReplyQuote(message: ThreadMessage) {
-  return `\n\nOn ${formatFullDateTime(message.received_at, 'an earlier message')}, ${formatParticipant(message.from[0])} wrote:\n${quotedPreview(message)}`;
+function buildReplyQuoteHtml(message: ThreadMessage) {
+  const serverQuote = (message as ThreadMessage & { reply_quote_html?: string | null }).reply_quote_html;
+  if (serverQuote?.trim()) return serverQuote;
+
+  return `<p>On ${escapeHtmlText(formatFullDateTime(message.received_at, 'an earlier message'))}, ${escapeHtmlText(formatParticipant(message.from[0]))} wrote:</p><blockquote>${message.html}</blockquote>`;
 }
 
 function prefillFromThread(
@@ -169,7 +183,7 @@ function prefillFromThread(
     cc: cc.join(', '),
     bcc: '',
     subject: replySubject(thread.subject),
-    body: buildReplyQuote(lastMessage),
+    body: buildReplyQuoteHtml(lastMessage),
     sendAt: '',
   };
 }
@@ -226,7 +240,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     cc: splitAddresses(form.cc),
     bcc: splitAddresses(form.bcc),
     subject: form.subject,
-    body_markdown: form.body,
+    body_html: form.body,
     attachments: [],
   }), [form]);
 
@@ -296,7 +310,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       cc: draftQuery.data.cc.join(', '),
       bcc: draftQuery.data.bcc.join(', '),
       subject: draftQuery.data.subject,
-      body: draftQuery.data.body_markdown,
+      body: draftQuery.data.body_html,
       sendAt: '',
     };
     setForm(nextForm);
@@ -307,7 +321,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       cc: draftQuery.data.cc,
       bcc: draftQuery.data.bcc,
       subject: draftQuery.data.subject,
-      body_markdown: draftQuery.data.body_markdown,
+      body_html: draftQuery.data.body_html,
       attachments: [],
     });
     setDirty(false);
@@ -364,7 +378,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       cc: draftPayload.cc,
       bcc: draftPayload.bcc,
       subject: draftPayload.subject,
-      body_markdown: draftPayload.body_markdown,
+      body_html: draftPayload.body_html,
       attachments: [],
       ...(sendAt ? { send_at: sendAt } : {}),
     };
