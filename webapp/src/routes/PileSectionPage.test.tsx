@@ -181,6 +181,22 @@ describe('PileSectionPage Reply Later panel', () => {
   });
 
 
+  it('escapes plaintext replies before wrapping them as HTML', async () => {
+    const client = renderReplyLaterPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Select Launch plan from Alice to reply/ }));
+    fireEvent.change(screen.getByPlaceholderText('Write your reply…'), {
+      target: { value: 'if x < y > 0 then\ncontinue & say "ok"' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+
+    await waitFor(() => expect(client.sendReplyCalls).toHaveLength(1));
+    expect(client.sendReplyCalls[0]?.body.body_html).toBe(
+      '<p>if x &lt; y &gt; 0 then<br/>continue &amp; say &quot;ok&quot;</p>',
+    );
+  });
+
+
   it('keeps Reply Later row selection separate from checkbox selection', async () => {
     renderReplyLaterPage();
 
