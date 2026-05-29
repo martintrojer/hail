@@ -10,6 +10,7 @@ pub mod quote;
 pub use quote::{StrippedText, strip_quoted_history};
 
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 
 use ammonia::{Builder, UrlRelative};
 use html5ever::serialize::{SerializeOpts, TraversalScope};
@@ -48,6 +49,18 @@ pub fn sanitize_and_strip_trackers(input_html: &str) -> SanitizedHtml {
         html_with_remote_images,
         blocked_trackers,
     }
+}
+
+/// Sanitize an outbound compose/draft HTML body before storing or sending.
+///
+/// Outbound HTML is authored by our composer but still treated as untrusted
+/// request input. The allow-list is intentionally narrower than inbound mail
+/// rendering: no images, tables, forms, iframes, scripts, event handlers, or
+/// remote resource-loading attributes. Links may target only explicit safe
+/// schemes and always receive `rel="noopener noreferrer"` and
+/// `target="_blank"`.
+pub fn sanitize_outgoing_html(input_html: &str) -> String {
+    outgoing_sanitizer().clean(input_html).to_string()
 }
 
 /// Convert a plain-text mail body into a safe HTML fragment.
@@ -183,6 +196,71 @@ fn sanitizer() -> Builder<'static> {
         })
         .add_allowed_classes("img", &["hail-cid-inline-image"]);
     builder
+}
+
+fn outgoing_sanitizer() -> Builder<'static> {
+    let mut tag_attributes = HashMap::new();
+    tag_attributes.insert("a", HashSet::from(["href", "title"]));
+
+    let mut builder = Builder::empty();
+    builder
+        .tags(HashSet::from([
+            "a",
+            "b",
+            "strong",
+            "i",
+            "em",
+            "u",
+            "s",
+            "code",
+            "pre",
+            "blockquote",
+            "p",
+            "br",
+            "hr",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "ul",
+            "ol",
+            "li",
+            "span",
+            "div",
+        ]))
+        .tag_attributes(tag_attributes)
+        .clean_content_tags(HashSet::from(["script", "style", "iframe"]))
+        .generic_attributes(HashSet::from(["style"]))
+        .url_schemes(HashSet::from(["http", "https", "mailto"]))
+        .url_relative(UrlRelative::Deny)
+        .link_rel(Some("noopener noreferrer"))
+        .set_tag_attribute_value("a", "target", "_blank")
+        .attribute_filter(|_element, attribute, value| match attribute {
+            "style" => sanitize_outgoing_style(value).map(Cow::Owned),
+            attr if attr.to_ascii_lowercase().starts_with("on") => None,
+            _ => Some(Cow::Borrowed(value)),
+        });
+    builder
+}
+
+fn sanitize_outgoing_style(value: &str) -> Option<String> {
+    let mut declarations = Vec::new();
+
+    for declaration in value.split(';') {
+        let Some((property, raw_value)) = declaration.split_once(':') else {
+            continue;
+        };
+        if !property.trim().eq_ignore_ascii_case("text-align") {
+            continue;
+        }
+
+        let align = raw_value.trim().to_ascii_lowercase();
+        if matches!(align.as_str(), "left" | "center" | "right") {
+            declarations.push(format!("text-align:{align}"));
+        }
+    }
+
+    (!declarations.is_empty()).then(|| declarations.join(";"))
 }
 
 fn strip_tracking_images(
@@ -329,6 +407,94 @@ fn normalize_url_for_scheme_detection(src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_outgoing_drops_script_content() {
+        let sanitized = sanitize_outgoing_html("<p>Hello</p><script>alert(1)</script>");
+
+        assert_eq!(sanitized, "<p>Hello</p>");
+    }
+
+    #[test]
+    fn sanitize_outgoing_drops_iframe_but_keeps_surrounding_text() {
+        let sanitized = sanitize_outgoing_html(
+            r#"before<iframe src="https://evil.example/embed">frame</iframe>after"#,
+        );
+
+        assert_eq!(sanitized, "beforeafter");
+    }
+
+    #[test]
+    fn sanitize_outgoing_drops_event_handlers() {
+        let sanitized = sanitize_outgoing_html(r#"<p onclick="alert(1)">Click me</p>"#);
+
+        assert_eq!(sanitized, "<p>Click me</p>");
+    }
+
+    #[test]
+    fn sanitize_outgoing_strips_javascript_hrefs() {
+        let sanitized = sanitize_outgoing_html(r#"<a href="javascript:alert(1)">click</a>"#);
+
+        assert!(sanitized.starts_with("<a "));
+        assert!(sanitized.ends_with(">click</a>"));
+        assert!(sanitized.contains(r#"rel="noopener noreferrer""#));
+        assert!(sanitized.contains(r#"target="_blank""#));
+        assert!(!sanitized.to_ascii_lowercase().contains("javascript"));
+    }
+
+    #[test]
+    fn sanitize_outgoing_keeps_compose_formatting_tags() {
+        let sanitized = sanitize_outgoing_html(
+            r#"<blockquote><ul><li><code>let x = 1;</code></li></ul><pre>code block</pre></blockquote>"#,
+        );
+
+        assert_eq!(
+            sanitized,
+            "<blockquote><ul><li><code>let x = 1;</code></li></ul><pre>code block</pre></blockquote>"
+        );
+    }
+
+    #[test]
+    fn sanitize_outgoing_leaves_text_untouched() {
+        let sanitized = sanitize_outgoing_html("Hello Alice & Bob < Carol");
+
+        assert_eq!(sanitized, "Hello Alice &amp; Bob &lt; Carol");
+    }
+
+    #[test]
+    fn sanitize_outgoing_normalizes_link_rel_and_target() {
+        let sanitized = sanitize_outgoing_html(
+            r#"<a href="https://example.com/path?q=1&x=2" rel="opener" target="_self">site</a>"#,
+        );
+
+        assert!(sanitized.starts_with(r#"<a href="https://example.com/path?q=1&amp;x=2""#));
+        assert!(sanitized.ends_with(">site</a>"));
+        assert!(sanitized.contains(r#"rel="noopener noreferrer""#));
+        assert!(sanitized.contains(r#"target="_blank""#));
+    }
+
+    #[test]
+    fn sanitize_outgoing_strips_images_and_remote_loaders() {
+        let sanitized = sanitize_outgoing_html(
+            r#"<p>Logo</p><img src="https://example.com/logo.png" alt="logo"><form action="https://example.com"><input name="x"></form>"#,
+        );
+
+        assert_eq!(sanitized, "<p>Logo</p>");
+        assert!(!sanitized.contains("https://example.com/logo.png"));
+        assert!(!sanitized.contains("<form"));
+    }
+
+    #[test]
+    fn sanitize_outgoing_allows_only_safe_text_align_style() {
+        let sanitized = sanitize_outgoing_html(
+            r#"<p style="color:red; text-align: center; background:url(https://evil.example/x)">Centered</p><div style="text-align:justify">No style</div>"#,
+        );
+
+        assert_eq!(
+            sanitized,
+            r#"<p style="text-align:center">Centered</p><div>No style</div>"#
+        );
+    }
 
     #[test]
     fn plaintext_body_is_escaped_and_preserves_line_breaks() {

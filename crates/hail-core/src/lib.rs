@@ -20,7 +20,9 @@ pub use crypto::{
     seal_with_aad,
 };
 pub use mail_classification::{HAIL_SPAM_KEYWORD, MailClassification, SPAM_KEYWORD};
-pub use mail_render::{BlockedTracker, SanitizedHtml, sanitize_and_strip_trackers};
+pub use mail_render::{
+    BlockedTracker, SanitizedHtml, sanitize_and_strip_trackers, sanitize_outgoing_html,
+};
 pub use provider_tokens::{
     EncryptedProviderOAuthToken, ProviderOAuthToken, ProviderOAuthTokenKind, ProviderTokenContext,
     ProviderTokenCryptoError, open_provider_oauth_token, seal_provider_oauth_token,
