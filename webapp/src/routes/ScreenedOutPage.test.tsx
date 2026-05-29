@@ -124,6 +124,13 @@ function response(status: number, body: unknown = {}) {
   });
 }
 
+function openDropdown(button: HTMLElement) {
+  fireEvent.pointerDown(button, {
+    ctrlKey: false,
+    button: 0,
+  });
+}
+
 describe('ScreenedOutPage', () => {
   it('renders blocked senders tab by default and can switch to screened emails', async () => {
     renderScreenedOut();
@@ -142,10 +149,9 @@ describe('ScreenedOutPage', () => {
   it('allows a sender through the routing picker and refreshes the list', async () => {
     const client = renderScreenedOut();
 
-    fireEvent.click(await screen.findAllByRole('button', { name: 'Allow' }).then((buttons) => buttons[0]));
-    expect(
-      screen.getByRole('menu', { name: 'Screener routing destinations' }),
-    ).toBeInTheDocument();
+    const allowButtons = await screen.findAllByRole('button', { name: 'Allow' });
+    openDropdown(allowButtons[0]);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
 
@@ -187,7 +193,8 @@ describe('ScreenedOutPage', () => {
     client.undoFailure = new HailApiError(422, undefined, response(422));
     renderScreenedOut(client);
 
-    fireEvent.click(await screen.findAllByRole('button', { name: 'Allow' }).then((buttons) => buttons[0]));
+    const allowButtons = await screen.findAllByRole('button', { name: 'Allow' });
+    openDropdown(allowButtons[0]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
 
     await waitFor(() => expect(client.undoDenyCalls).toHaveLength(1));
