@@ -31,7 +31,7 @@ import {
 import { Input } from '../ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Separator } from '../ui/separator';
-import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
+import { Toggle } from '../ui/toggle';
 
 export interface RichTextEditorHandle {
   focus: (position?: 'start' | 'end') => void;
@@ -432,44 +432,52 @@ function ComposerToolbar({ editor, onOpenLinkShortcut }: { editor: Editor | null
 
   return (
     <div className="flex flex-wrap items-center gap-1 border-b border-border px-2 py-1">
-      <ToggleGroup type="multiple" variant="default" size="sm" spacing={1} aria-label="Text formatting">
-        <ToggleGroupItem
-          value="bold"
+      <div className="flex w-fit items-center gap-1" role="group" aria-label="Text formatting">
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Bold"
-          data-state={editor?.isActive('bold') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('bold'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleBold().run())}
-          onClick={() => run((current) => current.chain().focus().toggleBold().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleBold().run())}
         >
           <Bold data-icon="inline-start" />
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="italic"
+        </Toggle>
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Italic"
-          data-state={editor?.isActive('italic') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('italic'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleItalic().run())}
-          onClick={() => run((current) => current.chain().focus().toggleItalic().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleItalic().run())}
         >
           <Italic data-icon="inline-start" />
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="underline"
+        </Toggle>
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Underline"
-          data-state={editor?.isActive('underline') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('underline'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleUnderline().run())}
-          onClick={() => run((current) => current.chain().focus().toggleUnderline().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleUnderline().run())}
         >
           <UnderlineIcon data-icon="inline-start" />
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="strike"
+        </Toggle>
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Strike"
-          data-state={editor?.isActive('strike') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('strike'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleStrike().run())}
-          onClick={() => run((current) => current.chain().focus().toggleStrike().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleStrike().run())}
         >
           <Strikethrough data-icon="inline-start" />
-        </ToggleGroupItem>
-      </ToggleGroup>
+        </Toggle>
+      </div>
 
       <Separator orientation="vertical" className="mx-1 h-5" />
 
@@ -494,44 +502,52 @@ function ComposerToolbar({ editor, onOpenLinkShortcut }: { editor: Editor | null
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <ToggleGroup type="multiple" variant="default" size="sm" spacing={1} aria-label="Blocks">
-        <ToggleGroupItem
-          value="bullet-list"
+      <div className="flex w-fit items-center gap-1" role="group" aria-label="Blocks">
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Bullet list"
-          data-state={editor?.isActive('bulletList') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('bulletList'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleBulletList().run())}
-          onClick={() => run((current) => current.chain().focus().toggleBulletList().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleBulletList().run())}
         >
           <List data-icon="inline-start" />
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="ordered-list"
+        </Toggle>
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Ordered list"
-          data-state={editor?.isActive('orderedList') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('orderedList'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleOrderedList().run())}
-          onClick={() => run((current) => current.chain().focus().toggleOrderedList().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleOrderedList().run())}
         >
           <ListOrdered data-icon="inline-start" />
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="blockquote"
+        </Toggle>
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Blockquote"
-          data-state={editor?.isActive('blockquote') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('blockquote'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleBlockquote().run())}
-          onClick={() => run((current) => current.chain().focus().toggleBlockquote().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleBlockquote().run())}
         >
           <Quote data-icon="inline-start" />
-        </ToggleGroupItem>
-        <ToggleGroupItem
-          value="code"
+        </Toggle>
+        <Toggle
+          type="button"
+          variant="default"
+          size="sm"
           aria-label="Inline code"
-          data-state={editor?.isActive('code') ? 'on' : 'off'}
+          pressed={Boolean(editor?.isActive('code'))}
           disabled={!canRun((current) => current.can().chain().focus().toggleCode().run())}
-          onClick={() => run((current) => current.chain().focus().toggleCode().run())}
+          onPressedChange={() => run((current) => current.chain().focus().toggleCode().run())}
         >
           <Code data-icon="inline-start" />
-        </ToggleGroupItem>
-      </ToggleGroup>
+        </Toggle>
+      </div>
 
       <Button
         type="button"
