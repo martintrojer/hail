@@ -335,6 +335,19 @@ function MessageCard({
             </Alert>
           ) : null}
 
+          {notes.length > 0 ? (
+            <div className="mt-5 flex flex-col gap-3">
+              {notes.map((note) => (
+                <InlineNote
+                  key={note.id}
+                  text={note.text}
+                  author={note.author}
+                  timestamp={note.timestamp}
+                />
+              ))}
+            </div>
+          ) : null}
+
           {renderedHtml.trim().length > 0 ? (
             <div
               className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top"
@@ -348,19 +361,6 @@ function MessageCard({
               {message.preview || 'This message has no renderable body.'}
             </p>
           )}
-
-          {notes.length > 0 ? (
-            <div className="mt-5 flex flex-col gap-3">
-              {notes.map((note) => (
-                <InlineNote
-                  key={note.id}
-                  text={note.text}
-                  author={note.author}
-                  timestamp={note.timestamp}
-                />
-              ))}
-            </div>
-          ) : null}
 
           {addingNote ? (
             <Card size="sm" className="mt-5 rounded-r-lg border-l-4 border-l-primary">
