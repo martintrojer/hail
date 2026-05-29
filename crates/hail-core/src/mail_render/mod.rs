@@ -494,6 +494,19 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_outgoing_preserves_real_world_compose_structure() {
+        let input = r#"<p>Hi team,</p><ul><li><p>Review the <a href="https://example.org/doc">launch notes</a></p></li><li><p>Run <code>cargo test</code></p></li></ul><blockquote><p>Alice wrote:</p><p>Ship it.</p></blockquote>"#;
+        let sanitized = sanitize_outgoing_html(input);
+
+        assert!(sanitized.contains("<p>Hi team,</p>"));
+        assert!(sanitized.contains("<ul><li><p>Review the <a href=\"https://example.org/doc\""));
+        assert!(sanitized.contains("rel=\"noopener noreferrer\""));
+        assert!(sanitized.contains("target=\"_blank\""));
+        assert!(sanitized.contains("launch notes</a></p></li><li><p>Run <code>cargo test</code></p></li></ul>"));
+        assert!(sanitized.contains("<blockquote><p>Alice wrote:</p><p>Ship it.</p></blockquote>"));
+    }
+
+    #[test]
     fn sanitize_outgoing_leaves_text_untouched() {
         let sanitized = sanitize_outgoing_html("Hello Alice & Bob < Carol");
 

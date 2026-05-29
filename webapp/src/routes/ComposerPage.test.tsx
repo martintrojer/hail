@@ -67,8 +67,8 @@ class ComposerPageTestClient extends TestHailApiClient {
     cc: ['carol@example.com'],
     bcc: ['dave@example.com'],
     subject: 'Saved draft subject',
-    body_html: '<p>Saved draft body.</p>',
-    body_markdown: 'Saved draft body.',
+    body_html: '<p>Saved draft body.</p><blockquote><p>Earlier context.</p></blockquote>',
+    body_markdown: 'Saved draft body. Earlier context.',
   };
 
   constructor() {
@@ -386,20 +386,50 @@ describe('ComposerPage', () => {
   it('renders the rich-text toolbar and updates editor HTML for formatting toggles', async () => {
     renderComposer();
     await setEditorText('Hello rich text');
+    const editor = await screen.findByLabelText('Body');
 
     fireEvent.click(screen.getByRole('button', { name: 'Bold' }));
-    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<p><strong>Bold words</strong></p>');
+    setEditorHtmlForTest(editor, '<p><strong>Bold words</strong></p>');
     expect(await getEditorHtml()).toContain('<strong>Bold words</strong>');
 
     fireEvent.click(screen.getByRole('button', { name: 'Bold' }));
     fireEvent.click(screen.getByRole('button', { name: 'Italic' }));
-    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<p><em>Italic words</em></p>');
+    setEditorHtmlForTest(editor, '<p><em>Italic words</em></p>');
     expect(await getEditorHtml()).toContain('<em>Italic words</em>');
 
     fireEvent.click(screen.getByRole('button', { name: 'Italic' }));
     fireEvent.click(screen.getByRole('button', { name: 'Bullet list' }));
-    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<ul><li><p>List item</p></li></ul>');
+    setEditorHtmlForTest(editor, '<ul><li><p>List item</p></li></ul>');
     expect(await getEditorHtml()).toContain('<ul>');
+    expect(await getEditorText()).toContain('List item');
+  });
+
+  it('sends the editor HTML without a legacy markdown body', async () => {
+    const client = renderComposer();
+    fireEvent.change(await screen.findByLabelText('To'), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Subject'), {
+      target: { value: 'Rich message' },
+    });
+    setEditorHtmlForTest(
+      await screen.findByLabelText('Body'),
+      '<p>Hello <strong>Alice</strong></p><ul><li><p>First</p></li></ul>',
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+
+    await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
+    expect(client.sendComposeCalls[0]).toEqual({
+      to: ['alice@example.com'],
+      cc: [],
+      bcc: [],
+      subject: 'Rich message',
+      body_html: '<p>Hello <strong>Alice</strong></p><ul><li><p>First</p></li></ul><p></p>',
+      attachments: [],
+    });
+    expect(client.sendComposeCalls[0]).not.toHaveProperty('body_markdown');
   });
 
   it('still sends when no attachments are selected', async () => {
@@ -469,7 +499,8 @@ describe('ComposerPage', () => {
     expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
     expect(screen.getByLabelText('Bcc')).toHaveValue('dave@example.com');
     expect(screen.getByLabelText('Subject')).toHaveValue('Saved draft subject');
-    expect(await getEditorText()).toBe('Saved draft body.');
+    expect(await getEditorText()).toBe('Saved draft body.Earlier context.');
+    expect(await getEditorHtml()).toContain('<blockquote><p>Earlier context.</p></blockquote>');
     expect(client.getDraftCalls).toEqual(['draft-existing']);
 
     await setEditorText('Updated resumed draft body.');
@@ -639,6 +670,34 @@ describe('ComposerPage', () => {
     });
   });
 
+  it('autosave snapshot changes when only body_html changes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = new ComposerPageTestClient();
+    client.draftResponse = {
+      ...client.draftResponse,
+      body_html: '<p>Same visible text</p>',
+      body_markdown: 'Same visible text',
+    };
+    renderComposer({ client, draftId: 'draft-existing' });
+
+    expect(await getEditorText()).toBe('Same visible text');
+    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<blockquote><p>Same visible text</p></blockquote>');
+    await waitFor(() => expect(screen.getByText('Draft not saved yet')).toBeInTheDocument());
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
+    expect(client.updateDraftCalls[0].draftId).toBe('draft-existing');
+    expect(client.updateDraftCalls[0].body).toMatchObject({
+      to: ['alice@example.com', 'bob@example.com'],
+      cc: ['carol@example.com'],
+      bcc: ['dave@example.com'],
+      subject: 'Saved draft subject',
+      body_html: '<blockquote><p>Same visible text</p></blockquote><p></p>',
+      attachments: [],
+    });
+  });
+
   it('shows draft load errors and keeps compose fields available', async () => {
     const client = new ComposerPageTestClient();
     client.getDraftError = apiError(404, { error: 'not_found' });
@@ -766,6 +825,9 @@ describe('ComposerPage', () => {
     renderComposer({ replyToThreadId: 'thread-123' });
 
     expect(screen.getByText('Loading reply details…')).toBeInTheDocument();
+    expect(await getEditorHtml()).toContain(
+      '<blockquote><p>Can you review this?</p></blockquote>',
+    );
     expect((await screen.findByLabelText('Body')).textContent).toContain('Can you review this?');
   });
 
