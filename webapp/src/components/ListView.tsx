@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
-import { Separator } from './ui/separator';
 import { Spinner } from './ui/spinner';
 
 interface ListViewProps<T> {
@@ -72,10 +71,9 @@ export function ListView<T>({
       ) : null}
 
       {!hasMore && items.length > 0 ? (
-        <div className="py-6 text-center">
-          <Separator />
-          <p className="mt-4 text-xs text-muted-foreground">You&apos;re all caught up</p>
-        </div>
+        <p className="py-6 text-center text-xs text-muted-foreground">
+          You&apos;re all caught up
+        </p>
       ) : null}
 
       <div ref={sentinelRef} aria-hidden="true" className="h-px" />
