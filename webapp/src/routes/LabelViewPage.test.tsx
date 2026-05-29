@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { RouterProvider } from '@tanstack/react-router';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LabelThreadsResponse } from '../api/client';
 import { HailApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
@@ -16,15 +16,22 @@ import {
 import { LabelViewPage } from './LabelViewPage';
 
 class LabelViewPageTestClient extends TestHailApiClient {
-  readonly labelThreadCalls: number[] = [];
+  readonly labelThreadCalls: Array<{ labelId: number; cursor?: string }> = [];
 
-  constructor(private readonly response: Promise<LabelThreadsResponse>) {
+  constructor(private readonly responses: Promise<LabelThreadsResponse>[]) {
     super();
   }
 
-  override async getLabelThreads(labelId: number): Promise<LabelThreadsResponse> {
-    this.labelThreadCalls.push(labelId);
-    return this.response;
+  override async getLabelThreads(
+    labelId: number,
+    params: { cursor?: string; limit?: number } = {},
+  ): Promise<LabelThreadsResponse> {
+    this.labelThreadCalls.push({ labelId, cursor: params.cursor });
+    const response = this.responses.shift();
+    if (!response) {
+      throw new Error(`Unexpected label thread request for cursor ${params.cursor ?? 'initial'}`);
+    }
+    return response;
   }
 }
 
@@ -114,7 +121,7 @@ describe('LabelViewPage', () => {
   it('renders the label path header and assigned threads', async () => {
     const client = renderLabelView(
       42,
-      new LabelViewPageTestClient(Promise.resolve(labelThreadsResponse())),
+      new LabelViewPageTestClient([Promise.resolve(labelThreadsResponse())]),
     );
 
     expect(await screen.findByRole('heading', { name: 'Work / Receipts' })).toBeInTheDocument();
@@ -125,13 +132,94 @@ describe('LabelViewPage', () => {
     expect(within(thread).getByText('Alice Sender')).toBeInTheDocument();
     expect(within(thread).getByText('Invoice update')).toBeInTheDocument();
     expect(within(thread).getByText('Your invoice is ready.')).toBeInTheDocument();
-    expect(client.labelThreadCalls).toEqual([42]);
+    expect(client.labelThreadCalls).toEqual([{ labelId: 42, cursor: undefined }]);
+  });
+
+  it('fetches the next cursor page and renders accumulated label threads', async () => {
+    const observerInstances: Array<{
+      callback: IntersectionObserverCallback;
+      observed: Element[];
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    const originalObserver = window.IntersectionObserver;
+    window.IntersectionObserver = vi.fn(function MockIntersectionObserver(
+      this: IntersectionObserver,
+      callback: IntersectionObserverCallback,
+    ) {
+      const instance = {
+        callback,
+        observed: [] as Element[],
+        disconnect: vi.fn(),
+      };
+      observerInstances.push(instance);
+      this.observe = (element: Element) => instance.observed.push(element);
+      this.unobserve = vi.fn();
+      this.disconnect = instance.disconnect;
+      this.takeRecords = () => [];
+      Object.defineProperties(this, {
+        root: { value: null },
+        rootMargin: { value: '' },
+        thresholds: { value: [] },
+      });
+    }) as unknown as typeof IntersectionObserver;
+
+    try {
+      const client = renderLabelView(
+        42,
+        new LabelViewPageTestClient([
+          Promise.resolve(labelThreadsResponse({ next_cursor: '1' })),
+          Promise.resolve(
+            labelThreadsResponse({
+              items: [
+                {
+                  thread_id: 'thread-2',
+                  from: 'Bob Sender',
+                  subject: 'Second invoice',
+                  preview: 'Another invoice is ready.',
+                  labels: [],
+                },
+              ],
+              next_cursor: null,
+            }),
+          ),
+        ]),
+      );
+
+      expect(await screen.findByRole('link', {
+        name: 'Open Invoice update from Alice Sender',
+      })).toBeInTheDocument();
+      await waitFor(() => expect(observerInstances[0]?.observed.length).toBe(1));
+
+      observerInstances[0].callback(
+        [
+          {
+            target: observerInstances[0].observed[0],
+            isIntersecting: true,
+          } as IntersectionObserverEntry,
+        ],
+        {} as IntersectionObserver,
+      );
+
+      expect(await screen.findByRole('link', {
+        name: 'Open Second invoice from Bob Sender',
+      })).toBeInTheDocument();
+      expect(screen.getByRole('link', {
+        name: 'Open Invoice update from Alice Sender',
+      })).toBeInTheDocument();
+      expect(screen.getByText("You're all caught up")).toBeInTheDocument();
+      expect(client.labelThreadCalls).toEqual([
+        { labelId: 42, cursor: undefined },
+        { labelId: 42, cursor: '1' },
+      ]);
+    } finally {
+      window.IntersectionObserver = originalObserver;
+    }
   });
 
   it('renders hydrated label chips for multi-label rows', async () => {
     renderLabelView(
       42,
-      new LabelViewPageTestClient(
+      new LabelViewPageTestClient([
         Promise.resolve(
           labelThreadsResponse({
             items: [
@@ -148,7 +236,7 @@ describe('LabelViewPage', () => {
                     path_segments: ['Work', 'Receipts'],
                     source: 'manual',
                     color: null,
-                    thread_count: 1,
+                    thread_count: 2,
                   },
                   {
                     id: 99,
@@ -164,7 +252,7 @@ describe('LabelViewPage', () => {
             ],
           }),
         ),
-      ),
+      ]),
     );
 
     const thread = await screen.findByRole('link', {
@@ -179,7 +267,7 @@ describe('LabelViewPage', () => {
   it('renders an empty state for labels without assigned threads', async () => {
     renderLabelView(
       42,
-      new LabelViewPageTestClient(Promise.resolve(labelThreadsResponse({ items: [] }))),
+      new LabelViewPageTestClient([Promise.resolve(labelThreadsResponse({ items: [] }))]),
     );
 
     expect(await screen.findByRole('heading', { name: 'Work / Receipts' })).toBeInTheDocument();
@@ -189,9 +277,9 @@ describe('LabelViewPage', () => {
   it('renders not found errors from the label thread API', async () => {
     renderLabelView(
       42,
-      new LabelViewPageTestClient(
+      new LabelViewPageTestClient([
         Promise.reject(new HailApiError(404, {}, response(404))),
-      ),
+      ]),
     );
 
     expect(await screen.findByText('Something went wrong.')).toBeInTheDocument();

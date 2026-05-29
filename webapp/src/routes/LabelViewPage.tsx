@@ -83,10 +83,12 @@ export function LabelViewPage({ labelId, client }: LabelViewPageProps) {
     );
   }
 
-  const title = query.data ? labelPath(query.data.label.name, query.data.label.path_segments) : 'Label';
-  const actions = query.data ? (
+  const data = query.data?.pages[0];
+  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
+  const title = data ? labelPath(data.label.name, data.label.path_segments) : 'Label';
+  const actions = data ? (
     <Badge variant="secondary">
-      {query.data.label.thread_count} {query.data.label.thread_count === 1 ? 'thread' : 'threads'}
+      {data.label.thread_count} {data.label.thread_count === 1 ? 'thread' : 'threads'}
     </Badge>
   ) : null;
 
@@ -103,7 +105,14 @@ export function LabelViewPage({ labelId, client }: LabelViewPageProps) {
   } else {
     list = (
       <ActionableList
-        items={query.data.items}
+        items={items}
+        hasMore={query.hasNextPage}
+        isLoadingMore={query.isFetchingNextPage}
+        onLoadMore={() => {
+          if (query.hasNextPage && !query.isFetchingNextPage) {
+            void query.fetchNextPage();
+          }
+        }}
         actions={{
           client: apiClient,
           availableActions: ['archive', 'trash', 'set-aside', 'reply-later', 'classify'],
