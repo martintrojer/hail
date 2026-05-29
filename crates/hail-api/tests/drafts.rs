@@ -202,6 +202,20 @@ fn draft_email_json(draft: &FakeJmapDraft) -> Value {
     })
 }
 
+fn assert_text_inside_blockquote(html: &str, text: &str) {
+    let blockquote_start = html.find("<blockquote").expect("blockquote start");
+    let blockquote_end = html[blockquote_start..]
+        .find("</blockquote>")
+        .map(|offset| blockquote_start + offset)
+        .expect("blockquote end");
+    let text_position = html.find(text).expect("blockquote text");
+
+    assert!(
+        blockquote_start < text_position && text_position < blockquote_end,
+        "expected {text:?} inside blockquote"
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Call {
     Create {
@@ -721,7 +735,7 @@ async fn jmap_get_sanitizes_saved_html_before_returning_draft() {
         bcc: "dana@example.org",
         subject: "Saved unsafe draft",
         html_body: Some(
-            r#"<p onclick="alert(2)">Hello <strong>Bob</strong></p><script>alert(1)</script><a href="javascript:alert(3)">bad link</a><img src="http://evil">"#,
+            r#"<p>Hi <strong>Bob</strong>,</p><p onclick="alert(1)">Quick note <em>about</em> the doc.</p><blockquote><p>Prior context line 1</p><p>Prior context line 2</p></blockquote><a href="javascript:alert(1)">bad</a><img src="http://tracker/p.gif" /><script>alert(1)</script>"#,
         ),
         text_body: "Hello Bob text fallback",
     })
@@ -750,15 +764,17 @@ async fn jmap_get_sanitizes_saved_html_before_returning_draft() {
     assert_eq!(body["body_markdown"], "Hello Bob text fallback");
 
     let body_html = body["body_html"].as_str().expect("body_html string");
-    assert!(body_html.contains("Hello <strong>Bob</strong>"));
-    assert!(body_html.contains(">bad link</a>"));
+    assert!(body_html.contains("<strong>Bob</strong>"));
+    assert!(body_html.contains("<em>about</em>"));
+    assert!(body_html.contains(">bad</a>"));
+    assert_text_inside_blockquote(body_html, "Prior context line 1");
+    assert_text_inside_blockquote(body_html, "Prior context line 2");
     let lower_html = body_html.to_ascii_lowercase();
     assert!(!lower_html.contains("<script"));
-    assert!(!lower_html.contains("alert(1)"));
     assert!(!lower_html.contains("onclick"));
     assert!(!lower_html.contains("javascript:"));
     assert!(!lower_html.contains("<img"));
-    assert!(!lower_html.contains("http://evil"));
+    assert!(!lower_html.contains("http://tracker"));
 
     handle.abort();
 }
