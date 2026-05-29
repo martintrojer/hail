@@ -153,34 +153,6 @@
 }
 
 @layer components {
-  .hail-page-title {
-    font-size: clamp(2rem, 8vw, 2.5rem);
-    font-weight: 700;
-    line-height: 1.2;
-    letter-spacing: -0.01em;
-  }
-
-  .hail-sender {
-    font-size: 1rem;
-    font-weight: 600;
-    line-height: 1.35;
-    color: var(--color-ink-primary);
-  }
-
-  .hail-subject {
-    font-size: 0.95rem;
-    font-weight: 400;
-    line-height: 1.4;
-    color: var(--color-ink-secondary);
-  }
-
-  .hail-preview {
-    font-size: 0.875rem;
-    font-weight: 400;
-    line-height: 1.4;
-    color: var(--color-ink-tertiary);
-  }
-
   .hail-body {
     font-size: 1.05rem;
     font-weight: 400;
@@ -188,22 +160,8 @@
     color: var(--color-ink-primary);
   }
 
-  .hail-chrome {
-    font-size: 0.875rem;
-    font-weight: 500;
-    line-height: 1.4;
-  }
-
   .focus-ring {
     @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-blue;
-  }
-
-  .hail-badge {
-    font-size: 0.7rem;
-    font-weight: 600;
-    line-height: 1.2;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
   }
 }
 
