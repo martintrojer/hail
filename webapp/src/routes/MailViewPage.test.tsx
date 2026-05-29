@@ -279,6 +279,86 @@ function response(status: number, body: unknown = {}) {
   });
 }
 
+function openRowActions(subject: string) {
+  const trigger = screen.getByRole('button', { name: `Actions for ${subject}` });
+
+  fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' });
+  fireEvent.click(trigger);
+
+  return trigger;
+}
+
+async function clickRowAction(subject: string, action: string) {
+  const trigger = openRowActions(subject);
+  const menuitem = await screen.findByRole('menuitem', { name: action });
+
+  fireEvent.click(menuitem);
+
+  return trigger;
+}
+
+type SingleThreadActionCase = {
+  name: string;
+  menuitem: string;
+  itemOverrides?: Partial<MailViewResponse['items'][number]>;
+  assertCall: (client: MailViewPageTestClient) => void;
+};
+
+const singleThreadActionCases: SingleThreadActionCase[] = [
+  {
+    name: 'Archive',
+    menuitem: 'Archive',
+    assertCall: (client) => expect(client.archiveCalls).toEqual(['thread-one']),
+  },
+  {
+    name: 'Trash',
+    menuitem: 'Trash',
+    assertCall: (client) => expect(client.trashCalls).toEqual(['thread-one']),
+  },
+  {
+    name: 'Set Aside',
+    menuitem: 'Set Aside',
+    assertCall: (client) => expect(client.setAsideCalls).toEqual(['thread-one']),
+  },
+  {
+    name: 'Reply Later',
+    menuitem: 'Reply Later',
+    assertCall: (client) => expect(client.replyLaterCalls).toEqual(['thread-one']),
+  },
+  {
+    name: 'Move to Imbox',
+    menuitem: 'Imbox',
+    assertCall: (client) =>
+      expect(client.classifyCalls).toEqual([{ threadId: 'thread-one', to: 'imbox' }]),
+  },
+  {
+    name: 'Move to Feed',
+    menuitem: 'Feed',
+    assertCall: (client) =>
+      expect(client.classifyCalls).toEqual([{ threadId: 'thread-one', to: 'feed' }]),
+  },
+  {
+    name: 'Move to Paper Trail',
+    menuitem: 'Paper Trail',
+    assertCall: (client) =>
+      expect(client.classifyCalls).toEqual([{ threadId: 'thread-one', to: 'papertrail' }]),
+  },
+  {
+    name: 'Mark read',
+    menuitem: 'Mark read',
+    itemOverrides: { unread: true },
+    assertCall: (client) =>
+      expect(client.markThreadCalls).toEqual([{ threadId: 'thread-one', read: true }]),
+  },
+  {
+    name: 'Mark unread',
+    menuitem: 'Mark unread',
+    itemOverrides: { unread: false },
+    assertCall: (client) =>
+      expect(client.markThreadCalls).toEqual([{ threadId: 'thread-one', read: false }]),
+  },
+];
+
 describe('MailViewPage', () => {
   it('uses a responsive full-width shell for list-only mail views', async () => {
     renderMailView('imbox');
@@ -703,8 +783,8 @@ describe('MailViewPage', () => {
   });
 
 
-  it('opens a per-row quick actions menu and runs a single-thread action', async () => {
-    const client = renderMailView(
+  it('opens a per-row quick actions menu with Radix trigger semantics and aria state', async () => {
+    renderMailView(
       'imbox',
       new MailViewPageTestClient({
         imbox: Promise.resolve(
@@ -714,10 +794,88 @@ describe('MailViewPage', () => {
               from: 'Alice Sender',
               subject: 'First thread',
             }),
+          ]),
+        ),
+      }),
+    );
+
+    await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
+    });
+    const actions = screen.getByRole('button', { name: 'Actions for First thread' });
+
+    expect(actions).toHaveAttribute('aria-label', 'Actions for First thread');
+    expect(actions).toHaveAttribute('aria-haspopup', 'menu');
+    expect(actions).toHaveAttribute('aria-expanded', 'false');
+    expect(actions.closest('[data-hail-row-actions="true"]')).toHaveClass('sm:opacity-0');
+
+    actions.focus();
+    expect(actions).toHaveFocus();
+
+    fireEvent.pointerDown(actions, { button: 0, pointerType: 'mouse' });
+    fireEvent.click(actions);
+
+    expect(await screen.findByRole('menuitem', { name: 'Archive' })).toBeInTheDocument();
+    expect(actions).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() =>
+      expect(screen.queryByRole('menuitem', { name: 'Archive' })).not.toBeInTheDocument(),
+    );
+    expect(actions).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it.each(singleThreadActionCases)(
+    'runs the $name per-row quick action for only its thread',
+    async ({ menuitem, itemOverrides, assertCall }) => {
+      const client = renderMailView(
+        'imbox',
+        new MailViewPageTestClient({
+          imbox: Promise.resolve(
+            mailViewResponse('imbox', [
+              mailItem('imbox', {
+                thread_id: 'thread-one',
+                from: 'Alice Sender',
+                subject: 'First thread',
+                ...itemOverrides,
+              }),
+              mailItem('imbox', {
+                thread_id: 'thread-two',
+                from: 'Bob Sender',
+                subject: 'Second thread',
+                unread: itemOverrides?.unread ?? true,
+              }),
+            ]),
+          ),
+        }),
+      );
+
+      await screen.findByRole('link', {
+        name: 'Open First thread from Alice Sender',
+      });
+      await clickRowAction('First thread', menuitem);
+
+      await waitFor(() => assertCall(client));
+      expect(client.archiveCalls).not.toContain('thread-two');
+      expect(client.trashCalls).not.toContain('thread-two');
+      expect(client.setAsideCalls).not.toContain('thread-two');
+      expect(client.replyLaterCalls).not.toContain('thread-two');
+      expect(client.classifyCalls.map((call) => call.threadId)).not.toContain('thread-two');
+      expect(client.markThreadCalls.map((call) => call.threadId)).not.toContain('thread-two');
+    },
+  );
+
+  it('closes the per-row menu when a menuitem is clicked', async () => {
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
             mailItem('imbox', {
-              thread_id: 'thread-two',
-              from: 'Bob Sender',
-              subject: 'Second thread',
+              thread_id: 'thread-one',
+              from: 'Alice Sender',
+              subject: 'First thread',
             }),
           ]),
         ),
@@ -727,20 +885,45 @@ describe('MailViewPage', () => {
     await screen.findByRole('link', {
       name: 'Open First thread from Alice Sender',
     });
-    const firstActions = screen.getByRole('button', {
-      name: 'Actions for First thread',
+    const trigger = await clickRowAction('First thread', 'Trash');
+
+    await waitFor(() =>
+      expect(screen.queryByRole('menuitem', { name: 'Trash' })).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('does not select or open the thread when the per-row trigger is clicked', async () => {
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-one',
+              from: 'Alice Sender',
+              subject: 'First thread',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
     });
+    const actions = screen.getByRole('button', { name: 'Actions for First thread' });
 
-    expect(firstActions.closest('[data-hail-row-actions="true"]')).toHaveClass('sm:opacity-0');
-    firstActions.focus();
-    expect(firstActions).toHaveFocus();
+    fireEvent.pointerDown(actions, { button: 0, pointerType: 'mouse' });
+    fireEvent.click(actions);
 
-    fireEvent.pointerDown(firstActions, { button: 0, pointerType: 'mouse' });
-    fireEvent.click(firstActions);
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Trash' }));
-
-    await waitFor(() => expect(client.trashCalls).toEqual(['thread-one']));
-    expect(client.trashCalls).not.toContain('thread-two');
+    expect(await screen.findByRole('menuitem', { name: 'Archive' })).toBeInTheDocument();
+    expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Alice Sender' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    expect(window.location.pathname).toBe('/imbox');
   });
 
   it('keeps batch actions distinct from per-row quick actions', async () => {
@@ -783,7 +966,7 @@ describe('MailViewPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('keeps per-row quick actions usable on unselected rows during selection mode', async () => {
+  it('hides per-row quick action triggers only for selected rows', async () => {
     const client = renderMailView(
       'imbox',
       new MailViewPageTestClient({
@@ -807,26 +990,34 @@ describe('MailViewPage', () => {
     const firstLink = await screen.findByRole('link', {
       name: 'Open First thread from Alice Sender',
     });
-    screen.getByRole('link', {
+    expect(screen.getByRole('link', {
       name: 'Open Second thread from Bob Sender',
-    });
+    })).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'Actions for First thread' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for Second thread' })).toBeInTheDocument();
 
     fireEvent.click(within(firstLink).getByRole('checkbox', { name: 'Select Alice Sender' }));
+
     expect(screen.getByText('1 selected')).toBeInTheDocument();
     expect(
-      within(firstLink).queryByRole('button', { name: 'Actions for First thread' }),
+      screen.queryByRole('button', { name: 'Actions for First thread' }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for Second thread' })).toBeInTheDocument();
 
-    const secondActions = screen.getByRole('button', { name: 'Actions for Second thread' });
-    fireEvent.pointerDown(secondActions, { button: 0, pointerType: 'mouse' });
-    fireEvent.click(secondActions);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Actions for Second thread' }), {
+      button: 0,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Second thread' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
 
     await waitFor(() => expect(client.archiveCalls).toEqual(['thread-two']));
+    expect(client.archiveCalls).not.toContain('thread-one');
     expect(screen.getByText('1 selected')).toBeInTheDocument();
   });
 
-  it('supports keyboard activation and dismissal for per-row quick actions', async () => {
+  it('dismisses per-row quick actions with Escape and marks read from the reopened menu', async () => {
     const client = renderMailView(
       'imbox',
       new MailViewPageTestClient({
@@ -846,18 +1037,14 @@ describe('MailViewPage', () => {
     await screen.findByRole('link', {
       name: 'Open First thread from Alice Sender',
     });
-    const actions = screen.getByRole('button', { name: 'Actions for First thread' });
+    const actions = openRowActions('First thread');
 
-    actions.focus();
-    fireEvent.pointerDown(actions, { button: 0, pointerType: 'mouse' });
-    fireEvent.click(actions);
-    await screen.findByRole('menuitem', { name: 'Mark read' });
+    expect(await screen.findByRole('menuitem', { name: 'Mark read' })).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() =>
       expect(screen.queryByRole('menuitem', { name: 'Mark read' })).not.toBeInTheDocument(),
     );
 
-    actions.focus();
     fireEvent.pointerDown(actions, { button: 0, pointerType: 'mouse' });
     fireEvent.click(actions);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark read' }));
