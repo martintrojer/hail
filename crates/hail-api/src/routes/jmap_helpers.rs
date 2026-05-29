@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use hail_core::MailClassification;
+use hail_core::mail_render::{html_fragment_to_text, sanitize_and_strip_trackers};
 use hail_jmap::jmap_client::email::Property;
 use secrecy::SecretString;
 use serde::Serialize;
@@ -16,6 +17,9 @@ pub const MAIL_VIEW_PROPERTIES: &[Property] = &[
     Property::Bcc,
     Property::Subject,
     Property::Preview,
+    Property::HtmlBody,
+    Property::TextBody,
+    Property::BodyValues,
     Property::ReceivedAt,
     Property::Keywords,
 ];
@@ -314,7 +318,7 @@ pub async fn latest_thread_previews(
             ThreadPreview {
                 from: format_from(email.from()),
                 subject: email.subject().unwrap_or_default().to_string(),
-                preview: email.preview().unwrap_or_default().to_string(),
+                preview: preview_from_email(&email),
             },
         );
     }
@@ -348,6 +352,69 @@ pub async fn clear_thread_state(
     if let Err(err) = hail_db::clear_thread_sidecar_state(&state.db, user_id, thread_id).await {
         tracing::warn!(user_id, thread_id = %thread_id, error = %err, "thread sidecar cleanup failed");
     }
+}
+
+pub fn preview_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
+    let jmap_preview = collapse_preview_whitespace(email.preview().unwrap_or_default());
+    if !jmap_preview.is_empty() {
+        return jmap_preview;
+    }
+
+    if let Some(text) = body_from_parts(email, email.text_body()) {
+        let preview = collapse_preview_whitespace(&text);
+        if !preview.is_empty() {
+            return preview;
+        }
+    }
+
+    if let Some(html) = body_from_parts(email, email.html_body()) {
+        let sanitized = sanitize_and_strip_trackers(&html);
+        let preview = collapse_preview_whitespace(&html_fragment_to_text(&sanitized.html));
+        if !preview.is_empty() {
+            return preview;
+        }
+    }
+
+    String::new()
+}
+
+fn body_from_parts(
+    email: &hail_jmap::jmap_client::email::Email,
+    parts: Option<&[hail_jmap::jmap_client::email::EmailBodyPart]>,
+) -> Option<String> {
+    let mut body = String::new();
+    for part in parts? {
+        let Some(part_id) = part.part_id() else {
+            continue;
+        };
+        let Some(value) = email.body_value(part_id) else {
+            continue;
+        };
+        body.push_str(value.value());
+    }
+    Some(body)
+}
+
+fn collapse_preview_whitespace(input: &str) -> String {
+    let mut preview = String::new();
+    for word in input.split_whitespace() {
+        if !preview.is_empty() {
+            preview.push(' ');
+        }
+        preview.push_str(word);
+        if preview.chars().count() >= 200 {
+            return cap_preview(preview);
+        }
+    }
+    cap_preview(preview)
+}
+
+fn cap_preview(input: String) -> String {
+    let mut capped = String::new();
+    for ch in input.chars().take(200) {
+        capped.push(ch);
+    }
+    capped
 }
 
 fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {

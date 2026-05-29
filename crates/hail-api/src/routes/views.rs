@@ -30,7 +30,8 @@ use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{
-    MAIL_VIEW_PROPERTIES, hydrate_thread_previews, jmap_session, trash_mailbox_id,
+    MAIL_VIEW_PROPERTIES, hydrate_thread_previews, jmap_session, preview_from_email,
+    trash_mailbox_id,
 };
 use crate::routes::labels::LabelResponse;
 use crate::routes::response::{bad_request, internal, not_found};
@@ -153,7 +154,7 @@ impl MailViewProvider for JmapMailViewProvider {
                         cc: format_addresses(email.cc()),
                         bcc: format_addresses(email.bcc()),
                         subject: email.subject().unwrap_or_default().to_string(),
-                        preview: email.preview().unwrap_or_default().to_string(),
+                        preview: preview_from_email(&email),
                         received_at: email
                             .received_at()
                             .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
@@ -459,7 +460,7 @@ impl SearchProvider for JmapSearchProvider {
                         email_id,
                         from: format_from(email.from()),
                         subject: email.subject().unwrap_or_default().to_string(),
-                        preview: email.preview().unwrap_or_default().to_string(),
+                        preview: preview_from_email(&email),
                         received_at: email
                             .received_at()
                             .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
