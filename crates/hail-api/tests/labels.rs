@@ -1,8 +1,14 @@
-use axum::body::Body;
+use axum::Router;
+use axum::body::{Body, Bytes};
+use axum::extract::State;
 use axum::http::{Method, Request, StatusCode, header};
+use axum::response::IntoResponse;
 use hail_api::middleware::auth::CSRF_HEADER;
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tower::ServiceExt;
 
 async fn request(
@@ -33,8 +39,192 @@ async fn request(
         .unwrap()
 }
 
+struct JmapEmailFixture {
+    id: &'static str,
+    thread_id: &'static str,
+    from_name: &'static str,
+    from_email: &'static str,
+    subject: &'static str,
+    preview: &'static str,
+}
+
+async fn start_fake_jmap(emails: Vec<JmapEmailFixture>) -> (String, tokio::task::JoinHandle<()>) {
+    let emails = Arc::new(
+        emails
+            .into_iter()
+            .map(|email| (email.thread_id.to_owned(), email))
+            .collect::<HashMap<_, _>>(),
+    );
+    let app = Router::new()
+        .route("/.well-known/jmap", axum::routing::get(fake_jmap_session))
+        .route("/jmap/", axum::routing::post(fake_jmap_api))
+        .with_state(emails);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake jmap");
+    let addr = listener.local_addr().expect("fake jmap addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("fake jmap server");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+async fn fake_jmap_session(
+    State(_emails): State<Arc<HashMap<String, JmapEmailFixture>>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let base_url = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| format!("http://{host}"))
+        .unwrap_or_else(|| "http://127.0.0.1:0".to_owned());
+    axum::Json(serde_json::json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 50_000_000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10_000_000,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;unicode-casemap"]
+            },
+            "urn:ietf:params:jmap:mail": {
+                "maxMailboxesPerEmail": 16,
+                "maxMailboxDepth": 10,
+                "maxSizeMailboxName": 255,
+                "maxSizeAttachmentsPerEmail": 50_000_000,
+                "emailQuerySortOptions": ["receivedAt"],
+                "mayCreateTopLevelMailbox": true
+            }
+        },
+        "accounts": {
+            "account-test": {
+                "name": "Test Account",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    "urn:ietf:params:jmap:mail": {}
+                }
+            }
+        },
+        "primaryAccounts": {
+            "urn:ietf:params:jmap:mail": "account-test"
+        },
+        "username": "labels@example.org",
+        "apiUrl": format!("{base_url}/jmap/"),
+        "downloadUrl": format!("{base_url}/download/{{accountId}}/{{blobId}}/{{name}}?accept={{type}}"),
+        "uploadUrl": format!("{base_url}/upload/{{accountId}}/"),
+        "eventSourceUrl": format!("{base_url}/eventsource/?types={{types}}&closeafter={{closeafter}}&ping={{ping}}"),
+        "state": "fake-state"
+    }))
+}
+
+async fn fake_jmap_api(
+    State(emails): State<Arc<HashMap<String, JmapEmailFixture>>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let request: Value = serde_json::from_slice(&body).expect("jmap request json");
+    let call = request["methodCalls"]
+        .as_array()
+        .and_then(|calls| calls.first())
+        .expect("single jmap method call");
+    let method = call[0].as_str().expect("jmap method name");
+    let tag = call[2].as_str().unwrap_or("s0");
+    let response = match method {
+        "Email/query" => {
+            let requested_threads = collect_requested_threads(&call[1]);
+            let ids = requested_threads
+                .iter()
+                .filter_map(|thread_id| emails.get(thread_id).map(|email| email.id))
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "accountId": "account-test",
+                "queryState": "fake-query-state",
+                "canCalculateChanges": false,
+                "position": 0,
+                "total": ids.len(),
+                "ids": ids
+            })
+        }
+        "Email/get" => {
+            let ids = call[1]["ids"]
+                .as_array()
+                .expect("Email/get ids")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>();
+            let list = ids
+                .iter()
+                .filter_map(|id| emails.values().find(|email| email.id == *id))
+                .map(|email| {
+                    serde_json::json!({
+                        "id": email.id,
+                        "threadId": email.thread_id,
+                        "from": [{
+                            "name": email.from_name,
+                            "email": email.from_email
+                        }],
+                        "subject": email.subject,
+                        "preview": email.preview
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "accountId": "account-test",
+                "state": "fake-get-state",
+                "list": list,
+                "notFound": []
+            })
+        }
+        other => panic!("unexpected JMAP method {other}"),
+    };
+    axum::Json(serde_json::json!({
+        "sessionState": "fake-state",
+        "methodResponses": [[method, response, tag]]
+    }))
+}
+
+fn collect_requested_threads(arguments: &Value) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(thread_id) = map.get("inThread").and_then(Value::as_str) {
+                    out.push(thread_id.to_owned());
+                }
+                for child in map.values() {
+                    walk(child, out);
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    walk(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut thread_ids = Vec::new();
+    walk(
+        arguments.get("filter").unwrap_or(arguments),
+        &mut thread_ids,
+    );
+    thread_ids
+}
+
 fn create_body(name: &str) -> String {
     serde_json::json!({ "name": name }).to_string()
+}
+
+fn item_for_thread<'a>(items: &'a [Value], thread_id: &str) -> &'a Value {
+    items
+        .iter()
+        .find(|item| item["thread_id"] == thread_id)
+        .unwrap_or_else(|| panic!("{thread_id} in response"))
 }
 
 #[tokio::test]
@@ -370,6 +560,95 @@ async fn label_threads_returns_current_user_assigned_threads_with_labels() {
         .map(|label| label["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(label_names, vec!["Important", "Work/Receipts"]);
+}
+
+#[tokio::test]
+async fn label_threads_hydrates_previews_from_jmap_and_keeps_missing_threads_empty() {
+    let (mut state, key) = fixture_state().await;
+    let (jmap_url, fake_jmap) = start_fake_jmap(vec![
+        JmapEmailFixture {
+            id: "email-alpha",
+            thread_id: "thread-alpha",
+            from_name: "Alice Sender",
+            from_email: "alice.sender@example.org",
+            subject: "Alpha fixture subject",
+            preview: "Alpha fixture preview text",
+        },
+        JmapEmailFixture {
+            id: "email-beta",
+            thread_id: "thread-beta",
+            from_name: "Bob Sender",
+            from_email: "bob.sender@example.org",
+            subject: "Beta fixture subject",
+            preview: "Beta fixture preview text",
+        },
+    ])
+    .await;
+    state.config.stalwart.jmap_url = jmap_url;
+    let (user_id, sid) = seed_session(&state, &key, "label-preview@example.org").await;
+    let label = hail_db::labels::create_label(&state.db, user_id, "Hydrated", None)
+        .await
+        .expect("create label");
+    let other_label = hail_db::labels::create_label(&state.db, user_id, "Pinned", Some("gold"))
+        .await
+        .expect("create other label");
+
+    for thread_id in ["thread-missing", "thread-beta", "thread-alpha"] {
+        hail_db::labels::assign_label_to_thread(&state.db, user_id, thread_id, label.id)
+            .await
+            .unwrap_or_else(|err| panic!("assign {thread_id}: {err}"));
+    }
+    hail_db::labels::assign_label_to_thread(&state.db, user_id, "thread-alpha", other_label.id)
+        .await
+        .expect("assign second label");
+
+    let resp = request(
+        state,
+        Method::GET,
+        &format!("/api/labels/{}/threads?limit=10", label.id),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["label"]["id"], label.id);
+    assert_eq!(json["label"]["thread_count"], 3);
+    let items = json["items"].as_array().expect("label thread items");
+    assert_eq!(items.len(), 3);
+
+    let alpha = item_for_thread(items, "thread-alpha");
+    assert_eq!(alpha["from"], "Alice Sender <alice.sender@example.org>");
+    assert_eq!(alpha["subject"], "Alpha fixture subject");
+    assert_eq!(alpha["preview"], "Alpha fixture preview text");
+    assert!(!alpha["from"].as_str().unwrap().is_empty());
+    assert!(!alpha["subject"].as_str().unwrap().is_empty());
+    assert!(!alpha["preview"].as_str().unwrap().is_empty());
+    let alpha_labels = alpha["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|label| label["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(alpha_labels, vec!["Hydrated", "Pinned"]);
+
+    let beta = item_for_thread(items, "thread-beta");
+    assert_eq!(beta["from"], "Bob Sender <bob.sender@example.org>");
+    assert_eq!(beta["subject"], "Beta fixture subject");
+    assert_eq!(beta["preview"], "Beta fixture preview text");
+    assert!(!beta["from"].as_str().unwrap().is_empty());
+    assert!(!beta["subject"].as_str().unwrap().is_empty());
+    assert!(!beta["preview"].as_str().unwrap().is_empty());
+
+    let missing = item_for_thread(items, "thread-missing");
+    assert_eq!(missing["from"], "");
+    assert_eq!(missing["subject"], "");
+    assert_eq!(missing["preview"], "");
+    assert_eq!(missing["labels"][0]["name"], "Hydrated");
+
+    fake_jmap.abort();
 }
 
 #[tokio::test]
