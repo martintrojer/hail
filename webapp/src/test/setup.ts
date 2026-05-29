@@ -11,6 +11,21 @@ Object.defineProperty(window.HTMLElement.prototype, 'scrollIntoView', {
   writable: true,
 });
 
+Object.defineProperty(window.HTMLElement.prototype, 'hasPointerCapture', {
+  value: () => false,
+  writable: true,
+});
+
+Object.defineProperty(window.HTMLElement.prototype, 'releasePointerCapture', {
+  value: vi.fn(),
+  writable: true,
+});
+
+Object.defineProperty(window.HTMLElement.prototype, 'setPointerCapture', {
+  value: vi.fn(),
+  writable: true,
+});
+
 Object.defineProperty(window, 'matchMedia', {
   value: vi.fn().mockImplementation((query: string) => ({
     matches: false,

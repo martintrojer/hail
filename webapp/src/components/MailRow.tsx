@@ -106,27 +106,30 @@ export function MailRowQuickActionsMenu({
         open && 'sm:opacity-100',
       )}
     >
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Actions for ${subject || '(no subject)'}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={listActions.isBusy}
-        onKeyDown={stopKeyEvent}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen(true);
-        }}
-      >
-        <MoreHorizontal aria-hidden="true" />
-      </Button>
       <MessageActionPopup
         open={open}
         onClose={() => setOpen(false)}
         onOpenChange={setOpen}
+        trigger={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Actions for ${subject || '(no subject)'}`}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            disabled={listActions.isBusy}
+            onKeyDown={stopKeyEvent}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen((value) => !value);
+            }}
+          >
+            <MoreHorizontal aria-hidden="true" />
+          </Button>
+        }
         onAction={(action, payload) => {
           void handleAction(action, payload);
         }}
