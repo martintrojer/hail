@@ -1,8 +1,10 @@
-import { useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { cn } from '../lib/utils';
 import { formatDateTime } from '../lib/dates';
 import { actionErrorMessage } from '../lib/errorMessages';
 import { useApiClient } from '../api/ApiClientProvider';
+import { useBubbleUpMutation } from '../api/query';
 import { useListActions } from '../hooks/useListActions';
 import { previewClass, senderNameClass, subjectClass, timeClass } from '../lib/mailRowStyles';
 import { Badge } from './ui/badge';
@@ -13,6 +15,43 @@ import type { HailApiClient } from '../api/client';
 import type { components } from '../api/types';
 import { Button } from './ui/button';
 import { MessageActionPopup, markReadAction, markUnreadAction } from './MessageActionPopup';
+
+function bubbleUpOptionToIso(option: string) {
+  const now = new Date();
+  const target = new Date(now);
+
+  switch (option) {
+    case 'Later today':
+      if (now.getHours() >= 14) {
+        target.setTime(now.getTime() + 3 * 60 * 60 * 1000);
+      } else {
+        target.setHours(17, 0, 0, 0);
+      }
+      break;
+    case 'Tomorrow morning':
+      target.setDate(now.getDate() + 1);
+      target.setHours(9, 0, 0, 0);
+      break;
+    case 'This weekend': {
+      const daysUntilSaturday = (6 - now.getDay() + 7) % 7 || 7;
+      target.setDate(now.getDate() + daysUntilSaturday);
+      target.setHours(10, 0, 0, 0);
+      break;
+    }
+    case 'Next week': {
+      const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
+      target.setDate(now.getDate() + daysUntilMonday);
+      target.setHours(9, 0, 0, 0);
+      break;
+    }
+    case 'Pick a date…':
+    default:
+      target.setTime(now.getTime() + 24 * 60 * 60 * 1000);
+      break;
+  }
+
+  return target.toISOString();
+}
 
 export interface MailRowProps {
   from: string;
@@ -42,16 +81,14 @@ export function MailRowQuickActionsMenu({
   selected: boolean;
   client?: HailApiClient;
 }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const listActions = useListActions({
     client,
     availableActions: ['archive', 'trash', 'set-aside', 'reply-later', 'classify'],
   });
+  const bubbleUp = useBubbleUpMutation(client);
   const apiClient = useApiClient();
-
-  if (!threadId || selected) {
-    return null;
-  }
 
   function stopKeyEvent(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -62,6 +99,31 @@ export function MailRowQuickActionsMenu({
   async function handleAction(action: string, payload?: unknown) {
     setOpen(false);
     if (!threadId) {
+      return;
+    }
+
+    if (action === 'reply') {
+      await navigate({ to: '/compose', search: { replyTo: threadId, replyAll: false } });
+      return;
+    }
+
+    if (action === 'reply-all') {
+      await navigate({ to: '/compose', search: { replyTo: threadId, replyAll: true } });
+      return;
+    }
+
+    if (action === 'forward') {
+      await navigate({ to: '/compose', search: { forward: threadId } });
+      return;
+    }
+
+    if (action === 'add-note') {
+      await navigate({ to: '/thread/$threadId', params: { threadId }, search: { from: undefined } });
+      return;
+    }
+
+    if (action === 'bubble-up') {
+      setOpen(true);
       return;
     }
 
@@ -93,9 +155,58 @@ export function MailRowQuickActionsMenu({
       return;
     }
 
+    if (action === 'mark-spam') {
+      await apiClient.spamThread(threadId);
+      return;
+    }
+
     if (action === 'mark-unread') {
       await apiClient.markThread(threadId, false);
     }
+  }
+
+  async function handleBubbleUpSelect(option: string) {
+    setOpen(false);
+    if (!threadId) {
+      return;
+    }
+
+    await bubbleUp.mutateAsync({
+      threadId,
+      request: { at: bubbleUpOptionToIso(option) },
+    });
+  }
+
+  useEffect(() => {
+    function handleMailShortcut(event: Event) {
+      const customEvent = event as CustomEvent<{ action?: string }>;
+      const action = customEvent.detail?.action;
+      if (!action || document.activeElement?.getAttribute('data-hail-thread-id') !== threadId) {
+        return;
+      }
+
+      if (action === 'open-menu') {
+        setOpen(true);
+        return;
+      }
+
+      if (
+        action === 'reply' ||
+        action === 'reply-all' ||
+        action === 'forward' ||
+        action === 'add-note' ||
+        action === 'bubble-up'
+      ) {
+        void handleAction(action);
+      }
+    }
+
+    window.addEventListener('hail:mail-shortcut', handleMailShortcut);
+    return () => window.removeEventListener('hail:mail-shortcut', handleMailShortcut);
+  }, [threadId]);
+
+  if (!threadId || selected) {
+    return null;
   }
 
   return (
@@ -132,14 +243,9 @@ export function MailRowQuickActionsMenu({
         onAction={(action, payload) => {
           void handleAction(action, payload);
         }}
-        hiddenActions={[
-          'reply',
-          'reply-all',
-          'forward',
-          'bubble-up',
-          'add-note',
-          'mark-spam',
-        ]}
+        onBubbleUpSelect={(option) => {
+          void handleBubbleUpSelect(option);
+        }}
         extraActions={[unread ? markReadAction : markUnreadAction]}
       />
       {listActions.error ? (

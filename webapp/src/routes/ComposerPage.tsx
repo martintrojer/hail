@@ -41,6 +41,7 @@ import { composeErrorMessage } from '../lib/errorMessages';
 interface ComposerPageProps {
   replyToThreadId?: string;
   replyAll?: boolean;
+  forwardThreadId?: string;
   draftId?: string;
   initialTo?: string[];
   initialSubject?: string;
@@ -150,6 +151,10 @@ function replySubject(subject: string) {
   return /^\s*re:/i.test(subject) ? subject : `Re: ${subject}`;
 }
 
+function forwardSubject(subject: string) {
+  return /^\s*fwd?:/i.test(subject) ? subject : `Fwd: ${subject}`;
+}
+
 function formatParticipant(participant: ThreadParticipant | undefined) {
   const name = participant?.name?.trim();
   return name || participant?.email || 'Unknown sender';
@@ -181,12 +186,8 @@ function buildReplyQuoteHtml(message: ThreadMessage) {
   return `<p>On ${escapeHtmlText(formatFullDateTime(message.received_at, 'an earlier message'))}, ${escapeHtmlText(formatParticipant(message.from[0]))} wrote:</p><blockquote>${message.html}</blockquote>`;
 }
 
-function prefillFromThread(
-  thread: ThreadViewResponse,
-  replyAll: boolean,
-  currentUserEmail: string | undefined,
-): ComposerForm | null {
-  const messages = [...thread.messages].sort((left, right) => {
+function sortedThreadMessages(thread: ThreadViewResponse) {
+  return [...thread.messages].sort((left, right) => {
     const leftTime = Date.parse(left.received_at ?? '');
     const rightTime = Date.parse(right.received_at ?? '');
     if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
@@ -194,6 +195,14 @@ function prefillFromThread(
     if (Number.isNaN(rightTime)) return 1;
     return leftTime - rightTime;
   });
+}
+
+function prefillFromThread(
+  thread: ThreadViewResponse,
+  replyAll: boolean,
+  currentUserEmail: string | undefined,
+): ComposerForm | null {
+  const messages = sortedThreadMessages(thread);
   const lastMessage = messages.at(-1);
   if (!lastMessage) return null;
 
@@ -219,11 +228,26 @@ function prefillFromThread(
   };
 }
 
+function prefillForwardFromThread(thread: ThreadViewResponse): ComposerForm | null {
+  const messages = sortedThreadMessages(thread);
+  const lastMessage = messages.at(-1);
+  if (!lastMessage) return null;
+
+  return {
+    to: '',
+    cc: '',
+    bcc: '',
+    subject: forwardSubject(thread.subject),
+    body: buildReplyQuoteHtml(lastMessage),
+    sendAt: '',
+  };
+}
+
 function placeCaretAtStart(editor: RichTextEditorHandle | null) {
   editor?.focus('start');
 }
 
-export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initialDraftId, initialTo = [], initialSubject = '', client }: ComposerPageProps) {
+export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadId, draftId: initialDraftId, initialTo = [], initialSubject = '', client }: ComposerPageProps) {
   const contextClient = useApiClient();
   const apiClient = client ?? contextClient;
   const closeComposer = useGoBack();
@@ -246,11 +270,13 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   const bodyRef = useRef<RichTextEditorHandle | null>(null);
   const snapshotRef = useRef('');
   const replyPrefillKeyRef = useRef<string | null>(null);
+  const forwardPrefillKeyRef = useRef<string | null>(null);
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
   const createDraft = useCreateDraftMutation(apiClient);
-  const draftQuery = useDraft(initialDraftId, apiClient, { enabled: Boolean(initialDraftId) && !replyToThreadId });
+  const draftQuery = useDraft(initialDraftId, apiClient, { enabled: Boolean(initialDraftId) && !replyToThreadId && !forwardThreadId });
   const replyThreadQuery = useThread(replyToThreadId ?? '', apiClient, { enabled: Boolean(replyToThreadId) });
+  const forwardThreadQuery = useThread(forwardThreadId ?? '', apiClient, { enabled: Boolean(forwardThreadId) && !replyToThreadId });
   const updateDraft = useUpdateDraftMutation(apiClient);
   const hasUnsupportedAttachments = attachments.length > 0;
   const sendCompose = useSendComposeMutation(apiClient, {
@@ -275,9 +301,10 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     };
   }, [form]);
 
-  const canSaveDraft = !replyToThreadId;
+  const canSaveDraft = !replyToThreadId && !forwardThreadId;
   const replyPrefillLoading = Boolean(replyToThreadId) && replyThreadQuery.isLoading;
-  const prefillLoading = replyPrefillLoading || draftQuery.isLoading;
+  const forwardPrefillLoading = Boolean(forwardThreadId) && !replyToThreadId && forwardThreadQuery.isLoading;
+  const prefillLoading = replyPrefillLoading || forwardPrefillLoading || draftQuery.isLoading;
   const canSubmit = !prefillLoading
     && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
     && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
@@ -335,7 +362,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   }
 
   useEffect(() => {
-    if (!initialDraftId || replyToThreadId || !draftQuery.data) return;
+    if (!initialDraftId || replyToThreadId || forwardThreadId || !draftQuery.data) return;
 
     const loadedBody = draftBodyFromResponse(draftQuery.data);
     const nextForm = {
@@ -360,13 +387,13 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
     setDirty(false);
     setLastSavedAt(null);
     setSendError(null);
-  }, [draftQuery.data, initialDraftId, replyToThreadId]);
+  }, [draftQuery.data, initialDraftId, replyToThreadId, forwardThreadId]);
 
   useEffect(() => {
-    if (draftQuery.isError && initialDraftId && !replyToThreadId) {
+    if (draftQuery.isError && initialDraftId && !replyToThreadId && !forwardThreadId) {
       setSendError(composeErrorMessage(draftQuery.error, 'Draft could not be loaded.'));
     }
-  }, [draftQuery.error, draftQuery.isError, initialDraftId, replyToThreadId]);
+  }, [draftQuery.error, draftQuery.isError, initialDraftId, replyToThreadId, forwardThreadId]);
 
   useEffect(() => {
     if (!replyToThreadId) {
@@ -395,10 +422,39 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   }, [replyThreadQuery.error, replyThreadQuery.isError, replyToThreadId]);
 
   useEffect(() => {
+    if (!forwardThreadId || replyToThreadId) {
+      forwardPrefillKeyRef.current = null;
+      return;
+    }
+    if (!forwardThreadQuery.data) return;
+
+    const prefillKey = forwardThreadId;
+    if (forwardPrefillKeyRef.current === prefillKey) return;
+
+    setSendError(null);
+    const nextForm = prefillForwardFromThread(forwardThreadQuery.data);
+    if (nextForm) {
+      setForm(nextForm);
+      setShowCarbonCopyFields(false);
+      setDirty(false);
+    }
+    forwardPrefillKeyRef.current = prefillKey;
+  }, [forwardThreadId, forwardThreadQuery.data, replyToThreadId]);
+
+  useEffect(() => {
+    if (forwardThreadQuery.isError && forwardThreadId && !replyToThreadId) {
+      setSendError(composeErrorMessage(forwardThreadQuery.error, 'Forward details could not be loaded.'));
+    }
+  }, [forwardThreadId, forwardThreadQuery.error, forwardThreadQuery.isError, replyToThreadId]);
+
+  useEffect(() => {
     if (replyToThreadId && !replyPrefillLoading) {
       placeCaretAtStart(bodyRef.current);
     }
-  }, [replyPrefillLoading, replyToThreadId]);
+    if (forwardThreadId && !forwardPrefillLoading) {
+      placeCaretAtStart(bodyRef.current);
+    }
+  }, [forwardPrefillLoading, forwardThreadId, replyPrefillLoading, replyToThreadId]);
 
   useEffect(() => {
     const timer = window.setInterval(saveDraft, autosaveIntervalMs);
@@ -456,7 +512,9 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
   const autosaveText = replyToThreadId
     ? 'Replies send through the thread reply API.'
-    : savingDraft
+    : forwardThreadId
+      ? 'Forward this thread to new recipients.'
+      : savingDraft
       ? 'Saving draft…'
       : lastSavedAt
         ? 'Draft saved'
@@ -466,7 +524,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
 
   return (
     <AppShell
-      title={replyToThreadId ? 'Reply' : 'Compose'}
+      title={replyToThreadId ? 'Reply' : forwardThreadId ? 'Forward' : 'Compose'}
       contentLayout="composer"
       reading={
         <section className="flex min-h-[calc(100vh-11rem)] flex-col" aria-labelledby="composer-title">
@@ -482,13 +540,13 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
           </Button>
 
           <div className="sr-only">
-            <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : 'Compose message'}</h2>
+            <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : forwardThreadId ? 'Forward thread' : 'Compose message'}</h2>
           </div>
 
           {prefillLoading ? (
             <Card className="flex min-h-[22rem] flex-1 items-center justify-center text-muted-foreground">
               <CardContent>
-                {draftQuery.isLoading ? 'Loading draft…' : 'Loading reply details…'}
+                {draftQuery.isLoading ? 'Loading draft…' : forwardPrefillLoading ? 'Loading forward details…' : 'Loading reply details…'}
               </CardContent>
             </Card>
           ) : (
@@ -506,7 +564,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                       placeholder="alice@example.com, bob@example.com"
                       className={lineInputClass}
                       autoComplete="email"
-                      autoFocus={!replyToThreadId && !initialDraftId}
+                      autoFocus={!replyToThreadId && !forwardThreadId && !initialDraftId}
                     />
                     <Button
                       type="button"
@@ -577,7 +635,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                   aria-label="Body"
                   value={form.body}
                   onChange={(html) => updateField('body', html)}
-                  autoFocus={Boolean(replyToThreadId)}
+                  autoFocus={Boolean(replyToThreadId || forwardThreadId)}
                 />
               </Field>
             </div>
@@ -603,7 +661,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
                   />
                 </Field>
               </div>
-              <Badge variant="outline" className={`transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId ? 'opacity-100' : 'opacity-0'}`}>
+              <Badge variant="outline" className={`transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId || forwardThreadId ? 'opacity-100' : 'opacity-0'}`}>
                 {autosaveText}
               </Badge>
             </div>

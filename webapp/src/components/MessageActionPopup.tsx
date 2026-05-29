@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { BubbleUpDropdownSub } from './BubbleUpSubmenu';
 import {
   Archive,
   Bookmark,
@@ -34,6 +35,8 @@ export interface MessageActionPopupProps {
   hiddenActions?: string[];
   /** Optional actions to append for list-row state toggles. */
   extraActions?: ActionItem[];
+  /** Optional handler for the Bubble Up submenu. */
+  onBubbleUpSelect?: (option: string) => void;
 }
 
 export interface ActionItem {
@@ -80,6 +83,7 @@ export function MessageActionPopup({
   trigger,
   hiddenActions = [],
   extraActions = [],
+  onBubbleUpSelect,
 }: MessageActionPopupProps) {
   function runAction(action: string, payload?: unknown) {
     onAction(action, payload);
@@ -118,11 +122,19 @@ export function MessageActionPopup({
 
         <DropdownMenuGroup>
           {filteredGroups[1].map((item) => (
-            <MessageMenuItem
-              key={item.action}
-              item={item}
-              onSelect={() => runAction(item.action, item.payload)}
-            />
+            item.action === 'bubble-up' && onBubbleUpSelect ? (
+              <BubbleUpMenuItem
+                key={item.action}
+                item={item}
+                onSelect={onBubbleUpSelect}
+              />
+            ) : (
+              <MessageMenuItem
+                key={item.action}
+                item={item}
+                onSelect={() => runAction(item.action, item.payload)}
+              />
+            )
           ))}
         </DropdownMenuGroup>
 
@@ -180,6 +192,23 @@ export function MessageActionPopup({
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function BubbleUpMenuItem({
+  item,
+  onSelect,
+}: {
+  item: ActionItem;
+  onSelect: (option: string) => void;
+}) {
+  const Icon = item.icon;
+
+  return (
+    <BubbleUpDropdownSub onSelect={onSelect}>
+      <Icon aria-hidden="true" />
+      <span>{item.label}</span>
+    </BubbleUpDropdownSub>
   );
 }
 

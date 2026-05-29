@@ -16,6 +16,7 @@ import { ApiClientProvider } from '../api/ApiClientProvider';
 import { AuthProvider } from '../auth/AuthProvider';
 import { UndoToastProvider } from '../components/UndoToastProvider';
 import { router } from '../router';
+import { queryClient as appQueryClient } from '../lib/queryClient';
 import {
   createTestQueryClient,
   renderWithQueryClient,
@@ -45,6 +46,7 @@ class MailViewPageTestClient extends TestHailApiClient {
   readonly markThreadCalls: Array<{ threadId: string; read: boolean }> = [];
   readonly replyLaterCalls: string[] = [];
   readonly assignLabelToThreadsCalls: Array<{ threadIds: string[]; labelId?: number | null; labelName?: string | null }> = [];
+  readonly bubbleUpCalls: Array<{ threadId: string; at: string }> = [];
   failingActions = new Set<string>();
 
   constructor(
@@ -118,6 +120,19 @@ class MailViewPageTestClient extends TestHailApiClient {
   ): Promise<ThreadVerbResponse> {
     this.replyLaterCalls.push(threadId);
     return this.threadVerbResponse('reply-later');
+  }
+
+  override async bubbleUpThread(
+    threadId: string,
+    body: { at: string },
+  ): Promise<{ bubble_id: number; surface_at: string }> {
+    this.bubbleUpCalls.push({ threadId, at: body.at });
+    return { bubble_id: 1, surface_at: body.at };
+  }
+
+  override async spamThread(threadId: string): Promise<ThreadVerbResponse> {
+    this.trashCalls.push(`spam:${threadId}`);
+    return this.threadVerbResponse('spam');
   }
 
   override async listLabels(): Promise<LabelListResponse> {
@@ -214,6 +229,7 @@ function renderMailView(
   const queryClient = createTestQueryClient();
 
   seedMe(queryClient);
+  seedMe(appQueryClient);
 
   currentTestBody = (
     <ApiClientProvider client={client}>
@@ -356,6 +372,11 @@ const singleThreadActionCases: SingleThreadActionCase[] = [
     itemOverrides: { unread: false },
     assertCall: (client) =>
       expect(client.markThreadCalls).toEqual([{ threadId: 'thread-one', read: false }]),
+  },
+  {
+    name: 'Mark as spam',
+    menuitem: 'Mark as spam',
+    assertCall: (client) => expect(client.trashCalls).toEqual(['spam:thread-one']),
   },
 ];
 
@@ -865,6 +886,83 @@ describe('MailViewPage', () => {
       expect(client.markThreadCalls.map((call) => call.threadId)).not.toContain('thread-two');
     },
   );
+
+  it('navigates per-row reply, reply all, forward, and add-note actions', async () => {
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-one',
+              from: 'Alice Sender',
+              subject: 'First thread',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
+    });
+
+    await clickRowAction('First thread', 'Reply');
+    await waitFor(() => expect(window.location.pathname).toBe('/compose'));
+    expect(window.location.search).toContain('replyTo=thread-one');
+    expect(window.location.search).toContain('replyAll=false');
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    await screen.findByRole('link', { name: 'Open First thread from Alice Sender' });
+    await clickRowAction('First thread', 'Reply All');
+    await waitFor(() => expect(window.location.pathname).toBe('/compose'));
+    expect(window.location.search).toContain('replyTo=thread-one');
+    expect(window.location.search).toContain('replyAll=true');
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    await screen.findByRole('link', { name: 'Open First thread from Alice Sender' });
+    await clickRowAction('First thread', 'Forward');
+    await waitFor(() => expect(window.location.pathname).toBe('/compose'));
+    expect(window.location.search).toContain('forward=thread-one');
+
+    window.history.pushState({}, '', '/imbox');
+    await router.invalidate();
+    await screen.findByRole('link', { name: 'Open First thread from Alice Sender' });
+    await clickRowAction('First thread', 'Add a Note');
+    await waitFor(() => expect(window.location.pathname).toBe('/thread/thread-one'));
+  });
+
+  it('schedules a bubble-up from the per-row submenu', async () => {
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-one',
+              from: 'Alice Sender',
+              subject: 'First thread',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    await screen.findByRole('link', {
+      name: 'Open First thread from Alice Sender',
+    });
+    openRowActions('First thread');
+    const bubbleUpTrigger = await screen.findByRole('menuitem', { name: 'Bubble Up' });
+    fireEvent.pointerMove(bubbleUpTrigger);
+    fireEvent.pointerEnter(bubbleUpTrigger);
+    fireEvent.keyDown(bubbleUpTrigger, { key: 'ArrowRight' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tomorrow morning' }));
+
+    await waitFor(() => expect(client.bubbleUpCalls).toHaveLength(1));
+    expect(client.bubbleUpCalls[0].threadId).toBe('thread-one');
+  });
 
   it('closes the per-row menu when a menuitem is clicked', async () => {
     renderMailView(
