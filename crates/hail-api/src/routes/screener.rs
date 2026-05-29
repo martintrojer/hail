@@ -30,7 +30,7 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{MAIL_VIEW_PROPERTIES, jmap_session};
+use crate::routes::jmap_helpers::{MAIL_VIEW_PROPERTIES, jmap_session, preview_from_email};
 use crate::routes::response::{bad_request, internal};
 use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
@@ -540,10 +540,12 @@ async fn enrich_screener_senders(
     email_ids.dedup();
 
     let mut request = session.client().build();
-    request
-        .get_email()
+    let get_email = request.get_email();
+    get_email
         .ids(email_ids)
         .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
+    get_email.arguments().fetch_text_body_values(true);
+    get_email.arguments().fetch_html_body_values(true);
     let mut response = request
         .send_get_email()
         .await
@@ -557,15 +559,16 @@ async fn enrich_screener_senders(
             let received_at = email
                 .received_at()
                 .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+            let preview_text = preview_from_email(&email);
             let summary = ScreenerEmail {
                 email_id: email_id.clone(),
                 subject: email.subject().unwrap_or_default().to_string(),
-                preview: email.preview().unwrap_or_default().to_string(),
+                preview: preview_text.clone(),
                 received_at,
             };
             let preview = ScreenerLatestPreview {
                 subject: summary.subject.clone(),
-                preview: summary.preview.clone(),
+                preview: preview_text,
                 from: format_from(email.from()),
                 received_at,
             };

@@ -70,6 +70,82 @@ pub fn plaintext_body_to_html(input_text: &str) -> String {
     html
 }
 
+/// Convert a sanitized HTML fragment into plain text suitable for compact
+/// previews. Tags are treated as structural whitespace and text nodes are
+/// decoded by the HTML parser before being appended.
+pub fn html_fragment_to_text(input_html: &str) -> String {
+    let dom = parse_fragment(
+        RcDom::default(),
+        Default::default(),
+        QualName::new(None, ns!(html), local_name!("body")),
+        Vec::new(),
+        false,
+    )
+    .one(input_html);
+
+    let mut output = String::new();
+    collect_text_from_html(&dom.document, &mut output);
+    output
+}
+
+fn collect_text_from_html(handle: &Handle, output: &mut String) {
+    match &handle.data {
+        NodeData::Text { contents } => output.push_str(&contents.borrow()),
+        NodeData::Element { name, .. } if is_html_text_break(name.local.as_ref()) => {
+            output.push(' ');
+        }
+        _ => {}
+    }
+
+    for child in handle.children.borrow().iter() {
+        collect_text_from_html(child, output);
+    }
+
+    if let NodeData::Element { name, .. } = &handle.data
+        && is_html_text_break(name.local.as_ref())
+    {
+        output.push(' ');
+    }
+}
+
+fn is_html_text_break(tag: &str) -> bool {
+    matches!(
+        tag,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "br"
+            | "dd"
+            | "div"
+            | "dl"
+            | "dt"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "li"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "td"
+            | "th"
+            | "tr"
+            | "ul"
+    )
+}
+
 fn escape_text_into(input: &str, output: &mut String) {
     for ch in input.chars() {
         match ch {

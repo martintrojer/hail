@@ -191,7 +191,7 @@ describe('ScreenerPage', () => {
     expect(screen.getByText('Earlier newsletter issue.')).toBeInTheDocument();
     expect(screen.getByText('May 22, 2026')).toBeInTheDocument();
     expect(screen.getByText('No subject')).toBeInTheDocument();
-    expect(screen.getByText('Preview unavailable.')).toBeInTheDocument();
+    expect(screen.queryByText('Preview unavailable.')).not.toBeInTheDocument();
     expect(screen.getByText('Date unavailable')).toBeInTheDocument();
   });
 

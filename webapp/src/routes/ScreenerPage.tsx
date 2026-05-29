@@ -121,9 +121,7 @@ function PendingSenderCard({
     email: sender.sender || 'unknown address',
   };
   const subject = subjectText(sender.latest_preview) ?? 'First message from this sender';
-  const preview =
-    previewText(sender.latest_preview) ??
-    'Preview unavailable until this message is indexed.';
+  const preview = previewText(sender.latest_preview);
   const emails = sender.emails ?? [];
   const expandedId = `screener-emails-${encodeURIComponent(sender.sender)}`;
   const pendingEmailCount = sender.message_count ?? emails.length;
@@ -181,9 +179,11 @@ function PendingSenderCard({
 
                 <div className="mt-4 flex flex-col gap-2">
                   <p className="text-sm leading-6 text-card-foreground">{subject}</p>
-                  <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">
-                    {preview}
-                  </p>
+                  {preview ? (
+                    <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">
+                      {preview}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </Button>
@@ -214,9 +214,11 @@ function PendingSenderCard({
                         {formatDate(email.received_at)}
                       </time>
                     </div>
-                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
-                      {email.preview || 'Preview unavailable.'}
-                    </p>
+                    {email.preview ? (
+                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                        {email.preview}
+                      </p>
+                    ) : null}
                   </li>
                 ))}
               </ul>
