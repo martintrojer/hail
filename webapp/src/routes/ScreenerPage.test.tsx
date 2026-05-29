@@ -195,6 +195,84 @@ describe('ScreenerPage', () => {
     expect(screen.getByText('Date unavailable')).toBeInTheDocument();
   });
 
+  it('hides empty preview lines instead of rendering unavailable placeholder copy', async () => {
+    renderScreener(
+      new ScreenerPageTestClient({
+        view: sampleScreenerView({
+          senders: [
+            {
+              sender: 'blank@example.com',
+              first_seen_at: '2026-05-23T12:00:00Z',
+              message_count: 1,
+              latest_preview: {
+                from: 'blank@example.com',
+                subject: 'Blank preview subject',
+                preview: '',
+                received_at: '2026-05-23T12:15:00Z',
+              },
+              emails: [
+                {
+                  email_id: 'blank-email-1',
+                  subject: 'Blank child subject',
+                  preview: '',
+                  received_at: '2026-05-23T12:15:00Z',
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(await screen.findByText('Blank preview subject')).toBeInTheDocument();
+    expect(screen.queryByText(/Preview unavailable/i)).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show · 1 pending email/i }),
+    );
+
+    expect(screen.getByText('Blank child subject')).toBeInTheDocument();
+    expect(screen.queryByText(/Preview unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it('renders non-empty latest and email previews', async () => {
+    renderScreener(
+      new ScreenerPageTestClient({
+        view: sampleScreenerView({
+          senders: [
+            {
+              sender: 'preview@example.com',
+              first_seen_at: '2026-05-23T12:00:00Z',
+              message_count: 1,
+              latest_preview: {
+                from: 'preview@example.com',
+                subject: 'Preview subject',
+                preview: 'Visible latest body excerpt.',
+                received_at: '2026-05-23T12:15:00Z',
+              },
+              emails: [
+                {
+                  email_id: 'preview-email-1',
+                  subject: 'Preview child subject',
+                  preview: 'Visible child body excerpt.',
+                  received_at: '2026-05-23T12:15:00Z',
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(await screen.findByText('Visible latest body excerpt.')).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show · 1 pending email/i }),
+    );
+
+    expect(screen.getByText('Visible child body excerpt.')).toBeInTheDocument();
+  });
+
   it('opens routing choices before approving a sender with history backfill', async () => {
     const client = renderScreener();
 
