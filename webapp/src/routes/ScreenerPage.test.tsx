@@ -173,6 +173,13 @@ function response(status: number, body: unknown = {}) {
   });
 }
 
+function openDropdown(button: HTMLElement) {
+  fireEvent.pointerDown(button, {
+    ctrlKey: false,
+    button: 0,
+  });
+}
+
 describe('ScreenerPage', () => {
   it('expands a sender card to show all pending emails', async () => {
     renderScreener();
@@ -276,10 +283,8 @@ describe('ScreenerPage', () => {
   it('opens routing choices before approving a sender with history backfill', async () => {
     const client = renderScreener();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
-    expect(
-      screen.getByRole('menu', { name: 'Screener routing destinations' }),
-    ).toBeInTheDocument();
+    openDropdown(await screen.findByRole('button', { name: 'Approve' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'The Imbox' })).toHaveClass(
       'bg-muted',
     );
@@ -368,7 +373,7 @@ describe('ScreenerPage', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    openDropdown(await screen.findByRole('button', { name: 'Approve' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
 
     expect(

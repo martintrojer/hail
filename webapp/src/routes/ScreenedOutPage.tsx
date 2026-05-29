@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { DeniedSender, HailApiClient } from '../api/client';
 import { useDeniedSenders, useUndoDenyMutation } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
@@ -38,17 +38,7 @@ function AllowButton({
   client?: HailApiClient;
   label?: string;
 }) {
-  const [routingOpen, setRoutingOpen] = useState(false);
-  const [routingAnchor, setRoutingAnchor] = useState<DOMRect | null>(null);
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const undo = useUndoDenyMutation(client);
-
-  function showRoutingDropdown() {
-    if (buttonRef.current) {
-      setRoutingAnchor(buttonRef.current.getBoundingClientRect());
-    }
-    setRoutingOpen(true);
-  }
 
   function allow(destination: ScreenerRoutingDestination) {
     undo.mutate({ address: sender, classify_as: destination });
@@ -56,23 +46,15 @@ function AllowButton({
 
   return (
     <>
-      <Button
-        ref={buttonRef}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={routingOpen}
-        onClick={showRoutingDropdown}
-        disabled={undo.isPending}
-        size="sm"
-      >
-        {undo.isPending ? 'Allowing…' : label}
-      </Button>
-      <ScreenerRoutingDropdown
-        open={routingOpen}
-        anchorRect={routingAnchor}
-        onClose={() => setRoutingOpen(false)}
-        onSelect={allow}
-      />
+      <ScreenerRoutingDropdown onSelect={allow}>
+        <Button
+          type="button"
+          disabled={undo.isPending}
+          size="sm"
+        >
+          {undo.isPending ? 'Allowing…' : label}
+        </Button>
+      </ScreenerRoutingDropdown>
       {undo.isError ? (
         <Alert variant="destructive" className="sm:col-span-2">
           <AlertDescription>

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { ShieldOff } from 'lucide-react';
 import type { HailApiClient } from '../api/client';
@@ -97,10 +97,7 @@ function PendingSenderCard({
   sender: ScreenerPendingSender;
   client?: HailApiClient;
 }) {
-  const [routingOpen, setRoutingOpen] = useState(false);
-  const [routingAnchor, setRoutingAnchor] = useState<DOMRect | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const approveButtonRef = useRef<HTMLButtonElement | null>(null);
   const { showToast } = useUndoToast();
   const decision = useScreenerDecisionMutation(client, {
     onSuccess: (data, variables) => {
@@ -126,13 +123,6 @@ function PendingSenderCard({
   const expandedId = `screener-emails-${encodeURIComponent(sender.sender)}`;
   const pendingEmailCount = sender.message_count ?? emails.length;
   const emailCountLabel = `${pendingEmailCount} pending ${pendingEmailCount === 1 ? 'email' : 'emails'}`;
-
-  function showRoutingDropdown() {
-    if (approveButtonRef.current) {
-      setRoutingAnchor(approveButtonRef.current.getBoundingClientRect());
-    }
-    setRoutingOpen(true);
-  }
 
   function approve(destination: ScreenerRoutingDestination) {
     decision.mutate({
@@ -228,18 +218,16 @@ function PendingSenderCard({
       </Collapsible>
 
       <CardFooter className="flex-wrap gap-2">
-        <Button
-          ref={approveButtonRef}
-          type="button"
-          aria-label={isPending ? 'Saving…' : 'Approve'}
-          aria-haspopup="menu"
-          aria-expanded={routingOpen}
-          onClick={showRoutingDropdown}
-          disabled={isPending}
-          size="sm"
-        >
-          {isPending ? 'Saving…' : 'Yes'}
-        </Button>
+        <ScreenerRoutingDropdown onSelect={approve}>
+          <Button
+            type="button"
+            aria-label={isPending ? 'Saving…' : 'Approve'}
+            disabled={isPending}
+            size="sm"
+          >
+            {isPending ? 'Saving…' : 'Yes'}
+          </Button>
+        </ScreenerRoutingDropdown>
         <Button
           type="button"
           aria-label="Deny"
@@ -251,13 +239,6 @@ function PendingSenderCard({
           No
         </Button>
       </CardFooter>
-
-      <ScreenerRoutingDropdown
-        open={routingOpen}
-        anchorRect={routingAnchor}
-        onClose={() => setRoutingOpen(false)}
-        onSelect={approve}
-      />
 
       {decision.isError ? (
         <CardContent>

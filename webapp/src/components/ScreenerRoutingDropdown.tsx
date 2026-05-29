@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { Check } from './icons';
 import { cn } from '../lib/utils';
 import {
@@ -6,6 +6,7 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
 export type ScreenerRoutingDestination = 'imbox' | 'feed' | 'papertrail';
@@ -17,10 +18,8 @@ export const routingDestinationLabels = {
 } as const satisfies Record<ScreenerRoutingDestination, string>;
 
 export interface ScreenerRoutingDropdownProps {
-  open: boolean;
-  onClose: () => void;
   onSelect: (destination: ScreenerRoutingDestination) => void;
-  anchorRect?: DOMRect | null;
+  children: ReactNode;
   value?: ScreenerRoutingDestination;
 }
 
@@ -34,69 +33,19 @@ const routingOptions: Array<{
 ];
 
 export function ScreenerRoutingDropdown({
-  open,
-  onClose,
   onSelect,
-  anchorRect,
+  children,
   value = 'imbox',
 }: ScreenerRoutingDropdownProps) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    }
-
-    function handlePointerDown(event: MouseEvent) {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        contentRef.current &&
-        !contentRef.current.contains(target)
-      ) {
-        onClose();
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('mousedown', handlePointerDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('mousedown', handlePointerDown);
-    };
-  }, [onClose, open]);
-
-  if (!open) {
-    return null;
-  }
-
-  function selectDestination(destination: ScreenerRoutingDestination) {
-    onSelect(destination);
-    onClose();
-  }
-
   return (
-    <DropdownMenu modal={false} open={open}>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent
-        ref={contentRef}
         aria-label="Screener routing destinations"
         className="w-[180px]"
-        style={
-          anchorRect
-            ? {
-                position: 'fixed',
-                top: anchorRect.bottom + 8,
-                left: anchorRect.left,
-              }
-            : undefined
-        }
+        side="bottom"
+        align="start"
+        sideOffset={8}
       >
         <DropdownMenuGroup>
           {routingOptions.map((option) => {
@@ -105,7 +54,8 @@ export function ScreenerRoutingDropdown({
             return (
               <DropdownMenuItem
                 key={option.value}
-                onSelect={() => selectDestination(option.value)}
+                aria-checked={isSelected}
+                onSelect={() => onSelect(option.value)}
                 className={cn(isSelected && 'bg-muted')}
               >
                 <span className="flex-1">{option.label}</span>
