@@ -19,6 +19,19 @@ import {
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
 import { UndoToastProvider } from './components/UndoToastProvider';
+import { Alert, AlertDescription } from './components/ui/alert';
+import { Button } from './components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from './components/ui/card';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from './components/ui/field';
+import { Input } from './components/ui/input';
+import { Spinner } from './components/ui/spinner';
 import { useTheme } from './hooks/useTheme';
 import { formErrorMessage } from './lib/errorMessages';
 import { queryClient } from './lib/queryClient';
@@ -57,54 +70,15 @@ function CenteredPage({ children }: { children: ReactNode }) {
   useTheme();
 
   return (
-    <main className="min-h-screen bg-bg-page px-6 py-12 text-ink-primary">
+    <main className="min-h-screen bg-background px-6 py-12 text-foreground">
       <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-md flex-col justify-center">
         <div className="mb-8 flex flex-col items-center">
           <img src="/logo-icon-transparent.png" alt="hail" className="h-16" />
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-ink-primary">hail</h1>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-foreground">hail</h1>
         </div>
         {children}
       </section>
     </main>
-  );
-}
-
-function TextInput({
-  id,
-  label,
-  type = 'text',
-  value,
-  onChange,
-  autoComplete,
-  required = true,
-  minLength,
-  placeholder,
-}: {
-  id: string;
-  label: string;
-  type?: string;
-  value: string;
-  onChange: (value: string) => void;
-  autoComplete?: string;
-  required?: boolean;
-  minLength?: number;
-  placeholder?: string;
-}) {
-  return (
-    <label className="block text-sm font-medium text-ink-secondary" htmlFor={id}>
-      {label}
-      <input
-        id={id}
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        autoComplete={autoComplete}
-        required={required}
-        minLength={minLength}
-        placeholder={placeholder}
-        className="mt-2 w-full rounded-lg border border-border-menu bg-bg-surface px-3 py-2 text-ink-primary outline-none ring-accent-blue transition placeholder:text-ink-tertiary focus:border-accent-blue focus:ring-2"
-      />
-    </label>
   );
 }
 
@@ -114,9 +88,27 @@ function ErrorMessage({ message }: { message: string | null }) {
   }
 
   return (
-    <p className="rounded-lg border border-red-800 bg-red-950/70 px-3 py-2 text-sm text-red-100">
-      {message}
-    </p>
+    <Alert variant="destructive">
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
+}
+
+function SubmitButton({ form, isPending, pendingText, children }: {
+  form?: string;
+  isPending: boolean;
+  pendingText: string;
+  children: ReactNode;
+}) {
+  return (
+    <Button type="submit" form={form} disabled={isPending} className="w-full">
+      {isPending ? (
+        <>
+          <Spinner data-icon="inline-start" aria-hidden="true" role="presentation" />
+          {pendingText}
+        </>
+      ) : children}
+    </Button>
   );
 }
 
@@ -138,50 +130,56 @@ function LoginPage() {
 
   return (
     <CenteredPage>
-      <form
-        onSubmit={onSubmit}
-        className="rounded-2xl border border-border-menu bg-bg-surface p-6 shadow-2xl shadow-ink-primary/10"
-      >
-        <h2 className="text-2xl font-semibold">Sign in</h2>
-        <p className="mt-2 text-sm text-ink-secondary">
-          Use your hail email and password to continue.
-        </p>
-        <div className="mt-6 space-y-4">
-          <TextInput
-            id="email"
-            label="Email"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            autoComplete="email"
-          />
-          <TextInput
-            id="password"
-            label="Password"
-            type="password"
-            value={password}
-            onChange={setPassword}
-            autoComplete="current-password"
-          />
-          <ErrorMessage
-            message={
-              login.error
-                ? formErrorMessage(login.error, 'Sign in failed. Try again.')
-                : null
-            }
-          />
-          <button
-            type="submit"
-            disabled={login.isPending}
-            className="w-full rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {login.isPending ? 'Signing in…' : 'Sign in'}
-          </button>
-        </div>
-      </form>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle role="heading" aria-level={2}>Sign in</CardTitle>
+          <CardDescription>Use your hail email and password to continue.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form id="login-form" onSubmit={onSubmit}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="email">Email</FieldLabel>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="password">Password</FieldLabel>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </Field>
+              <ErrorMessage
+                message={
+                  login.error
+                    ? formErrorMessage(login.error, 'Sign in failed. Try again.')
+                    : null
+                }
+              />
+            </FieldGroup>
+          </form>
+        </CardContent>
+        <CardFooter>
+          <SubmitButton form="login-form" isPending={login.isPending} pendingText="Signing in…">
+            Sign in
+          </SubmitButton>
+        </CardFooter>
+      </Card>
     </CenteredPage>
   );
 }
+
 
 function setupInactiveMessage(reason: string | undefined) {
   if (reason === 'config_admin_set') {
@@ -211,54 +209,63 @@ function InvitePage() {
 
   return (
     <CenteredPage>
-      <form
-        onSubmit={onSubmit}
-        className="rounded-2xl border border-border-menu bg-bg-surface p-6 shadow-2xl shadow-ink-primary/10"
-      >
-        <h2 className="text-2xl font-semibold">Accept invite</h2>
-        {invite.isPending ? (
-          <p className="mt-4 text-sm text-ink-secondary">Checking invite…</p>
-        ) : invite.isError ? (
-          <p role="alert" className="mt-4 rounded-lg border border-red-800 bg-red-950/70 px-3 py-2 text-sm text-red-100">
-            This invite is invalid, expired, or already used.
-          </p>
-        ) : (
-          <>
-            <p className="mt-2 text-sm text-ink-secondary">
-              Create a password for {invite.data.email}.
-            </p>
-            <div className="mt-6 space-y-4">
-              <TextInput
-                id="invite-password"
-                label="Password"
-                type="password"
-                value={password}
-                onChange={setPassword}
-                autoComplete="new-password"
-                minLength={12}
-              />
-              <p className="text-xs text-ink-tertiary">Password must be at least 12 characters.</p>
-              <ErrorMessage
-                message={
-                  acceptInvite.error
-                    ? formErrorMessage(acceptInvite.error, 'Invite failed. Try again.')
-                    : null
-                }
-              />
-              <button
-                type="submit"
-                disabled={acceptInvite.isPending}
-                className="w-full rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {acceptInvite.isPending ? 'Creating account…' : 'Create account'}
-              </button>
-            </div>
-          </>
-        )}
-      </form>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle role="heading" aria-level={2}>Accept invite</CardTitle>
+          {!invite.isPending && !invite.isError ? (
+            <CardDescription>Create a password for {invite.data.email}.</CardDescription>
+          ) : null}
+        </CardHeader>
+        <CardContent>
+          {invite.isPending ? (
+            <p className="text-sm text-muted-foreground">Checking invite…</p>
+          ) : invite.isError ? (
+            <Alert variant="destructive">
+              <AlertDescription>This invite is invalid, expired, or already used.</AlertDescription>
+            </Alert>
+          ) : (
+            <form id="invite-form" onSubmit={onSubmit}>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="invite-password">Password</FieldLabel>
+                  <Input
+                    id="invite-password"
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="new-password"
+                    required
+                    minLength={12}
+                  />
+                  <FieldDescription>Password must be at least 12 characters.</FieldDescription>
+                </Field>
+                <ErrorMessage
+                  message={
+                    acceptInvite.error
+                      ? formErrorMessage(acceptInvite.error, 'Invite failed. Try again.')
+                      : null
+                  }
+                />
+              </FieldGroup>
+            </form>
+          )}
+        </CardContent>
+        {!invite.isPending && !invite.isError ? (
+          <CardFooter>
+            <SubmitButton
+              form="invite-form"
+              isPending={acceptInvite.isPending}
+              pendingText="Creating account…"
+            >
+              Create account
+            </SubmitButton>
+          </CardFooter>
+        ) : null}
+      </Card>
     </CenteredPage>
   );
 }
+
 
 function SetupPage() {
   const navigate = useNavigate();
@@ -296,7 +303,7 @@ function SetupPage() {
   if (setupState.isPending) {
     return (
       <CenteredPage>
-        <p className="text-center text-ink-secondary">Checking setup state…</p>
+        <p className="text-center text-muted-foreground">Checking setup state…</p>
       </CenteredPage>
     );
   }
@@ -304,12 +311,16 @@ function SetupPage() {
   if (setupState.isError) {
     return (
       <CenteredPage>
-        <div className="rounded-2xl border border-red-800 bg-red-950/70 p-6">
-          <h2 className="text-xl font-semibold">Setup unavailable</h2>
-          <p className="mt-2 text-sm text-red-100">
-            Could not read setup state. Refresh and try again.
-          </p>
-        </div>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle role="heading" aria-level={2}>Setup unavailable</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Alert variant="destructive">
+              <AlertDescription>Could not read setup state. Refresh and try again.</AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
       </CenteredPage>
     );
   }
@@ -317,108 +328,126 @@ function SetupPage() {
   if (!setupState.data.wizard_active) {
     return (
       <CenteredPage>
-        <div className="rounded-2xl border border-border-menu bg-bg-surface p-6">
-          <h2 className="text-2xl font-semibold">Setup inactive</h2>
-          <p className="mt-2 text-sm text-ink-secondary">
-            {setupInactiveMessage(setupState.data.reason)}
-          </p>
-          <Link
-            to="/login"
-            className="mt-6 inline-flex rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover"
-          >
-            Go to login
-          </Link>
-        </div>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle role="heading" aria-level={2}>Setup inactive</CardTitle>
+            <CardDescription>{setupInactiveMessage(setupState.data.reason)}</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Button asChild>
+              <Link to="/login">Go to login</Link>
+            </Button>
+          </CardFooter>
+        </Card>
       </CenteredPage>
     );
   }
 
   return (
     <CenteredPage>
-      <form
-        onSubmit={onSubmit}
-        className="rounded-2xl border border-border-menu bg-bg-surface p-6 shadow-2xl shadow-ink-primary/10"
-      >
-        <h2 className="text-2xl font-semibold">First-run setup</h2>
-        <p className="mt-2 text-sm text-ink-secondary">
-          Create the first admin mailbox for this hail instance. If Stalwart
-          management is configured, hail first provisions the mail domain in
-          Stalwart and then creates the admin principal; otherwise the domain
-          and account must already exist in Stalwart and the wizard verifies
-          them with a JMAP login. You need the operator bootstrap token from
-          the server environment/config.
-        </p>
-        <div className="mt-6 space-y-4">
-          <TextInput
-            id="setup-bootstrap-token"
-            label="Bootstrap token"
-            type="password"
-            value={bootstrapToken}
-            onChange={setBootstrapToken}
-            autoComplete="off"
-            placeholder="Paste HAIL_SETUP__BOOTSTRAP_TOKEN"
-          />
-          <TextInput
-            id="setup-email"
-            label="Admin email"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            autoComplete="email"
-            placeholder="you@example.com"
-          />
-          <TextInput
-            id="display-name"
-            label="Display name"
-            value={displayName}
-            onChange={setDisplayName}
-            autoComplete="name"
-            required={false}
-          />
-          <TextInput
-            id="domain"
-            label="Mail domain"
-            value={domain}
-            onChange={setDomain}
-            autoComplete="off"
-            placeholder="example.com"
-          />
-          <TextInput
-            id="setup-password"
-            label="Password"
-            type="password"
-            value={password}
-            onChange={setPassword}
-            autoComplete="new-password"
-            minLength={12}
-          />
-          <p className="text-xs text-ink-tertiary">
-            Password must be at least 12 characters. The email must belong to
-            the mail domain. The wizard accepts domains with or without a
-            trailing dot; the API normalizes to lowercase before provisioning.
-          </p>
-          <ErrorMessage
-            message={
-              setupAdmin.error
-                ? formErrorMessage(
-                    setupAdmin.error,
-                    'Setup failed. Check the values and try again.',
-                  )
-                : null
-            }
-          />
-          <button
-            type="submit"
-            disabled={setupAdmin.isPending}
-            className="w-full rounded-lg bg-accent-blue px-4 py-2 font-semibold text-white transition hover:bg-accent-blue-hover disabled:cursor-not-allowed disabled:opacity-60"
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle role="heading" aria-level={2}>First-run setup</CardTitle>
+          <CardDescription>
+            Create the first admin mailbox for this hail instance. If Stalwart
+            management is configured, hail first provisions the mail domain in
+            Stalwart and then creates the admin principal; otherwise the domain
+            and account must already exist in Stalwart and the wizard verifies
+            them with a JMAP login. You need the operator bootstrap token from
+            the server environment/config.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form id="setup-form" onSubmit={onSubmit}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="setup-bootstrap-token">Bootstrap token</FieldLabel>
+                <Input
+                  id="setup-bootstrap-token"
+                  type="password"
+                  value={bootstrapToken}
+                  onChange={(event) => setBootstrapToken(event.target.value)}
+                  autoComplete="off"
+                  placeholder="Paste HAIL_SETUP__BOOTSTRAP_TOKEN"
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="setup-email">Admin email</FieldLabel>
+                <Input
+                  id="setup-email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="display-name">Display name</FieldLabel>
+                <Input
+                  id="display-name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  autoComplete="name"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="domain">Mail domain</FieldLabel>
+                <Input
+                  id="domain"
+                  value={domain}
+                  onChange={(event) => setDomain(event.target.value)}
+                  autoComplete="off"
+                  placeholder="example.com"
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="setup-password">Password</FieldLabel>
+                <Input
+                  id="setup-password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="new-password"
+                  required
+                  minLength={12}
+                />
+                <FieldDescription>
+                  Password must be at least 12 characters. The email must belong to
+                  the mail domain. The wizard accepts domains with or without a
+                  trailing dot; the API normalizes to lowercase before provisioning.
+                </FieldDescription>
+              </Field>
+              <ErrorMessage
+                message={
+                  setupAdmin.error
+                    ? formErrorMessage(
+                        setupAdmin.error,
+                        'Setup failed. Check the values and try again.',
+                      )
+                    : null
+                }
+              />
+            </FieldGroup>
+          </form>
+        </CardContent>
+        <CardFooter>
+          <SubmitButton
+            form="setup-form"
+            isPending={setupAdmin.isPending}
+            pendingText="Creating admin…"
           >
-            {setupAdmin.isPending ? 'Creating admin…' : 'Create admin'}
-          </button>
-        </div>
-      </form>
+            Create admin
+          </SubmitButton>
+        </CardFooter>
+      </Card>
     </CenteredPage>
   );
 }
+
 
 function ImboxPage() {
   return (
