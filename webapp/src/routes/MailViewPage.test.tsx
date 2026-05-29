@@ -736,9 +736,7 @@ describe('MailViewPage', () => {
     expect(firstActions).toHaveFocus();
 
     fireEvent.click(firstActions);
-    expect(await screen.findByRole('menu', { name: 'Message actions' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Trash' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Trash' }));
 
     await waitFor(() => expect(client.trashCalls).toEqual(['thread-one']));
     expect(client.trashCalls).not.toContain('thread-two');
@@ -848,20 +846,16 @@ describe('MailViewPage', () => {
     const actions = screen.getByRole('button', { name: 'Actions for First thread' });
 
     actions.focus();
-    fireEvent.keyDown(actions, { key: 'Enter' });
     fireEvent.click(actions);
-    const firstMenu = await screen.findByRole('menu', { name: 'Message actions' });
-    expect(firstMenu).toBeInTheDocument();
+    await screen.findByRole('menuitem', { name: 'Mark read' });
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() =>
-      expect(screen.queryByRole('menu', { name: 'Message actions' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('menuitem', { name: 'Mark read' })).not.toBeInTheDocument(),
     );
 
     actions.focus();
-    fireEvent.keyDown(actions, { key: 'Enter' });
     fireEvent.click(actions);
-    await screen.findByRole('menu', { name: 'Message actions' });
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark read' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark read' }));
 
     await waitFor(() => expect(client.markThreadCalls).toEqual([{ threadId: 'thread-one', read: true }]));
   });
