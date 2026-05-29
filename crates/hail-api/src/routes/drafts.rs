@@ -25,9 +25,9 @@ use utoipa_axum::routes;
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id, provider_error};
 use crate::routes::outbound::{
-    MAX_BODY_BYTES, OutboundHeaders, create_draft_email, html_to_plaintext, render_compose_body,
-    render_markdown, set_rendered_body, validate_attachments, validate_recipients,
-    validate_subject,
+    MAX_BODY_BYTES, OutboundHeaders, RenderedBody, create_draft_email, html_to_plaintext,
+    render_markdown, rendered_html, set_rendered_body, set_text_body, validate_attachments,
+    validate_body, validate_recipients, validate_subject,
 };
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
@@ -82,7 +82,7 @@ impl DraftStore for JmapDraftStore {
             create_draft_email::<DraftStoreError, _>(
                 &session,
                 OutboundHeaders::new(from, &draft.to, &draft.cc, &draft.bcc, &draft.subject),
-                |email| set_rendered_body(email, &draft.body),
+                |email| set_draft_body(email, &draft.body),
             )
             .await
         })
@@ -168,7 +168,7 @@ impl DraftStore for JmapDraftStore {
                 email.subject(subject);
             }
             if let Some(body) = draft.body {
-                set_rendered_body(email, &body);
+                set_draft_body(email, &body);
             }
 
             let mut response = request.send_set_email().await.map_err(provider_error)?;
@@ -462,6 +462,45 @@ async fn delete_draft(
     }
 }
 
+fn set_draft_body(
+    email: &mut hail_jmap::jmap_client::email::Email<hail_jmap::jmap_client::Set>,
+    body: &RenderedBody,
+) {
+    if body.html.trim().is_empty() {
+        set_text_body(email, "");
+    } else {
+        set_rendered_body(email, body);
+    }
+}
+
+fn render_draft_body(
+    body_html: Option<&str>,
+    body_markdown: Option<&str>,
+) -> Result<RenderedBody, &'static str> {
+    if let Some(html) = body_html {
+        validate_body(html)?;
+        if !html.trim().is_empty() {
+            let body = rendered_html(html);
+            validate_body(&body.html)?;
+            return Ok(body);
+        }
+    }
+
+    if let Some(markdown) = body_markdown {
+        validate_body(markdown)?;
+        if !markdown.trim().is_empty() {
+            let body = render_markdown(markdown);
+            validate_body(&body.html)?;
+            return Ok(body);
+        }
+    }
+
+    Ok(RenderedBody {
+        plain_text: String::new(),
+        html: String::new(),
+    })
+}
+
 impl DraftPayload {
     fn into_create(self) -> Result<DraftCreate, &'static str> {
         validate_attachments(&self.attachments)?;
@@ -469,7 +508,7 @@ impl DraftPayload {
         let cc = self.cc.unwrap_or_default();
         let bcc = self.bcc.unwrap_or_default();
         let subject = self.subject.unwrap_or_default();
-        let body = render_compose_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
+        let body = render_draft_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
         let body_markdown = html_to_plaintext(&body.html);
         let body_html = body.html.clone();
 
@@ -504,7 +543,7 @@ impl DraftPayload {
             validate_subject(subject)?;
         }
         let body = if self.body_html.is_some() || self.body_markdown.is_some() {
-            Some(render_compose_body(
+            Some(render_draft_body(
                 self.body_html.as_deref(),
                 self.body_markdown.as_deref(),
             )?)
