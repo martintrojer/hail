@@ -12,7 +12,10 @@
 //! production uses [`JmapScreenerBackfill`] to move/keyword existing Screener
 //! messages as soon as the sender is approved or denied.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use axum::extract::{Extension, Path, State, rejection::JsonRejection};
@@ -30,7 +33,9 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{MAIL_VIEW_PROPERTIES, jmap_session, preview_from_email};
+use crate::routes::jmap_helpers::{
+    MAIL_VIEW_PROPERTIES, collapse_preview_whitespace, jmap_session, preview_from_email,
+};
 use crate::routes::response::{bad_request, internal};
 use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
@@ -39,6 +44,8 @@ use crate::state::AppState;
 pub const TAG: &str = "screener";
 
 const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
+const SCREENER_RICH_EMAIL_GET_CHUNK_SIZE: usize = 20;
+const SCREENER_LIGHT_EMAIL_GET_CHUNK_SIZE: usize = 200;
 
 /// Dependency-injection seam for applying a screener decision to existing
 /// mail from the sender. Production uses [`JmapScreenerBackfill`]; tests can
@@ -539,27 +546,87 @@ async fn enrich_screener_senders(
     email_ids.sort();
     email_ids.dedup();
 
-    let mut request = session.client().build();
-    let get_email = request.get_email();
-    get_email
-        .ids(email_ids)
-        .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
-    get_email.arguments().fetch_text_body_values(true);
-    get_email.arguments().fetch_html_body_values(true);
-    let mut response = request
-        .send_get_email()
-        .await
-        .map_err(|err| err.to_string())?;
-
-    let emails_by_id: HashMap<_, _> = response
-        .take_list()
+    let mut rich_ids: Vec<String> = sender_email_ids
+        .iter()
+        .filter_map(|ids| ids.first().cloned())
+        .collect();
+    rich_ids.sort();
+    rich_ids.dedup();
+    let rich_id_set: HashSet<&str> = rich_ids.iter().map(String::as_str).collect();
+    let light_ids: Vec<String> = email_ids
         .into_iter()
-        .filter_map(|email| {
-            let email_id = email.id()?.to_string();
+        .filter(|id| !rich_id_set.contains(id.as_str()))
+        .collect();
+
+    let mut emails_by_id = HashMap::new();
+    hydrate_screener_emails(
+        &session,
+        &rich_ids,
+        SCREENER_RICH_EMAIL_GET_CHUNK_SIZE,
+        true,
+        &mut emails_by_id,
+    )
+    .await?;
+    hydrate_screener_emails(
+        &session,
+        &light_ids,
+        SCREENER_LIGHT_EMAIL_GET_CHUNK_SIZE,
+        false,
+        &mut emails_by_id,
+    )
+    .await?;
+
+    for (sender, ids) in senders.iter_mut().zip(sender_email_ids) {
+        let emails: Vec<_> = ids
+            .into_iter()
+            .filter_map(|id| emails_by_id.get(&id).cloned())
+            .collect();
+
+        sender.latest_preview = emails.first().map(|(_, preview)| preview.clone());
+        sender.emails = emails.into_iter().map(|(summary, _)| summary).collect();
+    }
+
+    Ok(())
+}
+
+async fn hydrate_screener_emails(
+    session: &hail_jmap::Session,
+    email_ids: &[String],
+    chunk_size: usize,
+    fetch_body_values: bool,
+    emails_by_id: &mut HashMap<String, (ScreenerEmail, ScreenerLatestPreview)>,
+) -> Result<(), String> {
+    if email_ids.is_empty() {
+        return Ok(());
+    }
+
+    for chunk in email_ids.chunks(chunk_size) {
+        let mut request = session.client().build();
+        let get_email = request.get_email();
+        get_email
+            .ids(chunk.to_vec())
+            .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
+        if fetch_body_values {
+            get_email.arguments().fetch_text_body_values(true);
+            get_email.arguments().fetch_html_body_values(true);
+        }
+        let mut response = request
+            .send_get_email()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        for email in response.take_list() {
+            let Some(email_id) = email.id().map(ToOwned::to_owned) else {
+                continue;
+            };
             let received_at = email
                 .received_at()
                 .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
-            let preview_text = preview_from_email(&email);
+            let preview_text = if fetch_body_values {
+                preview_from_email(&email)
+            } else {
+                collapse_preview_whitespace(email.preview().unwrap_or_default())
+            };
             let summary = ScreenerEmail {
                 email_id: email_id.clone(),
                 subject: email.subject().unwrap_or_default().to_string(),
@@ -572,18 +639,8 @@ async fn enrich_screener_senders(
                 from: format_from(email.from()),
                 received_at,
             };
-            Some((email_id, (summary, preview)))
-        })
-        .collect();
-
-    for (sender, ids) in senders.iter_mut().zip(sender_email_ids) {
-        let emails: Vec<_> = ids
-            .into_iter()
-            .filter_map(|id| emails_by_id.get(&id).cloned())
-            .collect();
-
-        sender.latest_preview = emails.first().map(|(_, preview)| preview.clone());
-        sender.emails = emails.into_iter().map(|(summary, _)| summary).collect();
+            emails_by_id.insert(email_id, (summary, preview));
+        }
     }
 
     Ok(())

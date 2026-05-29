@@ -124,14 +124,55 @@ struct JmapEmailFixture {
     html_body: Option<&'static str>,
 }
 
+#[derive(Clone)]
+struct OwnedJmapEmailFixture {
+    id: String,
+    sender: String,
+    subject: String,
+    preview: String,
+    text_body: Option<String>,
+    html_body: Option<String>,
+}
+
+impl From<JmapEmailFixture> for OwnedJmapEmailFixture {
+    fn from(email: JmapEmailFixture) -> Self {
+        Self {
+            id: email.id.to_owned(),
+            sender: email.sender.to_owned(),
+            subject: email.subject.to_owned(),
+            preview: email.preview.to_owned(),
+            text_body: email.text_body.map(ToOwned::to_owned),
+            html_body: email.html_body.map(ToOwned::to_owned),
+        }
+    }
+}
+
 async fn start_fake_screener_jmap(
     emails: Vec<JmapEmailFixture>,
 ) -> (String, tokio::task::JoinHandle<()>) {
-    let emails = Arc::new(emails);
+    start_fake_screener_jmap_with_recorder(emails, Arc::new(Mutex::new(Vec::new()))).await
+}
+
+async fn start_fake_screener_jmap_with_recorder(
+    emails: Vec<JmapEmailFixture>,
+    requests: Arc<Mutex<Vec<Value>>>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    start_fake_screener_jmap_owned_with_recorder(
+        emails.into_iter().map(Into::into).collect(),
+        requests,
+    )
+    .await
+}
+
+async fn start_fake_screener_jmap_owned_with_recorder(
+    emails: Vec<OwnedJmapEmailFixture>,
+    requests: Arc<Mutex<Vec<Value>>>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let state = Arc::new(FakeJmapState { emails, requests });
     let app = Router::new()
         .route("/.well-known/jmap", axum::routing::get(fake_jmap_session))
         .route("/jmap/", axum::routing::post(fake_jmap_api))
-        .with_state(emails);
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind fake jmap");
@@ -142,6 +183,12 @@ async fn start_fake_screener_jmap(
             .expect("fake jmap server");
     });
     (format!("http://{addr}"), handle)
+}
+
+#[derive(Default)]
+struct FakeJmapState {
+    emails: Vec<OwnedJmapEmailFixture>,
+    requests: Arc<Mutex<Vec<Value>>>,
 }
 
 async fn fake_jmap_session(headers: axum::http::HeaderMap) -> impl IntoResponse {
@@ -194,10 +241,11 @@ async fn fake_jmap_session(headers: axum::http::HeaderMap) -> impl IntoResponse 
 }
 
 async fn fake_jmap_api(
-    axum::extract::State(emails): axum::extract::State<Arc<Vec<JmapEmailFixture>>>,
+    axum::extract::State(state): axum::extract::State<Arc<FakeJmapState>>,
     body: Bytes,
 ) -> impl IntoResponse {
     let request: Value = serde_json::from_slice(&body).expect("jmap request json");
+    state.requests.lock().unwrap().push(request.clone());
     let call = request["methodCalls"]
         .as_array()
         .and_then(|calls| calls.first())
@@ -215,10 +263,11 @@ async fn fake_jmap_api(
         }),
         "Email/query" => {
             let sender = requested_sender(&call[1]);
-            let ids = emails
+            let ids = state
+                .emails
                 .iter()
-                .filter(|email| Some(email.sender) == sender.as_deref())
-                .map(|email| email.id)
+                .filter(|email| Some(email.sender.as_str()) == sender.as_deref())
+                .map(|email| email.id.as_str())
                 .collect::<Vec<_>>();
             serde_json::json!({
                 "accountId": "account-test",
@@ -238,7 +287,7 @@ async fn fake_jmap_api(
                 .collect::<Vec<_>>();
             let list = ids
                 .iter()
-                .filter_map(|id| emails.iter().find(|email| email.id == *id))
+                .filter_map(|id| state.emails.iter().find(|email| email.id == *id))
                 .map(email_json)
                 .collect::<Vec<_>>();
             serde_json::json!({
@@ -273,12 +322,12 @@ fn requested_sender(arguments: &Value) -> Option<String> {
     walk(arguments.get("filter").unwrap_or(arguments))
 }
 
-fn email_json(email: &JmapEmailFixture) -> Value {
+fn email_json(email: &OwnedJmapEmailFixture) -> Value {
     let mut body_values = serde_json::Map::new();
     let mut text_body = Vec::new();
     let mut html_body = Vec::new();
 
-    if let Some(text) = email.text_body {
+    if let Some(text) = email.text_body.as_deref() {
         body_values.insert(
             "text-1".to_owned(),
             serde_json::json!({ "value": text, "isTruncated": false }),
@@ -289,7 +338,7 @@ fn email_json(email: &JmapEmailFixture) -> Value {
         }));
     }
 
-    if let Some(html) = email.html_body {
+    if let Some(html) = email.html_body.as_deref() {
         body_values.insert(
             "html-1".to_owned(),
             serde_json::json!({ "value": html, "isTruncated": false }),
@@ -604,6 +653,98 @@ async fn screener_view_derives_previews_from_body_when_jmap_preview_is_empty() {
     let empty_sender = sender(senders, "empty@example.org");
     assert_eq!(empty_sender["latest_preview"]["preview"], "");
     assert_eq!(empty_sender["emails"][0]["preview"], "");
+
+    fake_jmap.abort();
+}
+
+#[tokio::test]
+async fn screener_view_fetches_body_values_only_for_newest_email_per_sender() {
+    let mut emails = Vec::new();
+    for index in 0..12 {
+        emails.push(OwnedJmapEmailFixture {
+            id: format!("bulk-email-{index:02}"),
+            sender: "bulk@example.org".to_owned(),
+            subject: format!("Bulk message {index:02}"),
+            preview: String::new(),
+            text_body: Some(format!(
+                "Newest body preview {index:02} with enough words to prove body fallback hydration is used."
+            )),
+            html_body: None,
+        });
+    }
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (mut state, key) = fixture_state().await;
+    let (jmap_url, fake_jmap) =
+        start_fake_screener_jmap_owned_with_recorder(emails, requests.clone()).await;
+    state.config.stalwart.jmap_url = jmap_url;
+    let (user_id, sid) = seed_session(&state, &key, "screener-bulk@example.org").await;
+    seed_rule(
+        &state,
+        user_id,
+        "bulk@example.org",
+        "pending",
+        None,
+        Utc::now(),
+    )
+    .await;
+
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/views/screener",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let senders = json["senders"].as_array().expect("screener senders");
+    let bulk_sender = sender(senders, "bulk@example.org");
+    assert_eq!(bulk_sender["message_count"], 12);
+    assert_eq!(bulk_sender["emails"].as_array().unwrap().len(), 12);
+    assert_eq!(bulk_sender["emails"][0]["email_id"], "bulk-email-00");
+    assert_eq!(
+        bulk_sender["latest_preview"]["preview"],
+        "Newest body preview 00 with enough words to prove body fallback hydration is used."
+    );
+    assert_eq!(
+        bulk_sender["emails"][0]["preview"],
+        "Newest body preview 00 with enough words to prove body fallback hydration is used."
+    );
+    assert_eq!(bulk_sender["emails"][1]["email_id"], "bulk-email-01");
+    assert_eq!(bulk_sender["emails"][1]["preview"], "");
+
+    let requests = requests.lock().unwrap();
+    let email_gets = requests
+        .iter()
+        .filter_map(|request| {
+            let call = request["methodCalls"].as_array()?.first()?;
+            (call[0].as_str()? == "Email/get").then_some(&call[1])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        email_gets.len(),
+        2,
+        "expected rich and light Email/get calls"
+    );
+
+    let rich_get = email_gets
+        .iter()
+        .find(|arguments| arguments["fetchTextBodyValues"] == true)
+        .expect("rich Email/get fetches body values");
+    assert_eq!(rich_get["fetchHTMLBodyValues"], true);
+    assert_eq!(rich_get["ids"], serde_json::json!(["bulk-email-00"]));
+
+    let light_get = email_gets
+        .iter()
+        .find(|arguments| arguments["fetchTextBodyValues"].is_null())
+        .expect("light Email/get omits body value flags");
+    let light_ids = light_get["ids"].as_array().expect("light ids");
+    assert_eq!(light_ids.len(), 11);
+    assert!(!light_ids.iter().any(|id| id == "bulk-email-00"));
 
     fake_jmap.abort();
 }
