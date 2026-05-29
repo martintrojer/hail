@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Button } from './ui/button';
 import { MessageActionPopup } from './MessageActionPopup';
@@ -69,6 +70,39 @@ describe('MessageActionPopup', () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
     expect(onAction).toHaveBeenCalledWith('move-to', 'papertrail');
+  });
+
+  it('activates the first action with ArrowDown and Enter from the trigger', async () => {
+    const onAction = vi.fn();
+
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <MessageActionPopup
+          open={open}
+          onClose={() => setOpen(false)}
+          onOpenChange={setOpen}
+          onAction={onAction}
+          trigger={<Button>Actions</Button>}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    const trigger = screen.getByRole('button', { name: 'Actions' });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'ArrowDown', code: 'ArrowDown' });
+    expect(await screen.findByRole('menu')).toHaveAttribute('aria-label', 'Message actions');
+    fireEvent.keyDown(document.activeElement ?? screen.getByRole('menu'), {
+      key: 'Enter',
+      code: 'Enter',
+    });
+
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith('reply', undefined));
+    await waitFor(() =>
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument(),
+    );
   });
 
   it('closes on Escape and when Radix requests close through a trigger', () => {

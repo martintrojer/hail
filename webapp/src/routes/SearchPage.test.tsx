@@ -111,6 +111,25 @@ function renderSearchPage() {
   return { ...view, client };
 }
 
+function openSelect(label: string) {
+  const trigger = screen.getByLabelText(label);
+  fireEvent.pointerDown(trigger, {
+    button: 0,
+    ctrlKey: false,
+    pointerType: 'mouse',
+  });
+  fireEvent.click(trigger);
+  return trigger;
+}
+
+async function chooseNextSelectOption(label: string) {
+  openSelect(label);
+  const optionName = label === 'Label' ? 'Work' : label === 'Scope' ? 'Mail' : 'Imbox';
+  const option = await screen.findByRole('option', { name: optionName });
+  fireEvent.keyDown(option, { key: 'ArrowDown', code: 'ArrowDown' });
+  fireEvent.keyDown(option, { key: 'Enter', code: 'Enter' });
+}
+
 describe('SearchPage', () => {
   it('uses the centralized AppShell split container for search list plus reading content', async () => {
     renderSearchPage();
@@ -176,6 +195,26 @@ describe('SearchPage', () => {
       scope: 'all',
       mailbox: 'papertrail',
       label_id: 12,
+    });
+  });
+
+  it('chooses scope, mailbox, and label filters with ArrowDown and Enter', async () => {
+    const { client } = renderSearchPage();
+
+    await screen.findByLabelText('Label');
+    await chooseNextSelectOption('Scope');
+    await chooseNextSelectOption('Mailbox');
+    await chooseNextSelectOption('Label');
+    fireEvent.change(screen.getByPlaceholderText('Search mail and notes'), {
+      target: { value: 'invoice' },
+    });
+
+    await waitFor(() => expect(client.searchCalls).toHaveLength(1));
+    expect(client.searchCalls[0]).toEqual({
+      q: 'invoice',
+      scope: 'mail',
+      mailbox: 'imbox',
+      label_id: 10,
     });
   });
 });

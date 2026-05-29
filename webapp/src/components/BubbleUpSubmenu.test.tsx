@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BubbleUpSubmenu } from './BubbleUpSubmenu';
 
@@ -45,6 +45,26 @@ describe('BubbleUpSubmenu', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Tomorrow morning' }));
 
     expect(onSelect).toHaveBeenCalledWith('Tomorrow morning');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects an option with ArrowDown and Enter, then closes on Escape', async () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <BubbleUpSubmenu
+        open
+        onClose={onClose}
+        onSelect={onSelect}
+      />,
+    );
+
+    const menu = screen.getByRole('menu', { name: 'Bubble up time options' });
+    fireEvent.keyDown(menu, { key: 'ArrowDown', code: 'ArrowDown' });
+    fireEvent.keyDown(document.activeElement ?? menu, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('Later today'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

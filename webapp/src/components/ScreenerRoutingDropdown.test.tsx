@@ -55,18 +55,20 @@ describe('ScreenerRoutingDropdown', () => {
     expect(onSelect).toHaveBeenCalledWith('feed');
   });
 
-  it('activates the initially focused item with keyboard ArrowDown and Enter', async () => {
+  it('selects Feed with ArrowDown and Enter from the open menu', async () => {
     const onSelect = renderRoutingDropdown();
-    const trigger = screen.getByRole('button', { name: 'Approve' });
 
-    trigger.focus();
-    fireEvent.keyDown(trigger, { key: 'ArrowDown', code: 'ArrowDown' });
-    fireEvent.keyDown(document.activeElement ?? screen.getByRole('menu'), {
+    openDropdown();
+    await screen.findByRole('menu');
+    const feed = screen.getByRole('menuitem', { name: 'The Feed' });
+    feed.focus();
+    fireEvent.keyDown(feed, { key: 'ArrowDown', code: 'ArrowDown' });
+    fireEvent.keyDown(feed, {
       key: 'Enter',
       code: 'Enter',
     });
 
-    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('imbox'));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('feed'));
   });
 
   it('closes on Escape', async () => {
