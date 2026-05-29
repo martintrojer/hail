@@ -29,6 +29,14 @@ import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
@@ -147,12 +155,12 @@ function TrackerSummary({ trackers }: { trackers: FeedBlockedTracker[] }) {
   }
 
   return (
-    <span
-      className="rounded-full bg-bg-banner px-2 py-0.5 text-xs font-semibold text-ink-secondary"
+    <Badge
+      variant="secondary"
       title={trackers.map((tracker) => tracker.reason).join('\n')}
     >
       {trackers.length} tracker{trackers.length === 1 ? '' : 's'} blocked
-    </span>
+    </Badge>
   );
 }
 
@@ -179,63 +187,64 @@ function FeedCard({
     <article
       ref={register(item.thread_id)}
       data-hail-feed-thread-id={item.thread_id}
-      className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6"
     >
-      <header className="space-y-3 border-b border-border-hairline pb-4">
-        <div className="flex items-start justify-between gap-3">
+      <Card size="sm" className="gap-0 border border-border py-0 shadow-none ring-0">
+        <CardHeader className="border-b border-border p-4 pb-3 sm:p-5 sm:pb-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-ink-secondary">
+            <CardDescription className="truncate font-medium">
               {item.from || 'Unknown sender'}
-            </p>
-            <h2 className="mt-1 text-xl font-bold leading-tight tracking-tight text-ink-primary">
+            </CardDescription>
+            <CardTitle className="mt-1 text-lg font-semibold tracking-tight text-foreground">
               <ThreadLink
                 threadId={item.thread_id}
-                className="focus-ring rounded-sm outline-none hover:text-accent-blue"
+                className="focus-ring rounded-sm outline-none hover:text-primary"
                 ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
               >
                 {item.subject || '(no subject)'}
               </ThreadLink>
-            </h2>
+            </CardTitle>
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-2">
+          <CardAction className="flex flex-col items-end gap-2">
             {item.unread ? <Badge>New</Badge> : null}
             <TrackerSummary trackers={trackers} />
-          </div>
-        </div>
-        <ScreenReaderThreadMetadata item={item} />
-      </header>
+          </CardAction>
+          <ScreenReaderThreadMetadata item={item} />
+        </CardHeader>
 
-      {feedHtml.length > 0 ? (
-        <div className="relative mt-5">
-          <div
-            className={cn(
-              'max-w-none overflow-hidden text-base leading-relaxed text-ink-primary [&_a]:text-accent-blue [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border-hairline [&_blockquote]:pl-4 [&_blockquote]:text-ink-secondary [&_code]:rounded [&_code]:bg-bg-hover [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top',
-              clamped && 'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-20 after:bg-gradient-to-b after:from-transparent after:to-card',
-            )}
-            style={clamped ? { maxHeight: FEED_COLLAPSED_MAX_HEIGHT } : undefined}
-            // Server owns the mail-render trust boundary for Feed excerpts: hail-api
-            // strips quoted history, blocks remote images/trackers, and sanitizes HTML.
-            dangerouslySetInnerHTML={{ __html: feedHtml }}
-          />
-          {clamped ? (
-            <div className="mt-4 flex justify-center">
-              <Button type="button" variant="outline" onClick={() => setExpanded(true)}>
-                Show more
-              </Button>
+        <CardContent className="p-4 sm:p-5">
+          {feedHtml.length > 0 ? (
+            <div className="relative">
+              <div
+                className={cn(
+                  'max-w-none overflow-hidden text-base leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top',
+                  clamped && 'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-20 after:bg-gradient-to-b after:from-transparent after:to-card',
+                )}
+                style={clamped ? { maxHeight: FEED_COLLAPSED_MAX_HEIGHT } : undefined}
+                // Server owns the mail-render trust boundary for Feed excerpts: hail-api
+                // strips quoted history, blocks remote images/trackers, and sanitizes HTML.
+                dangerouslySetInnerHTML={{ __html: feedHtml }}
+              />
+              {clamped ? (
+                <div className="mt-4 flex justify-center">
+                  <Button type="button" variant="outline" onClick={() => setExpanded(true)}>
+                    Show more
+                  </Button>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-      ) : (
-        <p className="mt-5 whitespace-pre-wrap text-base leading-relaxed text-ink-primary">
-          {item.preview || 'This message has no renderable body.'}
-        </p>
-      )}
+          ) : (
+            <p className="whitespace-pre-wrap text-base leading-relaxed text-foreground">
+              {item.preview || 'This message has no renderable body.'}
+            </p>
+          )}
 
-      {markError ? (
-        <p role="alert" className="mt-4 text-sm text-destructive">
-          {actionErrorMessage(markError, 'Mark read')}
-        </p>
-      ) : null}
+          {markError ? (
+            <p role="alert" className="mt-4 text-sm text-destructive">
+              {actionErrorMessage(markError, 'Mark read')}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
     </article>
   );
 }
@@ -256,7 +265,7 @@ function FeedReadingStream({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       {items.map((item) => (
         <FeedCard
           key={item.thread_id}
