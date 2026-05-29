@@ -395,10 +395,10 @@ PUT  /api/contacts/:address/note   { markdown }
 DELETE /api/contacts/:address/note
 
 POST /api/compose
-        { to, cc?, bcc?, subject, body_markdown,
+        { to, cc?, bcc?, subject, body_html,
           attachments?: [blob_id], send_at?: ISO8601,
           in_reply_to?: thread_id }
-POST /api/threads/:id/reply        { body_markdown, attachments?, send_at? }
+POST /api/threads/:id/reply        { body_html, attachments?, send_at? }
 POST /api/drafts                   { ... }                       # auto-save
 PATCH /api/drafts/:id              { ... }
 DELETE /api/scheduled-sends/:id                                  # cancel send-later
@@ -506,7 +506,7 @@ GET /metrics                       # Prometheus (opt-in via env)
 | Routing | TanStack Router (type-safe) |
 | Data | TanStack Query + WebSocket-driven cache invalidation |
 | Styling | Tailwind CSS + shadcn/ui (Radix primitives under the hood) |
-| Rich text | Tiptap (ProseMirror) |
+| Rich text | Tiptap (ProseMirror); compose uses sanitized HTML over the API. See [`compose-rich-text-design.md`](./compose-rich-text-design.md). |
 | Drag & drop | dnd-kit |
 | Virtualized lists | TanStack Virtual |
 | Types | Generated from OpenAPI via `openapi-typescript` |
@@ -542,7 +542,7 @@ GET /metrics                       # Prometheus (opt-in via env)
 
 - **Single-column shell:** top strip (logo/wordmark, section title, icon cluster + avatar) + center column (720px max-width, `margin: 0 auto`). No persistent sidebar. Navigation lives in a dropdown menu anchored on the logo. See `docs/ui-direction.md` §2.
 - **The Pile:** persistent floating bottom-right widget visible from Imbox and other list views. Shows counts for Set Aside + Reply Later items. Clicking expands to show thread previews with quick-remove actions. See `docs/ui-direction.md` §11.
-- **Composer:** full-page in-canvas writing surface (same center column). Minimal field styling, quiet Send Later secondary action. Auto-saves to `/api/drafts` every 5s of inactivity. See `docs/ui-direction.md` §7.
+- **Composer:** full-page in-canvas writing surface (same center column). Minimal field styling, quiet Send Later secondary action. Auto-saves to `/api/drafts` every 5s of inactivity. Compose content is TipTap-authored HTML carried as `body_html`; see [`compose-rich-text-design.md`](./compose-rich-text-design.md) and `docs/ui-direction.md` §7.
 - **Undo toast:** dark bottom-center viewport-anchored bar for destructive mutation undo. Auto-dismisses after ~5s. At most one at a time. See `docs/ui-direction.md` §11b.
 - **Screener notification banner:** warm in-column banner at the top of Imbox when senders are pending. See `docs/ui-direction.md` §8b.
 - **Per-message action popup:** floating card triggered from each message in thread view. Offers Reply, Forward, Set Aside, Reply Later, Bubble Up, Move To, Add Note, Spam, Trash. See `docs/ui-direction.md` §6.
@@ -574,7 +574,7 @@ g s            go to Screener
 - Know any `$hail_*` keyword names.
 - Talk JMAP directly.
 - Strip tracking pixels or sanitize incoming HTML (server already did it).
-- Build RFC 5322 messages for outbound (server does it from `body_markdown` + structured fields).
+- Build RFC 5322 messages for outbound (server does it from sanitized `body_html` + structured fields).
 
 ## 10. Security Model
 
@@ -666,7 +666,7 @@ Decisions deferred to implementation or post-v1:
 
 ### v1 — "Yes, this is hey" (MVP)
 
-Tier 1 (all): Screener (with routing dropdown for Imbox/Feed/Paper Trail destination), Imbox/Feed/Paper Trail, the Pile (Reply Later + Set Aside as floating bottom-right widget), thread-as-document, spy pixel blocking, strict JMAP threading, per-message action popup, inline notes.
+Tier 1 (all): Screener (with routing dropdown for Imbox/Feed/Paper Trail destination), Imbox/Feed/Paper Trail, the Pile (Reply Later + Set Aside as floating bottom-right widget), thread-as-document, spy pixel blocking, strict JMAP threading, per-message action popup, inline notes, rich-text compose with sanitized HTML (`body_html`; see [`compose-rich-text-design.md`](./compose-rich-text-design.md)).
 Tier 2 sticky four: contact notes, bubble-up (with time picker submenu), send-later, unified search.
 Plumbing: multi-user auth via Stalwart, minimal admin UI, both Cloudflare Tunnel recipes, first-run wizard + config-file admin path, Litestream backup option.
 UI: HEY-inspired warm paper aesthetic (single-column, no sidebar, dropdown menu navigation). See `docs/ui-direction.md`.

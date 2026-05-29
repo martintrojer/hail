@@ -38,6 +38,7 @@
    │    • Auth: cookie session, AES-GCM-encrypted JMAP token      │
    │    • Sanitise inbound HTML, strip tracking pixels            │
    │    • Build outbound MIME from structured client input        │
+   │      (rich-text rules: docs/compose-rich-text-design.md)     │
    │                                                              │
    │  Stateless except for the cookie session table.              │
    └──────────────────────────────────────────────────────────────┘
@@ -241,7 +242,9 @@ catches up.
 **Why:** Rust gives us the best JMAP/Stalwart integration (`jmap-client` from
 Stalwart Labs), strong long-lived async handling, and a single small runtime
 image. React gives the browser UI the right ecosystem. OpenAPI-generated TS
-types give us type sharing without adding a TS server.
+types give us type sharing without adding a TS server. Rich-text compose uses
+TipTap HTML over the hail API, with server-side outbound sanitization; see
+[`docs/compose-rich-text-design.md`](./compose-rich-text-design.md).
 
 ### 6.5 Fat Rust, slim SPA
 
