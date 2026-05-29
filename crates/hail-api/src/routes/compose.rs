@@ -20,9 +20,8 @@ use crate::audit;
 use crate::middleware::auth::{AuthSession, AuthUser};
 use crate::routes::jmap_helpers::{jmap_session, provider_error};
 use crate::routes::outbound::{
-    OutboundHeaders, create_draft_email, looks_like_email, render_markdown, reply_subject,
-    set_rendered_body, submit_email, validate_attachments, validate_body, validate_recipients,
-    validate_subject,
+    OutboundHeaders, create_draft_email, looks_like_email, render_compose_body, reply_subject,
+    set_rendered_body, submit_email, validate_attachments, validate_recipients, validate_subject,
 };
 pub use crate::routes::outbound::{OutboundMessage, ReplyHeaders};
 use crate::routes::response::{bad_request, error_response, internal, not_found};
@@ -236,14 +235,16 @@ struct ComposePayload {
     cc: Option<Vec<String>>,
     bcc: Option<Vec<String>>,
     subject: String,
-    body_markdown: String,
+    body_html: Option<String>,
+    body_markdown: Option<String>,
     attachments: Option<Vec<serde_json::Value>>,
     #[schema(value_type = Option<String>, format = DateTime)]
     send_at: Option<DateTime<Utc>>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 struct ReplyPayload {
-    body_markdown: String,
+    body_html: Option<String>,
+    body_markdown: Option<String>,
     attachments: Option<Vec<serde_json::Value>>,
     #[schema(value_type = Option<String>, format = DateTime)]
     send_at: Option<DateTime<Utc>>,
@@ -650,13 +651,13 @@ impl ComposePayload {
             validate_recipients("bcc", &bcc, true)?;
         }
         validate_subject(&self.subject)?;
-        validate_body(&self.body_markdown)?;
+        let body = render_compose_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
         Ok(OutboundMessage {
             to: self.to,
             cc,
             bcc,
             subject: self.subject,
-            body: render_markdown(&self.body_markdown),
+            body,
             reply,
         })
     }
@@ -665,7 +666,7 @@ impl ComposePayload {
 impl ReplyPayload {
     fn into_message(self, context: ReplyContext) -> Result<OutboundMessage, &'static str> {
         validate_attachments(&self.attachments)?;
-        validate_body(&self.body_markdown)?;
+        let body = render_compose_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
         if context.to.is_empty() {
             return Err("reply_recipient_not_found");
         }
@@ -676,7 +677,7 @@ impl ReplyPayload {
             cc: Vec::new(),
             bcc: Vec::new(),
             subject: context.subject,
-            body: render_markdown(&self.body_markdown),
+            body,
             reply: Some(ReplyHeaders {
                 in_reply_to: context.in_reply_to,
                 references: context.references,

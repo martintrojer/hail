@@ -1,6 +1,6 @@
 //! Shared outbound mail helpers for compose/reply sends and draft autosave.
 
-use hail_core::mail_render::sanitize_and_strip_trackers;
+use hail_core::mail_render::{html_fragment_to_text, sanitize_outgoing_html};
 use hail_jmap::jmap_client::core::set::SetObject;
 
 use crate::routes::jmap_helpers::{ProviderError, provider_error, required_drafts_mailbox_id};
@@ -169,10 +169,43 @@ pub fn set_rendered_body(
 pub fn render_markdown(markdown: &str) -> RenderedBody {
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new(markdown));
-    RenderedBody {
-        plain_text: markdown_to_plain_text(markdown),
-        html: sanitize_and_strip_trackers(&html).html,
+    rendered_html(&html)
+}
+
+pub fn render_compose_body(
+    body_html: Option<&str>,
+    body_markdown: Option<&str>,
+) -> Result<RenderedBody, &'static str> {
+    let Some(body) = body_html
+        .filter(|body| !body.trim().is_empty())
+        .map(rendered_html)
+        .or_else(|| {
+            body_markdown
+                .filter(|body| !body.trim().is_empty())
+                .map(render_markdown)
+        })
+    else {
+        return Err("body_required");
+    };
+
+    validate_body(&body.html)?;
+    if body.html.trim().is_empty() {
+        return Err("body_required");
     }
+    Ok(body)
+}
+
+pub fn rendered_html(html: &str) -> RenderedBody {
+    let html = sanitize_outgoing_html(html);
+    let plain_text = html_to_plaintext(&html);
+    RenderedBody { plain_text, html }
+}
+
+pub fn html_to_plaintext(html: &str) -> String {
+    html_fragment_to_text(html)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn validate_attachments(
@@ -290,46 +323,6 @@ fn apply_headers(
             email.references(reply.references.iter().map(String::as_str));
         }
     }
-}
-
-fn markdown_to_plain_text(markdown: &str) -> String {
-    let mut text = String::new();
-    let mut need_space = false;
-    for event in pulldown_cmark::Parser::new(markdown) {
-        match event {
-            pulldown_cmark::Event::Text(value) | pulldown_cmark::Event::Code(value) => {
-                if need_space && !text.ends_with([' ', '\n']) {
-                    text.push(' ');
-                }
-                text.push_str(&value);
-                need_space = false;
-            }
-            pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {
-                text.push('\n');
-                need_space = false;
-            }
-            pulldown_cmark::Event::End(
-                pulldown_cmark::TagEnd::Paragraph | pulldown_cmark::TagEnd::Heading(_),
-            ) => {
-                text.push_str("\n\n");
-                need_space = false;
-            }
-            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Item) => {
-                if !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str("- ");
-                need_space = false;
-            }
-            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Item) => {
-                text.push('\n');
-                need_space = false;
-            }
-            pulldown_cmark::Event::End(_) => need_space = true,
-            _ => {}
-        }
-    }
-    text.trim().to_string()
 }
 
 async fn required_identity_id_for<E>(session: &hail_jmap::Session, from: &str) -> Result<String, E>

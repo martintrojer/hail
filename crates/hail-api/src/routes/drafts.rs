@@ -25,8 +25,9 @@ use utoipa_axum::routes;
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id, provider_error};
 use crate::routes::outbound::{
-    MAX_BODY_BYTES, OutboundHeaders, create_draft_email, set_text_body, validate_attachments,
-    validate_body, validate_recipients, validate_subject,
+    MAX_BODY_BYTES, OutboundHeaders, create_draft_email, html_to_plaintext, render_compose_body,
+    render_markdown, set_rendered_body, validate_attachments, validate_recipients,
+    validate_subject,
 };
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
@@ -81,7 +82,7 @@ impl DraftStore for JmapDraftStore {
             create_draft_email::<DraftStoreError, _>(
                 &session,
                 OutboundHeaders::new(from, &draft.to, &draft.cc, &draft.bcc, &draft.subject),
-                |email| set_text_body(email, draft.body_markdown),
+                |email| set_rendered_body(email, &draft.body),
             )
             .await
         })
@@ -106,11 +107,13 @@ impl DraftStore for JmapDraftStore {
                 hail_jmap::jmap_client::email::Property::Bcc,
                 hail_jmap::jmap_client::email::Property::Subject,
                 hail_jmap::jmap_client::email::Property::TextBody,
+                hail_jmap::jmap_client::email::Property::HtmlBody,
                 hail_jmap::jmap_client::email::Property::BodyValues,
             ]);
             get_email
                 .arguments()
                 .fetch_text_body_values(true)
+                .fetch_html_body_values(true)
                 .max_body_value_bytes(MAX_BODY_BYTES);
 
             let mut response = request.send_get_email().await.map_err(provider_error)?;
@@ -131,6 +134,8 @@ impl DraftStore for JmapDraftStore {
                 cc: addresses_from_jmap(email.cc()),
                 bcc: addresses_from_jmap(email.bcc()),
                 subject: email.subject().unwrap_or_default().to_string(),
+                body_html: html_body_from_email(&email)
+                    .unwrap_or_else(|| render_markdown(&text_body_from_email(&email)).html),
                 body_markdown: text_body_from_email(&email),
             }))
         })
@@ -162,8 +167,8 @@ impl DraftStore for JmapDraftStore {
             if let Some(subject) = draft.subject {
                 email.subject(subject);
             }
-            if let Some(body_markdown) = draft.body_markdown {
-                set_text_body(email, body_markdown);
+            if let Some(body) = draft.body {
+                set_rendered_body(email, &body);
             }
 
             let mut response = request.send_set_email().await.map_err(provider_error)?;
@@ -213,7 +218,9 @@ pub struct DraftCreate {
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
     pub subject: String,
+    pub body: crate::routes::outbound::RenderedBody,
     pub body_markdown: String,
+    pub body_html: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -222,7 +229,9 @@ pub struct DraftUpdate {
     pub cc: Option<Vec<String>>,
     pub bcc: Option<Vec<String>>,
     pub subject: Option<String>,
+    pub body: Option<crate::routes::outbound::RenderedBody>,
     pub body_markdown: Option<String>,
+    pub body_html: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -232,6 +241,7 @@ pub struct DraftDetails {
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
     pub subject: String,
+    pub body_html: String,
     pub body_markdown: String,
 }
 
@@ -269,6 +279,7 @@ struct DraftPayload {
     cc: Option<Vec<String>>,
     bcc: Option<Vec<String>>,
     subject: Option<String>,
+    body_html: Option<String>,
     body_markdown: Option<String>,
     attachments: Option<Vec<serde_json::Value>>,
 }
@@ -458,20 +469,23 @@ impl DraftPayload {
         let cc = self.cc.unwrap_or_default();
         let bcc = self.bcc.unwrap_or_default();
         let subject = self.subject.unwrap_or_default();
-        let body_markdown = self.body_markdown.unwrap_or_default();
+        let body = render_compose_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
+        let body_markdown = html_to_plaintext(&body.html);
+        let body_html = body.html.clone();
 
         validate_recipients("to", &to, false)?;
         validate_recipients("cc", &cc, false)?;
         validate_recipients("bcc", &bcc, false)?;
         validate_subject(&subject)?;
-        validate_body(&body_markdown)?;
 
         Ok(DraftCreate {
             to,
             cc,
             bcc,
             subject,
+            body,
             body_markdown,
+            body_html,
         })
     }
 
@@ -489,15 +503,22 @@ impl DraftPayload {
         if let Some(subject) = &self.subject {
             validate_subject(subject)?;
         }
-        if let Some(body_markdown) = &self.body_markdown {
-            validate_body(body_markdown)?;
-        }
+        let body = if self.body_html.is_some() || self.body_markdown.is_some() {
+            Some(render_compose_body(
+                self.body_html.as_deref(),
+                self.body_markdown.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        let body_markdown = body.as_ref().map(|body| html_to_plaintext(&body.html));
+        let body_html = body.as_ref().map(|body| body.html.clone());
 
         if self.to.is_none()
             && self.cc.is_none()
             && self.bcc.is_none()
             && self.subject.is_none()
-            && self.body_markdown.is_none()
+            && body.is_none()
         {
             return Err("empty_patch");
         }
@@ -507,7 +528,9 @@ impl DraftPayload {
             cc: self.cc,
             bcc: self.bcc,
             subject: self.subject,
-            body_markdown: self.body_markdown,
+            body,
+            body_markdown,
+            body_html,
         })
     }
 }
@@ -548,12 +571,19 @@ fn addresses_from_jmap(
 }
 
 fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
-    let Some(parts) = email.text_body() else {
-        return String::new();
-    };
+    body_from_parts(email, email.text_body()).unwrap_or_default()
+}
 
+fn html_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> Option<String> {
+    body_from_parts(email, email.html_body()).filter(|body| !body.trim().is_empty())
+}
+
+fn body_from_parts(
+    email: &hail_jmap::jmap_client::email::Email,
+    parts: Option<&[hail_jmap::jmap_client::email::EmailBodyPart]>,
+) -> Option<String> {
     let mut body = String::new();
-    for part in parts {
+    for part in parts? {
         let Some(part_id) = part.part_id() else {
             continue;
         };
@@ -562,7 +592,7 @@ fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String 
         };
         body.push_str(value.value());
     }
-    body
+    Some(body)
 }
 
 fn provider_failed(user_id: i64, err: String) -> Response {
