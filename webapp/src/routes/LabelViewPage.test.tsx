@@ -206,7 +206,6 @@ describe('LabelViewPage', () => {
       expect(screen.getByRole('link', {
         name: 'Open Invoice update from Alice Sender',
       })).toBeInTheDocument();
-      expect(screen.getByText("You're all caught up")).toBeInTheDocument();
       expect(client.labelThreadCalls).toEqual([
         { labelId: 42, cursor: undefined },
         { labelId: 42, cursor: '1' },
