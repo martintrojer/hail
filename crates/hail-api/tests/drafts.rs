@@ -84,9 +84,17 @@ enum Call {
 struct FakeDraftStore {
     calls: Mutex<Vec<Call>>,
     fail: Mutex<Option<DraftStoreError>>,
+    get_response: Mutex<Option<DraftDetails>>,
 }
 
 impl FakeDraftStore {
+    fn with_get_response(response: DraftDetails) -> Self {
+        Self {
+            get_response: Mutex::new(Some(response)),
+            ..Self::default()
+        }
+    }
+
     fn calls(&self) -> Vec<Call> {
         self.calls.lock().expect("calls mutex").clone()
     }
@@ -147,15 +155,21 @@ impl DraftStore for FakeDraftStore {
             self.calls.lock().expect("calls mutex").push(Call::Get {
                 draft_id: draft_id.to_string(),
             });
-            Ok(Some(DraftDetails {
-                draft_id: draft_id.to_string(),
-                to: vec!["bob@example.org".to_string()],
-                cc: vec!["carol@example.org".to_string()],
-                bcc: vec!["dana@example.org".to_string()],
-                subject: "Saved draft".to_string(),
-                body_html: "<p>Saved body</p>".to_string(),
-                body_markdown: "Saved body".to_string(),
-            }))
+            Ok(Some(
+                self.get_response
+                    .lock()
+                    .expect("get response mutex")
+                    .clone()
+                    .unwrap_or_else(|| DraftDetails {
+                        draft_id: draft_id.to_string(),
+                        to: vec!["bob@example.org".to_string()],
+                        cc: vec!["carol@example.org".to_string()],
+                        bcc: vec!["dana@example.org".to_string()],
+                        subject: "Saved draft".to_string(),
+                        body_html: "<p>Saved body</p>".to_string(),
+                        body_markdown: "Saved body".to_string(),
+                    }),
+            ))
         })
     }
 
@@ -384,7 +398,7 @@ async fn create_draft_prefers_body_html_over_legacy_markdown() {
 }
 
 #[tokio::test]
-async fn create_draft_rejects_missing_body() {
+async fn create_draft_accepts_missing_body() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let store = Arc::new(FakeDraftStore::default());
@@ -396,18 +410,29 @@ async fn create_draft_rejects_missing_body() {
         "/api/drafts",
         Some(&sid),
         true,
-        Some(r#"{}"#),
+        Some(r#"{"subject":"Subject-only autosave"}"#),
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let body = json_body(resp).await;
-    assert_eq!(body["error"], "body_required");
-    assert!(store.calls().is_empty());
+    assert_eq!(body["draft_id"], "draft-1");
+    assert_eq!(
+        store.calls(),
+        vec![Call::Create {
+            from: "alice@example.org".to_string(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: "Subject-only autosave".to_string(),
+            body_markdown: "".to_string(),
+            body_html: "".to_string(),
+        }]
+    );
 }
 
 #[tokio::test]
-async fn create_draft_rejects_empty_body() {
+async fn create_draft_accepts_empty_body() {
     let (state, key) = fixture_state().await;
     let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
     let store = Arc::new(FakeDraftStore::default());
@@ -423,10 +448,82 @@ async fn create_draft_rejects_empty_body() {
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Create {
+            from: "alice@example.org".to_string(),
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            subject: "".to_string(),
+            body_markdown: "".to_string(),
+            body_html: "".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn update_draft_can_clear_body() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::default());
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::PATCH,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        true,
+        Some(r#"{"body_html":""}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        store.calls(),
+        vec![Call::Update {
+            draft_id: "draft-1".to_string(),
+            to: None,
+            cc: None,
+            bcc: None,
+            subject: None,
+            body_markdown: Some("".to_string()),
+            body_html: Some("".to_string()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn get_draft_returns_empty_body_fields() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let store = Arc::new(FakeDraftStore::with_get_response(DraftDetails {
+        draft_id: "draft-1".to_string(),
+        to: vec![],
+        cc: vec![],
+        bcc: vec![],
+        subject: "Subject-only autosave".to_string(),
+        body_html: "".to_string(),
+        body_markdown: "".to_string(),
+    }));
+
+    let resp = request(
+        state,
+        store.clone(),
+        Method::GET,
+        "/api/drafts/draft-1",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
     let body = json_body(resp).await;
-    assert_eq!(body["error"], "body_required");
-    assert!(store.calls().is_empty());
+    assert_eq!(body["body_html"], "");
+    assert_eq!(body["body_markdown"], "");
 }
 
 #[tokio::test]
@@ -584,7 +681,8 @@ async fn create_update_get_round_trip_body_html() {
                 bcc: vec![],
                 subject: "HTML".to_string(),
                 body_markdown: "Hello Bob One".to_string(),
-                body_html: "<p>Hello <strong>Bob</strong></p><ul><li><p>One</p></li></ul>".to_string(),
+                body_html: "<p>Hello <strong>Bob</strong></p><ul><li><p>One</p></li></ul>"
+                    .to_string(),
             },
             Call::Update {
                 draft_id: "draft-1".to_string(),
