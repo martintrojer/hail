@@ -36,6 +36,7 @@ export interface ListActionConfig {
 
 export interface ListActionHandlerOptions {
   toast?: boolean;
+  classifyTo?: Extract<MailClassification, 'imbox' | 'feed' | 'papertrail'>;
 }
 
 const singularMessages: Record<ListAction, { message: string; undoSuccessMessage?: string }> = {
@@ -61,6 +62,11 @@ const batchMessages: Record<ListAction, (count: number) => string> = {
   delete: (count) => `${count} draft${count === 1 ? '' : 's'} deleted.`,
   'delete-forever': (count) => `${count} thread${count === 1 ? '' : 's'} deleted forever.`,
 };
+
+function classificationLabel(classification: Extract<MailClassification, 'imbox' | 'feed' | 'papertrail'>) {
+  if (classification === 'papertrail') return 'Paper Trail';
+  return classification.charAt(0).toUpperCase() + classification.slice(1);
+}
 
 function undoFrom(data: unknown) {
   const undoable = data as UndoableResponse | undefined;
@@ -98,7 +104,7 @@ export function useListActions(config: ListActionConfig) {
     } else if (action === 'reply-later') {
       data = await replyLaterMutation.mutateAsync({ threadId });
     } else if (action === 'classify') {
-      data = await classifyMutation.mutateAsync({ threadId, to: classifyTo });
+      data = await classifyMutation.mutateAsync({ threadId, to: options.classifyTo ?? classifyTo });
     } else if (action === 'restore') {
       data = restoreMode === 'restore-endpoint'
         ? await restoreMutation.mutateAsync({ threadId })
@@ -113,8 +119,11 @@ export function useListActions(config: ListActionConfig) {
 
     if (shouldToast) {
       const message = singularMessages[action];
+      const toastMessage = action === 'classify' && options.classifyTo
+        ? `Thread moved to ${classificationLabel(options.classifyTo)}.`
+        : message.message;
       undoToast.showToast({
-        message: message.message,
+        message: toastMessage,
         undo: undoFrom(data),
         undoSuccessMessage: message.undoSuccessMessage,
       });

@@ -23,7 +23,7 @@ import { ArrowUpCircle } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
-import { MailRow as SharedMailRow } from '../components/MailRow';
+import { MailRow as SharedMailRow, MailRowQuickActionsMenu } from '../components/MailRow';
 import { ScreenerBanner } from '../components/ScreenerBanner';
 import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
@@ -283,11 +283,13 @@ function MailListRow({
   view,
   selected,
   onToggleSelect,
+  client,
 }: {
   item: MailViewItem;
   view: MailViewKind;
   selected?: boolean;
   onToggleSelect?: () => void;
+  client?: HailApiClient;
 }) {
   return (
     <MailThreadRow
@@ -295,6 +297,7 @@ function MailListRow({
       view={view}
       selected={selected}
       onToggleSelect={onToggleSelect}
+      client={client}
     />
   );
 }
@@ -326,36 +329,51 @@ function MailThreadRow({
   view,
   selected,
   onToggleSelect,
+  client,
 }: {
   item: MailViewItem;
   view: MailViewKind;
   selected?: boolean;
   onToggleSelect?: () => void;
+  client?: HailApiClient;
 }) {
   return (
-    <ThreadLink
-      threadId={item.thread_id}
-      mailListItem
+    <div
       className={cn(
-        'block border-b border-l-2 border-b-border border-l-transparent focus-visible:border-l-primary focus-visible:bg-accent focus-visible:outline-none hover:bg-muted/60',
+        'group/mail-row flex items-stretch border-b border-l-2 border-b-border border-l-transparent hover:bg-muted/60 focus-within:bg-accent',
         rowDensityClass(view),
         selected && 'bg-accent',
       )}
-      ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
     >
-      <ScreenReaderThreadMetadata item={item} />
-      <SharedMailRow
-        from={item.from || 'Unknown sender'}
-        subject={item.subject || '(no subject)'}
-        preview={view === 'papertrail' ? '' : item.preview || 'No preview available.'}
-        receivedAt={item.received_at}
-        unread={view === 'papertrail' ? false : item.unread}
-        hasNotes={item.has_notes}
-        selected={selected}
-        onToggleSelect={onToggleSelect}
-        labels={item.labels}
-      />
-    </ThreadLink>
+      <ThreadLink
+        threadId={item.thread_id}
+        mailListItem
+        className="block min-w-0 flex-1 focus-visible:border-l-primary focus-visible:outline-none"
+        ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
+      >
+        <ScreenReaderThreadMetadata item={item} />
+        <SharedMailRow
+          from={item.from || 'Unknown sender'}
+          subject={item.subject || '(no subject)'}
+          preview={view === 'papertrail' ? '' : item.preview || 'No preview available.'}
+          receivedAt={item.received_at}
+          unread={view === 'papertrail' ? false : item.unread}
+          hasNotes={item.has_notes}
+          selected={selected}
+          onToggleSelect={onToggleSelect}
+          labels={item.labels}
+        />
+      </ThreadLink>
+      <div className="flex shrink-0 items-start px-2 py-2">
+        <MailRowQuickActionsMenu
+          threadId={item.thread_id}
+          subject={item.subject || '(no subject)'}
+          unread={view === 'papertrail' ? false : item.unread}
+          selected={Boolean(selected)}
+          client={client}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -406,6 +424,7 @@ function MailRows({
           view={view}
           selected={selected}
           onToggleSelect={onToggleSelect}
+          client={client}
         />
       )}
       keyExtractor={(item) => item.thread_id}
@@ -854,6 +873,7 @@ export function MailViewPage({
                 view={view}
                 selected={selected}
                 onToggleSelect={onToggleSelect}
+                client={apiClient}
               />
             )}
             keyExtractor={(item) => item.thread_id}

@@ -4,6 +4,8 @@ import {
   Bookmark,
   Clock,
   Forward,
+  MailOpen,
+  MailCheck,
   Reply,
   StickyNote,
   Trash2,
@@ -24,14 +26,17 @@ import {
 export interface MessageActionPopupProps {
   open: boolean;
   onClose: () => void;
+  onOpenChange?: (open: boolean) => void;
   onAction: (action: string, payload?: unknown) => void;
   /** Optional trigger lets Radix anchor the menu to the shadcn Button. */
   trigger?: ReactNode;
   /** Actions to hide based on context (e.g. hide bubble-up in pile views). */
   hiddenActions?: string[];
+  /** Optional actions to append for list-row state toggles. */
+  extraActions?: ActionItem[];
 }
 
-interface ActionItem {
+export interface ActionItem {
   action: string;
   label: string;
   icon: LucideIcon;
@@ -58,6 +63,9 @@ const actionGroups: ActionItem[][] = [
   ],
 ];
 
+export const markReadAction: ActionItem = { action: 'mark-read', label: 'Mark read', icon: MailOpen };
+export const markUnreadAction: ActionItem = { action: 'mark-unread', label: 'Mark unread', icon: MailCheck };
+
 const moveTargets = [
   { label: 'Imbox', value: 'imbox' },
   { label: 'Feed', value: 'feed' },
@@ -68,8 +76,10 @@ export function MessageActionPopup({
   open,
   onClose,
   onAction,
+  onOpenChange,
   trigger,
   hiddenActions = [],
+  extraActions = [],
 }: MessageActionPopupProps) {
   function runAction(action: string, payload?: unknown) {
     onAction(action, payload);
@@ -79,12 +89,14 @@ export function MessageActionPopup({
   const filteredGroups = actionGroups.map((group) =>
     group.filter((item) => !hidden.has(item.action)),
   );
+  const filteredExtraActions = extraActions.filter((item) => !hidden.has(item.action));
 
   return (
     <DropdownMenu
       modal={false}
       open={open}
       onOpenChange={(nextOpen) => {
+        onOpenChange?.(nextOpen);
         if (!nextOpen) {
           onClose();
         }
@@ -127,6 +139,21 @@ export function MessageActionPopup({
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
+
+        {filteredExtraActions.length > 0 ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              {filteredExtraActions.map((item) => (
+                <MessageMenuItem
+                  key={item.action}
+                  item={item}
+                  onSelect={() => runAction(item.action, item.payload)}
+                />
+              ))}
+            </DropdownMenuGroup>
+          </>
+        ) : null}
 
         <DropdownMenuSeparator />
 
