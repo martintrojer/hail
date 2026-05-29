@@ -16,6 +16,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use hail_core::mail_render::sanitize_outgoing_html;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -128,15 +129,17 @@ impl DraftStore for JmapDraftStore {
                 return Ok(None);
             }
 
+            let body_markdown = text_body_from_email(&email);
+            let body_html = sanitized_body_html_from_email(&email, &body_markdown);
+
             Ok(Some(DraftDetails {
                 draft_id: draft_id.to_string(),
                 to: addresses_from_jmap(email.to()),
                 cc: addresses_from_jmap(email.cc()),
                 bcc: addresses_from_jmap(email.bcc()),
                 subject: email.subject().unwrap_or_default().to_string(),
-                body_html: html_body_from_email(&email)
-                    .unwrap_or_else(|| render_markdown(&text_body_from_email(&email)).html),
-                body_markdown: text_body_from_email(&email),
+                body_html,
+                body_markdown,
             }))
         })
     }
@@ -632,6 +635,15 @@ fn body_from_parts(
         body.push_str(value.value());
     }
     Some(body)
+}
+
+fn sanitized_body_html_from_email(
+    email: &hail_jmap::jmap_client::email::Email,
+    text_body: &str,
+) -> String {
+    html_body_from_email(email)
+        .map(|html| sanitize_outgoing_html(&html))
+        .unwrap_or_else(|| sanitize_outgoing_html(&render_markdown(text_body).html))
 }
 
 fn provider_failed(user_id: i64, err: String) -> Response {
