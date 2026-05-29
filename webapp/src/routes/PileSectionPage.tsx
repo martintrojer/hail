@@ -18,6 +18,7 @@ import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { AppShell } from '../layout/AppShell';
 import { pilePreview } from '../lib/pilePreview';
+import { plaintextToBodyHtml } from '../lib/plaintextToBodyHtml';
 import { cn } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -85,7 +86,7 @@ function ReplyPanel({
       cc: [],
       bcc: [],
       subject: '',
-      body_html: `<p>${body.trim()}</p>`,
+      body_html: plaintextToBodyHtml(body),
       attachments: [],
     };
     try {
