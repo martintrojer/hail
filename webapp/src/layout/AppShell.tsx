@@ -824,14 +824,12 @@ export function AppShell({
               data-hail-content-layout={contentLayout}
               className={cn('mx-auto w-full min-w-0', contentWidthClass)}
             >
-              <div className="mb-5 flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
-                <div className="min-w-0">
-                  <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-                    {title}
-                  </h1>
+              <h1 className="sr-only">{title}</h1>
+              {actions ? (
+                <div className="mb-4 flex justify-end border-b pb-3">
+                  <div className="shrink-0">{actions}</div>
                 </div>
-                {actions ? <div className="shrink-0">{actions}</div> : null}
-              </div>
+              ) : null}
 
               <div className="flex flex-col gap-8">
                 {list}
