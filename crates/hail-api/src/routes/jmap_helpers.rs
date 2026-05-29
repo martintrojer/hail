@@ -395,7 +395,7 @@ fn body_from_parts(
     Some(body)
 }
 
-fn collapse_preview_whitespace(input: &str) -> String {
+pub fn collapse_preview_whitespace(input: &str) -> String {
     let mut preview = String::new();
     for word in input.split_whitespace() {
         if !preview.is_empty() {
