@@ -7,7 +7,7 @@ import {
   within,
 } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   ComposeRequest,
   ComposeResponse,
@@ -155,6 +155,39 @@ class ComposerPageTestClient extends TestHailApiClient {
 let currentTestBody: ReactNode = null;
 let restoreComposeRoute: (() => void) | null = null;
 
+declare global {
+  interface Window {
+    __HAIL_TEST_EDITOR_UPDATES__?: WeakMap<HTMLElement, (html: string) => void>;
+  }
+}
+
+beforeAll(() => {
+  Element.prototype.getClientRects = function getClientRects() {
+    const rect = this.getBoundingClientRect();
+    return {
+      length: 1,
+      item: (index: number) => (index === 0 ? rect : null),
+      0: rect,
+      [Symbol.iterator]: function* iterator() {
+        yield rect;
+      },
+    } as DOMRectList;
+  };
+  document.elementFromPoint = () => document.body;
+  Range.prototype.getClientRects = function getRangeClientRects() {
+    const rect = document.body.getBoundingClientRect();
+    return {
+      length: 1,
+      item: (index: number) => (index === 0 ? rect : null),
+      0: rect,
+      [Symbol.iterator]: function* iterator() {
+        yield rect;
+      },
+    } as DOMRectList;
+  };
+  Range.prototype.getBoundingClientRect = () => document.body.getBoundingClientRect();
+});
+
 afterEach(() => {
   vi.useRealTimers();
   currentTestBody = null;
@@ -223,6 +256,26 @@ function renderComposer({
   return client;
 }
 
+function setEditorHtmlForTest(editor: HTMLElement, html: string) {
+  const update = window.__HAIL_TEST_EDITOR_UPDATES__?.get(editor);
+  expect(update).toBeDefined();
+  update?.(html);
+}
+
+async function setEditorText(text: string) {
+  const editor = await screen.findByLabelText('Body');
+  setEditorHtmlForTest(editor, text ? `<p>${text}</p>` : '<p></p>');
+  fireEvent.input(editor, { target: { innerHTML: text ? `<p>${text}</p>` : '<p></p>' } });
+}
+
+async function getEditorHtml() {
+  return (await screen.findByLabelText('Body')).innerHTML;
+}
+
+async function getEditorText() {
+  return (await screen.findByLabelText('Body')).textContent ?? '';
+}
+
 async function fillSendableFields() {
   fireEvent.change(await screen.findByLabelText('To'), {
     target: { value: 'alice@example.com; bob@example.com' },
@@ -236,15 +289,12 @@ async function fillSendableFields() {
   fireEvent.change(screen.getByLabelText('Subject'), {
     target: { value: 'Quarterly report' },
   });
-  fireEvent.change(screen.getByLabelText('Body'), {
-    target: { value: 'Report attached.' },
-  });
+  await setEditorText('Report attached.');
+  await screen.findByText('Draft not saved yet');
 }
 
 async function fillReplyBody() {
-  fireEvent.change(await screen.findByLabelText('Body'), {
-    target: { value: 'Reply from the composer.' },
-  });
+  await setEditorText('Reply from the composer.');
 }
 
 function selectAttachment() {
@@ -333,10 +383,30 @@ describe('ComposerPage', () => {
     expect(client.createDraftCalls).toEqual([]);
   });
 
+  it('renders the rich-text toolbar and updates editor HTML for formatting toggles', async () => {
+    renderComposer();
+    await setEditorText('Hello rich text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bold' }));
+    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<p><strong>Bold words</strong></p>');
+    expect(await getEditorHtml()).toContain('<strong>Bold words</strong>');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bold' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Italic' }));
+    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<p><em>Italic words</em></p>');
+    expect(await getEditorHtml()).toContain('<em>Italic words</em>');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Italic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bullet list' }));
+    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<ul><li><p>List item</p></li></ul>');
+    expect(await getEditorHtml()).toContain('<ul>');
+  });
+
   it('still sends when no attachments are selected', async () => {
     const client = renderComposer();
     await fillSendableFields();
 
+    expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled();
     fireEvent.submit(
       screen.getByRole('button', { name: 'Send now' }).closest('form')!,
     );
@@ -347,7 +417,7 @@ describe('ComposerPage', () => {
       cc: ['carol@example.com'],
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
-      body_html: 'Report attached.',
+      body_html: '<p>Report attached.</p>',
       attachments: [],
     });
     expect(await screen.findByText('Sent.')).toBeInTheDocument();
@@ -399,12 +469,11 @@ describe('ComposerPage', () => {
     expect(screen.getByLabelText('Cc')).toHaveValue('carol@example.com');
     expect(screen.getByLabelText('Bcc')).toHaveValue('dave@example.com');
     expect(screen.getByLabelText('Subject')).toHaveValue('Saved draft subject');
-    expect(screen.getByLabelText('Body')).toHaveValue('<p>Saved draft body.</p>');
+    expect(await getEditorText()).toBe('Saved draft body.');
     expect(client.getDraftCalls).toEqual(['draft-existing']);
 
-    fireEvent.change(screen.getByLabelText('Body'), {
-      target: { value: 'Updated resumed draft body.' },
-    });
+    await setEditorText('Updated resumed draft body.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
@@ -416,7 +485,7 @@ describe('ComposerPage', () => {
         cc: ['carol@example.com'],
         bcc: ['dave@example.com'],
         subject: 'Saved draft subject',
-        body_html: 'Updated resumed draft body.',
+        body_html: '<p>Updated resumed draft body.</p>',
         attachments: [],
       },
     });
@@ -448,9 +517,8 @@ describe('ComposerPage', () => {
 
   it('keeps send validation strict when a partial draft is saveable', async () => {
     const client = renderComposer();
-    fireEvent.change(await screen.findByLabelText('Body'), {
-      target: { value: 'Needs a recipient and subject first.' },
-    });
+    await setEditorText('Needs a recipient and subject first.');
+    await waitFor(() => expect(screen.getByText('Draft not saved yet')).toBeInTheDocument());
 
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send later' })).toBeDisabled();
@@ -464,7 +532,7 @@ describe('ComposerPage', () => {
     expect(client.createDraftCalls[0]).toMatchObject({
       to: [],
       subject: '',
-      body_html: 'Needs a recipient and subject first.',
+      body_html: '<p>Needs a recipient and subject first.</p>',
     });
   });
 
@@ -480,14 +548,13 @@ describe('ComposerPage', () => {
       cc: ['carol@example.com'],
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
-      body_html: 'Report attached.',
+      body_html: '<p>Report attached.</p>',
       attachments: [],
     });
     expect(client.updateDraftCalls).toEqual([]);
 
-    fireEvent.change(screen.getByLabelText('Body'), {
-      target: { value: 'Updated draft body.' },
-    });
+    await setEditorText('Updated draft body.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
@@ -499,7 +566,7 @@ describe('ComposerPage', () => {
         cc: ['carol@example.com'],
         bcc: ['dave@example.com', 'erin@example.com'],
         subject: 'Quarterly report',
-        body_html: 'Updated draft body.',
+        body_html: '<p>Updated draft body.</p>',
         attachments: [],
       },
     });
@@ -520,14 +587,12 @@ describe('ComposerPage', () => {
       cc: ['carol@example.com'],
       bcc: ['dave@example.com', 'erin@example.com'],
       subject: 'Quarterly report',
-      body_html: 'Report attached.',
+      body_html: '<p>Report attached.</p>',
       attachments: [],
     });
     expect(await screen.findByText('Draft saved')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Body'), {
-      target: { value: 'Autosaved update.' },
-    });
+    await setEditorText('Autosaved update.');
 
     await vi.advanceTimersByTimeAsync(5000);
 
@@ -540,7 +605,7 @@ describe('ComposerPage', () => {
         cc: ['carol@example.com'],
         bcc: ['dave@example.com', 'erin@example.com'],
         subject: 'Quarterly report',
-        body_html: 'Autosaved update.',
+        body_html: '<p>Autosaved update.</p>',
         attachments: [],
       },
     });
@@ -553,7 +618,7 @@ describe('ComposerPage', () => {
 
     expect(await screen.findByLabelText('To')).toHaveValue('');
     expect(screen.getByLabelText('Subject')).toHaveValue('');
-    expect(screen.getByLabelText('Body')).toHaveValue('');
+    expect(await getEditorText()).toBe('');
     expect(client.getDraftCalls).toEqual(['missing-draft']);
     expect(
       await screen.findByText('Draft could not be loaded. HTTP 404.'),
@@ -578,6 +643,7 @@ describe('ComposerPage', () => {
       target: { value: 'ignored-cc@example.com' },
     });
     await fillReplyBody();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
 
     await waitFor(() => expect(client.sendReplyCalls).toHaveLength(1));
@@ -585,7 +651,7 @@ describe('ComposerPage', () => {
     expect(client.sendReplyCalls[0]).toEqual({
       threadId: 'thread-123',
       body: {
-        body_html: 'Reply from the composer.',
+        body_html: '<p>Reply from the composer.</p>',
         attachments: [],
         send_at: undefined,
       },
@@ -632,10 +698,9 @@ describe('ComposerPage', () => {
     expect(screen.getByLabelText('Subject')).toHaveValue(
       'Re: Existing subject',
     );
-    const body = screen.getByLabelText('Body') as HTMLTextAreaElement;
-    expect(body.value).toContain('Bob Sender wrote:');
-    expect(body.value).toContain('<blockquote><p>Line one</p></blockquote>');
-    expect(body.value).not.toContain('> Line one');
+    const bodyText = await getEditorText();
+    expect(bodyText).toContain('Bob Sender wrote:');
+    expect(bodyText).toContain('Line one');
     expect(client.getThreadCalls).toEqual(['thread-456']);
   });
 
@@ -673,9 +738,7 @@ describe('ComposerPage', () => {
     renderComposer({ replyToThreadId: 'thread-123' });
 
     expect(screen.getByText('Loading reply details…')).toBeInTheDocument();
-    expect(
-      ((await screen.findByLabelText('Body')) as HTMLTextAreaElement).value,
-    ).toContain('<blockquote><p>Can you review this?</p></blockquote>');
+    expect((await screen.findByLabelText('Body')).textContent).toContain('Can you review this?');
   });
 
   it('shows send mutation error messages from API failures', async () => {

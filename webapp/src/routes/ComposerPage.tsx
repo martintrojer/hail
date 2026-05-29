@@ -23,6 +23,7 @@ import {
   useUpdateDraftMutation,
 } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
+import { RichTextEditor, type RichTextEditorHandle } from '../components/Composer/RichTextEditor';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { InlineNote } from '../components/InlineNote';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
@@ -31,7 +32,6 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Field, FieldGroup, FieldLabel } from '../components/ui/field';
 import { Input } from '../components/ui/input';
-import { Textarea } from '../components/ui/textarea';
 import { useGoBack } from '../hooks/useGoBack';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { AppShell } from '../layout/AppShell';
@@ -66,6 +66,10 @@ interface AttachmentDraft {
 const autosaveIntervalMs = 5000;
 const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
 const lineInputClass = 'h-12 border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0';
+
+function htmlHasContent(html: string) {
+  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim().length > 0;
+}
 
 function splitAddresses(value: string) {
   return value.split(/[;,]/).map((address) => address.trim()).filter(Boolean);
@@ -188,12 +192,8 @@ function prefillFromThread(
   };
 }
 
-function placeCaretAtStart(element: HTMLTextAreaElement | null) {
-  if (!element) return;
-  window.requestAnimationFrame(() => {
-    element.focus();
-    element.setSelectionRange(0, 0);
-  });
+function placeCaretAtStart(editor: RichTextEditorHandle | null) {
+  editor?.focus('start');
 }
 
 export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initialDraftId, initialTo = [], initialSubject = '', client }: ComposerPageProps) {
@@ -216,7 +216,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [showCarbonCopyFields, setShowCarbonCopyFields] = useState(false);
-  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const bodyRef = useRef<RichTextEditorHandle | null>(null);
   const snapshotRef = useRef('');
   const replyPrefillKeyRef = useRef<string | null>(null);
 
@@ -250,7 +250,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
   const canSubmit = !prefillLoading
     && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
     && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
-    && form.body.trim().length > 0;
+    && htmlHasContent(draftPayload.body_html);
+  const canManualSaveDraft = dirty && canSaveDraft && !hasUnsupportedAttachments;
   const threadNotes = replyToThreadId && replyThreadQuery.data ? replyThreadQuery.data.notes : [];
 
   function updateField(field: keyof ComposerForm, value: string) {
@@ -310,7 +311,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       cc: draftQuery.data.cc.join(', '),
       bcc: draftQuery.data.bcc.join(', '),
       subject: draftQuery.data.subject,
-      body: draftQuery.data.body_html,
+      body: draftQuery.data.body_html ?? draftQuery.data.body_markdown ?? '',
       sendAt: '',
     };
     setForm(nextForm);
@@ -321,7 +322,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
       cc: draftQuery.data.cc,
       bcc: draftQuery.data.bcc,
       subject: draftQuery.data.subject,
-      body_html: draftQuery.data.body_html,
+      body_html: draftQuery.data.body_html ?? draftQuery.data.body_markdown ?? '',
       attachments: [],
     });
     setDirty(false);
@@ -538,13 +539,12 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
               )}
               <Field className="min-h-[22rem] flex-1">
                 <FieldLabel htmlFor="compose-body" className="sr-only">Body</FieldLabel>
-                <Textarea
+                <RichTextEditor
                   ref={bodyRef}
                   id="compose-body"
+                  aria-label="Body"
                   value={form.body}
-                  onChange={(event) => updateField('body', event.target.value)}
-                  className="min-h-[22rem] flex-1 resize-none border-0 bg-transparent px-4 py-4 text-base leading-relaxed shadow-none focus-visible:ring-0"
-                  placeholder="Write your email…"
+                  onChange={(html) => updateField('body', html)}
                   autoFocus={Boolean(replyToThreadId)}
                 />
               </Field>
@@ -581,7 +581,7 @@ export function ComposerPage({ replyToThreadId, replyAll = false, draftId: initi
             <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-border pt-5">
               <Button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending}>{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</Button>
               <Button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} variant="secondary">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</Button>
-              {!replyToThreadId ? <Button type="button" onClick={saveDraft} disabled={!dirty || savingDraft || !canSaveDraft || hasUnsupportedAttachments} variant="outline">{savingDraft ? 'Saving…' : 'Save draft'}</Button> : null}
+              {!replyToThreadId ? <Button type="button" onClick={saveDraft} disabled={!canManualSaveDraft || savingDraft} variant="outline">{savingDraft ? 'Saving…' : 'Save draft'}</Button> : null}
               <Button type="button" onClick={closeComposer} variant="ghost" className="ml-auto">Discard</Button>
             </div>
 

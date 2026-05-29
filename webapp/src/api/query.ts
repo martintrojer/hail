@@ -1264,7 +1264,6 @@ export function useSendComposeMutation(
       threadId
         ? client.sendReply(threadId, {
             body_html: request.body_html,
-            body_markdown: request.body_markdown,
             attachments: request.attachments,
             send_at: request.send_at,
           })
