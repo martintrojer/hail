@@ -482,6 +482,137 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_outgoing_blocks_high_risk_bypass_shapes() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            must_contain: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                name: "svg_onload",
+                input: r#"<svg onload=alert(1)><circle></circle></svg>"#,
+                must_contain: &[],
+            },
+            Case {
+                name: "data_svg_image",
+                input: r#"<img src="data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+" />"#,
+                must_contain: &[],
+            },
+            Case {
+                name: "data_html_link",
+                input: r#"<a href="data:text/html,<script>alert(1)</script>">x</a>"#,
+                must_contain: &[">x</a>"],
+            },
+            Case {
+                name: "mixed_case_javascript_link",
+                input: r#"<a href="JaVaScRiPt:alert(1)">x</a>"#,
+                must_contain: &[">x</a>"],
+            },
+            Case {
+                name: "entity_encoded_javascript_link",
+                input: r#"<a href="javascript&#58;alert(1)">x</a>"#,
+                must_contain: &[">x</a>"],
+            },
+            Case {
+                name: "mixed_case_script_tag",
+                input: r#"<ScRiPt>alert(1)</ScRiPt>"#,
+                must_contain: &[],
+            },
+            Case {
+                name: "nested_script_preserves_surrounding_text",
+                input: r#"<p>safe<script>alert(1)</script>after</p>"#,
+                must_contain: &["safe", "after"],
+            },
+            Case {
+                name: "leading_whitespace_javascript_link",
+                input: r#"<a href=" javascript:alert(1)">x</a>"#,
+                must_contain: &[">x</a>"],
+            },
+            Case {
+                name: "malformed_event_attribute_preserves_bold",
+                input: r#"<p onclick=foo() x><b>hi</b>"#,
+                must_contain: &["<b>hi</b>"],
+            },
+            Case {
+                name: "iframe_srcdoc",
+                input: r#"<iframe srcdoc="<script>alert(1)</script>">frame</iframe>"#,
+                must_contain: &[],
+            },
+            Case {
+                name: "math_nested_script",
+                input: r#"<math><mtext><script>alert(1)</script></mtext></math>"#,
+                must_contain: &[],
+            },
+            Case {
+                name: "details_ontoggle",
+                input: r#"<details ontoggle="alert(1)">x</details>"#,
+                must_contain: &["x"],
+            },
+            Case {
+                name: "vbscript_link",
+                input: r#"<a href="vbscript:alert(1)">x</a>"#,
+                must_contain: &[">x</a>"],
+            },
+        ];
+
+        for case in cases {
+            let output = sanitize_outgoing_html(case.input);
+            let lower = output.to_ascii_lowercase();
+
+            assert!(
+                !lower.contains("script"),
+                "{} leaked script token in {output:?}",
+                case.name
+            );
+            assert!(
+                !lower.contains("javascript:"),
+                "{} leaked javascript: URL in {output:?}",
+                case.name
+            );
+            assert!(
+                !output.contains("data:"),
+                "{} leaked data: URL in {output:?}",
+                case.name
+            );
+            assert!(
+                !output.contains("vbscript:"),
+                "{} leaked vbscript: URL in {output:?}",
+                case.name
+            );
+            assert!(
+                !output.contains("onload"),
+                "{} leaked onload attribute in {output:?}",
+                case.name
+            );
+            assert!(
+                !output.contains("onclick"),
+                "{} leaked onclick attribute in {output:?}",
+                case.name
+            );
+            assert!(
+                !output.contains("ontoggle"),
+                "{} leaked ontoggle attribute in {output:?}",
+                case.name
+            );
+            assert!(
+                !lower.contains("alert"),
+                "{} leaked alert payload in {output:?}",
+                case.name
+            );
+
+            for expected in case.must_contain {
+                assert!(
+                    output.contains(expected),
+                    "{} lost expected safe fragment {expected:?} in {output:?}",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn sanitize_outgoing_keeps_compose_formatting_tags() {
         let sanitized = sanitize_outgoing_html(
             r#"<blockquote><ul><li><code>let x = 1;</code></li></ul><pre>code block</pre></blockquote>"#,
