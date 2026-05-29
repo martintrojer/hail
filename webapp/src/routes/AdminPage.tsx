@@ -207,7 +207,13 @@ function CreateUserForm() {
 function ResetPasswordForm({ user }: { user: UserView }) {
   const inputId = useId();
   const [password, setPassword] = useState('');
-  const resetPassword = useResetAdminUserPasswordMutation(undefined, { onSuccess: () => setPassword('') });
+  const [resetSucceeded, setResetSucceeded] = useState(false);
+  const resetPassword = useResetAdminUserPasswordMutation(undefined, {
+    onSuccess: () => {
+      setPassword('');
+      setResetSucceeded(true);
+    },
+  });
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -220,9 +226,10 @@ function ResetPasswordForm({ user }: { user: UserView }) {
         <UiField>
           <FieldLabel htmlFor={inputId} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reset password</FieldLabel>
           <div className="flex gap-2">
-            <Input id={inputId} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" required minLength={12} placeholder="New password" className="min-w-0 flex-1" />
+            <Input id={inputId} type="password" value={password} onChange={(event) => { setPassword(event.target.value); setResetSucceeded(false); }} autoComplete="new-password" required minLength={12} placeholder="New password" className="min-w-0 flex-1" />
             <Button type="submit" variant="outline" disabled={resetPassword.isPending}>{resetPassword.isPending ? 'Saving…' : 'Reset'}</Button>
           </div>
+          {resetSucceeded ? <p role="status" className="text-xs text-muted-foreground">Password reset for {user.email}.</p> : null}
           <FormError error={resetPassword.error} action="Reset password" />
         </UiField>
       </FieldGroup>
@@ -242,7 +249,19 @@ function UserCard({ user, currentUserId, totalEmails }: { user: UserView; curren
         <CardAction>
           <div className="flex shrink-0 items-center gap-2">
             {user.is_admin ? <Badge variant="secondary">Admin</Badge> : null}
-            <Button type="button" variant="destructive" size="sm" onClick={() => deleteUser.mutate(user.id)} disabled={deleteUser.isPending || isSelf} title={isSelf ? 'You cannot delete your own admin account.' : undefined}>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                if (window.confirm(`Delete user ${user.email}? This cannot be undone.`)) {
+                  deleteUser.mutate(user.id);
+                }
+              }}
+              disabled={deleteUser.isPending || isSelf}
+              title={isSelf ? 'You cannot delete your own admin account.' : undefined}
+              aria-label={`Delete user ${user.email}`}
+            >
               {deleteUser.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </div>
@@ -327,7 +346,20 @@ function DomainsSection() {
                 <Card key={domain} size="sm" className="bg-muted/40 shadow-none">
                   <CardContent className="flex items-center justify-between gap-3">
                     <span className="min-w-0 truncate font-medium">{domain}</span>
-                    <Button type="button" variant="destructive" size="sm" onClick={() => deleteDomain.mutate(domain)} disabled={deleteDomain.isPending}>Delete</Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => {
+                        if (window.confirm(`Delete domain ${domain}? Stalwart will stop accepting mail for this domain.`)) {
+                          deleteDomain.mutate(domain);
+                        }
+                      }}
+                      disabled={deleteDomain.isPending}
+                      aria-label={`Delete domain ${domain}`}
+                    >
+                      Delete
+                    </Button>
                   </CardContent>
                 </Card>
               ))}
