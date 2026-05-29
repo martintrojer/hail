@@ -1,48 +1,16 @@
 import { useMemo } from 'react';
-import { type HailApiClient, type MailViewItem } from '../api/client';
+import { type HailApiClient } from '../api/client';
 import { useArchiveView } from '../api/query';
 import { ActionableList } from '../components/ActionableList';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
+import { MailThreadRow } from '../components/MailThreadRow';
 import { StateCard } from '../components/StateCard';
-import { ThreadLink } from '../components/ThreadLink';
-import { MailRow } from '../components/MailRow';
 import { AppShell } from '../layout/AppShell';
 import { viewErrorMessage } from '../lib/errorMessages';
 
 interface ArchivePageProps {
   client?: HailApiClient;
-}
-
-function ArchiveRow({
-  item,
-  selected,
-  onToggleSelect,
-}: {
-  item: MailViewItem;
-  selected?: boolean;
-  onToggleSelect?: () => void;
-}) {
-  return (
-    <div className="border-b border-border py-4 pl-3 pr-0 hover:bg-muted/50 sm:py-5">
-      <ThreadLink
-        threadId={item.thread_id}
-        mailListItem
-        className="block min-w-0 rounded-sm focus-ring outline-none"
-        ariaLabel={`Open ${item.subject || 'thread'} from ${item.from || 'unknown sender'}`}
-      >
-        <MailRow
-          from={item.from || 'Unknown sender'}
-          subject={item.subject || '(no subject)'}
-          preview={item.preview || 'No preview available.'}
-          receivedAt={item.received_at}
-          hasNotes={item.has_notes}
-          selected={selected}
-          onToggleSelect={onToggleSelect}
-        />
-      </ThreadLink>
-    </div>
-  );
 }
 
 export function ArchivePage({ client }: ArchivePageProps) {
@@ -68,7 +36,7 @@ export function ArchivePage({ client }: ArchivePageProps) {
         items={items}
         actions={{ client, availableActions: ['restore'], restoreMode: 'classify-imbox' }}
         renderItem={(item, { selected, onToggleSelect }) => (
-          <ArchiveRow item={item} selected={selected} onToggleSelect={onToggleSelect} />
+          <MailThreadRow item={item} selected={selected} onToggleSelect={onToggleSelect} />
         )}
         keyExtractor={(item) => item.thread_id}
         emptyState={<StateCard title="Nothing archived yet." />}
