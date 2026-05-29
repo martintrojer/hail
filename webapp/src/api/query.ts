@@ -1,4 +1,5 @@
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -33,7 +34,6 @@ import {
   type DraftRequest,
   type DraftResponse,
   type ImboxSectionedResponse,
-  type LabelThreadsResponse,
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
@@ -541,11 +541,17 @@ export function useWorkflows(
 export function useLabelThreads(
   labelId: number,
   client = defaultApiClient,
-  options?: QueryConfig<LabelThreadsResponse>,
+  options?: { enabled?: boolean },
 ) {
-  return useQuery({
-    queryKey: queryKeys.labelThreads(labelId),
-    queryFn: () => client.getLabelThreads(labelId),
+  return useInfiniteQuery({
+    queryKey: queryKeys.labelThreadsRoot(labelId),
+    queryFn: ({ pageParam }) =>
+      client.getLabelThreads(
+        labelId,
+        typeof pageParam === 'string' ? { cursor: pageParam } : {},
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     ...options,
     enabled: Number.isSafeInteger(labelId) && labelId > 0 && (options?.enabled ?? true),
   });
