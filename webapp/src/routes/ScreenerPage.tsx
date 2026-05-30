@@ -8,7 +8,7 @@ import {
 } from '../api/client';
 import {
   useScreenerDecisionMutation,
-  useScreenerView,
+  useScreenerInfiniteView,
 } from '../api/query';
 import { ErrorState } from '../components/ErrorState';
 import { LoadingState } from '../components/LoadingState';
@@ -254,7 +254,8 @@ function PendingSenderCard({
 }
 
 export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
-  const query = useScreenerView(client);
+  const query = useScreenerInfiniteView(client);
+  const senders = query.data?.pages.flatMap((page) => page.senders) ?? [];
 
   let list;
   if (query.isPending) {
@@ -269,12 +270,16 @@ export function ScreenerPage({ client }: { client?: HailApiClient } = {}) {
   } else {
     list = (
       <ListView
-        items={query.data.senders}
+        items={senders}
         renderItem={(sender) => <PendingSenderCard sender={sender} client={client} />}
         keyExtractor={(sender) => sender.sender}
-        hasMore={false}
-        isLoadingMore={false}
-        onLoadMore={() => {}}
+        hasMore={query.hasNextPage}
+        isLoadingMore={query.isFetchingNextPage}
+        onLoadMore={() => {
+          if (query.hasNextPage && !query.isFetchingNextPage) {
+            void query.fetchNextPage();
+          }
+        }}
         emptyState={<EmptyState />}
       />
     );

@@ -489,6 +489,7 @@ async fn screener_view_returns_only_current_user_pending_rows() {
     assert_eq!(senders[0]["message_count"], 1);
     assert!(senders[0]["latest_preview"].is_null());
     assert!(senders[0]["emails"].as_array().unwrap().is_empty());
+    assert!(json["next_cursor"].is_null());
 }
 
 #[tokio::test]
@@ -568,6 +569,107 @@ async fn screener_view_sorts_newest_first() {
         got,
         vec!["new@example.org", "middle@example.org", "old@example.org"]
     );
+    assert!(json["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn screener_view_paginates_pending_senders_with_cursor() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let now = Utc::now();
+    let fixtures = [
+        ("newest@example.org", now),
+        ("same-a@example.org", now - Duration::minutes(1)),
+        ("same-b@example.org", now - Duration::minutes(1)),
+        ("same-c@example.org", now - Duration::minutes(1)),
+        ("oldest@example.org", now - Duration::minutes(2)),
+    ];
+    for (sender, first_seen_at) in fixtures {
+        seed_rule(&state, user_id, sender, "pending", None, first_seen_at).await;
+    }
+
+    let first = request(
+        state.clone(),
+        Method::GET,
+        "/api/views/screener?limit=2",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = json_body(first).await;
+    let first_senders: Vec<&str> = first["senders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["sender"].as_str().unwrap())
+        .collect();
+    assert_eq!(first_senders, vec!["newest@example.org", "same-a@example.org"]);
+    let first_cursor = first["next_cursor"]
+        .as_str()
+        .expect("first page cursor")
+        .to_owned();
+
+    let second = request(
+        state.clone(),
+        Method::GET,
+        &format!("/api/views/screener?limit=2&cursor={first_cursor}"),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = json_body(second).await;
+    let second_senders: Vec<&str> = second["senders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["sender"].as_str().unwrap())
+        .collect();
+    assert_eq!(second_senders, vec!["same-b@example.org", "same-c@example.org"]);
+    let second_cursor = second["next_cursor"]
+        .as_str()
+        .expect("second page cursor")
+        .to_owned();
+    assert_ne!(second_cursor, first_cursor);
+
+    let third = request(
+        state,
+        Method::GET,
+        &format!("/api/views/screener?limit=2&cursor={second_cursor}"),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(third.status(), StatusCode::OK);
+    let third = json_body(third).await;
+    let third_senders: Vec<&str> = third["senders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["sender"].as_str().unwrap())
+        .collect();
+    assert_eq!(third_senders, vec!["oldest@example.org"]);
+    assert!(third["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn screener_view_rejects_invalid_cursor() {
+    let (state, key) = fixture_state().await;
+    let (_, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/views/screener?cursor=not-a-cursor",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

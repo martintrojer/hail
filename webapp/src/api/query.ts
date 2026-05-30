@@ -412,6 +412,18 @@ export function useScreenerView(
   });
 }
 
+export function useScreenerInfiniteView(client = defaultApiClient) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.screenerInfinite(),
+    queryFn: ({ pageParam }) =>
+      client.getScreenerView(
+        typeof pageParam === 'string' ? { cursor: pageParam } : {},
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+}
+
 export function useViewCounts(
   client = defaultApiClient,
   options?: QueryConfig<ViewCountsResponse>,

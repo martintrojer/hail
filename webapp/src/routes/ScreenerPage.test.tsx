@@ -1,7 +1,7 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   ScreenerDecisionRequest,
   ScreenerDecisionResponse,
@@ -21,7 +21,9 @@ import { ScreenerPage } from './ScreenerPage';
 
 class ScreenerPageTestClient extends TestHailApiClient {
   readonly decideScreenerCalls: ScreenerDecisionRequest[] = [];
-  private viewPromise: Promise<ScreenerView>;
+  readonly getScreenerViewCalls: Array<{ cursor?: string; limit?: number }> = [];
+  private viewPromise: Promise<ScreenerView> | null;
+  private viewPages: ScreenerView[];
   private decisionHandler: (
     body: ScreenerDecisionRequest,
   ) => Promise<ScreenerDecisionResponse>;
@@ -29,10 +31,12 @@ class ScreenerPageTestClient extends TestHailApiClient {
   constructor({
     view = sampleScreenerView(),
     viewPromise,
+    viewPages,
     decisionHandler,
   }: {
     view?: ScreenerView;
     viewPromise?: Promise<ScreenerView>;
+    viewPages?: ScreenerView[];
     decisionHandler?: (
       body: ScreenerDecisionRequest,
     ) => Promise<ScreenerDecisionResponse>;
@@ -45,7 +49,8 @@ class ScreenerPageTestClient extends TestHailApiClient {
         is_admin: false,
       },
     });
-    this.viewPromise = viewPromise ?? Promise.resolve(view);
+    this.viewPromise = viewPromise ?? null;
+    this.viewPages = viewPages ?? [view];
     this.decisionHandler =
       decisionHandler ??
       ((body) =>
@@ -61,8 +66,15 @@ class ScreenerPageTestClient extends TestHailApiClient {
         }));
   }
 
-  override async getScreenerView(): Promise<ScreenerView> {
-    return this.viewPromise;
+  override async getScreenerView(
+    params: { cursor?: string; limit?: number } = {},
+  ): Promise<ScreenerView> {
+    this.getScreenerViewCalls.push(params);
+    if (this.viewPromise) {
+      return this.viewPromise;
+    }
+
+    return this.viewPages[Math.min(this.getScreenerViewCalls.length - 1, this.viewPages.length - 1)];
   }
 
   override async decideScreener(
@@ -180,7 +192,109 @@ function openDropdown(button: HTMLElement) {
   });
 }
 
+function sampleSender(sender: string, subject: string = sender) {
+  return {
+    sender,
+    first_seen_at: '2026-05-23T12:00:00Z',
+    message_count: 1,
+    latest_preview: {
+      from: sender,
+      subject,
+      preview: `${subject} preview`,
+      received_at: '2026-05-23T12:15:00Z',
+    },
+    emails: [],
+  };
+}
+
+type MockObserver = IntersectionObserver & {
+  callback: IntersectionObserverCallback;
+};
+
+function installMockIntersectionObserver() {
+  const originalObserver = window.IntersectionObserver;
+  const observers: MockObserver[] = [];
+  window.IntersectionObserver = vi.fn(function MockIntersectionObserver(
+    this: MockObserver,
+    callback: IntersectionObserverCallback,
+  ) {
+    this.callback = callback;
+    observers.push(this);
+    this.observe = vi.fn();
+    this.disconnect = vi.fn();
+    this.takeRecords = vi.fn(() => []);
+    this.unobserve = vi.fn();
+    Object.defineProperties(this, {
+      root: { value: null },
+      rootMargin: { value: '0px' },
+      thresholds: { value: [] },
+    });
+  }) as unknown as typeof IntersectionObserver;
+
+  return {
+    observers,
+    triggerLast() {
+      const observer = observers.at(-1);
+      if (!observer) {
+        throw new Error('IntersectionObserver was not installed');
+      }
+      observer.callback(
+        [
+          {
+            isIntersecting: true,
+          } as IntersectionObserverEntry,
+        ],
+        observer,
+      );
+    },
+    restore() {
+      window.IntersectionObserver = originalObserver;
+    },
+  };
+}
+
 describe('ScreenerPage', () => {
+  it('loads additional pages when the sentinel intersects and stops at the final page', async () => {
+    const intersection = installMockIntersectionObserver();
+    try {
+      const client = renderScreener(
+        new ScreenerPageTestClient({
+          viewPages: [
+            {
+              senders: [sampleSender('first@example.com', 'First sender')],
+              next_cursor: 'cursor-2',
+            },
+            {
+              senders: [sampleSender('second@example.com', 'Second sender')],
+              next_cursor: null,
+            },
+          ],
+        }),
+      );
+
+      expect(await screen.findByText('First sender')).toBeInTheDocument();
+      expect(screen.queryByText('Second sender')).not.toBeInTheDocument();
+      expect(client.getScreenerViewCalls).toEqual([{}]);
+
+      intersection.triggerLast();
+
+      expect(await screen.findByText('Second sender')).toBeInTheDocument();
+      expect(screen.getByText('First sender')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(client.getScreenerViewCalls).toEqual([
+          {},
+          { cursor: 'cursor-2' },
+        ]),
+      );
+
+      intersection.triggerLast();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(client.getScreenerViewCalls).toHaveLength(2);
+    } finally {
+      intersection.restore();
+    }
+  });
+
   it('expands a sender card to show all pending emails', async () => {
     renderScreener();
 

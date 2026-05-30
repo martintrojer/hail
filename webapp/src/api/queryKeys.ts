@@ -23,6 +23,7 @@ export const queryKeys = {
     [...queryKeys.views(), 'search', scope, mailbox, labelId ?? 'all-labels', q] as const,
   labels: () => [...queryKeys.all, 'labels'] as const,
   screener: () => [...queryKeys.views(), 'screener'] as const,
+  screenerInfinite: () => [...queryKeys.screener(), 'infinite'] as const,
   screenerAllowed: () => [...queryKeys.screener(), 'allowed'] as const,
   speakeasy: () => [...queryKeys.all, 'speakeasy'] as const,
   screenerDenied: () => [...queryKeys.screener(), 'denied'] as const,

@@ -18,9 +18,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::extract::{Extension, Path, State, rejection::JsonRejection};
+use axum::extract::{Extension, Path, Query, State, rejection::JsonRejection};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone, Utc};
 pub use hail_core::screener::Classification;
 use hail_core::screener::normalize_sender;
@@ -46,6 +47,8 @@ pub const TAG: &str = "screener";
 const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
 const SCREENER_RICH_EMAIL_GET_CHUNK_SIZE: usize = 20;
 const SCREENER_LIGHT_EMAIL_GET_CHUNK_SIZE: usize = 200;
+const DEFAULT_SCREENER_LIMIT: usize = 50;
+const MAX_SCREENER_LIMIT: usize = 100;
 
 /// Dependency-injection seam for applying a screener decision to existing
 /// mail from the sender. Production uses [`JmapScreenerBackfill`]; tests can
@@ -146,6 +149,35 @@ where
 #[derive(Debug, Serialize, ToSchema)]
 struct ScreenerViewResponse {
     senders: Vec<ScreenerSender>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+struct ScreenerViewQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+impl ScreenerViewQuery {
+    fn normalized_limit(&self) -> usize {
+        self.limit
+            .unwrap_or(DEFAULT_SCREENER_LIMIT)
+            .clamp(1, MAX_SCREENER_LIMIT)
+    }
+
+    fn decoded_cursor(&self) -> Result<Option<ScreenerCursor>, ()> {
+        match self.cursor.as_deref().map(str::trim) {
+            None | Some("") => Ok(None),
+            Some(cursor) => ScreenerCursor::decode(cursor).map(Some),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScreenerCursor {
+    first_seen_at: DateTime<Utc>,
+    sender: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -264,8 +296,10 @@ impl ScreenerDecision {
     get,
     path = "/api/views/screener",
     tag = TAG,
+    params(ScreenerViewQuery),
     responses(
         (status = 200, description = "Pending screener senders.", body = ScreenerViewResponse),
+        (status = 400, description = "Invalid cursor."),
         (status = 401, description = "Missing or invalid session."),
         (status = 500, description = "Screener lookup failed."),
     ),
@@ -273,22 +307,65 @@ impl ScreenerDecision {
 async fn get_screener(
     State(state): State<AppState>,
     Extension(user): Extension<AuthUser>,
+    Query(query): Query<ScreenerViewQuery>,
 ) -> Response {
-    let rows = match sqlx::query_as::<_, (String, DateTime<Utc>)>(
-        "SELECT sender_address, first_seen_at \
-         FROM screener_rules \
-         WHERE user_id = ?1 AND decision = 'pending' \
-         ORDER BY first_seen_at DESC",
-    )
-    .bind(user.id)
-    .fetch_all(&state.db)
-    .await
-    {
+    let cursor = match query.decoded_cursor() {
+        Ok(cursor) => cursor,
+        Err(()) => return bad_request("invalid_cursor"),
+    };
+    let limit = query.normalized_limit();
+    let page_size = limit.saturating_add(1) as i64;
+
+    let rows = match if let Some(cursor) = cursor {
+        sqlx::query_as::<_, (String, DateTime<Utc>)>(
+            "SELECT sender_address, first_seen_at \
+             FROM screener_rules \
+             WHERE user_id = ?1 \
+               AND decision = 'pending' \
+               AND (first_seen_at < ?2 OR (first_seen_at = ?2 AND sender_address > ?3)) \
+             ORDER BY first_seen_at DESC, sender_address ASC \
+             LIMIT ?4",
+        )
+        .bind(user.id)
+        .bind(cursor.first_seen_at)
+        .bind(cursor.sender)
+        .bind(page_size)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as::<_, (String, DateTime<Utc>)>(
+            "SELECT sender_address, first_seen_at \
+             FROM screener_rules \
+             WHERE user_id = ?1 AND decision = 'pending' \
+             ORDER BY first_seen_at DESC, sender_address ASC \
+             LIMIT ?2",
+        )
+        .bind(user.id)
+        .bind(page_size)
+        .fetch_all(&state.db)
+        .await
+    } {
         Ok(rows) => rows,
         Err(err) => {
             tracing::error!(user_id = user.id, error = %err, "screener view lookup failed");
             return internal();
         }
+    };
+
+    let has_more = rows.len() > limit;
+    let mut rows = rows;
+    if has_more {
+        rows.truncate(limit);
+    }
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|(sender, first_seen_at)| ScreenerCursor {
+                first_seen_at: *first_seen_at,
+                sender: normalize_sender(sender),
+            })
+            .map(|cursor| cursor.encode())
+    } else {
+        None
     };
 
     let mut senders: Vec<ScreenerSender> = rows
@@ -306,7 +383,37 @@ async fn get_screener(
         );
     }
 
-    Json(ScreenerViewResponse { senders }).into_response()
+    Json(ScreenerViewResponse {
+        senders,
+        next_cursor,
+    })
+    .into_response()
+}
+
+impl ScreenerCursor {
+    fn encode(&self) -> String {
+        URL_SAFE_NO_PAD.encode(format!("{}\n{}", self.first_seen_at.to_rfc3339(), self.sender))
+    }
+
+    fn decode(value: &str) -> Result<Self, ()> {
+        let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|_| ())?;
+        let decoded = String::from_utf8(decoded).map_err(|_| ())?;
+        let Some((first_seen_at, sender)) = decoded.split_once('\n') else {
+            return Err(());
+        };
+        let first_seen_at = DateTime::parse_from_rfc3339(first_seen_at)
+            .map_err(|_| ())?
+            .with_timezone(&Utc);
+        let sender = normalize_sender(sender);
+        if sender.is_empty() {
+            return Err(());
+        }
+
+        Ok(Self {
+            first_seen_at,
+            sender,
+        })
+    }
 }
 
 impl ScreenerSender {
