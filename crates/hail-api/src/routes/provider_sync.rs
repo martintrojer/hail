@@ -26,6 +26,7 @@ pub fn openapi_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_provider_sync_statuses))
         .routes(routes!(trigger_provider_sync))
+        .routes(routes!(reimport_provider_account))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -105,6 +106,32 @@ async fn trigger_provider_sync(
     }
 }
 
+#[utoipa::path(post, path = "/api/provider-accounts/{id}/reimport", tag = TAG,
+    params(("id" = i64, Path)),
+    responses((status = 200, description = "Provider account reset for a fresh Gmail initial import.", body = ProviderSyncTriggerResponse)))]
+async fn reimport_provider_account(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    match reset_provider_account_for_reimport(&state.db, user.id, id).await {
+        Ok(ReimportResetResult::Updated(account)) => {
+            tracing::info!(provider_account_id = id, user_id = user.id, "provider reimport requested");
+            Json(ProviderSyncTriggerResponse { account }).into_response()
+        }
+        Ok(ReimportResetResult::AlreadyInitialSync) => {
+            error_response(StatusCode::CONFLICT, "provider_reimport_already_running")
+        }
+        Ok(ReimportResetResult::NotFound) => {
+            error_response(StatusCode::NOT_FOUND, "provider_account_not_found")
+        }
+        Err(err) => {
+            tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "provider reimport reset failed");
+            internal()
+        }
+    }
+}
+
 async fn list_statuses(
     db: &SqlitePool,
     user_id: i64,
@@ -167,6 +194,61 @@ async fn mark_provider_account_due(
         .map(Some)
 }
 
+#[derive(Debug)]
+enum ReimportResetResult {
+    Updated(ProviderSyncStatusResponse),
+    AlreadyInitialSync,
+    NotFound,
+}
+
+async fn reset_provider_account_for_reimport(
+    db: &SqlitePool,
+    user_id: i64,
+    provider_account_id: i64,
+) -> Result<ReimportResetResult, sqlx::Error> {
+    let mut tx = db.begin().await?;
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT sync_status FROM provider_accounts \
+         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' \
+           AND sync_status IN ('active', 'error', 'initial_sync') \
+           AND refresh_token_enc IS NOT NULL",
+    )
+    .bind(provider_account_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(status) = status else {
+        tx.commit().await?;
+        return Ok(ReimportResetResult::NotFound);
+    };
+
+    if status == "initial_sync" {
+        tx.commit().await?;
+        return Ok(ReimportResetResult::AlreadyInitialSync);
+    }
+
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE provider_accounts \
+         SET last_profile_history_id = NULL, profile_synced_at = NULL, \
+             initial_sync_completed_at = NULL, backfill_cursor_json = NULL, \
+             last_error_class = NULL, last_error_message = NULL, sync_status = 'initial_sync', \
+             next_sync_after = NULL, sync_backoff_secs = NULL, updated_at = ?1 \
+         WHERE id = ?2 AND user_id = ?3",
+    )
+    .bind(now)
+    .bind(provider_account_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    load_status(db, user_id, provider_account_id)
+        .await
+        .map(ReimportResetResult::Updated)
+}
+
 async fn load_status(
     db: &SqlitePool,
     user_id: i64,
@@ -193,6 +275,12 @@ async fn row_to_status(
     row: sqlx::sqlite::SqliteRow,
 ) -> Result<ProviderSyncStatusResponse, sqlx::Error> {
     let id: i64 = row.get("id");
+    let last_error_class: Option<String> = row.get("last_error_class");
+    let last_error_event = if last_error_class.is_some() {
+        load_event_summary(db, user_id, id, Some("failed")).await?
+    } else {
+        None
+    };
     Ok(ProviderSyncStatusResponse {
         id,
         provider_kind: row.get("provider_kind"),
@@ -204,12 +292,12 @@ async fn row_to_status(
         last_sync_succeeded_at: row.get("last_sync_succeeded_at"),
         next_sync_after: row.get("next_sync_after"),
         sync_backoff_secs: row.get("sync_backoff_secs"),
-        last_error_class: row.get("last_error_class"),
+        last_error_class,
         last_error_message: None,
         last_profile_history_id: row.get("last_profile_history_id"),
         profile_synced_at: row.get("profile_synced_at"),
         last_sync_event: load_event_summary(db, user_id, id, None).await?,
-        last_error_event: load_event_summary(db, user_id, id, Some("failed")).await?,
+        last_error_event,
     })
 }
 
