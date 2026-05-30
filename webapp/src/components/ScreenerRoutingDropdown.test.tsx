@@ -28,31 +28,34 @@ describe('ScreenerRoutingDropdown', () => {
   it('opens routing destinations from its trigger with Imbox highlighted', () => {
     renderRoutingDropdown();
 
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
-
     openDropdown();
 
     const dropdown = screen.getByRole('menu');
     expect(dropdown).toBeInTheDocument();
     expect(document.body).toContainElement(dropdown);
 
-    const imbox = screen.getByRole('menuitem', { name: 'The Imbox' });
-    expect(imbox).toHaveClass('bg-muted');
+    const imbox = screen.getByRole('menuitemradio', { name: 'The Imbox' });
     expect(imbox).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('menuitem', { name: 'The Feed' })).toHaveAttribute(
+    expect(screen.getByRole('menuitemradio', { name: 'The Feed' })).toHaveAttribute(
       'aria-checked',
       'false',
     );
-    expect(screen.getByRole('menuitem', { name: 'Paper Trail' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: 'Paper Trail' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
   });
 
-  it('selects a destination from the menu', () => {
+  it('selects a destination from the menu', async () => {
     const onSelect = renderRoutingDropdown();
 
     openDropdown();
-    fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'The Feed' }));
 
     expect(onSelect).toHaveBeenCalledWith('feed');
+    await waitFor(() =>
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument(),
+    );
   });
 
   it('selects Feed with ArrowDown and Enter from the open menu', async () => {
@@ -60,7 +63,7 @@ describe('ScreenerRoutingDropdown', () => {
 
     openDropdown();
     await screen.findByRole('menu');
-    const feed = screen.getByRole('menuitem', { name: 'The Feed' });
+    const feed = screen.getByRole('menuitemradio', { name: 'The Feed' });
     feed.focus();
     fireEvent.keyDown(feed, { key: 'ArrowDown', code: 'ArrowDown' });
     fireEvent.keyDown(feed, {

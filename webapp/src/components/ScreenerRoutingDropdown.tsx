@@ -1,11 +1,9 @@
 import type { ReactNode } from 'react';
-import { Check } from './icons';
-import { cn } from '../lib/utils';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
@@ -47,23 +45,17 @@ export function ScreenerRoutingDropdown({
         align="start"
         sideOffset={8}
       >
-        <DropdownMenuGroup>
-          {routingOptions.map((option) => {
-            const isSelected = option.value === value;
-
-            return (
-              <DropdownMenuItem
-                key={option.value}
-                aria-checked={isSelected}
-                onSelect={() => onSelect(option.value)}
-                className={cn(isSelected && 'bg-muted')}
-              >
-                <span className="flex-1">{option.label}</span>
-                {isSelected ? <Check aria-hidden="true" /> : null}
-              </DropdownMenuItem>
-            );
-          })}
-        </DropdownMenuGroup>
+        <DropdownMenuRadioGroup value={value}>
+          {routingOptions.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              onSelect={() => onSelect(option.value)}
+            >
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
