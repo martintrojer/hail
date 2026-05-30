@@ -345,7 +345,7 @@ describe('ThreadPage', () => {
     expect(content).toHaveClass('max-w-3xl', 'lg:max-w-4xl', 'xl:max-w-5xl', 'min-w-0');
   });
 
-  it('renders sanitized HTML at the trust boundary and shows blocked trackers', async () => {
+  it('renders sanitized HTML in an isolated iframe and shows blocked trackers', async () => {
     const { container } = renderThread(sampleThread());
 
     expect(
@@ -355,12 +355,19 @@ describe('ThreadPage', () => {
       'title',
       '1x1 tracking pixel removed',
     );
-    expect(screen.getByText('Sanitized receipt')).toBeInTheDocument();
 
-    const sanitizedHtmlBoundary = container.querySelector('article div.mt-5');
-    expect(sanitizedHtmlBoundary?.innerHTML).toBe(
-      '<p><strong>Sanitized receipt</strong> ready.</p>',
+    const iframe = container.querySelector('iframe[title="Email body from Alice Sender"]') as HTMLIFrameElement | null;
+    expect(iframe).toHaveAttribute(
+      'sandbox',
+      'allow-same-origin allow-popups allow-popups-to-escape-sandbox',
     );
+    expect(iframe).not.toHaveAttribute('sandbox', expect.stringContaining('allow-scripts'));
+
+    await waitFor(() => {
+      expect(iframe?.contentDocument?.body.innerHTML).toBe(
+        '<p><strong>Sanitized receipt</strong> ready.</p>',
+      );
+    });
   });
 
 
@@ -459,7 +466,7 @@ describe('ThreadPage', () => {
   });
 
   it('shows remote images on demand while keeping the sanitized default', async () => {
-    const { container } = renderThread(
+    renderThread(
       sampleThread({
         messages: [
           {
@@ -486,14 +493,19 @@ describe('ThreadPage', () => {
       }),
     );
 
-    expect(await screen.findByText(/Remote images are hidden by default\./)).toBeInTheDocument();
-    expect(container.querySelector('article img')).toBeNull();
+    const firstFrame = await screen.findByTitle('Email body from Alice Sender') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(firstFrame.contentDocument?.querySelector('img')).toBeNull();
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Show remote images' }));
 
-    const image = container.querySelector('article img');
-    expect(image).not.toBeNull();
-    expect(image).toHaveAttribute('src', 'https://cdn.example/logo.png');
+    await waitFor(() => {
+      expect(firstFrame.contentDocument?.querySelector('img')).toHaveAttribute(
+        'src',
+        'https://cdn.example/logo.png',
+      );
+    });
     expect(screen.getByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
 
     cleanup();
@@ -515,12 +527,18 @@ describe('ThreadPage', () => {
       }),
     );
     expect(await screen.findByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
-    expect(document.querySelector('article img')).toHaveAttribute('src', 'https://cdn.example/logo.png');
+    const persistedFrame = await screen.findByTitle('Email body from Alice Sender') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(persistedFrame.contentDocument?.querySelector('img')).toHaveAttribute(
+        'src',
+        'https://cdn.example/logo.png',
+      );
+    });
   });
 
 
   it('does not add artificial borders to email layout tables', async () => {
-    const { container } = renderThread(
+    renderThread(
       sampleThread({
         messages: [
           {
@@ -538,11 +556,13 @@ describe('ThreadPage', () => {
       }),
     );
 
-    await screen.findByText('Outer');
-    const htmlBoundary = container.querySelector('article div.mt-5');
-    expect(htmlBoundary?.className).not.toContain('[&_td]:border');
-    expect(htmlBoundary?.className).not.toContain('[&_th]:border');
-    expect(htmlBoundary?.innerHTML).toContain('<table>');
+    const iframe = await screen.findByTitle('Email body from Alice Sender') as HTMLIFrameElement;
+    await waitFor(() => {
+      const htmlBoundary = iframe.contentDocument?.body;
+      expect(htmlBoundary?.textContent).toContain('Outer');
+      expect(htmlBoundary?.querySelector('table')).toBeInTheDocument();
+      expect(htmlBoundary?.innerHTML).toContain('<table>');
+    });
   });
 
   it('renders plaintext fallback content when no sanitized HTML is available', async () => {

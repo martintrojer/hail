@@ -20,6 +20,7 @@ import {
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
 import { BubbleUpSubmenu } from '../components/BubbleUpSubmenu';
+import { EmailFrame } from '../components/EmailFrame';
 import { ErrorState } from '../components/ErrorState';
 import { InlineNote, type InlineNoteProps } from '../components/InlineNote';
 import { ArrowLeft, MoreHorizontal, ShieldOff, StickyNote } from '../components/icons';
@@ -349,12 +350,10 @@ function MessageCard({
           ) : null}
 
           {renderedHtml.trim().length > 0 ? (
-            <div
-              className="mt-5 max-w-none overflow-x-auto text-base leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top"
-              // Server owns the mail-render trust boundary: hail-api strips quoted
-              // history, removes trackers, and sanitizes HTML before this field is
-              // exposed to the SPA. The client renders only that sanitized fragment.
-              dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            <EmailFrame
+              html={renderedHtml}
+              title={`Email body from ${sender ? formatParticipantName(sender) : 'Unknown sender'}`}
+              className="mt-5"
             />
           ) : (
             <p className="mt-5 whitespace-pre-wrap text-base leading-relaxed text-foreground">

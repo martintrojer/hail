@@ -558,7 +558,10 @@ describe('MailViewPage', () => {
     );
 
     expect(await screen.findByText('Today in self-hosting')).toBeInTheDocument();
-    expect(screen.getByText(/Long newsletter section/)).toBeInTheDocument();
+    const iframe = await screen.findByTitle('Email body from Daily Newsletter') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(iframe.contentDocument?.body.textContent).toContain('Long newsletter section');
+    });
     expect(screen.getByText('1 tracker blocked')).toBeInTheDocument();
     expect(screen.queryByText('Fallback summary.')).not.toBeInTheDocument();
 
