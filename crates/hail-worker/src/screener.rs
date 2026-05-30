@@ -252,27 +252,55 @@ pub async fn route_email(
         }
         Some(ScreenerDecision::Pending) => {
             move_to_screener_if_needed(jmap, env).await?;
+            update_pending_latest_received_at(conn, user_id, &sender, env).await?;
             Ok(RouteOutcome::ScreenerPending {
                 sender: sender.clone(),
             })
         }
         None => {
             move_to_screener_if_needed(jmap, env).await?;
-            let first_seen_at = env.received_at.unwrap_or_else(Utc::now).to_rfc3339();
+            let received_at = pending_received_at(env);
             sqlx::query(
                 "INSERT INTO screener_rules \
-                 (user_id, sender_address, decision, classify_as, decided_at, first_seen_at) \
-                 VALUES (?, ?, 'pending', NULL, NULL, ?) \
-                 ON CONFLICT(user_id, sender_address) DO NOTHING",
+                 (user_id, sender_address, decision, classify_as, decided_at, first_seen_at, latest_pending_received_at) \
+                 VALUES (?, ?, 'pending', NULL, NULL, ?, ?) \
+                 ON CONFLICT(user_id, sender_address) DO UPDATE SET \
+                   latest_pending_received_at = MAX(COALESCE(latest_pending_received_at, ''), excluded.latest_pending_received_at) \
+                 WHERE screener_rules.decision = 'pending'",
             )
             .bind(user_id)
             .bind(&sender)
-            .bind(first_seen_at)
+            .bind(&received_at)
+            .bind(&received_at)
             .execute(&mut *conn)
             .await?;
             Ok(RouteOutcome::ScreenerPending { sender })
         }
     }
+}
+
+async fn update_pending_latest_received_at(
+    conn: &mut SqliteConnection,
+    user_id: i64,
+    sender: &str,
+    env: &EmailEnvelope,
+) -> Result<(), sqlx::Error> {
+    let received_at = pending_received_at(env);
+    sqlx::query(
+        "UPDATE screener_rules \
+         SET latest_pending_received_at = MAX(COALESCE(latest_pending_received_at, ''), ?1) \
+         WHERE user_id = ?2 AND sender_address = ?3 AND decision = 'pending'",
+    )
+    .bind(received_at)
+    .bind(user_id)
+    .bind(sender)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+fn pending_received_at(env: &EmailEnvelope) -> String {
+    env.received_at.unwrap_or_else(Utc::now).to_rfc3339()
 }
 
 async fn run_workflows_after_classification(

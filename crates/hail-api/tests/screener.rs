@@ -7,6 +7,7 @@ use axum::{
     http::{Method, Request, StatusCode, header},
     response::IntoResponse,
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
 use hail_api::{
     middleware::auth::{CSRF_HEADER, require_auth},
@@ -56,6 +57,24 @@ async fn seed_rule_with_decided_at(
         .execute(&state.db)
         .await
         .unwrap();
+}
+
+async fn set_latest_pending_received_at(
+    state: &AppState,
+    user_id: i64,
+    sender: &str,
+    latest_pending_received_at: chrono::DateTime<Utc>,
+) {
+    sqlx::query(
+        "UPDATE screener_rules SET latest_pending_received_at = ?1 \
+         WHERE user_id = ?2 AND sender_address = ?3",
+    )
+    .bind(latest_pending_received_at)
+    .bind(user_id)
+    .bind(sender)
+    .execute(&state.db)
+    .await
+    .unwrap();
 }
 
 fn app(state: AppState, backfill: Arc<FakeBackfill>) -> Router {
@@ -605,7 +624,10 @@ async fn screener_view_paginates_pending_senders_with_cursor() {
         .iter()
         .map(|s| s["sender"].as_str().unwrap())
         .collect();
-    assert_eq!(first_senders, vec!["newest@example.org", "same-a@example.org"]);
+    assert_eq!(
+        first_senders,
+        vec!["newest@example.org", "same-a@example.org"]
+    );
     let first_cursor = first["next_cursor"]
         .as_str()
         .expect("first page cursor")
@@ -628,7 +650,10 @@ async fn screener_view_paginates_pending_senders_with_cursor() {
         .iter()
         .map(|s| s["sender"].as_str().unwrap())
         .collect();
-    assert_eq!(second_senders, vec!["same-b@example.org", "same-c@example.org"]);
+    assert_eq!(
+        second_senders,
+        vec!["same-b@example.org", "same-c@example.org"]
+    );
     let second_cursor = second["next_cursor"]
         .as_str()
         .expect("second page cursor")
@@ -654,6 +679,139 @@ async fn screener_view_paginates_pending_senders_with_cursor() {
         .collect();
     assert_eq!(third_senders, vec!["oldest@example.org"]);
     assert!(third["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn screener_view_sorts_by_latest_pending_received_at_with_first_seen_fallback() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let now = Utc::now();
+    let imported_old = chrono::DateTime::parse_from_rfc3339("2014-02-03T04:05:06Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    seed_rule(
+        &state,
+        user_id,
+        "recent@example.org",
+        "pending",
+        None,
+        now - Duration::days(10),
+    )
+    .await;
+    set_latest_pending_received_at(&state, user_id, "recent@example.org", now).await;
+
+    seed_rule(
+        &state,
+        user_id,
+        "old-import@example.org",
+        "pending",
+        None,
+        now,
+    )
+    .await;
+    set_latest_pending_received_at(&state, user_id, "old-import@example.org", imported_old).await;
+
+    seed_rule(
+        &state,
+        user_id,
+        "fallback@example.org",
+        "pending",
+        None,
+        now - Duration::hours(1),
+    )
+    .await;
+
+    let tie_time = now - Duration::hours(2);
+    for sender in ["tie-b@example.org", "tie-a@example.org"] {
+        seed_rule(
+            &state,
+            user_id,
+            sender,
+            "pending",
+            None,
+            now - Duration::days(1),
+        )
+        .await;
+        set_latest_pending_received_at(&state, user_id, sender, tie_time).await;
+    }
+
+    let resp = request(
+        state,
+        Method::GET,
+        "/api/views/screener",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let got: Vec<&str> = json["senders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["sender"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            "recent@example.org",
+            "fallback@example.org",
+            "tie-a@example.org",
+            "tie-b@example.org",
+            "old-import@example.org",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn screener_view_accepts_v1_cursor_and_emits_v2_cursor() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let now = Utc::now();
+    for (sender, first_seen_at) in [
+        ("new@example.org", now),
+        ("middle@example.org", now - Duration::minutes(1)),
+        ("old@example.org", now - Duration::minutes(2)),
+    ] {
+        seed_rule(&state, user_id, sender, "pending", None, first_seen_at).await;
+    }
+
+    let first = request(
+        state.clone(),
+        Method::GET,
+        "/api/views/screener?limit=1",
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = json_body(first).await;
+    let v2_cursor = first["next_cursor"].as_str().expect("v2 cursor");
+    let decoded_v2 = String::from_utf8(URL_SAFE_NO_PAD.decode(v2_cursor).unwrap()).unwrap();
+    assert!(decoded_v2.starts_with("2\n"), "cursor was {decoded_v2:?}");
+
+    let v1_cursor = URL_SAFE_NO_PAD.encode(format!(
+        "{}\n{}",
+        (now - Duration::minutes(1)).to_rfc3339(),
+        "middle@example.org"
+    ));
+    let after_v1 = request(
+        state,
+        Method::GET,
+        &format!("/api/views/screener?limit=1&cursor={v1_cursor}"),
+        Some(&sid),
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(after_v1.status(), StatusCode::OK);
+    let after_v1 = json_body(after_v1).await;
+    let senders = after_v1["senders"].as_array().unwrap();
+    assert_eq!(senders.len(), 1);
+    assert_eq!(senders[0]["sender"], "old@example.org");
 }
 
 #[tokio::test]
