@@ -67,6 +67,7 @@
    │    • Catch-up replay since stored jmap_state cursor         │
    │    • Screener routing  (new mail → Imbox/Screener/Trash)    │
    │    • Apply $hail_* classification keywords                  │
+   │    • Workflow rule evaluation after Screener allow          │
    │    • Scheduled jobs    (bubble-up, send-later, reconcile)   │
    │                                                             │
    │  Restartable; persists its position in jmap_state.          │
@@ -151,6 +152,9 @@ the rationale is in `docs/design.md` §6.
 - **Provider import mode (v1.2) keeps this boundary after Gmail import.** Gmail
   or another provider may be the public mailbox edge, but imported RFC822 lands
   in Stalwart and the hail UI continues to treat Stalwart/JMAP as authoritative.
+  After import dedupe, the same worker routing path runs Screener first and then
+  enabled workflow rules for allowed mail; workflow `classify_as` can override
+  the Screener default and `add_label` assigns local thread labels.
   Provider cursors, encrypted OAuth tokens, and dedupe mappings live in
   `hail.db`; provider mailbox state is not the hail UI source of truth. Provider
   outbound prefers Stalwart smarthost relay, uses Gmail API send only as a

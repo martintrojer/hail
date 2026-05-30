@@ -10,6 +10,8 @@ use hail_jmap::jmap_client;
 use hail_jmap::jmap_client::mailbox::{Role, query::Filter};
 use sqlx::SqliteConnection;
 
+use crate::workflows::{WorkflowMessageContext, evaluate_workflows};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmailEnvelope {
     pub id: String,
@@ -18,6 +20,8 @@ pub struct EmailEnvelope {
     pub subject: String,
     pub preview: Option<String>,
     pub raw_rfc822: Option<Vec<u8>>,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
     pub mailbox_ids: Vec<String>,
     pub keywords: Vec<String>,
     pub received_at: Option<DateTime<Utc>>,
@@ -178,16 +182,24 @@ pub async fn route_email(
     if speakeasy_matches(conn, user_id, env).await? {
         jmap.apply_keyword(&env.id, Classification::Imbox.keyword())
             .await?;
-        return Ok(RouteOutcome::SpeakeasyBypass);
+        return run_workflows_after_classification(conn, jmap, user_id, env)
+            .await
+            .map(|workflow_classification| {
+                workflow_classification.map_or(RouteOutcome::SpeakeasyBypass, |classification| {
+                    RouteOutcome::Classified { classification }
+                })
+            });
     }
 
     // System senders (bounce notifications, postmaster) bypass the screener entirely.
     if is_system_sender(&env.from) {
         jmap.apply_keyword(&env.id, Classification::Imbox.keyword())
             .await?;
-        return Ok(RouteOutcome::Classified {
-            classification: Classification::Imbox,
-        });
+        return run_workflows_after_classification(conn, jmap, user_id, env)
+            .await
+            .map(|workflow_classification| RouteOutcome::Classified {
+                classification: workflow_classification.unwrap_or(Classification::Imbox),
+            });
     }
 
     let sender = normalize_sender(&env.from);
@@ -224,7 +236,11 @@ pub async fn route_email(
         Some(ScreenerDecision::Allow(classification)) => {
             jmap.apply_keyword(&env.id, classification.keyword())
                 .await?;
-            Ok(RouteOutcome::Classified { classification })
+            run_workflows_after_classification(conn, jmap, user_id, env)
+                .await
+                .map(|workflow_classification| RouteOutcome::Classified {
+                    classification: workflow_classification.unwrap_or(classification),
+                })
         }
         Some(ScreenerDecision::Deny) => {
             let trash_id = jmap
@@ -257,6 +273,29 @@ pub async fn route_email(
             Ok(RouteOutcome::ScreenerPending { sender })
         }
     }
+}
+
+async fn run_workflows_after_classification(
+    conn: &mut SqliteConnection,
+    jmap: &dyn JmapOps,
+    user_id: i64,
+    env: &EmailEnvelope,
+) -> Result<Option<Classification>, RouteError> {
+    let evaluation = evaluate_workflows(
+        conn,
+        jmap,
+        user_id,
+        &WorkflowMessageContext {
+            email_id: env.id.clone(),
+            thread_id: env.thread_id.clone(),
+            from: env.from.clone(),
+            to: env.to.clone(),
+            cc: env.cc.clone(),
+            subject: env.subject.clone(),
+        },
+    )
+    .await?;
+    Ok(evaluation.classification)
 }
 
 async fn speakeasy_matches(
@@ -381,6 +420,8 @@ mod tests {
                 b"From: sender@example.com\r\nSubject: ignored\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<p>html phrase</p>"
                     .to_vec(),
             ),
+            to: Vec::new(),
+            cc: Vec::new(),
             mailbox_ids: Vec::new(),
             keywords: Vec::new(),
             received_at: None,

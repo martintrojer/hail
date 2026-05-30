@@ -9,6 +9,7 @@ pub mod provider_sync_scheduler;
 pub mod rfc822_import;
 #[allow(dead_code)]
 pub mod screener;
+pub mod workflows;
 
 #[allow(dead_code)]
 pub(crate) mod crypto;
