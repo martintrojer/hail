@@ -28,6 +28,7 @@ import {
   Settings,
   ShieldAlert,
   ShieldOff,
+  SlidersHorizontal,
   Sun,
   Tags,
   Trash2,
@@ -238,6 +239,12 @@ const workflowNavItems: NavItem[] = [
     label: 'Screened Out',
     description: 'Review blocked senders and allow mistakes into the right place.',
     Icon: ShieldOff,
+  },
+  {
+    to: '/workflows',
+    label: 'Workflows',
+    description: 'Rules that classify, label, or auto-reply to incoming mail.',
+    Icon: SlidersHorizontal,
   },
 ];
 
