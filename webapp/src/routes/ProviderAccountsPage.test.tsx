@@ -13,6 +13,7 @@ import type {
   GmailConnectResponse,
   ProviderAccount,
   ProviderAccountResponse,
+  ProviderReimportResponse,
   ProviderSyncStatus,
   ProviderSyncStatusListResponse,
   ProviderSyncTriggerResponse,
@@ -111,6 +112,7 @@ class ProviderAccountsTestClient extends TestHailApiClient {
   disconnectCalls: number[] = [];
   syncStatusCalls = 0;
   triggerSyncCalls: number[] = [];
+  reimportCalls: number[] = [];
   syncStatuses: ProviderSyncStatus[] = [];
   syncStatusResponses: ProviderSyncStatusListResponse[] = [];
   connectResponse: GmailConnectResponse = {
@@ -119,11 +121,13 @@ class ProviderAccountsTestClient extends TestHailApiClient {
   };
   disconnectResponse: ProviderAccountResponse | null = null;
   triggerSyncResponse: ProviderSyncTriggerResponse | null = null;
+  reimportResponse: ProviderReimportResponse | null = null;
   triggerSyncPromise: Promise<ProviderSyncTriggerResponse> | null = null;
   connectFailure: Error | null = null;
   disconnectFailure: Error | null = null;
   syncStatusFailure: Error | null = null;
   triggerSyncFailure: Error | null = null;
+  reimportFailure: Error | null = null;
 
   override async connectGmail(): Promise<GmailConnectResponse> {
     this.connectCalls += 1;
@@ -188,6 +192,28 @@ class ProviderAccountsTestClient extends TestHailApiClient {
       sync_status: 'active',
       next_sync_after: null,
       sync_backoff_secs: null,
+    });
+    this.syncStatuses = this.syncStatuses.map((status) => status.id === id ? account : status);
+    return { account };
+  }
+
+  override async reimportProviderAccount(
+    id: number,
+  ): Promise<ProviderReimportResponse> {
+    this.reimportCalls.push(id);
+    if (this.reimportFailure) {
+      throw this.reimportFailure;
+    }
+    const account = this.reimportResponse?.account ?? providerSyncStatus({
+      ...(this.syncStatuses.find((status) => status.id === id) ?? {}),
+      id,
+      sync_status: 'initial_sync',
+      next_sync_after: null,
+      sync_backoff_secs: null,
+      last_error_class: null,
+      last_error_message: null,
+      last_error_event: null,
+      last_profile_history_id: null,
     });
     this.syncStatuses = this.syncStatuses.map((status) => status.id === id ? account : status);
     return { account };
@@ -559,6 +585,69 @@ describe('ProviderAccountsPage', () => {
     expect(screen.getAllByText('future_state').length).toBeGreaterThan(0);
   });
 
+  it('shows the re-import button only for connected Gmail accounts', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({ id: 1, display_email: 'Active Account', sync_status: 'active' }),
+      providerSyncStatus({ id: 2, display_email: 'Error Account', sync_status: 'error' }),
+      providerSyncStatus({ id: 3, display_email: 'Initial Account', sync_status: 'initial_sync' }),
+      providerSyncStatus({ id: 4, display_email: 'Disabled Account', sync_status: 'disabled' }),
+      providerSyncStatus({ id: 5, display_email: 'Revoked Account', sync_status: 'revoked' }),
+      providerSyncStatus({ id: 6, display_email: 'Disconnected Account', sync_status: 'disconnected' }),
+    ];
+    renderPage({ client });
+
+    expect(
+      within((await screen.findByRole('heading', { name: 'Active Account' })).closest('section') as HTMLElement)
+        .getByRole('button', { name: 'Re-import from Gmail' }),
+    ).toBeEnabled();
+    expect(
+      within((await screen.findByRole('heading', { name: 'Error Account' })).closest('section') as HTMLElement)
+        .getByRole('button', { name: 'Re-import from Gmail' }),
+    ).toBeEnabled();
+    expect(
+      within((await screen.findByRole('heading', { name: 'Re-importing from Gmail…' })).closest('section') as HTMLElement)
+        .getByRole('button', { name: 'Re-import from Gmail' }),
+    ).toBeDisabled();
+
+    for (const accountName of ['Disabled Account', 'Revoked Account', 'Disconnected Account']) {
+      expect(
+        within((await screen.findByRole('heading', { name: accountName })).closest('section') as HTMLElement)
+          .queryByRole('button', { name: 'Re-import from Gmail' }),
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it('opens the re-import confirmation dialog and cancel does nothing', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [providerSyncStatus({ sync_status: 'active' })];
+    renderPage({ client });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-import from Gmail' }));
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('Re-import from Gmail?');
+    expect(screen.getByText(/Hail will re-fetch all Gmail messages from scratch/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(client.reimportCalls).toEqual([]);
+  });
+
+  it('confirms re-import, flips to initial sync, disables actions, and updates the header', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [providerSyncStatus({ sync_status: 'active' })];
+    renderPage({ client });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-import from Gmail' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-import' }));
+
+    await waitFor(() => {
+      expect(client.reimportCalls).toEqual([42]);
+      expect(screen.getByRole('heading', { name: 'Re-importing from Gmail…' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sync now' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Re-import from Gmail' })).toBeDisabled();
+    });
+  });
+
   it('surfaces sync status and manual sync errors', async () => {
     const statusClient = new ProviderAccountsTestClient();
     statusClient.syncStatusFailure = new HailApiError(
@@ -623,7 +712,7 @@ describe('ProviderAccountsPage', () => {
     renderPage({ client });
 
     for (const [accountName, label] of [
-      ['Initial Account', 'Initial import running'],
+      ['Re-importing from Gmail…', 'Initial import running'],
       ['Active Account', 'Connected'],
       ['Error Account', 'Needs attention'],
       ['Disabled Account', 'Disabled'],

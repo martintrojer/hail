@@ -1113,6 +1113,200 @@ async fn manual_sync_trigger_marks_only_importable_accounts_due_without_running_
 }
 
 #[tokio::test]
+async fn reimport_requires_auth() {
+    let (state, _key) = app_state().await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+
+    let resp = app(state, client)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/provider-accounts/123/reimport")
+                .header(CSRF_HEADER, "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(resp).await["error"], "unauthorized");
+}
+
+#[tokio::test]
+async fn reimport_disconnected_account_returns_not_found() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, sync_status, disconnected_at, created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-disconnected-reimport', 'disconnected-reimport@gmail.example', \
+                 '[]', 'disconnected', ?2, ?2, ?2) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/reimport"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(resp).await["error"], "provider_account_not_found");
+
+    let row: (String, Option<String>, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT sync_status, disconnected_at, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "disconnected");
+    assert!(row.1.is_some());
+    assert!(row.2.is_none());
+}
+
+#[tokio::test]
+async fn reimport_active_account_resets_cursors_and_error_state() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let account_id: i64 = sqlx::query_scalar(
+        r#"INSERT INTO provider_accounts
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email,
+          granted_scopes_json, refresh_token_enc, last_profile_history_id, profile_synced_at,
+          initial_sync_completed_at, backfill_cursor_json, sync_status, last_sync_attempted_at,
+          last_sync_succeeded_at, next_sync_after, sync_backoff_secs, last_error_class, last_error_message,
+          created_at, updated_at)
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-active-reimport', 'active-reimport@gmail.example',
+                 'Active Reimport', '[]', ?2, 'history-99', ?3, ?3,
+                 '{"kind":"gmail_historical_v1","completed":false}', 'error', ?3, ?3, ?4, 900,
+                 'gmail_rate_limit', 'rate limited', ?3, ?3)
+         RETURNING id"#,
+    )
+    .bind(user_id)
+    .bind(vec![7_u8; 29])
+    .bind(now)
+    .bind(now + chrono::Duration::hours(1))
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    insert_provider_sync_audit_log(
+        &state.db,
+        NewProviderSyncAuditLog {
+            user_id,
+            provider_account_id: account_id,
+            operation_kind: ProviderSyncOperationKind::Failure,
+            event_type: ProviderSyncEventType::SyncFailed,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Failed,
+            safe_error_code: Some("gmail_rate_limit"),
+            safe_error_class: Some("gmail_rate_limit"),
+            safe_error_message: Some("provider asked us to retry later"),
+            metadata_json: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/reimport"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["account"]["id"], account_id);
+    assert_eq!(body["account"]["sync_status"], "initial_sync");
+    assert!(body["account"]["last_profile_history_id"].is_null());
+    assert!(body["account"]["last_error_class"].is_null());
+    assert!(body["account"]["last_error_event"].is_null());
+    assert!(body["account"]["next_sync_after"].is_null());
+    assert!(body["account"]["sync_backoff_secs"].is_null());
+
+    let row: (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    ) = sqlx::query_as(
+        "SELECT sync_status, last_profile_history_id, profile_synced_at, initial_sync_completed_at, \
+                backfill_cursor_json, last_error_class, sync_backoff_secs \
+         FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "initial_sync");
+    assert!(row.1.is_none());
+    assert!(row.2.is_none());
+    assert!(row.3.is_none());
+    assert!(row.4.is_none());
+    assert!(row.5.is_none());
+    assert!(row.6.is_none());
+}
+
+#[tokio::test]
+async fn reimport_while_initial_sync_returns_conflict() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_enc, last_profile_history_id, sync_status, \
+          created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-initial-reimport', 'initial-reimport@gmail.example', \
+                 '[]', ?2, 'history-100', 'initial_sync', ?3, ?3) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(vec![8_u8; 29])
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/reimport"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(resp).await["error"], "provider_reimport_already_running");
+
+    let cursor: Option<String> = sqlx::query_scalar(
+        "SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(cursor.as_deref(), Some("history-100"));
+}
+
+#[tokio::test]
 async fn manual_sync_trigger_requires_csrf() {
     let (state, key) = app_state().await;
     let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
@@ -1139,6 +1333,7 @@ async fn provider_account_mutations_require_auth() {
 
     for uri in [
         "/api/provider-accounts/123/sync",
+        "/api/provider-accounts/123/reimport",
         "/api/provider-accounts/123/disconnect",
     ] {
         let resp = app(state.clone(), client.clone())

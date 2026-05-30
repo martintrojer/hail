@@ -61,6 +61,7 @@ import {
   type LabelListResponse,
   type LabelItemResponse,
   type ProviderAccountResponse,
+  type ProviderReimportResponse,
   type ProviderSyncStatusListResponse,
   type ProviderSyncTriggerResponse,
   type ProviderSyncStatus,
@@ -328,6 +329,67 @@ export function useTriggerProviderSyncMutation(
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useReimportProviderAccountMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, ProviderReimportResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id) => client.reimportProviderAccount(id),
+    ...options,
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      queryClient.setQueryData<ProviderSyncStatusListResponse>(
+        queryKeys.providerSyncStatuses(),
+        (current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            accounts: current.accounts.map((account) =>
+              account.id === id
+                ? {
+                    ...account,
+                    sync_status: 'initial_sync',
+                    last_profile_history_id: null,
+                    last_error_class: null,
+                    last_error_message: null,
+                    last_error_event: null,
+                    next_sync_after: null,
+                    sync_backoff_secs: null,
+                  }
+                : account,
+            ),
+          };
+        },
+      );
+      return undefined;
+    },
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ProviderSyncStatusListResponse>(
+        queryKeys.providerSyncStatuses(),
+        (current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            accounts: current.accounts.map((account) =>
+              account.id === data.account.id ? data.account : account,
+            ),
+          };
+        },
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+    onError: (error, variables, onMutateResult, mutationContext) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      options?.onError?.(error, variables, onMutateResult, mutationContext);
     },
   });
 }

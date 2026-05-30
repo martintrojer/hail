@@ -4,10 +4,22 @@ import {
   useConnectGmailMutation,
   useDisconnectProviderAccountMutation,
   useProviderSyncStatuses,
+  useReimportProviderAccountMutation,
   useTriggerProviderSyncMutation,
 } from '../api/query';
 import { StateCard } from '../components/StateCard';
 import { Alert, AlertDescription } from '../components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '../components/ui/alert-dialog';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -45,6 +57,10 @@ function statusLabel(status: ProviderSyncStatusValue, recovered = false) {
 }
 
 function canTriggerSync(status: ProviderSyncStatusValue) {
+  return !['disabled', 'disconnected', 'revoked'].includes(status);
+}
+
+function canReimport(status: ProviderSyncStatusValue) {
   return !['disabled', 'disconnected', 'revoked'].includes(status);
 }
 
@@ -175,37 +191,63 @@ function FailureCard({ status, recovered }: { status: ProviderSyncStatus; recove
   );
 }
 
-function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
+function ProviderSyncStatusCard({ status, syncing, reimporting, syncError, reimportError, onSync, onReimport }: {
   status: ProviderSyncStatus;
   syncing: boolean;
+  reimporting: boolean;
   syncError: Error | null;
+  reimportError: Error | null;
   onSync: () => void;
+  onReimport: () => void;
 }) {
   const recovered = isRecovered(status);
   const serverSyncing = isServerSyncing(status);
   const syncInProgress = syncing || serverSyncing;
-
+  const initialSync = status.sync_status === 'initial_sync';
+  const actionsDisabled = syncInProgress || reimporting;
+  const title = initialSync ? 'Re-importing from Gmail…' : (status.display_email || status.provider_email);
   return (
     <section>
       <Card>
         <CardHeader>
           <div>
             <CardDescription className="text-xs font-semibold uppercase tracking-wide">Gmail import health</CardDescription>
-            <CardTitle role="heading" aria-level={2}>{status.display_email || status.provider_email}</CardTitle>
+            <CardTitle role="heading" aria-level={2}>{title}</CardTitle>
             <div className="flex flex-wrap items-center gap-3">
               <StatusBadge status={status} />
               {syncInProgress ? (
                 <span className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground" role="status">
                   <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  Syncing Gmail…
+                  {initialSync ? 'Re-importing from Gmail…' : 'Syncing Gmail…'}
                 </span>
               ) : null}
             </div>
           </div>
-          <CardAction>
-            <Button type="button" onClick={onSync} disabled={syncInProgress || !canTriggerSync(status.sync_status)}>
+          <CardAction className="flex flex-col gap-2 sm:flex-row">
+            <Button type="button" onClick={onSync} disabled={actionsDisabled || !canTriggerSync(status.sync_status)}>
               {syncing ? 'Requesting sync…' : 'Sync now'}
             </Button>
+            {canReimport(status.sync_status) ? (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" variant="outline" disabled={actionsDisabled}>
+                    {reimporting ? 'Requesting re-import…' : 'Re-import from Gmail'}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Re-import from Gmail?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Hail will re-fetch all Gmail messages from scratch. This may take a long time and hit Gmail API quota. Already-imported local mail is kept and will be deduped by content hash.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={reimporting}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction disabled={reimporting} onClick={onReimport}>Re-import</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : null}
           </CardAction>
         </CardHeader>
         <CardContent>
@@ -221,6 +263,7 @@ function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
           <FailureCard status={status} recovered={recovered} />
 
           {syncError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(syncError, 'Sync Gmail now')}</AlertDescription></Alert> : null}
+          {reimportError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(reimportError, 'Re-import from Gmail')}</AlertDescription></Alert> : null}
         </CardContent>
       </Card>
     </section>
@@ -266,6 +309,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
   const disconnectProviderAccount = useDisconnectProviderAccountMutation(client);
   const syncStatuses = useProviderSyncStatuses(client);
   const triggerSync = useTriggerProviderSyncMutation(client);
+  const reimportProviderAccount = useReimportProviderAccountMutation(client);
   const { refetch: refetchSyncStatuses } = syncStatuses;
 
   useEffect(() => {
@@ -336,7 +380,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
         <>
           {gmailStatuses.map((status) => (
             <div key={status.id} className="flex flex-col gap-5">
-              <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} onSync={() => triggerSync.mutate(status.id)} />
+              <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} reimporting={reimportProviderAccount.isPending && reimportProviderAccount.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} reimportError={reimportProviderAccount.variables === status.id ? reimportProviderAccount.error : null} onSync={() => triggerSync.mutate(status.id)} onReimport={() => reimportProviderAccount.mutate(status.id)} />
               <ProviderAccountCard account={status} disconnecting={disconnectProviderAccount.isPending && disconnectProviderAccount.variables === status.id} disconnectError={disconnectProviderAccount.variables === status.id ? disconnectProviderAccount.error : null} onDisconnect={() => onDisconnect(status)} />
             </div>
           ))}
