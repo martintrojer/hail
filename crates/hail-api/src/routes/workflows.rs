@@ -1,9 +1,8 @@
 //! Workflow/mail rule CRUD endpoints.
 //!
-//! These routes provide the small persisted foundation for HEY-style
-//! Workflows. The evaluator is intentionally not here: API clients can list,
-//! create, update, and delete the current user's rules while worker routing
-//! work can later consume the same sidecar table.
+//! These routes provide the persisted foundation for HEY-style Workflows. API
+//! clients can list, create, update, and delete the current user's rules; the
+//! worker consumes the same sidecar table during mail routing.
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};

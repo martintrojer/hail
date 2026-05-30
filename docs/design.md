@@ -468,8 +468,8 @@ GET /metrics                       # Prometheus (opt-in via env)
 2. **Inbound routing.** On `Email/changes` for a user's Inbox:
    - Fetch envelope of new messages.
    - Lookup sender in `screener_rules`.
-   - `allow` → set `$hail_<classification>` keyword per rule, fan-out `imbox.new` / `feed.new` / `papertrail.new` WS events.
-   - `deny` → move to Trash.
+   - `allow` → set `$hail_<classification>` keyword per rule, then run enabled `workflow_rules` in id order. First matching workflow wins; its `classify_as` may override the Screener default and `add_label` assigns a local thread label.
+   - `deny` → move to Trash without running workflows.
    - No rule → move to `Screener` mailbox, insert `screener_rules` row as `pending`, fire `screener.pending` WS event.
 3. **Sidecar reconciliation.** Handles destroyed/moved JMAP objects from change feeds; prunes `stack_positions`, `bubble_ups`, etc.
 4. **Scheduler.** Polls `bubble_ups` and `scheduled_sends` tables on a fixed tick (60s default).

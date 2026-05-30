@@ -7,6 +7,9 @@ use sqlx::{Connection, SqliteConnection};
 const CURRENT_ROTATES_AT: &str = "2999-06-01T00:00:00Z";
 const EXPIRED_ROTATES_AT: &str = "2000-06-01T00:00:00Z";
 
+#[path = "../src/workflows.rs"]
+mod workflows;
+
 #[path = "../src/screener.rs"]
 mod screener;
 
@@ -160,6 +163,8 @@ fn envelope_with_id(from: &str, id: &str, mailbox_ids: Vec<String>) -> EmailEnve
         subject: "subject must not be info-logged".to_string(),
         preview: None,
         raw_rfc822: None,
+        to: Vec::new(),
+        cc: Vec::new(),
         mailbox_ids,
         keywords: vec![],
         received_at: None,

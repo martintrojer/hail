@@ -36,6 +36,8 @@ pub struct EmailEnvelope {
     pub thread_id: Option<String>,
     pub received_at: Option<i64>,
     pub from: Vec<(Option<String>, String)>,
+    pub to: Vec<(Option<String>, String)>,
+    pub cc: Vec<(Option<String>, String)>,
     pub subject: Option<String>,
     pub preview: Option<String>,
     pub keywords: Vec<String>,
@@ -353,6 +355,8 @@ fn route_envelope_from_change(env: &EmailEnvelope) -> Option<screener::EmailEnve
         subject: env.subject.clone().unwrap_or_default(),
         preview: env.preview.clone(),
         raw_rfc822: None,
+        to: env.to.iter().map(|(_, addr)| addr.clone()).collect(),
+        cc: env.cc.iter().map(|(_, addr)| addr.clone()).collect(),
         mailbox_ids: env.mailbox_ids.clone(),
         keywords: env.keywords.clone(),
         received_at: env

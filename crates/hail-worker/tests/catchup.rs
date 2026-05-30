@@ -16,6 +16,9 @@ mod app_events;
 mod catchup;
 #[path = "../src/changes.rs"]
 mod changes;
+#[path = "../src/workflows.rs"]
+mod workflows;
+
 #[path = "../src/screener.rs"]
 mod screener;
 

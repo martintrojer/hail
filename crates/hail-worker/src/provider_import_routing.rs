@@ -156,6 +156,8 @@ fn email_envelope_from_import(
         subject: first_header_value(&request.raw_rfc822, "Subject").unwrap_or_default(),
         preview: None,
         raw_rfc822: Some(request.raw_rfc822.clone()),
+        to: header_values(&request.raw_rfc822, "To"),
+        cc: header_values(&request.raw_rfc822, "Cc"),
         mailbox_ids: imported.jmap_mailbox_ids.clone(),
         keywords: request.keywords.clone(),
         received_at: request
@@ -165,7 +167,35 @@ fn email_envelope_from_import(
     })
 }
 
+fn header_values(raw_rfc822: &[u8], header_name: &str) -> Vec<String> {
+    all_header_values(raw_rfc822, header_name)
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(normalize_header_address)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn normalize_header_address(value: &str) -> String {
+    let trimmed = value.trim();
+    if let Some((_, rest)) = trimmed.rsplit_once('<') {
+        if let Some((addr, _)) = rest.split_once('>') {
+            return addr.trim().to_ascii_lowercase();
+        }
+    }
+    trimmed.to_ascii_lowercase()
+}
+
 fn first_header_value(raw_rfc822: &[u8], header_name: &str) -> Option<String> {
+    all_header_values(raw_rfc822, header_name)
+        .into_iter()
+        .next()
+}
+
+fn all_header_values(raw_rfc822: &[u8], header_name: &str) -> Vec<String> {
     let headers = String::from_utf8_lossy(raw_rfc822);
     let header_block = headers
         .split("\r\n\r\n")
@@ -173,12 +203,15 @@ fn first_header_value(raw_rfc822: &[u8], header_name: &str) -> Option<String> {
         .and_then(|part| part.split("\n\n").next())
         .unwrap_or(headers.as_ref());
     let unfolded = unfold_headers(header_block);
-    unfolded.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case(header_name)
-            .then(|| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
+    unfolded
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case(header_name)
+                .then(|| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .collect()
 }
 
 fn unfold_headers(headers: &str) -> String {

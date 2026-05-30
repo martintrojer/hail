@@ -25,6 +25,7 @@ mod screener;
 mod state;
 mod supervisor;
 mod user;
+mod workflows;
 
 use std::sync::Arc;
 

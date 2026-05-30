@@ -639,6 +639,8 @@ impl JmapChangeFetcher for LiveJmapFetcher {
             Property::ThreadId,
             Property::ReceivedAt,
             Property::From,
+            Property::To,
+            Property::Cc,
             Property::Subject,
             Property::Preview,
             Property::Keywords,
@@ -684,21 +686,25 @@ impl JmapChangeFetcher for LiveJmapFetcher {
     }
 }
 
+fn email_addresses(
+    addresses: Option<&[hail_jmap::jmap_client::email::EmailAddress]>,
+) -> Vec<(Option<String>, String)> {
+    addresses
+        .unwrap_or_default()
+        .iter()
+        .map(|a| (a.name().map(str::to_string), a.email().to_string()))
+        .collect()
+}
+
 fn envelope_from(em: jmap_client::email::Email) -> EmailEnvelope {
-    let from = em
-        .from()
-        .map(|addrs| {
-            addrs
-                .iter()
-                .map(|a| (a.name().map(str::to_string), a.email().to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let from = email_addresses(em.from());
     EmailEnvelope {
         id: em.id().unwrap_or_default().to_string(),
         thread_id: em.thread_id().map(str::to_string),
         received_at: em.received_at(),
         from,
+        to: email_addresses(em.to()),
+        cc: email_addresses(em.cc()),
         subject: em.subject().map(str::to_string),
         preview: em.preview().map(str::to_string),
         keywords: em.keywords().into_iter().map(str::to_string).collect(),
