@@ -153,7 +153,7 @@ describe('ScreenedOutPage', () => {
     openDropdown(allowButtons[0]);
     expect(screen.getByRole('menu')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Paper Trail' }));
 
     await waitFor(() => expect(client.undoDenyCalls).toHaveLength(1));
     expect(client.undoDenyCalls[0]).toEqual({
@@ -195,7 +195,7 @@ describe('ScreenedOutPage', () => {
 
     const allowButtons = await screen.findAllByRole('button', { name: 'Allow' });
     openDropdown(allowButtons[0]);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'The Feed' }));
 
     await waitFor(() => expect(client.undoDenyCalls).toHaveLength(1));
     expect(

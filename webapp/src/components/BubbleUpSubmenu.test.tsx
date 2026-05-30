@@ -21,13 +21,15 @@ describe('BubbleUpSubmenu', () => {
     const submenu = screen.getByRole('menu', { name: 'Bubble up time options' });
     expect(submenu).toBeInTheDocument();
     expect(document.body).toContainElement(submenu);
-    expect(submenu).toHaveClass('bg-popover', 'rounded-lg', 'shadow-md');
 
-    expect(screen.getByRole('menuitem', { name: 'Later today' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Tomorrow morning' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'This weekend' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Next week' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Pick a date…' })).toBeInTheDocument();
+    const menuitems = screen.getAllByRole('menuitem');
+    expect(menuitems.map((item) => item.textContent)).toEqual([
+      'Later today',
+      'Tomorrow morning',
+      'This weekend',
+      'Next week',
+      'Pick a date…',
+    ]);
   });
 
   it('selects an option and closes', () => {

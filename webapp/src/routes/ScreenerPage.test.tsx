@@ -285,11 +285,14 @@ describe('ScreenerPage', () => {
 
     openDropdown(await screen.findByRole('button', { name: 'Approve' }));
     expect(screen.getByRole('menu')).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'The Imbox' })).toHaveClass(
-      'bg-muted',
+    const imbox = screen.getByRole('menuitemradio', { name: 'The Imbox' });
+    expect(imbox).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('menuitemradio', { name: 'The Feed' })).toHaveAttribute(
+      'aria-checked',
+      'false',
     );
 
-    fireEvent.click(screen.getByRole('menuitem', { name: 'The Feed' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'The Feed' }));
 
     await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
     expect(client.decideScreenerCalls[0]).toEqual({
@@ -374,7 +377,7 @@ describe('ScreenerPage', () => {
     );
 
     openDropdown(await screen.findByRole('button', { name: 'Approve' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Paper Trail' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Paper Trail' }));
 
     expect(
       await screen.findByRole('alert', {

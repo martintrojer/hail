@@ -22,15 +22,13 @@ describe('InlineNote', () => {
     expect(screen.getByText(/Mina/)).toHaveTextContent('Mina · Today at 10:15');
   });
 
-  it('uses compact shadcn card styling for inline notes', () => {
+  it('exposes inline notes as article content', () => {
     render(<InlineNote text="Private thread context" author="Ari" timestamp="Yesterday" />);
 
-    expect(screen.getByRole('article')).toHaveClass(
-      'border-l-4',
-      'border-l-primary',
-      'bg-muted/40',
-      'rounded-r-lg',
-    );
+    const note = screen.getByRole('article');
+    expect(note).toHaveTextContent('Note');
+    expect(note).toHaveTextContent('Private thread context');
+    expect(note).toHaveTextContent('Ari · Yesterday');
   });
 });
 

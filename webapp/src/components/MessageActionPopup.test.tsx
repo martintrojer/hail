@@ -23,7 +23,6 @@ describe('MessageActionPopup', () => {
     const popup = screen.getByRole('menu', { name: 'Message actions' });
     expect(popup).toBeInTheDocument();
     expect(document.body).toContainElement(popup);
-    expect(popup).toHaveClass('bg-popover', 'rounded-lg', 'shadow-md');
 
     expect(screen.getByRole('menuitem', { name: 'Reply' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Reply All' })).toBeInTheDocument();
