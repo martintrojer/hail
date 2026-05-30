@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { BadgeCheck } from '../components/icons';
 import { AppShell } from '../layout/AppShell';
 import { actionErrorMessage } from '../lib/errorMessages';
 
@@ -221,6 +222,24 @@ export function ProviderAccountsPage({ client, location = window.location, confi
 
   const list = (
     <div className="flex flex-col gap-5">
+      {callbackNotice ? (
+        callbackNotice.kind === 'connected' ? (
+          <Alert
+            role="status"
+            className="border-emerald-500/40 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-950/40 dark:text-emerald-100 [&>svg]:text-emerald-600 dark:[&>svg]:text-emerald-400"
+          >
+            <BadgeCheck className="size-5" aria-hidden="true" />
+            <AlertDescription className="text-sm font-medium text-emerald-900 dark:text-emerald-100">
+              {callbackNotice.message}
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <Alert variant="destructive">
+            <AlertDescription>{callbackNotice.message}</AlertDescription>
+          </Alert>
+        )
+      ) : null}
+
       <Card>
         <CardHeader>
           <div>
@@ -243,14 +262,6 @@ export function ProviderAccountsPage({ client, location = window.location, confi
 
         {connectGmail.error ? <CardContent><Alert variant="destructive"><AlertDescription>{actionErrorMessage(connectGmail.error, 'Connect Gmail')}</AlertDescription></Alert></CardContent> : null}
       </Card>
-
-      {callbackNotice ? (
-        callbackNotice.kind === 'connected' ? (
-          <Alert role="status"><AlertDescription>{callbackNotice.message}</AlertDescription></Alert>
-        ) : (
-          <Alert variant="destructive"><AlertDescription>{callbackNotice.message}</AlertDescription></Alert>
-        )
-      ) : null}
 
       {syncStatuses.isPending ? (
         <StateCard title="Checking Gmail import status" body="Loading Gmail sync health from hail-api." />
