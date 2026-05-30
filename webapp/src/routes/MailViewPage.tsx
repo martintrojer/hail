@@ -18,6 +18,7 @@ import {
 } from '../api/query';
 import { useApiClient } from '../api/ApiClientProvider';
 import { ActionableList } from '../components/ActionableList';
+import { EmailFrame } from '../components/EmailFrame';
 import { ErrorState } from '../components/ErrorState';
 import { ArrowUpCircle } from '../components/icons';
 import { LoadingState } from '../components/LoadingState';
@@ -216,14 +217,16 @@ function FeedCard({
             <div className="relative">
               <div
                 className={cn(
-                  'max-w-none overflow-hidden text-base leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_img]:max-w-full [&_p]:my-3 [&_table]:max-w-full [&_td]:align-top [&_th]:align-top',
+                  'relative overflow-hidden',
                   clamped && 'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-20 after:bg-gradient-to-b after:from-transparent after:to-card',
                 )}
                 style={clamped ? { maxHeight: FEED_COLLAPSED_MAX_HEIGHT } : undefined}
-                // Server owns the mail-render trust boundary for Feed excerpts: hail-api
-                // strips quoted history, blocks remote images/trackers, and sanitizes HTML.
-                dangerouslySetInnerHTML={{ __html: feedHtml }}
-              />
+              >
+                <EmailFrame
+                  html={feedHtml}
+                  title={`Email body from ${item.from || 'Unknown sender'}`}
+                />
+              </div>
               {clamped ? (
                 <div className="mt-4 flex justify-center">
                   <Button type="button" variant="outline" onClick={() => setExpanded(true)}>
