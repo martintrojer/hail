@@ -63,6 +63,7 @@ import {
   type ProviderAccountResponse,
   type ProviderSyncStatusListResponse,
   type ProviderSyncTriggerResponse,
+  type ProviderSyncStatus,
   type ThreadVerbResponse,
   type ThreadViewResponse,
   type UserEnvelope,
@@ -280,6 +281,14 @@ export function useDisconnectProviderAccountMutation(
   });
 }
 
+function isProviderSyncing(status: ProviderSyncStatus) {
+  return status.sync_status === 'initial_sync' || Boolean(
+    status.last_sync_attempted_at &&
+    (!status.last_sync_succeeded_at ||
+      new Date(status.last_sync_attempted_at) > new Date(status.last_sync_succeeded_at)),
+  );
+}
+
 export function useProviderSyncStatuses(
   client = defaultApiClient,
   options?: QueryConfig<ProviderSyncStatusListResponse>,
@@ -287,6 +296,9 @@ export function useProviderSyncStatuses(
   return useQuery({
     queryKey: queryKeys.providerSyncStatuses(),
     queryFn: () => client.listProviderSyncStatuses(),
+    refetchInterval: (query) => (
+      query.state.data?.accounts.some(isProviderSyncing) ? 5000 : false
+    ),
     ...options,
   });
 }

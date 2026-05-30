@@ -57,7 +57,7 @@ function providerSyncStatus(
     display_email: 'Reader <reader@gmail.com>',
     sync_status: 'error',
     last_sync_attempted_at: '2026-05-26T17:00:00Z',
-    last_sync_succeeded_at: '2026-05-26T16:30:00Z',
+    last_sync_succeeded_at: '2026-05-26T17:00:00Z',
     next_sync_after: '2026-05-26T17:15:00Z',
     sync_backoff_secs: 900,
     last_error_class: 'gmail_rate_limit',
@@ -348,6 +348,76 @@ describe('ProviderAccountsPage', () => {
     expect(client.disconnectCalls).toEqual([]);
   });
 
+  it('shows Connected with green tick when sync_status is active and no error', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({
+        sync_status: 'active',
+        last_error_class: null,
+        last_error_message: null,
+        last_error_event: null,
+      }),
+    ];
+    renderPage({ client });
+
+    const section = (
+      await screen.findByRole('heading', { name: 'Reader <reader@gmail.com>' })
+    ).closest('section');
+    expect(section).not.toBeNull();
+    expect(within(section as HTMLElement).getByText('Connected')).toBeInTheDocument();
+  });
+
+  it('shows Connected (recovered) and hides destructive failure copy when last_sync_succeeded_at is after last_error_event.created_at', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({
+        sync_status: 'error',
+        last_sync_attempted_at: '2026-05-26T18:00:00Z',
+        last_sync_succeeded_at: '2026-05-26T18:05:00Z',
+        last_error_event: {
+          event_type: 'history_import',
+          result_status: 'failed',
+          safe_error_class: 'gmail_rate_limit',
+          safe_error_message: 'Gmail asked hail to slow down',
+          created_at: '2026-05-26T17:00:00Z',
+        },
+      }),
+    ];
+    renderPage({ client });
+
+    const section = (
+      await screen.findByRole('heading', { name: 'Reader <reader@gmail.com>' })
+    ).closest('section');
+    expect(section).not.toBeNull();
+    expect(within(section as HTMLElement).getByText('Connected (recovered)')).toBeInTheDocument();
+    expect(within(section as HTMLElement).getByText('No active failure — last sync succeeded')).toBeInTheDocument();
+    expect(within(section as HTMLElement).getByText(/Show last failure \(recovered/)).toBeInTheDocument();
+    expect(within(section as HTMLElement).queryByText('Needs attention')).not.toBeInTheDocument();
+    expect(within(section as HTMLElement).queryByText('gmail_rate_limit: Gmail asked hail to slow down')).not.toBeInTheDocument();
+  });
+
+  it('shows Syncing Gmail… and disables Sync now while server reports an in-flight attempt', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({
+        sync_status: 'active',
+        last_error_class: null,
+        last_error_message: null,
+        last_error_event: null,
+        last_sync_attempted_at: '2026-05-26T18:00:00Z',
+        last_sync_succeeded_at: '2026-05-26T17:00:00Z',
+      }),
+    ];
+    renderPage({ client });
+
+    const section = (
+      await screen.findByRole('heading', { name: 'Reader <reader@gmail.com>' })
+    ).closest('section');
+    expect(section).not.toBeNull();
+    expect(within(section as HTMLElement).getByText('Syncing Gmail…')).toBeInTheDocument();
+    expect(within(section as HTMLElement).getByRole('button', { name: 'Sync now' })).toBeDisabled();
+  });
+
   it('surfaces client errors for connect and disconnect actions', async () => {
     const connectClient = new ProviderAccountsTestClient();
     connectClient.connectFailure = new HailApiError(
@@ -411,6 +481,7 @@ describe('ProviderAccountsPage', () => {
         last_error_class: 'gmail_auth_revoked',
         last_error_message: 'Bearer raw-token body should not render',
         last_error_event: null,
+        last_sync_succeeded_at: null,
       }),
     ];
     renderPage({ client });
@@ -428,6 +499,9 @@ describe('ProviderAccountsPage', () => {
           providerSyncStatus({
             id: 42,
             sync_status: 'active',
+            last_sync_attempted_at: '2026-05-26T18:00:00Z',
+            last_sync_succeeded_at: '2026-05-26T18:00:00Z',
+            last_error_event: null,
             next_sync_after: null,
             sync_backoff_secs: null,
           }),
@@ -438,6 +512,9 @@ describe('ProviderAccountsPage', () => {
       account: providerSyncStatus({
         id: 42,
         sync_status: 'active',
+        last_sync_attempted_at: '2026-05-26T18:00:00Z',
+        last_sync_succeeded_at: '2026-05-26T18:00:00Z',
+        last_error_event: null,
         next_sync_after: null,
         sync_backoff_secs: null,
       }),
