@@ -176,7 +176,7 @@ impl ScreenerViewQuery {
 
 #[derive(Debug)]
 struct ScreenerCursor {
-    first_seen_at: DateTime<Utc>,
+    sort_key: DateTime<Utc>,
     sender: String,
 }
 
@@ -317,27 +317,28 @@ async fn get_screener(
     let page_size = limit.saturating_add(1) as i64;
 
     let rows = match if let Some(cursor) = cursor {
-        sqlx::query_as::<_, (String, DateTime<Utc>)>(
-            "SELECT sender_address, first_seen_at \
+        sqlx::query_as::<_, (String, DateTime<Utc>, DateTime<Utc>)>(
+            "SELECT sender_address, first_seen_at, COALESCE(latest_pending_received_at, first_seen_at) AS sort_key \
              FROM screener_rules \
              WHERE user_id = ?1 \
                AND decision = 'pending' \
-               AND (first_seen_at < ?2 OR (first_seen_at = ?2 AND sender_address > ?3)) \
-             ORDER BY first_seen_at DESC, sender_address ASC \
+               AND (COALESCE(latest_pending_received_at, first_seen_at) < ?2 \
+                    OR (COALESCE(latest_pending_received_at, first_seen_at) = ?2 AND sender_address > ?3)) \
+             ORDER BY COALESCE(latest_pending_received_at, first_seen_at) DESC, sender_address ASC \
              LIMIT ?4",
         )
         .bind(user.id)
-        .bind(cursor.first_seen_at)
+        .bind(cursor.sort_key)
         .bind(cursor.sender)
         .bind(page_size)
         .fetch_all(&state.db)
         .await
     } else {
-        sqlx::query_as::<_, (String, DateTime<Utc>)>(
-            "SELECT sender_address, first_seen_at \
+        sqlx::query_as::<_, (String, DateTime<Utc>, DateTime<Utc>)>(
+            "SELECT sender_address, first_seen_at, COALESCE(latest_pending_received_at, first_seen_at) AS sort_key \
              FROM screener_rules \
              WHERE user_id = ?1 AND decision = 'pending' \
-             ORDER BY first_seen_at DESC, sender_address ASC \
+             ORDER BY COALESCE(latest_pending_received_at, first_seen_at) DESC, sender_address ASC \
              LIMIT ?2",
         )
         .bind(user.id)
@@ -359,8 +360,8 @@ async fn get_screener(
     }
     let next_cursor = if has_more {
         rows.last()
-            .map(|(sender, first_seen_at)| ScreenerCursor {
-                first_seen_at: *first_seen_at,
+            .map(|(sender, _first_seen_at, sort_key)| ScreenerCursor {
+                sort_key: *sort_key,
                 sender: normalize_sender(sender),
             })
             .map(|cursor| cursor.encode())
@@ -370,7 +371,7 @@ async fn get_screener(
 
     let mut senders: Vec<ScreenerSender> = rows
         .into_iter()
-        .map(|(sender, first_seen_at)| {
+        .map(|(sender, first_seen_at, _sort_key)| {
             ScreenerSender::fallback(normalize_sender(&sender), first_seen_at)
         })
         .collect();
@@ -392,16 +393,23 @@ async fn get_screener(
 
 impl ScreenerCursor {
     fn encode(&self) -> String {
-        URL_SAFE_NO_PAD.encode(format!("{}\n{}", self.first_seen_at.to_rfc3339(), self.sender))
+        URL_SAFE_NO_PAD.encode(format!(
+            "2\n{}\n{}",
+            self.sort_key.to_rfc3339(),
+            self.sender
+        ))
     }
 
     fn decode(value: &str) -> Result<Self, ()> {
         let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|_| ())?;
         let decoded = String::from_utf8(decoded).map_err(|_| ())?;
-        let Some((first_seen_at, sender)) = decoded.split_once('\n') else {
-            return Err(());
+        let parts = decoded.split('\n').collect::<Vec<_>>();
+        let (sort_key, sender) = match parts.as_slice() {
+            ["2", sort_key, sender] => (*sort_key, *sender),
+            [first_seen_at, sender] => (*first_seen_at, *sender),
+            _ => return Err(()),
         };
-        let first_seen_at = DateTime::parse_from_rfc3339(first_seen_at)
+        let sort_key = DateTime::parse_from_rfc3339(sort_key)
             .map_err(|_| ())?
             .with_timezone(&Utc);
         let sender = normalize_sender(sender);
@@ -409,10 +417,7 @@ impl ScreenerCursor {
             return Err(());
         }
 
-        Ok(Self {
-            first_seen_at,
-            sender,
-        })
+        Ok(Self { sort_key, sender })
     }
 }
 

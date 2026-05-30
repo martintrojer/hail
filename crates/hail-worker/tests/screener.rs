@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::{DateTime, TimeZone, Utc};
 use hail_test::{TempDb, fresh_db_url};
 use sqlx::{Connection, SqliteConnection};
 
@@ -712,15 +713,111 @@ async fn no_rule_moves_to_screener_and_inserts_pending() {
             }
         ]
     );
-    let row: (String, Option<String>) = sqlx::query_as(
-        "SELECT decision, classify_as FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    let row: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT decision, classify_as, latest_pending_received_at FROM screener_rules WHERE user_id = ? AND sender_address = ?",
     )
     .bind(alice_id)
     .bind("new@example.com")
     .fetch_one(&mut conn)
     .await
     .expect("pending row");
-    assert_eq!(row, ("pending".to_string(), None));
+    assert_eq!(row.0, "pending");
+    assert_eq!(row.1, None);
+    assert!(
+        DateTime::parse_from_rfc3339(&row.2).is_ok(),
+        "latest pending received_at should be initialized on insert"
+    );
+}
+
+#[tokio::test]
+async fn parking_pending_messages_keeps_latest_received_at() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    let jmap = Arc::new(FakeJmapOps::new());
+    let older = Utc.with_ymd_and_hms(2014, 2, 3, 4, 5, 6).unwrap();
+    let newer = Utc.with_ymd_and_hms(2026, 5, 30, 12, 0, 0).unwrap();
+    let recent_sender_time = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
+
+    let mut first = envelope_with_id(
+        "same@example.com",
+        "email-old",
+        vec!["inbox-id".to_string()],
+    );
+    first.received_at = Some(older);
+    route_email(&mut conn, jmap.as_ref(), alice_id, &first)
+        .await
+        .expect("route first");
+
+    let mut second = envelope_with_id(
+        "same@example.com",
+        "email-new",
+        vec!["inbox-id".to_string()],
+    );
+    second.received_at = Some(newer);
+    route_email(&mut conn, jmap.as_ref(), alice_id, &second)
+        .await
+        .expect("route second");
+
+    let mut third = envelope_with_id(
+        "same@example.com",
+        "email-older",
+        vec!["inbox-id".to_string()],
+    );
+    third.received_at = Some(older - chrono::Duration::days(1));
+    route_email(&mut conn, jmap.as_ref(), alice_id, &third)
+        .await
+        .expect("route third");
+
+    let latest: String = sqlx::query_scalar(
+        "SELECT latest_pending_received_at FROM screener_rules WHERE user_id = ? AND sender_address = ?",
+    )
+    .bind(alice_id)
+    .bind("same@example.com")
+    .fetch_one(&mut conn)
+    .await
+    .expect("latest same sender");
+    assert_eq!(latest, newer.to_rfc3339());
+
+    let mut recent = envelope_with_id(
+        "recent@example.com",
+        "email-recent",
+        vec!["inbox-id".to_string()],
+    );
+    recent.received_at = Some(recent_sender_time);
+    route_email(&mut conn, jmap.as_ref(), alice_id, &recent)
+        .await
+        .expect("route recent");
+
+    let mut old_import = envelope_with_id(
+        "old-import@example.com",
+        "email-imported-old",
+        vec!["inbox-id".to_string()],
+    );
+    old_import.received_at = Some(older);
+    route_email(&mut conn, jmap.as_ref(), alice_id, &old_import)
+        .await
+        .expect("route old import");
+
+    let ordered: Vec<String> = sqlx::query_scalar(
+        "SELECT sender_address FROM screener_rules \
+         WHERE user_id = ? AND decision = 'pending' \
+         ORDER BY COALESCE(latest_pending_received_at, first_seen_at) DESC, sender_address ASC",
+    )
+    .bind(alice_id)
+    .fetch_all(&mut conn)
+    .await
+    .expect("ordered pending senders");
+    let recent_pos = ordered
+        .iter()
+        .position(|sender| sender == "recent@example.com")
+        .expect("recent sender");
+    let old_import_pos = ordered
+        .iter()
+        .position(|sender| sender == "old-import@example.com")
+        .expect("old import sender");
+    assert!(
+        recent_pos < old_import_pos,
+        "old imported mail must not outrank an existing recent sender: {ordered:?}"
+    );
 }
 
 #[tokio::test]
