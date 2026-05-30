@@ -623,9 +623,20 @@ export class HailApiClient {
     );
   }
 
-  async getScreenerView(): Promise<ScreenerView> {
+  async getScreenerView(
+    params: { cursor?: string; limit?: number } = {},
+  ): Promise<ScreenerView> {
+    const query = new URLSearchParams();
+    if (params.cursor) {
+      query.set('cursor', params.cursor);
+    }
+    if (params.limit !== undefined) {
+      query.set('limit', String(params.limit));
+    }
+    const suffix = query.toString();
+
     return this.#json<ScreenerView>(
-      await this.#request('/api/views/screener'),
+      await this.#request(`/api/views/screener${suffix ? `?${suffix}` : ''}`),
       200,
     );
   }

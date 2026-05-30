@@ -1454,6 +1454,7 @@ export interface components {
         };
         ScreenerViewResponse: {
             senders: components["schemas"]["ScreenerSender"][];
+            next_cursor?: string | null;
         };
         SearchResponse: {
             results: components["schemas"]["SearchResult"][];
@@ -4416,7 +4417,10 @@ export interface operations {
     };
     get_screener: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4431,6 +4435,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ScreenerViewResponse"];
                 };
+            };
+            /** @description Invalid cursor. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or invalid session. */
             401: {
