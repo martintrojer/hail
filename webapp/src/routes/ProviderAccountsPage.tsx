@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { BadgeCheck } from '../components/icons';
+import { BadgeCheck, Loader2 } from '../components/icons';
 import { AppShell } from '../layout/AppShell';
 import { actionErrorMessage } from '../lib/errorMessages';
 
@@ -31,7 +31,8 @@ type ProviderSyncStatusValue =
   | 'disconnected'
   | (string & {});
 
-function statusLabel(status: ProviderSyncStatusValue) {
+function statusLabel(status: ProviderSyncStatusValue, recovered = false) {
+  if (status === 'error' && recovered) return 'Connected (recovered)';
   switch (status) {
     case 'disabled': return 'Disabled';
     case 'initial_sync': return 'Initial import running';
@@ -74,7 +75,42 @@ function formatBackoff(value: number | null | undefined) {
   return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
 }
 
+function isRecovered(status: ProviderSyncStatus) {
+  return Boolean(
+    status.last_sync_succeeded_at &&
+    (!status.last_error_event || new Date(status.last_sync_succeeded_at) > new Date(status.last_error_event.created_at)),
+  );
+}
+
+function isServerSyncing(status: ProviderSyncStatus) {
+  return status.sync_status === 'initial_sync' || Boolean(
+    status.last_sync_attempted_at &&
+    (!status.last_sync_succeeded_at || new Date(status.last_sync_attempted_at) > new Date(status.last_sync_succeeded_at)),
+  );
+}
+
+function isHealthyBadge(status: ProviderSyncStatus, recovered: boolean) {
+  return (status.sync_status === 'active' && (!status.last_error_event || recovered)) ||
+    (status.sync_status === 'error' && recovered);
+}
+
+function StatusBadge({ status }: { status: ProviderSyncStatus }) {
+  const recovered = isRecovered(status);
+  const healthy = isHealthyBadge(status, recovered);
+
+  return (
+    <Badge
+      variant={healthy ? 'secondary' : statusVariant(status.sync_status)}
+      className={healthy ? 'mt-3 border-emerald-500/40 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-950/40 dark:text-emerald-100 [&>svg]:text-emerald-600 dark:[&>svg]:text-emerald-400' : 'mt-3'}
+    >
+      {healthy ? <BadgeCheck aria-hidden="true" /> : null}
+      {statusLabel(status.sync_status, recovered)}
+    </Badge>
+  );
+}
+
 function failureText(status: ProviderSyncStatus) {
+  if (isRecovered(status)) return 'No active failure — last sync succeeded';
   const className = status.last_error_event?.safe_error_class || status.last_error_class;
   const message = status.last_error_event?.safe_error_message;
   if (className && message) return `${className}: ${message}`;
@@ -116,12 +152,39 @@ function DetailTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+function FailureCard({ status, recovered }: { status: ProviderSyncStatus; recovered: boolean }) {
+  const card = (
+    <Card size="sm" className="mt-4 bg-muted/40 shadow-none">
+      <CardContent>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Last failure</p>
+        <p className="mt-1 text-sm">{failureText(status)}</p>
+        {status.last_error_event ? <p className="mt-1 text-xs text-muted-foreground">Recorded {formatDateTime(status.last_error_event.created_at)} during {status.last_error_event.event_type}.</p> : null}
+      </CardContent>
+    </Card>
+  );
+
+  if (!recovered) return card;
+
+  return (
+    <details className="mt-4">
+      <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+        Show last failure (recovered {formatDateTime(status.last_sync_succeeded_at)})
+      </summary>
+      {card}
+    </details>
+  );
+}
+
 function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
   status: ProviderSyncStatus;
   syncing: boolean;
   syncError: Error | null;
   onSync: () => void;
 }) {
+  const recovered = isRecovered(status);
+  const serverSyncing = isServerSyncing(status);
+  const syncInProgress = syncing || serverSyncing;
+
   return (
     <section>
       <Card>
@@ -129,10 +192,18 @@ function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
           <div>
             <CardDescription className="text-xs font-semibold uppercase tracking-wide">Gmail import health</CardDescription>
             <CardTitle role="heading" aria-level={2}>{status.display_email || status.provider_email}</CardTitle>
-            <Badge variant={statusVariant(status.sync_status)} className="mt-3">{statusLabel(status.sync_status)}</Badge>
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge status={status} />
+              {syncInProgress ? (
+                <span className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground" role="status">
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Syncing Gmail…
+                </span>
+              ) : null}
+            </div>
           </div>
           <CardAction>
-            <Button type="button" onClick={onSync} disabled={syncing || !canTriggerSync(status.sync_status)}>
+            <Button type="button" onClick={onSync} disabled={syncInProgress || !canTriggerSync(status.sync_status)}>
               {syncing ? 'Requesting sync…' : 'Sync now'}
             </Button>
           </CardAction>
@@ -147,13 +218,7 @@ function ProviderSyncStatusCard({ status, syncing, syncError, onSync }: {
             <DetailTile label="Profile synced" value={formatDateTime(status.profile_synced_at)} />
           </dl>
 
-          <Card size="sm" className="mt-4 bg-muted/40 shadow-none">
-            <CardContent>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Last failure</p>
-              <p className="mt-1 text-sm">{failureText(status)}</p>
-              {status.last_error_event ? <p className="mt-1 text-xs text-muted-foreground">Recorded {formatDateTime(status.last_error_event.created_at)} during {status.last_error_event.event_type}.</p> : null}
-            </CardContent>
-          </Card>
+          <FailureCard status={status} recovered={recovered} />
 
           {syncError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(syncError, 'Sync Gmail now')}</AlertDescription></Alert> : null}
         </CardContent>
@@ -176,7 +241,7 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
         <div>
           <CardDescription className="text-xs font-semibold uppercase tracking-wide">Gmail account</CardDescription>
           <CardTitle>{account.display_email || account.provider_email}</CardTitle>
-          <Badge variant={statusVariant(account.sync_status)} className="mt-3">{statusLabel(account.sync_status)}</Badge>
+          <StatusBadge status={account} />
         </div>
         <CardAction><Button type="button" variant="destructive" onClick={onDisconnect} disabled={disconnecting || !connected}>
           {disconnecting ? 'Disconnecting…' : connected ? 'Disconnect' : 'Disconnected'}
