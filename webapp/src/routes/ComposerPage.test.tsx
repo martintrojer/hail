@@ -282,8 +282,28 @@ async function setEditorText(text: string) {
   fireEvent.input(editor, { target: { innerHTML: text ? `<p>${text}</p>` : '<p></p>' } });
 }
 
-async function getEditorHtml() {
-  return (await screen.findByLabelText('Body')).innerHTML;
+function getEditorHtml() {
+  return screen.findByLabelText('Body').then((editor) => editor.innerHTML);
+}
+
+async function openLinkPopover() {
+  const trigger = await screen.findByRole('button', { name: 'Link' });
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.click(trigger);
+
+  const input = await screen.findByLabelText('Link URL');
+  const content = input.closest('[data-slot="popover-content"]');
+  expect(content).not.toBeNull();
+
+  return {
+    content: content as HTMLElement,
+    input,
+    trigger,
+  };
+}
+
+function applyLinkFromPopover(content: HTMLElement) {
+  fireEvent.click(within(content).getByRole('button', { name: 'Apply' }));
 }
 
 async function getEditorText() {
@@ -499,20 +519,20 @@ describe('ComposerPage', () => {
     tiptapEditor.commands.setContent('<p>Example link</p>');
     tiptapEditor.commands.setTextSelection({ from: 1, to: 8 });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Link' }));
-    fireEvent.change(await screen.findByLabelText('Link URL'), {
+    const invalidPopover = await openLinkPopover();
+    fireEvent.change(invalidPopover.input, {
       target: { value: 'javascript:alert(1)' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    applyLinkFromPopover(invalidPopover.content);
 
-    expect(await screen.findByText('Enter an http, https, or mailto URL.')).toBeInTheDocument();
+    expect(await within(invalidPopover.content).findByText('Enter an http, https, or mailto URL.')).toBeInTheDocument();
     expect(await getEditorHtml()).not.toContain('javascript:');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Link' }));
-    fireEvent.change(await screen.findByLabelText('Link URL'), {
+    const validPopover = await openLinkPopover();
+    fireEvent.change(validPopover.input, {
       target: { value: 'https://example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    applyLinkFromPopover(validPopover.content);
 
     await waitFor(() => expect(getEditorHtml()).resolves.toContain('<a'));
     let html = await getEditorHtml();
@@ -521,8 +541,8 @@ describe('ComposerPage', () => {
     expect(html).toContain('rel="noopener noreferrer"');
 
     tiptapEditor.commands.setTextSelection({ from: 1, to: 8 });
-    fireEvent.click(screen.getByRole('button', { name: 'Link' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const removePopover = await openLinkPopover();
+    fireEvent.click(within(removePopover.content).getByRole('button', { name: 'Remove' }));
 
     await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<a'));
     html = await getEditorHtml();
