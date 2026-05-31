@@ -49,6 +49,7 @@ class MailViewPageTestClient extends TestHailApiClient {
   readonly replyLaterCalls: string[] = [];
   readonly assignLabelToThreadsCalls: Array<{ threadIds: string[]; labelId?: number | null; labelName?: string | null }> = [];
   readonly bubbleUpCalls: Array<{ threadId: string; at: string }> = [];
+  prefs = { feed_load_remote_images: false };
   failingActions = new Set<string>();
 
   constructor(
@@ -82,6 +83,17 @@ class MailViewPageTestClient extends TestHailApiClient {
   override async getFeed(): Promise<MailViewResponse> {
     this.calls.push('feed');
     return this.responses.feed ?? Promise.resolve(mailViewResponse('feed'));
+  }
+
+  override async getUserPrefs() {
+    return this.prefs;
+  }
+
+  override async updateUserPrefs(body: { feed_load_remote_images?: boolean | null }) {
+    if (body.feed_load_remote_images !== undefined && body.feed_load_remote_images !== null) {
+      this.prefs = { feed_load_remote_images: body.feed_load_remote_images };
+    }
+    return this.prefs;
   }
 
   override async getPapertrail(): Promise<MailViewResponse> {
@@ -292,7 +304,9 @@ function mailItem(
     has_notes: false,
     labels: [],
     feed_html: null,
+    feed_html_with_images: null,
     feed_blocked_trackers: null,
+    feed_blocked_images: null,
     ...overrides,
   };
 }
@@ -591,6 +605,65 @@ describe('MailViewPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
+  it('shows a per-card remote image override when newsletter images are blocked', async () => {
+    renderMailView(
+      'feed',
+      new MailViewPageTestClient({
+        feed: Promise.resolve(
+          mailViewResponse('feed', [
+            mailItem('feed', {
+              thread_id: 'feed-image-thread',
+              from: 'Image Newsletter',
+              subject: 'Picture issue',
+              feed_html: '<p>No images version</p>',
+              feed_html_with_images: '<p>Images version</p><img src="https://cdn.example/hero.png" alt="Hero">',
+              feed_blocked_images: 1,
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    expect(await screen.findByText('Picture issue')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show images (1 blocked)' })).toBeInTheDocument();
+    const iframe = await screen.findByTitle('Email body from Image Newsletter') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(iframe.contentDocument?.body.textContent).toContain('No images version');
+    });
+    expect(iframe.contentDocument?.querySelector('img')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show images (1 blocked)' }));
+
+    await waitFor(() => {
+      expect(iframe.contentDocument?.body.textContent).toContain('Images version');
+    });
+    expect(iframe.contentDocument?.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example/hero.png');
+  });
+
+  it('renders Feed remote images on initial load when the server preference is on', async () => {
+    const client = new MailViewPageTestClient({
+      feed: Promise.resolve(
+        mailViewResponse('feed', [
+          mailItem('feed', {
+            from: 'Image Newsletter',
+            subject: 'Preference issue',
+            feed_html: '<p>Images version</p><img src="https://cdn.example/hero.png" alt="Hero">',
+            feed_html_with_images: '<p>Images version</p><img src="https://cdn.example/hero.png" alt="Hero">',
+            feed_blocked_images: 0,
+          }),
+        ]),
+      ),
+    });
+    client.prefs = { feed_load_remote_images: true };
+    renderMailView('feed', client);
+
+    const iframe = await screen.findByTitle('Email body from Image Newsletter') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(iframe.contentDocument?.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example/hero.png');
+    });
+    expect(screen.queryByRole('button', { name: /Show images/ })).not.toBeInTheDocument();
   });
 
   it('marks Feed cards read after they scroll past the viewport', async () => {

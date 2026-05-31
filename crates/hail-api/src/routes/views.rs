@@ -19,7 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
 use hail_core::mail_render::{
-    plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history,
+    FeedRenderOpts, plaintext_body_to_html, render_feed_html, strip_quoted_history,
 };
 use hail_core::{HAIL_SPAM_KEYWORD, MailClassification, SPAM_KEYWORD};
 use secrecy::SecretString;
@@ -55,6 +55,7 @@ pub trait MailViewProvider: Send + Sync + 'static {
         view: MailView,
         cursor: Option<String>,
         limit: usize,
+        opts: MailViewListOpts,
     ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>>;
 
     fn count<'a>(
@@ -87,6 +88,7 @@ impl MailViewProvider for JmapMailViewProvider {
         view: MailView,
         cursor: Option<String>,
         limit: usize,
+        opts: MailViewListOpts,
     ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
             use hail_jmap::jmap_client::email::query as email_query;
@@ -109,7 +111,7 @@ impl MailViewProvider for JmapMailViewProvider {
             }
 
             let emails = fetch_mail_view_emails(&session, ids, view).await?;
-            let grouped = group_mail_view_emails(emails, view)?;
+            let grouped = group_mail_view_emails(emails, view, opts.feed_render)?;
             Ok(page_mail_view_items(grouped, cursor.as_deref(), limit))
         })
     }
@@ -265,6 +267,11 @@ async fn fetch_mail_view_emails(
     Ok(emails)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MailViewListOpts {
+    pub feed_render: FeedRenderOpts,
+}
+
 #[derive(Debug, Clone)]
 pub struct MailViewPage {
     pub items: Vec<MailViewItem>,
@@ -331,6 +338,7 @@ async fn query_all_mail_view_ids(
 fn group_mail_view_emails(
     emails: Vec<hail_jmap::jmap_client::email::Email>,
     view: MailView,
+    feed_render_opts: FeedRenderOpts,
 ) -> Result<Vec<GroupedMailViewThread>, MailViewError> {
     let classification = view.classification();
     let mut by_thread: HashMap<String, (usize, usize, hail_jmap::jmap_client::email::Email)> =
@@ -367,10 +375,15 @@ fn group_mail_view_emails(
         .map(|(thread_id, (message_count, unread_count, email))| {
             let email_id = required_jmap_field(email.id(), "id")
                 .map_err(|err| MailViewError::malformed_email(err.field))?;
-            let feed_render = (view == MailView::Feed).then(|| render_feed_body(&email));
-            let (feed_html, feed_blocked_trackers) = match feed_render {
-                Some(render) => (Some(render.html), Some(render.blocked_trackers)),
-                None => (None, None),
+            let feed_render = (view == MailView::Feed).then(|| render_feed_body(&email, feed_render_opts));
+            let (feed_html, feed_html_with_images, feed_blocked_trackers, feed_blocked_images) = match feed_render {
+                Some(render) => (
+                    Some(render.html),
+                    Some(render.html_with_remote_images),
+                    Some(render.blocked_trackers),
+                    Some(render.blocked_images),
+                ),
+                None => (None, None, None, None),
             };
             let received_at_sort = email.received_at().unwrap_or(0);
 
@@ -395,7 +408,9 @@ fn group_mail_view_emails(
                     has_notes: false,
                     labels: Vec::new(),
                     feed_html,
+                    feed_html_with_images,
                     feed_blocked_trackers,
+                    feed_blocked_images,
                 },
             })
         })
@@ -637,7 +652,7 @@ impl SearchProvider for JmapSearchProvider {
                 .await
                 .map_err(|err| SearchError::provider(err.to_string()))?;
 
-            let grouped = group_mail_view_emails(response.take_list(), MailView::Imbox)
+            let grouped = group_mail_view_emails(response.take_list(), MailView::Imbox, FeedRenderOpts::default())
                 .map_err(|err| SearchError::provider(err.0))?;
             Ok(grouped
                 .into_iter()
@@ -840,9 +855,16 @@ pub struct MailViewItem {
     /// Only populated by `/api/views/feed`; compact list views should use `preview`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feed_html: Option<String>,
-    /// Tracker/remote-image removals observed while rendering `feed_html`.
+    /// Sanitized Feed body with remote images enabled for a per-card or global
+    /// user opt-in. Only populated by `/api/views/feed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_html_with_images: Option<String>,
+    /// Tracker removals observed while rendering Feed HTML.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feed_blocked_trackers: Option<Vec<FeedBlockedTrackerResponse>>,
+    /// Regular remote images removed while the Feed image preference is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_blocked_images: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -1461,7 +1483,7 @@ async fn load_view_counts(
     provider: Arc<dyn MailViewProvider>,
 ) -> Result<ViewCountsResponse, String> {
     let imbox_page = provider
-        .list(state, user.jmap_token.clone(), MailView::Imbox, None, MAX_LIMIT)
+        .list(state, user.jmap_token.clone(), MailView::Imbox, None, MAX_LIMIT, MailViewListOpts::default())
         .await
         .map_err(|err| err.0)?;
     let imbox_new = count_imbox_new(state, user.id, imbox_page.items).await?;
@@ -1588,7 +1610,15 @@ async fn get_view(
     let limit = query.normalized_limit();
 
     let page = match provider
-        .list(&state, user.jmap_token.clone(), view, query.cursor, limit)
+        .list(&state, user.jmap_token.clone(), view, query.cursor, limit, MailViewListOpts {
+            feed_render: FeedRenderOpts {
+                allow_remote_images: view == MailView::Feed
+                    && crate::routes::users::load_user_prefs(&state.db, user.id)
+                        .await
+                        .map(|prefs| prefs.feed_load_remote_images)
+                        .unwrap_or(false),
+            },
+        })
         .await
     {
         Ok(items) => items,
@@ -1715,7 +1745,7 @@ async fn get_unread_sectioned_view(
     };
 
     let mut page = provider
-        .list(state, user.jmap_token.clone(), view, None, fetch_limit)
+        .list(state, user.jmap_token.clone(), view, None, fetch_limit, MailViewListOpts::default())
         .await?;
     let mut items = std::mem::take(&mut page.items);
 
@@ -1910,10 +1940,15 @@ fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> 
 
 struct RenderedFeedBody {
     html: String,
+    html_with_remote_images: String,
     blocked_trackers: Vec<FeedBlockedTrackerResponse>,
+    blocked_images: usize,
 }
 
-fn render_feed_body(email: &hail_jmap::jmap_client::email::Email) -> RenderedFeedBody {
+fn render_feed_body(
+    email: &hail_jmap::jmap_client::email::Email,
+    opts: FeedRenderOpts,
+) -> RenderedFeedBody {
     let body_html = if let Some(html_body) =
         body_from_parts(email, email.html_body()).filter(|body| !body.trim().is_empty())
     {
@@ -1923,10 +1958,11 @@ fn render_feed_body(email: &hail_jmap::jmap_client::email::Email) -> RenderedFee
         plaintext_body_to_html(&text)
     };
     let stripped = strip_quoted_history(&body_html);
-    let sanitized = sanitize_and_strip_trackers(&stripped.html);
+    let sanitized = render_feed_html(&stripped.html, opts);
 
     RenderedFeedBody {
         html: sanitized.html,
+        html_with_remote_images: sanitized.html_with_remote_images,
         blocked_trackers: sanitized
             .blocked_trackers
             .into_iter()
@@ -1935,6 +1971,7 @@ fn render_feed_body(email: &hail_jmap::jmap_client::email::Email) -> RenderedFee
                 reason: tracker.reason,
             })
             .collect(),
+        blocked_images: sanitized.blocked_images,
     }
 }
 

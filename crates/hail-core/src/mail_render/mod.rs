@@ -27,11 +27,67 @@ pub struct SanitizedHtml {
     pub blocked_trackers: Vec<BlockedTracker>,
 }
 
+/// Sanitized Feed/newsletter HTML plus metadata about resources removed from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFeedHtml {
+    pub html: String,
+    pub html_with_remote_images: String,
+    pub blocked_trackers: Vec<BlockedTracker>,
+    pub blocked_images: usize,
+}
+
+/// Feed render options. Remote images are opt-in because they leak recipient
+/// IP/user-agent details to newsletter senders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FeedRenderOpts {
+    pub allow_remote_images: bool,
+}
+
 /// One stripped image that looked like a tracking beacon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockedTracker {
     pub src: String,
     pub reason: String,
+}
+
+/// Render a Feed/newsletter HTML fragment with a privacy-preserving default.
+///
+/// `html` is the variant selected by `opts`: remote images stripped when the
+/// user preference is off, or regular remote images preserved when it is on.
+/// `html_with_remote_images` is always populated so clients can offer a
+/// per-card in-memory "show images" override without a second server request.
+/// Tracker-shaped images are stripped from both variants.
+pub fn render_feed_html(input_html: &str, opts: FeedRenderOpts) -> RenderedFeedHtml {
+    let (no_image_html, blocked_default) = strip_images(input_html, true);
+    let (remote_image_html, blocked_remote_allowed) = strip_images(input_html, false);
+
+    let html_no_images = sanitizer().clean(&no_image_html).to_string();
+    let html_with_remote_images = feed_remote_image_sanitizer()
+        .clean(&remote_image_html)
+        .to_string();
+    let blocked_trackers = blocked_remote_allowed
+        .into_iter()
+        .filter(|blocked| blocked.tracker)
+        .map(|blocked| BlockedTracker {
+            src: blocked.src,
+            reason: blocked.reason,
+        })
+        .collect();
+    let blocked_images = blocked_default
+        .iter()
+        .filter(|blocked| !blocked.tracker)
+        .count();
+
+    RenderedFeedHtml {
+        html: if opts.allow_remote_images {
+            html_with_remote_images.clone()
+        } else {
+            html_no_images
+        },
+        html_with_remote_images,
+        blocked_trackers,
+        blocked_images,
+    }
 }
 
 /// Strip likely tracking images from an email HTML fragment, then sanitize it.
@@ -223,6 +279,12 @@ fn sanitizer() -> Builder<'static> {
     builder
 }
 
+fn feed_remote_image_sanitizer() -> Builder<'static> {
+    let mut builder = sanitizer();
+    builder.add_url_schemes(&["http", "https", "cid"]);
+    builder
+}
+
 fn outgoing_sanitizer() -> Builder<'static> {
     let mut tag_attributes = HashMap::new();
     tag_attributes.insert("a", HashSet::from(["href", "title"]));
@@ -288,10 +350,29 @@ fn sanitize_outgoing_style(value: &str) -> Option<String> {
     (!declarations.is_empty()).then(|| declarations.join(";"))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockedImage {
+    src: String,
+    reason: String,
+    tracker: bool,
+}
+
 fn strip_tracking_images(
     input_html: &str,
     block_remote_images: bool,
 ) -> (String, Vec<BlockedTracker>) {
+    let (html, blocked_images) = strip_images(input_html, block_remote_images);
+    let blocked_trackers = blocked_images
+        .into_iter()
+        .map(|blocked| BlockedTracker {
+            src: blocked.src,
+            reason: blocked.reason,
+        })
+        .collect();
+    (html, blocked_trackers)
+}
+
+fn strip_images(input_html: &str, block_remote_images: bool) -> (String, Vec<BlockedImage>) {
     let dom = parse_fragment(
         RcDom::default(),
         Default::default(),
@@ -301,8 +382,8 @@ fn strip_tracking_images(
     )
     .one(input_html);
 
-    let mut blocked_trackers = Vec::new();
-    strip_tracking_images_from(&dom.document, block_remote_images, &mut blocked_trackers);
+    let mut blocked_images = Vec::new();
+    strip_images_from(&dom.document, block_remote_images, &mut blocked_images);
 
     let mut bytes = Vec::new();
     serialize(
@@ -317,24 +398,24 @@ fn strip_tracking_images(
 
     (
         String::from_utf8(bytes).expect("html5ever serializes UTF-8"),
-        blocked_trackers,
+        blocked_images,
     )
 }
 
-fn strip_tracking_images_from(
+fn strip_images_from(
     handle: &Handle,
     block_remote_images: bool,
-    blocked_trackers: &mut Vec<BlockedTracker>,
+    blocked_images: &mut Vec<BlockedImage>,
 ) {
     let children = handle.children.borrow().clone();
     let mut remove_indices = Vec::new();
 
     for (index, child) in children.iter().enumerate() {
-        if let Some(blocked) = blocked_tracker_for(child, block_remote_images) {
-            blocked_trackers.push(blocked);
+        if let Some(blocked) = blocked_image_for(child, block_remote_images) {
+            blocked_images.push(blocked);
             remove_indices.push(index);
         } else {
-            strip_tracking_images_from(child, block_remote_images, blocked_trackers);
+            strip_images_from(child, block_remote_images, blocked_images);
         }
     }
 
@@ -347,7 +428,7 @@ fn strip_tracking_images_from(
     }
 }
 
-fn blocked_tracker_for(handle: &Handle, block_remote_images: bool) -> Option<BlockedTracker> {
+fn blocked_image_for(handle: &Handle, block_remote_images: bool) -> Option<BlockedImage> {
     let NodeData::Element { name, attrs, .. } = &handle.data else {
         return None;
     };
@@ -362,23 +443,24 @@ fn blocked_tracker_for(handle: &Handle, block_remote_images: bool) -> Option<Blo
     let height = attr_value(&attrs, "height").and_then(parse_dimension);
     let style = attr_value(&attrs, "style").unwrap_or_default();
 
-    let reason = if matches!((width, height), (Some(w), Some(h)) if w <= 2 && h <= 2) {
-        Some("image dimensions are 2x2 or smaller")
+    let (reason, tracker) = if matches!((width, height), (Some(w), Some(h)) if w <= 3 && h <= 3) {
+        ("image dimensions are 3x3 or smaller", true)
     } else if width == Some(0) || height == Some(0) {
-        Some("image has a zero dimension")
+        ("image has a zero dimension", true)
     } else if is_hidden_style(&style) {
-        Some("image is hidden by inline style")
+        ("image is hidden by inline style", true)
     } else if tracking_url(&src) {
-        Some("image URL looks like a tracking beacon")
+        ("image URL looks like a tracking beacon", true)
     } else if block_remote_images && is_remote_http_image(&src) {
-        Some("remote image blocked by default")
+        ("remote image blocked by default", false)
     } else {
-        None
-    }?;
+        return None;
+    };
 
-    Some(BlockedTracker {
+    Some(BlockedImage {
         src,
         reason: reason.to_string(),
+        tracker,
     })
 }
 
@@ -420,6 +502,30 @@ fn tracking_url(src: &str) -> bool {
     ["open", "pixel", "track", "beacon"]
         .iter()
         .any(|needle| src.contains(needle))
+        || known_tracker_domain(&src)
+}
+
+fn known_tracker_domain(normalized_src: &str) -> bool {
+    let Some(host_start) = normalized_src.find("://").map(|index| index + 3) else {
+        return false;
+    };
+    let host_end = normalized_src[host_start..]
+        .find(['/', '?', '#', ':'])
+        .map(|index| host_start + index)
+        .unwrap_or(normalized_src.len());
+    let host = &normalized_src[host_start..host_end];
+
+    [
+        "list-manage.com",
+        "mandrillapp.com",
+        "mailgun.org",
+        "mailgun.net",
+        "mcsv.net",
+        "mcdlv.net",
+        "sendgrid.net",
+    ]
+    .iter()
+    .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }
 
 fn normalize_url_for_scheme_detection(src: &str) -> String {
@@ -822,7 +928,7 @@ mod tests {
             sanitized.blocked_trackers[0].src,
             "https://tracker.example/open.gif"
         );
-        assert!(sanitized.blocked_trackers[0].reason.contains("2x2"));
+        assert!(sanitized.blocked_trackers[0].reason.contains("3x3"));
     }
 
     #[test]
@@ -894,6 +1000,69 @@ mod tests {
                 .reason
                 .contains("tracking beacon")
         );
+    }
+
+    #[test]
+    fn render_feed_blocks_remote_images_by_default_and_counts_them() {
+        let rendered = render_feed_html(
+            r#"<p>Logo</p><img src="https://cdn.example/logo.png" width="640" height="320" alt="Logo">"#,
+            FeedRenderOpts::default(),
+        );
+
+        assert_eq!(rendered.blocked_images, 1);
+        assert!(rendered.blocked_trackers.is_empty());
+        assert!(!rendered.html.contains("https://cdn.example/logo.png"));
+        assert!(!rendered.html.contains("<img"));
+        assert!(rendered.html_with_remote_images.contains("<img"));
+        assert!(
+            rendered
+                .html_with_remote_images
+                .contains(r#"src="https://cdn.example/logo.png""#)
+        );
+    }
+
+    #[test]
+    fn render_feed_allows_regular_remote_images_but_strips_trackers() {
+        let rendered = render_feed_html(
+            r#"<p>Issue</p><img src="https://cdn.example/hero.png" width="640" height="320" alt="Hero"><img src="https://track.mailgun.net/open.gif" width="1" height="1" alt="">"#,
+            FeedRenderOpts {
+                allow_remote_images: true,
+            },
+        );
+
+        assert_eq!(rendered.blocked_images, 1);
+        assert_eq!(rendered.blocked_trackers.len(), 1);
+        assert!(rendered.html.contains("https://cdn.example/hero.png"));
+        assert!(!rendered.html.contains("track.mailgun.net"));
+        assert!(rendered.blocked_trackers[0].reason.contains("3x3"));
+    }
+
+    #[test]
+    fn render_feed_strips_known_tracker_domains_even_when_not_tiny() {
+        let rendered = render_feed_html(
+            r#"<img src="https://click.mcsv.net/newsletter/banner.gif" width="600" height="200"><img src="https://images.example/banner.png" width="600" height="200">"#,
+            FeedRenderOpts {
+                allow_remote_images: true,
+            },
+        );
+
+        assert_eq!(rendered.blocked_trackers.len(), 1);
+        assert!(rendered.blocked_trackers[0].src.contains("mcsv.net"));
+        assert!(!rendered.html.contains("mcsv.net"));
+        assert!(rendered.html.contains("images.example/banner.png"));
+    }
+
+    #[test]
+    fn render_feed_confirms_current_zero_remote_images_when_preference_off() {
+        let rendered = render_feed_html(
+            r#"<img src="https://one.example/a.png"><img src="https://two.example/b.png">"#,
+            FeedRenderOpts {
+                allow_remote_images: false,
+            },
+        );
+
+        assert_eq!(rendered.blocked_images, 2);
+        assert!(!rendered.html.contains("<img"));
     }
 
     #[test]

@@ -769,6 +769,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/user/prefs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_user_prefs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["patch_user_prefs"];
+        trace?: never;
+    };
     "/api/views/archive": {
         parameters: {
             query?: never;
@@ -1388,13 +1404,20 @@ export interface components {
             cc: string[];
             classification: components["schemas"]["MailViewClassification"];
             email_id: string;
-            /** @description Tracker/remote-image removals observed while rendering `feed_html`. */
+            /** @description Regular remote images removed while the Feed image preference is off. */
+            feed_blocked_images?: number | null;
+            /** @description Tracker removals observed while rendering Feed HTML. */
             feed_blocked_trackers?: components["schemas"]["FeedBlockedTrackerResponse"][] | null;
             /**
              * @description Sanitized, tracker-stripped HTML excerpt/body for Feed reader cards.
              *     Only populated by `/api/views/feed`; compact list views should use `preview`.
              */
             feed_html?: string | null;
+            /**
+             * @description Sanitized Feed body with remote images enabled for a per-card or global
+             *     user opt-in. Only populated by `/api/views/feed`.
+             */
+            feed_html_with_images?: string | null;
             from: string;
             has_notes: boolean;
             labels: components["schemas"]["LabelResponse"][];
@@ -1660,6 +1683,9 @@ export interface components {
             expires_at: string;
             id: string;
         };
+        UpdateUserPrefsRequest: {
+            feed_load_remote_images?: boolean | null;
+        };
         UploadedBlob: {
             blob_id: string;
             size: number;
@@ -1667,6 +1693,9 @@ export interface components {
         };
         UserEnvelope: {
             user: components["schemas"]["UserView"];
+        };
+        UserPrefsResponse: {
+            feed_load_remote_images: boolean;
         };
         /**
          * @description Public JSON representation of a user. Mirrors the v1 schema in
@@ -4339,6 +4368,92 @@ export interface operations {
             };
             /** @description Undo action is not implemented. */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_user_prefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current user's UI preferences. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPrefsResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Preference lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    patch_user_prefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserPrefsRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated current user's UI preferences. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPrefsResponse"];
+                };
+            };
+            /** @description Invalid preference payload. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing CSRF header. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Preference update failed. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

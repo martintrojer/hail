@@ -29,6 +29,7 @@ pub mod speakeasy;
 pub mod threads;
 pub mod threads_view;
 pub mod undo;
+pub mod users;
 pub mod validation;
 pub mod views;
 pub mod workflows;

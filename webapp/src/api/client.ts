@@ -155,6 +155,12 @@ type SpeakeasyGetSuccess = ResponseBody<
 type SpeakeasyRotateSuccess = ResponseBody<
   paths['/api/speakeasy/rotate']['post']['responses']['200']
 >;
+type UserPrefsGetSuccess = ResponseBody<
+  paths['/api/user/prefs']['get']['responses']['200']
+>;
+type UserPrefsPatchSuccess = ResponseBody<
+  paths['/api/user/prefs']['patch']['responses']['200']
+>;
 
 type HailApiErrorBody<Status extends number> = Status extends 503
   ? ReadyzUnavailable
@@ -262,6 +268,8 @@ export type SearchScope = 'all' | 'mail' | 'notes' | 'clips';
 export type SearchMailbox = 'all' | 'imbox' | 'feed' | 'papertrail' | 'archive' | 'trash' | 'drafts';
 export type LabelResponse = components['schemas']['LabelResponse'];
 export type FeedBlockedTracker = components['schemas']['FeedBlockedTrackerResponse'];
+export type UserPrefs = UserPrefsGetSuccess;
+export type UpdateUserPrefsRequest = components['schemas']['UpdateUserPrefsRequest'];
 export type LabelItemResponse = LabelItemSuccess | LabelRenameSuccess | BatchAssignLabelSuccess;
 export type CreateLabelRequest = components['schemas']['CreateLabelRequest'];
 export type RenameLabelRequest = components['schemas']['RenameLabelRequest'];
@@ -664,6 +672,24 @@ export class HailApiClient {
         mutating: true,
       }),
       204,
+    );
+  }
+
+  async getUserPrefs(): Promise<UserPrefs> {
+    return this.#json<UserPrefs>(
+      await this.#request('/api/user/prefs'),
+      200,
+    );
+  }
+
+  async updateUserPrefs(body: UpdateUserPrefsRequest): Promise<UserPrefs> {
+    return this.#json<UserPrefsPatchSuccess>(
+      await this.#request('/api/user/prefs', {
+        method: 'PATCH',
+        body,
+        mutating: true,
+      }),
+      200,
     );
   }
 
