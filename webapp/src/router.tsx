@@ -275,6 +275,8 @@ function SetupPage() {
   const [displayName, setDisplayName] = useState('');
   const [domain, setDomain] = useState('');
   const [password, setPassword] = useState('');
+  const [stalwartAdminUsername, setStalwartAdminUsername] = useState('admin');
+  const [stalwartAdminPassword, setStalwartAdminPassword] = useState('');
   const [bootstrapToken, setBootstrapToken] = useState('');
   const setupAdmin = useSetupAdminMutation(apiClient, {
     onSuccess: () => {
@@ -297,6 +299,8 @@ function SetupPage() {
       display_name: displayName.trim() || null,
       domain,
       bootstrap_token: bootstrapToken,
+      stalwart_admin_username: stalwartAdminUsername,
+      stalwart_admin_password: stalwartAdminPassword,
     });
   }
 
@@ -350,11 +354,13 @@ function SetupPage() {
           <CardTitle role="heading" aria-level={2}>First-run setup</CardTitle>
           <CardDescription>
             Create the first admin mailbox for this hail instance. If Stalwart
-            management is configured, hail first provisions the mail domain in
-            Stalwart and then creates the admin principal; otherwise the domain
-            and account must already exist in Stalwart and the wizard verifies
-            them with a JMAP login. You need the operator bootstrap token from
-            the server environment/config.
+            management is configured, hail authenticates to Stalwart v0.16&apos;s
+            management REST API with the Stalwart admin credentials below,
+            creates the domain and mailbox with a short-lived bearer token, and
+            then verifies the mailbox with JMAP. If management is disabled, the
+            domain and account must already exist in Stalwart and the wizard
+            verifies them with a JMAP login. You need the operator bootstrap
+            token from the server environment/config.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -371,6 +377,31 @@ function SetupPage() {
                   placeholder="Paste HAIL_SETUP__BOOTSTRAP_TOKEN"
                   required
                 />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="stalwart-admin-username">Stalwart admin user</FieldLabel>
+                <Input
+                  id="stalwart-admin-username"
+                  value={stalwartAdminUsername}
+                  onChange={(event) => setStalwartAdminUsername(event.target.value)}
+                  autoComplete="off"
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="stalwart-admin-password">Stalwart admin password</FieldLabel>
+                <Input
+                  id="stalwart-admin-password"
+                  type="password"
+                  value={stalwartAdminPassword}
+                  onChange={(event) => setStalwartAdminPassword(event.target.value)}
+                  autoComplete="off"
+                  required
+                />
+                <FieldDescription>
+                  Local compose defaults to admin/admin1234 via STALWART_RECOVERY_ADMIN.
+                  Use the recovery admin credentials for your Stalwart instance.
+                </FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="setup-email">Admin email</FieldLabel>
