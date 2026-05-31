@@ -31,8 +31,20 @@ podman compose up -d --build
 ```
 
 The compose files pin Stalwart to `docker.io/stalwartlabs/stalwart:v0.16` and
-set `HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080` so hail can provision
-Stalwart through the management REST API.
+run a one-shot `stalwart-init` sidecar after Stalwart becomes healthy. The
+sidecar reads `STALWART_RECOVERY_ADMIN` from the compose environment, applies
+hail-friendly Stalwart settings idempotently through JMAP, verifies them, and
+then exits before `hail-api` and `hail-worker` start. The automatic settings are:
+
+- JMAP upload window: `maxUploadCount = 100000000`,
+  `uploadQuota = 1099511627776` bytes, `maxUploadSize = 104857600` bytes, and
+  `maxConcurrentUploads = 16`.
+- HTTP rate limits: authenticated and anonymous requests both at
+  `1000000` requests per `60000` ms.
+
+This replaces the old manual "open Stalwart admin and adjust quota/rate-limit
+fields" step. The operator still finishes hail's setup wizard and then connects
+Gmail/provider accounts as needed.
 
 ## 3. Open the wizard
 
@@ -46,7 +58,8 @@ Fill in:
 - **Bootstrap token**: `HAIL_SETUP_BOOTSTRAP_TOKEN` from `.env`.
 - **Stalwart admin user**: `admin` by default.
 - **Stalwart admin password**: `admin1234` by default for local compose because
-  `STALWART_RECOVERY_ADMIN=admin:admin1234` is set.
+  `STALWART_RECOVERY_ADMIN=admin:admin1234` is set; production compose reads
+  your `STALWART_RECOVERY_ADMIN` value from `deploy/.env`.
 - **Admin email**: the mailbox to create, for example `you@example.com`.
 - **Display name**: optional.
 - **Mail domain**: the domain part of the admin email, for example

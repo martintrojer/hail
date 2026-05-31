@@ -32,6 +32,9 @@
 services:
   stalwart:
     image: docker.io/stalwartlabs/stalwart:v0.16
+    environment:
+      - STALWART_PUBLIC_URL=${STALWART_PUBLIC_URL:-http://stalwart:8080/}
+      - STALWART_RECOVERY_ADMIN=${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN in .env}
     ports:
       - "25:25"       # SMTP
       - "465:465"     # submission SSL
@@ -44,13 +47,24 @@ services:
       - ./stalwart.example.toml:/opt/stalwart/etc/config.toml:ro
     restart: unless-stopped
     healthcheck:
-      # TODO: replace with an exec-form Stalwart-native probe if the upstream image
-      # exposes one. This uses curl when present and validates JMAP on localhost:8080.
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/jmap/.well-known/jmap >/dev/null"]
+      # Validate Stalwart's built-in liveness endpoint before the init sidecar runs.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz/live >/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  stalwart-init:
+    build:
+      context: ./stalwart-init
+    image: hail-stalwart-init:local
+    depends_on:
+      stalwart:
+        condition: service_healthy
+    environment:
+      - STALWART_URL=http://stalwart:8080
+      - STALWART_RECOVERY_ADMIN=${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN in .env}
+    restart: "no"
 
   hail-api:
     build:
@@ -58,8 +72,8 @@ services:
       dockerfile: Containerfile
     image: hail:local
     depends_on:
-      stalwart:
-        condition: service_started
+      stalwart-init:
+        condition: service_completed_successfully
     command: ["/usr/local/bin/hail-api"]
     environment:
       - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
@@ -84,8 +98,10 @@ services:
   hail-worker:
     image: hail:local
     depends_on:
-      - stalwart
-      - hail-api       # hail-api runs migrations first; worker starts after it.
+      stalwart-init:
+        condition: service_completed_successfully
+      hail-api:
+        condition: service_started
     command: ["/usr/local/bin/hail-worker"]
     environment:
       - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
