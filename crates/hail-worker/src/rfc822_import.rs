@@ -310,7 +310,8 @@ fn as_duplicate(imported: &ImportedRfc822Message) -> ImportedRfc822Message {
 }
 
 fn jmap_error(error: hail_jmap::jmap_client::Error) -> Rfc822ImportError {
-    Rfc822ImportError::Jmap(error.to_string())
+    let message = error.to_string();
+    classify_stalwart_jmap_error_message(&message).unwrap_or(Rfc822ImportError::Jmap(message))
 }
 
 pub(crate) fn first_message_id(raw_rfc822: &[u8]) -> Option<String> {
@@ -376,8 +377,44 @@ pub enum Rfc822ImportError {
     MissingImportedEmailId,
     #[error("Stalwart imported Email id {email_id} but Email/get could not hydrate it")]
     ImportedEmailMissing { email_id: String },
+    #[error("Stalwart upload quota exceeded during RFC822 import")]
+    StalwartProviderQuota,
+    #[error("Stalwart rate limit hit during RFC822 import")]
+    StalwartProviderRateLimited,
     #[error("Stalwart JMAP RFC822 import failed: {0}")]
     Jmap(String),
+}
+
+#[must_use]
+pub fn rfc822_import_error_class(error: &Rfc822ImportError) -> &'static str {
+    match error {
+        Rfc822ImportError::StalwartProviderQuota => "provider_quota",
+        Rfc822ImportError::StalwartProviderRateLimited => "provider_rate_limited",
+        _ => "stalwart_import",
+    }
+}
+
+#[must_use]
+pub fn classify_stalwart_jmap_error_message(message: &str) -> Option<Rfc822ImportError> {
+    let normalized = message.to_ascii_lowercase();
+    let is_429 = normalized.contains("429")
+        || normalized.contains("too many requests")
+        || normalized.contains("rate limited")
+        || normalized.contains("rate-limit")
+        || normalized.contains("quota exceeded");
+    if !is_429 {
+        return None;
+    }
+    if normalized.contains("quota exceeded") || normalized.contains("blob upload quota") {
+        return Some(Rfc822ImportError::StalwartProviderQuota);
+    }
+    if normalized.contains("too many requests")
+        || normalized.contains("rate limited")
+        || normalized.contains("rate-limit")
+    {
+        return Some(Rfc822ImportError::StalwartProviderRateLimited);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -389,6 +426,21 @@ mod tests {
             "From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nMessage-ID: <{message_id}>\r\nSubject: hello\r\n\r\nBody"
         )
         .into_bytes()
+    }
+
+    #[test]
+    fn classifies_stalwart_429_quota_and_rate_limit_messages() {
+        assert!(matches!(
+            classify_stalwart_jmap_error_message(
+                "HTTP 429 Quota exceeded: blob upload quota reached"
+            ),
+            Some(Rfc822ImportError::StalwartProviderQuota)
+        ));
+        assert!(matches!(
+            classify_stalwart_jmap_error_message("HTTP 429 Too Many Requests: rate limited"),
+            Some(Rfc822ImportError::StalwartProviderRateLimited)
+        ));
+        assert!(classify_stalwart_jmap_error_message("HTTP 500 server error").is_none());
     }
 
     #[tokio::test]

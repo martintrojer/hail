@@ -37,7 +37,9 @@ use crate::gmail_client::{
     GmailClient, GmailClientError, GmailLabel, GmailTokenSource, ListMessage, ListMessagesParams,
     ListMessagesResponse, RawGmailMessage,
 };
-use crate::rfc822_import::{ImportedRfc822Message, Rfc822ImportRequest, Rfc822Importer};
+use crate::rfc822_import::{
+    ImportedRfc822Message, Rfc822ImportRequest, Rfc822Importer, rfc822_import_error_class,
+};
 
 pub const GMAIL_INBOX_LABEL_ID: &str = "INBOX";
 const DEFAULT_PAGE_SIZE: u16 = 100;
@@ -768,6 +770,15 @@ where
         Some(Ok(routed_import)) => routed_import,
         Some(Err(error)) => {
             let message = safe_error_message(&error);
+            let class = match &error {
+                GmailHistoricalImportError::Rfc822Import(source) => {
+                    rfc822_import_error_class(source)
+                }
+                GmailHistoricalImportError::RoutedImport(
+                    crate::provider_import_routing::RoutedRfc822ImportError::Import(source),
+                ) => rfc822_import_error_class(source),
+                _ => "stalwart_import",
+            };
             summary.failed += 1;
             mark_message_failed(
                 db,
@@ -776,11 +787,11 @@ where
                 provider_history_id,
                 rfc822_message_id.as_deref(),
                 Some(&content_sha256),
-                "stalwart_import",
+                class,
                 &message,
             )
             .await?;
-            audit_message_failed(db, account, &raw.id, "stalwart_import", &message).await?;
+            audit_message_failed(db, account, &raw.id, class, &message).await?;
             return Ok(());
         }
     };

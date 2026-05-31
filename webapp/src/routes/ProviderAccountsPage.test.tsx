@@ -547,6 +547,56 @@ describe('ProviderAccountsPage', () => {
     expect(screen.queryByText(/raw-token/)).not.toBeInTheDocument();
   });
 
+  it('renders actionable Stalwart provider quota and rate-limit recovery text', async () => {
+    const quotaClient = new ProviderAccountsTestClient();
+    quotaClient.syncStatuses = [
+      providerSyncStatus({
+        last_error_class: 'provider_quota',
+        last_error_message: null,
+        last_error_event: {
+          event_type: 'initial_sync_aborted',
+          result_status: 'failed',
+          safe_error_class: 'provider_quota',
+          safe_error_message: 'Stalwart upload quota exceeded during initial Gmail import',
+          created_at: '2026-05-26T17:00:00Z',
+        },
+        last_sync_succeeded_at: null,
+      }),
+    ];
+    renderPage({ client: quotaClient });
+
+    expect(
+      await screen.findByText(
+        'Stalwart upload quota exceeded. Increase httpUploadQuota in Stalwart admin → Settings → Network → JMAP → Limits (Files / Size). Then click Re-import.',
+      ),
+    ).toBeInTheDocument();
+
+    cleanup();
+
+    const rateLimitClient = new ProviderAccountsTestClient();
+    rateLimitClient.syncStatuses = [
+      providerSyncStatus({
+        last_error_class: 'provider_rate_limited',
+        last_error_message: null,
+        last_error_event: {
+          event_type: 'initial_sync_aborted',
+          result_status: 'failed',
+          safe_error_class: 'provider_rate_limited',
+          safe_error_message: 'Stalwart rate limit hit during initial Gmail import',
+          created_at: '2026-05-26T17:00:00Z',
+        },
+        last_sync_succeeded_at: null,
+      }),
+    ];
+    renderPage({ client: rateLimitClient });
+
+    expect(
+      await screen.findByText(
+        'Stalwart rate limit hit. Increase rateLimitAuthenticated. Then click Re-import.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('shows Gmail sync health and triggers a manual sync', async () => {
     const client = new ProviderAccountsTestClient();
     client.syncStatusResponses = [

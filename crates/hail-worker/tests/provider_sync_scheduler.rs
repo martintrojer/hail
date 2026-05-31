@@ -9,7 +9,8 @@ use hail_test::{TempDb, fresh_db_url};
 use hail_worker::provider_sync_scheduler::{
     ProviderSyncAccount, ProviderSyncRunError, ProviderSyncRunOutcome, ProviderSyncRunner,
     ProviderSyncSchedulerOptions, gmail_incremental_sync_options_for_inbox,
-    gmail_initial_sync_options_for_inbox, process_provider_sync_accounts, process_provider_sync_tick,
+    gmail_initial_sync_options_for_inbox, process_provider_sync_accounts,
+    process_provider_sync_tick,
 };
 use sqlx::SqlitePool;
 use tokio::sync::Barrier;
@@ -271,15 +272,10 @@ async fn account_cancel_maps_to_paused_status_and_sync_paused_event() {
         sync_backoff_secs: None,
     };
 
-    let summary = process_provider_sync_accounts(
-        &pool,
-        &runner,
-        Utc::now(),
-        vec![account],
-        &cancel,
-    )
-    .await
-    .expect("provider sync accounts");
+    let summary =
+        process_provider_sync_accounts(&pool, &runner, Utc::now(), vec![account], &cancel)
+            .await
+            .expect("provider sync accounts");
 
     assert!(summary.cancelled);
     let state = provider_state(&pool, account_id).await;
@@ -292,7 +288,10 @@ async fn account_cancel_maps_to_paused_status_and_sync_paused_event() {
         .await
         .expect("audit events");
     assert_eq!(events[0].event_type, "sync_paused");
-    assert_eq!(events[0].safe_error_class.as_deref(), Some("operator_paused"));
+    assert_eq!(
+        events[0].safe_error_class.as_deref(),
+        Some("operator_paused")
+    );
 }
 
 #[tokio::test]
@@ -380,6 +379,146 @@ async fn scheduler_redacts_hostile_runner_error_in_account_and_audit_status() {
     assert!(audit_error.contains("[redacted]"));
     let metadata = failed.metadata_json.as_deref().expect("retry metadata");
     assert_no_hostile_leak(metadata);
+}
+
+#[tokio::test]
+async fn quota_message_failures_abort_initial_sync() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let id = insert_provider(&pool, user_id, "initial_sync", None, None, None).await;
+    for n in 0..51 {
+        sqlx::query(
+            "INSERT INTO provider_sync_events \
+             (provider_account_id, user_id, operation_kind, event_type, provider_message_id, result_status, safe_error_class, created_at) \
+             VALUES (?1, ?2, 'failure', 'message_failed', ?3, 'failed', 'provider_quota', ?4)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(format!("gmail-{n}"))
+        .bind((now + Duration::seconds(1)).to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("insert quota message_failed");
+    }
+    let runner = FakeRunner::default();
+    runner.set_result(id, Ok(ProviderSyncRunOutcome::incomplete_initial()));
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now,
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.failed, 1);
+    let state = provider_state(&pool, id).await;
+    assert_eq!(state.0, "error");
+    assert_eq!(state.2.as_deref(), Some("provider_quota"));
+    assert!(state.3.is_none());
+    assert!(state.4.is_none());
+
+    let audit = list_provider_sync_audit_logs(&pool, user_id, id, 10)
+        .await
+        .expect("audit");
+    assert!(audit.iter().any(|row| {
+        row.event_type == "initial_sync_aborted"
+            && row.safe_error_class.as_deref() == Some("provider_quota")
+    }));
+}
+
+#[tokio::test]
+async fn provider_rate_limited_failure_backs_off_as_initial_sync_retry() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let id = insert_provider(&pool, user_id, "initial_sync", None, None, None).await;
+    let runner = FakeRunner::default();
+    runner.set_result(
+        id,
+        Err(ProviderSyncRunError::retryable(
+            "provider_rate_limited",
+            "Stalwart rate limit hit during initial Gmail import",
+        )),
+    );
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now,
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.failed, 1);
+    let state = provider_state(&pool, id).await;
+    assert_eq!(state.0, "initial_sync");
+    assert_eq!(state.2.as_deref(), Some("provider_rate_limited"));
+    assert_eq!(state.4, Some(60));
+    assert!(state.3.is_some());
+
+    runner.set_result(id, Ok(ProviderSyncRunOutcome::completed_active()));
+    sqlx::query("UPDATE provider_accounts SET next_sync_after = NULL WHERE id = ?1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("clear next sync");
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now + Duration::minutes(1),
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync retry");
+
+    assert_eq!(summary.succeeded, 1);
+    let state = provider_state(&pool, id).await;
+    assert_eq!(state.0, "active");
+    assert!(state.2.is_none());
+    assert!(state.4.is_none());
+}
+
+#[tokio::test]
+async fn extended_provider_rate_limited_initial_sync_aborts() {
+    let (pool, _guard, user_id) = setup().await;
+    let now = Utc::now();
+    let id = insert_provider(&pool, user_id, "initial_sync", None, None, None).await;
+    sqlx::query(
+        "INSERT INTO provider_sync_events \
+         (provider_account_id, user_id, operation_kind, event_type, provider_message_id, result_status, safe_error_class, created_at) \
+         VALUES (?1, ?2, 'failure', 'message_failed', 'gmail-rate-limited', 'failed', 'provider_rate_limited', ?3)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(now.to_rfc3339())
+    .execute(&pool)
+    .await
+    .expect("insert rate-limit message_failed");
+    let runner = FakeRunner::default();
+    runner.set_result(id, Ok(ProviderSyncRunOutcome::incomplete_initial()));
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        now + Duration::minutes(31),
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.failed, 1);
+    let state = provider_state(&pool, id).await;
+    assert_eq!(state.0, "error");
+    assert_eq!(state.2.as_deref(), Some("provider_rate_limited"));
+    assert!(state.3.is_none());
+    assert!(state.4.is_none());
 }
 
 #[tokio::test]

@@ -132,6 +132,12 @@ function StatusBadge({ status }: { status: ProviderSyncStatus }) {
 function failureText(status: ProviderSyncStatus) {
   if (isRecovered(status)) return 'No active failure — last sync succeeded';
   const className = status.last_error_event?.safe_error_class || status.last_error_class;
+  if (className === 'provider_quota') {
+    return 'Stalwart upload quota exceeded. Increase httpUploadQuota in Stalwart admin → Settings → Network → JMAP → Limits (Files / Size). Then click Re-import.';
+  }
+  if (className === 'provider_rate_limited') {
+    return 'Stalwart rate limit hit. Increase rateLimitAuthenticated. Then click Re-import.';
+  }
   const message = status.last_error_event?.safe_error_message;
   if (className && message) return `${className}: ${message}`;
   return className || message || 'No recent failure recorded';
