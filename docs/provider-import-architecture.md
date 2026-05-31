@@ -404,3 +404,32 @@ and mailbox mutations are still not written by hail in v1.2.
 - Browser-side Gmail API access.
 - Broad Gmail scopes or destructive provider mutations.
 - Support for every provider API before Gmail import is proven.
+
+## Outbound via connected Gmail SMTP
+
+When the composer `From` address matches a connected Gmail provider account,
+hail sends the message through Gmail SMTP rather than Stalwart's outbound MTA.
+This is required for provider-mode users who do not own DNS/SPF/DKIM for the
+local Stalwart domain.
+
+Implementation details:
+
+- OAuth now requests both `gmail.readonly` and `gmail.send`.
+- Existing read-only accounts keep importing, but sending from that address
+  fails soft with `provider_scope_missing` / `needs_reauth`; the Provider
+  Accounts page shows an actionable reconnect button.
+- SMTP uses `smtp.gmail.com:465` with implicit TLS and SASL XOAUTH2. The SASL
+  initial response is `base64("user=<email>\x01auth=Bearer <access_token>\x01\x01")`.
+- On SMTP auth failure (for example 535), hail refreshes the OAuth access token
+  and retries once. A second auth failure is classified as `provider_token` and
+  recorded on the provider account without logging token material or message
+  bodies.
+- Successful provider sends insert a `provider_sync_events` row with event type
+  `sent_via_provider` and safe counts/ids only.
+- Gmail's SMTP submission creates the Gmail Sent copy automatically. Hail does
+  not IMAP-copy a duplicate; the local Stalwart draft/sent object remains the UI
+  side of the send pipeline.
+
+Outbound through Gmail is provider-specific in v1.2. Other provider types and
+IMAP-only accounts still fall back to Stalwart submission unless a future
+provider send hook is added.

@@ -11,6 +11,7 @@ const MAX_RECIPIENTS_PER_FIELD: usize = 200;
 
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
+    pub from: Option<String>,
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,

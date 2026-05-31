@@ -21,6 +21,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tower::ServiceExt;
 
 const GMAIL_READONLY: &str = "https://www.googleapis.com/auth/gmail.readonly";
+const GMAIL_SEND: &str = "https://www.googleapis.com/auth/gmail.send";
 
 fn hostile_leak_error() -> &'static str {
     "api failed Authorization: Bearer ya29.api-secret access_token=ya29.api-secret refresh_token=1//api-refresh\n\nSubject: API Private\n\nAPI body must not be exposed"
@@ -91,7 +92,7 @@ impl GmailOAuthClient for FakeGmailOAuthClient {
                 access_token: SecretString::from("ya29.access-token-secret"),
                 refresh_token: Some(SecretString::from("1//refresh-token-secret")),
                 expires_at: None,
-                granted_scopes: vec![GMAIL_READONLY.to_owned()],
+                granted_scopes: vec![GMAIL_READONLY.to_owned(), GMAIL_SEND.to_owned()],
                 profile: GmailProfile {
                     email: "Gmail.User@Example.COM".to_owned(),
                     history_id: Some("12345".to_owned()),
@@ -191,13 +192,16 @@ fn state_from_connect_response(value: &serde_json::Value) -> String {
 }
 
 #[tokio::test]
-async fn gmail_connect_returns_readonly_authorization_url_and_persists_state_hash_only() {
+async fn gmail_connect_returns_read_send_authorization_url_and_persists_state_hash_only() {
     let (state, key) = app_state().await;
     let (_user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
     let client = Arc::new(FakeGmailOAuthClient::default());
 
     let body = connect(state.clone(), client.clone(), &session_id).await;
-    assert_eq!(body["scopes"], serde_json::json!([GMAIL_READONLY]));
+    assert_eq!(
+        body["scopes"],
+        serde_json::json!([GMAIL_READONLY, GMAIL_SEND])
+    );
 
     let state_token = state_from_connect_response(&body);
     assert_eq!(state_token.len(), 64);
@@ -208,12 +212,18 @@ async fn gmail_connect_returns_readonly_authorization_url_and_persists_state_has
             .unwrap();
     assert_eq!(rows.len(), 1);
     assert_ne!(rows[0].0, state_token);
-    assert_eq!(rows[0].1, serde_json::json!([GMAIL_READONLY]).to_string());
+    assert_eq!(
+        rows[0].1,
+        serde_json::json!([GMAIL_READONLY, GMAIL_SEND]).to_string()
+    );
 
     let requests = client.auth_requests.lock().expect("auth requests");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].client_id, "gmail-client-id");
-    assert_eq!(requests[0].scopes, vec![GMAIL_READONLY.to_owned()]);
+    assert_eq!(
+        requests[0].scopes,
+        vec![GMAIL_READONLY.to_owned(), GMAIL_SEND.to_owned()]
+    );
 }
 
 #[tokio::test]
@@ -1190,8 +1200,24 @@ async fn stop_active_provider_import_pauses_and_audits_for_owner_only() {
         .unwrap()
     }
 
-    let active_id = insert_account(&state, user_id, "gmail-active-stop", "active", next_sync, now).await;
-    let other_id = insert_account(&state, other_user_id, "gmail-bob-stop", "active", next_sync, now).await;
+    let active_id = insert_account(
+        &state,
+        user_id,
+        "gmail-active-stop",
+        "active",
+        next_sync,
+        now,
+    )
+    .await;
+    let other_id = insert_account(
+        &state,
+        other_user_id,
+        "gmail-bob-stop",
+        "active",
+        next_sync,
+        now,
+    )
+    .await;
 
     let resp = app(state.clone(), client.clone())
         .oneshot(auth_request(
@@ -1208,7 +1234,10 @@ async fn stop_active_provider_import_pauses_and_audits_for_owner_only() {
     assert!(body["account"]["next_sync_after"].is_null());
     assert!(body["account"]["sync_backoff_secs"].is_null());
     assert_eq!(body["account"]["last_error_class"], "operator_paused");
-    assert_eq!(body["account"]["last_error_event"]["event_type"], "sync_paused");
+    assert_eq!(
+        body["account"]["last_error_event"]["event_type"],
+        "sync_paused"
+    );
 
     let row: (String, Option<String>, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class, last_error_message \
@@ -1283,7 +1312,10 @@ async fn stop_paused_provider_import_conflicts() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(resp).await["error"], "provider_sync_not_in_flight");
+    assert_eq!(
+        json_body(resp).await["error"],
+        "provider_sync_not_in_flight"
+    );
 }
 
 #[tokio::test]
@@ -1448,15 +1480,17 @@ async fn reimport_while_initial_sync_returns_conflict() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(resp).await["error"], "provider_reimport_already_running");
+    assert_eq!(
+        json_body(resp).await["error"],
+        "provider_reimport_already_running"
+    );
 
-    let cursor: Option<String> = sqlx::query_scalar(
-        "SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1",
-    )
-    .bind(account_id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
+    let cursor: Option<String> =
+        sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
+            .bind(account_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
     assert_eq!(cursor.as_deref(), Some("history-100"));
 }
 

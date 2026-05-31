@@ -56,6 +56,20 @@ This replaces the old manual "open Stalwart admin and adjust quota/rate-limit
 fields" step. The operator still finishes hail's setup wizard and then connects
 Gmail/provider accounts as needed.
 
+### Provider-mode outbound
+
+If the user connects Gmail and composes from that Gmail address, hail sends via
+Gmail SMTP (`smtp.gmail.com:465`, implicit TLS, XOAUTH2) using the stored OAuth
+refresh token. This bypasses Stalwart's outbound MTA for that identity, so real
+recipients can accept mail even when the self-hosted Stalwart domain has no
+public SPF/DKIM/DMARC setup. Gmail SMTP automatically places the sent message in
+Gmail Sent; hail records a safe `sent_via_provider` audit row and keeps tokens
+and message bodies out of logs.
+
+Accounts connected before the `gmail.send` scope was added must reconnect from
+Provider Accounts before outbound provider sending is enabled. Import remains
+read-only and continues to work while the account is in `needs_reauth`.
+
 ## 3. Open the wizard
 
 Open hail in a browser:

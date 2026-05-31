@@ -18,6 +18,7 @@ import {
 } from '../api/client';
 import { useApiClient } from '../api/ApiClientProvider';
 import {
+  useProviderSyncStatuses,
   useCreateDraftMutation,
   useDraft,
   useSendComposeMutation,
@@ -37,6 +38,13 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Field, FieldGroup, FieldLabel } from '../components/ui/field';
 import { Input } from '../components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import { useGoBack } from '../hooks/useGoBack';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { AppShell } from '../layout/AppShell';
@@ -89,6 +97,7 @@ function draftBodyFromResponse(draft: {
 }
 
 function draftSnapshot(payload: {
+  from?: string | null;
   to: string[];
   cc: string[];
   bcc: string[];
@@ -97,6 +106,7 @@ function draftSnapshot(payload: {
   attachments: unknown[];
 }) {
   return JSON.stringify({
+    from: payload.from,
     to: payload.to,
     cc: payload.cc,
     bcc: payload.bcc,
@@ -334,6 +344,20 @@ export function ComposerPage({
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const providerStatuses = useProviderSyncStatuses(apiClient);
+  const connectedProviderEmails = useMemo(
+    () =>
+      (providerStatuses.data?.accounts ?? [])
+        .filter((account) => account.provider_kind === 'gmail')
+        .map((account) => account.display_email || account.provider_email),
+    [providerStatuses.data?.accounts],
+  );
+  const fromIdentities = useMemo(
+    () => uniqueEmails([...connectedProviderEmails, user?.email ?? '']),
+    [connectedProviderEmails, user?.email],
+  );
+  const defaultFrom = fromIdentities[0] ?? user?.email ?? '';
+  const [fromAddress, setFromAddress] = useState(defaultFrom);
   const [form, setForm] = useState<ComposerForm>({
     to: initialTo.join(', '),
     cc: '',
@@ -398,6 +422,7 @@ export function ComposerPage({
   const draftPayload = useMemo(() => {
     const bodyHtml = form.body;
     return {
+      ...(connectedProviderEmails.length > 0 ? { from: fromAddress || user?.email } : {}),
       to: splitAddresses(form.to),
       cc: splitAddresses(form.cc),
       bcc: splitAddresses(form.bcc),
@@ -406,7 +431,7 @@ export function ComposerPage({
       body_markdown: htmlToPlainTextFallback(bodyHtml),
       attachments: [],
     };
-  }, [form]);
+  }, [connectedProviderEmails.length, form, fromAddress, user?.email]);
 
   const canSaveDraft = !replyToThreadId && !forwardThreadId;
   const replyPrefillLoading =
@@ -640,6 +665,7 @@ export function ComposerPage({
 
   function buildComposeRequest(sendAt?: string): ComposeRequest {
     return {
+      from: draftPayload.from,
       to: draftPayload.to,
       cc: draftPayload.cc,
       bcc: draftPayload.bcc,
@@ -699,6 +725,23 @@ export function ComposerPage({
             ? 'Draft not saved yet'
             : 'Draft saved';
 
+  useEffect(() => {
+    if (!fromAddress && defaultFrom) {
+      setFromAddress(defaultFrom);
+    }
+  }, [defaultFrom, fromAddress]);
+
+  useEffect(() => {
+    if (
+      fromAddress &&
+      !fromIdentities.some((email) =>
+        email.toLowerCase() === fromAddress.toLowerCase(),
+      )
+    ) {
+      setFromAddress(defaultFrom);
+    }
+  }, [defaultFrom, fromAddress, fromIdentities]);
+
   return (
     <AppShell
       title={
@@ -746,6 +789,38 @@ export function ComposerPage({
               <Card>
                 <CardContent>
                   <FieldGroup className="gap-0">
+                    {fromIdentities.length > 1 ? (
+                      <Field
+                        orientation="horizontal"
+                        className="items-center gap-3 border-b border-border px-1 py-1"
+                      >
+                        <FieldLabel className="w-16 shrink-0 pl-2 text-muted-foreground">
+                          From
+                        </FieldLabel>
+                        <Select value={fromAddress} onValueChange={setFromAddress}>
+                          <SelectTrigger className="h-12 border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0">
+                            <SelectValue placeholder="Choose sender" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {fromIdentities.map((email) => (
+                              <SelectItem key={email} value={email}>
+                                {email}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    ) : connectedProviderEmails.length > 0 ? (
+                      <Field
+                        orientation="horizontal"
+                        className="items-center gap-3 border-b border-border px-1 py-1"
+                      >
+                        <FieldLabel className="w-16 shrink-0 pl-2 text-muted-foreground">
+                          From
+                        </FieldLabel>
+                        <span className="px-3 text-base">{defaultFrom}</span>
+                      </Field>
+                    ) : null}
                     <Field
                       orientation="horizontal"
                       className="items-center gap-3 border-b border-border px-1 py-1"

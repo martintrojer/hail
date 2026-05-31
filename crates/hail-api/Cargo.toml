@@ -25,6 +25,7 @@ __test-stubs = []
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
 hail-jmap = { path = "../hail-jmap" }
+hail-worker = { path = "../hail-worker" }
 
 # Runtime + HTTP plumbing. Versions mirror hail-worker so the workspace
 # stays on a single set of tokio/axum/tower-http versions.

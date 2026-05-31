@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, State};
@@ -10,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
@@ -26,6 +27,17 @@ use crate::routes::outbound::{
 pub use crate::routes::outbound::{OutboundMessage, ReplyHeaders};
 use crate::routes::response::{bad_request, error_response, internal, not_found};
 use crate::state::AppState;
+use hail_db::provider_sync_audit::{
+    NewProviderSyncAuditLog, ProviderSyncEventType, ProviderSyncOperationKind,
+    ProviderSyncResultStatus, insert_provider_sync_audit_log,
+};
+use hail_worker::gmail_client::{
+    CachedGmailTokenSource, GMAIL_SEND_SCOPE, GmailAccessToken, GmailAccessTokenProvider,
+    GmailClientError, provider_worker_http_client,
+};
+use hail_worker::gmail_outbound_smtp::{
+    GmailOutboundMessage, GmailOutboundSmtp, GmailOutboundSmtpClient, LettreGmailSmtpSender,
+};
 
 /// OpenAPI tag for outbound compose/reply endpoints.
 pub const TAG: &str = "compose";
@@ -47,6 +59,17 @@ pub trait Composer: Send + Sync + 'static {
         email_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>>;
 
+    fn submit_message<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        from: &'a str,
+        email_id: &'a str,
+        _message: &'a OutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        self.submit(state, token, from, email_id)
+    }
+
     fn thread_context<'a>(
         &'a self,
         state: &'a AppState,
@@ -66,11 +89,12 @@ impl Composer for JmapComposer {
         message: OutboundMessage,
     ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
+            let effective_from = message.from.as_deref().unwrap_or(from);
             let session = jmap_session(state, token).await.map_err(provider_error)?;
             create_draft_email::<ComposeError, _>(
                 &session,
                 OutboundHeaders::new(
-                    from,
+                    effective_from,
                     &message.to,
                     &message.cc,
                     &message.bcc,
@@ -201,12 +225,171 @@ impl crate::routes::jmap_helpers::ProviderError for ComposeError {
 }
 
 pub fn router() -> Router<AppState> {
-    router_with_composer(Arc::new(JmapComposer))
+    router_with_composer(Arc::new(ProviderRoutingComposer::new(
+        JmapComposer,
+        LiveGmailOutboundSmtpFactory,
+    )))
 }
 
 /// Build the OpenAPI-tracked router for the production composer.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
-    openapi_router_with_composer(Arc::new(JmapComposer))
+    openapi_router_with_composer(Arc::new(ProviderRoutingComposer::new(
+        JmapComposer,
+        LiveGmailOutboundSmtpFactory,
+    )))
+}
+
+pub struct ProviderRoutingComposer<C = JmapComposer, S = LiveGmailOutboundSmtpFactory> {
+    inner: C,
+    smtp_factory: S,
+}
+
+impl<C, S> ProviderRoutingComposer<C, S> {
+    #[must_use]
+    pub fn new(inner: C, smtp_factory: S) -> Self {
+        Self {
+            inner,
+            smtp_factory,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct LiveGmailOutboundSmtpFactory;
+
+pub trait GmailOutboundSmtpFactory: Send + Sync + 'static {
+    fn build<'a>(
+        &'a self,
+        state: &'a AppState,
+        account: &'a ProviderOutboundAccount,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn GmailOutboundSmtp>, ComposeError>> + Send + 'a>>;
+}
+
+impl GmailOutboundSmtpFactory for LiveGmailOutboundSmtpFactory {
+    fn build<'a>(
+        &'a self,
+        state: &'a AppState,
+        account: &'a ProviderOutboundAccount,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn GmailOutboundSmtp>, ComposeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let http = provider_worker_http_client()
+                .map_err(|err| ComposeError::Provider(err.to_string()))?;
+            let token_source = DbGmailOutboundTokenSource::load(
+                &state.db,
+                http,
+                state.config.provider_import.gmail.oauth_client_id.clone(),
+                state
+                    .config
+                    .provider_import
+                    .gmail
+                    .oauth_client_secret
+                    .clone(),
+                state
+                    .config
+                    .provider_import
+                    .gmail
+                    .oauth_token_url
+                    .clone()
+                    .unwrap_or_else(|| "https://oauth2.googleapis.com/token".to_string()),
+                &state.server_key,
+                account,
+            )
+            .await
+            .map_err(|err| ComposeError::Provider(err.to_string()))?;
+            Ok(Box::new(GmailOutboundSmtpClient::new(
+                CachedGmailTokenSource::with_expiry_skew(token_source, Duration::ZERO),
+                LettreGmailSmtpSender,
+            )) as Box<dyn GmailOutboundSmtp>)
+        })
+    }
+}
+
+impl<C, S> Composer for ProviderRoutingComposer<C, S>
+where
+    C: Composer,
+    S: GmailOutboundSmtpFactory,
+{
+    fn create_draft<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        from: &'a str,
+        message: OutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
+        self.inner.create_draft(state, token, from, message)
+    }
+
+    fn submit<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        from: &'a str,
+        email_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        self.inner.submit(state, token, from, email_id)
+    }
+
+    fn submit_message<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        from: &'a str,
+        email_id: &'a str,
+        message: &'a OutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        Box::pin(async move {
+            let effective_from = message.from.as_deref().unwrap_or(from);
+            let Some(account) = provider_outbound_account(state, effective_from).await? else {
+                return self
+                    .inner
+                    .submit_message(state, token, from, email_id, message)
+                    .await;
+            };
+            if !account.has_gmail_send_scope() {
+                mark_provider_needs_reauth(state, &account).await?;
+                return Err(ComposeError::Provider(
+                    "provider_scope_missing: reconnect Gmail to enable outbound sending"
+                        .to_string(),
+                ));
+            }
+            let rfc822 = GmailOutboundMessage {
+                from: effective_from.to_string(),
+                to: message.to.clone(),
+                cc: message.cc.clone(),
+                bcc: message.bcc.clone(),
+                subject: message.subject.clone(),
+                plain_text: message.body.plain_text.clone(),
+                html: message.body.html.clone(),
+            };
+            let smtp = self.smtp_factory.build(state, &account).await?;
+            match smtp.send_gmail(&rfc822).await {
+                Ok(()) => {
+                    mark_provider_sent(state, &account, email_id, &rfc822).await?;
+                    Ok(Some(format!("provider:gmail:{}", account.id)))
+                }
+                Err(error) => {
+                    mark_provider_send_error(
+                        state,
+                        &account,
+                        error.error_class(),
+                        &error.to_string(),
+                    )
+                    .await?;
+                    Err(ComposeError::Provider(error.to_string()))
+                }
+            }
+        })
+    }
+
+    fn thread_context<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ReplyContext>, ComposeError>> + Send + 'a>> {
+        self.inner.thread_context(state, token, thread_id)
+    }
 }
 
 pub fn router_with_composer<C>(composer: Arc<C>) -> Router<AppState>
@@ -231,6 +414,7 @@ where
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct ComposePayload {
+    from: Option<String>,
     to: Vec<String>,
     cc: Option<Vec<String>>,
     bcc: Option<Vec<String>>,
@@ -564,7 +748,7 @@ async fn create_and_maybe_send(
     send_at: Option<DateTime<Utc>>,
 ) -> Response {
     let draft_email_id = match composer
-        .create_draft(state, user.jmap_token.clone(), &user.email, message)
+        .create_draft(state, user.jmap_token.clone(), &user.email, message.clone())
         .await
     {
         Ok(id) => id,
@@ -610,7 +794,13 @@ async fn create_and_maybe_send(
             .into_response();
     }
     match composer
-        .submit(state, user.jmap_token.clone(), &user.email, &draft_email_id)
+        .submit_message(
+            state,
+            user.jmap_token.clone(),
+            &user.email,
+            &draft_email_id,
+            &message,
+        )
         .await
     {
         Ok(submission_id) => {
@@ -653,6 +843,7 @@ impl ComposePayload {
         validate_subject(&self.subject)?;
         let body = render_compose_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
         Ok(OutboundMessage {
+            from: self.from,
             to: self.to,
             cc,
             bcc,
@@ -673,6 +864,7 @@ impl ReplyPayload {
         validate_recipients("to", &context.to, true)?;
         validate_subject(&context.subject)?;
         Ok(OutboundMessage {
+            from: None,
             to: context.to,
             cc: Vec::new(),
             bcc: Vec::new(),
@@ -773,6 +965,248 @@ fn scheduled_send_response_from_row(
 fn provider_failed(user_id: i64, err: String) -> Response {
     tracing::warn!(user_id, error = %err, "compose provider failed");
     internal()
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderOutboundAccount {
+    id: i64,
+    user_id: i64,
+    provider_account_id: String,
+    provider_email: String,
+    granted_scopes: Vec<String>,
+}
+
+impl ProviderOutboundAccount {
+    fn has_gmail_send_scope(&self) -> bool {
+        self.granted_scopes
+            .iter()
+            .any(|scope| scope == GMAIL_SEND_SCOPE)
+    }
+}
+
+async fn provider_outbound_account(
+    state: &AppState,
+    from: &str,
+) -> Result<Option<ProviderOutboundAccount>, ComposeError> {
+    let row = sqlx::query_as::<_, (i64, i64, String, String, String)>(
+        "SELECT id, user_id, provider_account_id, provider_email, granted_scopes_json \
+         FROM provider_accounts \
+         WHERE provider_kind = 'gmail' AND lower(provider_email) = lower(?1) \
+           AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
+           AND refresh_token_enc IS NOT NULL \
+         ORDER BY CASE WHEN sync_status = 'active' THEN 0 ELSE 1 END, id \
+         LIMIT 1",
+    )
+    .bind(from.trim())
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|err| ComposeError::Provider(err.to_string()))?;
+    let Some((id, user_id, provider_account_id, provider_email, granted_scopes_json)) = row else {
+        return Ok(None);
+    };
+    let granted_scopes = serde_json::from_str::<Vec<String>>(&granted_scopes_json)
+        .map_err(|err| ComposeError::Provider(err.to_string()))?;
+    Ok(Some(ProviderOutboundAccount {
+        id,
+        user_id,
+        provider_account_id,
+        provider_email,
+        granted_scopes,
+    }))
+}
+
+async fn mark_provider_needs_reauth(
+    state: &AppState,
+    account: &ProviderOutboundAccount,
+) -> Result<(), ComposeError> {
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE provider_accounts \
+         SET sync_status = 'needs_reauth', last_error_class = 'provider_scope_missing', \
+             last_error_message = 'Re-authenticate Gmail to enable outbound sending', updated_at = ?1 \
+         WHERE id = ?2",
+    )
+    .bind(now)
+    .bind(account.id)
+    .execute(&state.db)
+    .await
+    .map_err(|err| ComposeError::Provider(err.to_string()))?;
+    Ok(())
+}
+
+async fn mark_provider_send_error(
+    state: &AppState,
+    account: &ProviderOutboundAccount,
+    class: &str,
+    message: &str,
+) -> Result<(), ComposeError> {
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE provider_accounts \
+         SET sync_status = 'error', last_error_class = ?1, last_error_message = ?2, updated_at = ?3 \
+         WHERE id = ?4",
+    )
+    .bind(class)
+    .bind(message)
+    .bind(now)
+    .bind(account.id)
+    .execute(&state.db)
+    .await
+    .map_err(|err| ComposeError::Provider(err.to_string()))?;
+    Ok(())
+}
+
+async fn mark_provider_sent(
+    state: &AppState,
+    account: &ProviderOutboundAccount,
+    email_id: &str,
+    message: &GmailOutboundMessage,
+) -> Result<(), ComposeError> {
+    sqlx::query(
+        "UPDATE provider_accounts \
+         SET last_error_class = NULL, last_error_message = NULL, updated_at = ?1 \
+         WHERE id = ?2",
+    )
+    .bind(Utc::now())
+    .bind(account.id)
+    .execute(&state.db)
+    .await
+    .map_err(|err| ComposeError::Provider(err.to_string()))?;
+    let metadata = serde_json::json!({
+        "email_id": email_id,
+        "from": message.from,
+        "provider_email": account.provider_email,
+        "to_count": message.to.len(),
+        "cc_count": message.cc.len(),
+        "bcc_count": message.bcc.len(),
+        "gmailSentPlacement": "Gmail SMTP adds sent messages to Gmail Sent automatically; hail does not IMAP-copy a duplicate."
+    })
+    .to_string();
+    insert_provider_sync_audit_log(
+        &state.db,
+        NewProviderSyncAuditLog {
+            user_id: account.user_id,
+            provider_account_id: account.id,
+            operation_kind: ProviderSyncOperationKind::OutboundSend,
+            event_type: ProviderSyncEventType::SentViaProvider,
+            provider_message_id: None,
+            result_status: ProviderSyncResultStatus::Succeeded,
+            safe_error_code: None,
+            safe_error_class: None,
+            safe_error_message: None,
+            metadata_json: Some(&metadata),
+        },
+    )
+    .await
+    .map_err(|err| ComposeError::Provider(err.to_string()))?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct DbGmailOutboundTokenSource {
+    http: reqwest::Client,
+    client_id: Option<String>,
+    client_secret: Option<SecretString>,
+    token_url: String,
+    refresh_token: SecretString,
+}
+
+impl DbGmailOutboundTokenSource {
+    async fn load(
+        db: &sqlx::SqlitePool,
+        http: reqwest::Client,
+        client_id: Option<String>,
+        client_secret: Option<SecretString>,
+        token_url: String,
+        server_key: &[u8; hail_core::KEY_LEN],
+        account: &ProviderOutboundAccount,
+    ) -> Result<Self, sqlx::Error> {
+        let ciphertext: Vec<u8> = sqlx::query_scalar(
+            "SELECT refresh_token_enc FROM provider_accounts WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(account.id)
+        .bind(account.user_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| {
+            sqlx::Error::Protocol("provider account has no refresh token".to_string())
+        })?;
+        let context = hail_core::ProviderTokenContext::new(
+            account.user_id,
+            account.id,
+            "gmail",
+            account.provider_account_id.clone(),
+            hail_core::ProviderOAuthTokenKind::Refresh,
+        );
+        let token = hail_core::open_provider_oauth_token(ciphertext, server_key, &context)
+            .map_err(|err| sqlx::Error::Protocol(err.to_string()))?;
+        Ok(Self {
+            http,
+            client_id,
+            client_secret,
+            token_url,
+            refresh_token: SecretString::from(token.expose_secret().to_string()),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl GmailAccessTokenProvider for DbGmailOutboundTokenSource {
+    async fn refresh_access_token(&self) -> Result<GmailAccessToken, GmailClientError> {
+        let client_id = self.client_id.as_deref().ok_or_else(|| {
+            GmailClientError::token_error(std::io::Error::other(
+                "gmail oauth client id is not configured",
+            ))
+        })?;
+        let client_secret = self.client_secret.as_ref().ok_or_else(|| {
+            GmailClientError::token_error(std::io::Error::other(
+                "gmail oauth client secret is not configured",
+            ))
+        })?;
+        let body = {
+            let mut form = url::form_urlencoded::Serializer::new(String::new());
+            form.append_pair("client_id", client_id);
+            form.append_pair("client_secret", client_secret.expose_secret());
+            form.append_pair("refresh_token", self.refresh_token.expose_secret());
+            form.append_pair("grant_type", "refresh_token");
+            form.finish()
+        };
+        let token: GoogleRefreshTokenResponse = self
+            .http
+            .post(&self.token_url)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(body)
+            .send()
+            .await
+            .map_err(GmailClientError::Request)?
+            .error_for_status()
+            .map_err(GmailClientError::Request)?
+            .json()
+            .await
+            .map_err(GmailClientError::Request)?;
+        Ok(GmailAccessToken {
+            token: token.access_token,
+            expires_in: Duration::from_secs(token.expires_in.unwrap_or(3600)),
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GoogleRefreshTokenResponse {
+    #[serde(deserialize_with = "deserialize_secret")]
+    access_token: SecretString,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+fn deserialize_secret<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <String as serde::Deserialize>::deserialize(deserializer).map(SecretString::from)
 }
 
 fn conflict(error: &'static str) -> Response {

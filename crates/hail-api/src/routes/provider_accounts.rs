@@ -30,6 +30,7 @@ use crate::{
 pub const TAG: &str = "provider-accounts";
 const GMAIL_PROVIDER_KIND: &str = "gmail";
 const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 const OAUTH_STATE_TTL_MINUTES: i64 = 10;
 const PROVIDER_REFRESH_TOKEN_KEY_ID: &str = "server_key:v1";
 
@@ -380,7 +381,10 @@ async fn connect_gmail(
         );
     };
     let redirect_uri = gmail_redirect_uri(&state);
-    let scopes = vec![GMAIL_READONLY_SCOPE.to_string()];
+    let scopes = vec![
+        GMAIL_READONLY_SCOPE.to_string(),
+        GMAIL_SEND_SCOPE.to_string(),
+    ];
     let state_token = match create_oauth_state(
         &state.db,
         user.id,
@@ -573,6 +577,11 @@ async fn upsert_provider_account(
     if !scopes.iter().any(|scope| scope == GMAIL_READONLY_SCOPE) {
         return Err(sqlx::Error::Protocol(
             "gmail.readonly scope missing".to_string(),
+        ));
+    }
+    if !scopes.iter().any(|scope| scope == GMAIL_SEND_SCOPE) {
+        return Err(sqlx::Error::Protocol(
+            "gmail.send scope missing".to_string(),
         ));
     }
     let Some(refresh_token) = exchange.refresh_token else {

@@ -1247,6 +1247,7 @@ export interface components {
             body_html?: string | null;
             body_markdown?: string | null;
             cc?: string[] | null;
+            from?: string | null;
             /** Format: date-time */
             send_at?: string | null;
             subject: string;

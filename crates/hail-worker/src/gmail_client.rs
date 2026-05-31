@@ -41,10 +41,8 @@ pub fn provider_worker_http_client() -> Result<reqwest::Client, reqwest::Error> 
         .build()
 }
 
-/// OAuth scopes recommended for initial one-way Gmail import.
+/// OAuth scopes requested for Gmail import plus outbound send.
 pub const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
-
-/// Later outbound can request this separately instead of widening import scope.
 pub const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 
 #[derive(Debug, Error)]
