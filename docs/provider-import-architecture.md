@@ -195,11 +195,21 @@ https://stalw.art/docs/http/jmap/protocol/.
 
 Operational guidance:
 
+- Compose deployments run `stalwart-init` automatically before hail starts. It
+  applies the v1.2 defaults through Stalwart's JMAP management API:
+
+  ```text
+  maxUploadCount = 100000000
+  uploadQuota = 1099511627776
+  maxUploadSize = 104857600
+  maxConcurrentUploads = 16
+  ```
+
 - For live smoke and demos, prefer hail's bounded initial-import knob,
   `HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES`, so the first run
   imports a small deterministic window and leaves a durable cursor for later.
-- For local throwaway Stalwart containers, raise the JMAP upload quota before a
-  larger backfill. The checked-in local smoke configs set:
+- For local throwaway Stalwart containers outside compose, raise the JMAP upload
+  quota before a larger backfill. The checked-in local smoke configs set:
 
   ```toml
   [jmap.protocol.upload]

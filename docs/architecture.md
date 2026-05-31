@@ -351,6 +351,15 @@ stored or logged. If `stalwart.management_url` is unset, hail deliberately skips
 management provisioning and falls back to the documented opt-out: the domain and
 mailbox must already exist and `/setup` only verifies them via JMAP login.
 
+Compose deployments include a one-shot `stalwart-init` sidecar between Stalwart
+and hail. On clean or existing volumes it waits for Stalwart health, authenticates
+with `STALWART_RECOVERY_ADMIN`, patches the singleton `x:Jmap` and `x:Http`
+settings through Stalwart's JMAP management API, triggers a settings reload, and
+verifies the resulting upload quota, upload size/concurrency, and HTTP rate
+limits. `hail-api` and `hail-worker` depend on that job completing successfully,
+so local/prod compose no longer require manual Stalwart WebAdmin clicks before a
+Gmail/provider import.
+
 ### 6.10 Cloudflare Tunnel support is MVP, not polish
 
 **Decision:** v1 includes Cloudflare-oriented deployment recipes for web-only
