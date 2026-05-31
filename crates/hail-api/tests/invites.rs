@@ -22,6 +22,7 @@ impl StalwartUserManagement for DummyUserManagement {
     fn list_users<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ManagedUser>, UserManagementError>> + Send + 'a>>
     {
         Box::pin(async { Ok(Vec::new()) })
@@ -30,6 +31,7 @@ impl StalwartUserManagement for DummyUserManagement {
     fn create_user<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         email: &'a str,
         _password: SecretString,
         display_name: Option<&'a str>,
@@ -46,6 +48,7 @@ impl StalwartUserManagement for DummyUserManagement {
     fn delete_user<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         _email: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
@@ -54,6 +57,7 @@ impl StalwartUserManagement for DummyUserManagement {
     fn reset_password<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         email: &'a str,
         _password: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<ManagedUser, UserManagementError>> + Send + 'a>> {

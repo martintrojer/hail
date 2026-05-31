@@ -210,16 +210,16 @@ In the wizard:
 6. Submit, then sign in with that admin account.
 
 When `stalwart.management_url` is configured, that single submit authenticates
-to Stalwart v0.16's REST API with an `authCode` request, exchanges the client
-code for an in-memory bearer token, then calls `POST /api/principal` to create
-the domain principal and `POST /api/principal` again to create the individual
-mailbox principal. It finally performs a JMAP login to discover the account id
-for hail's local user row. The domain value may include a trailing dot in the
-UI; hail normalizes it to lowercase without the dot. The admin email must be
-under that same domain. Hail never stores or logs the Stalwart admin password,
-client code, or bearer token. If `stalwart.management_url` is intentionally
-unset, the wizard does **not** mutate Stalwart; pre-create the domain and
-account with the Stalwart WebUI/CLI first, then use the same mailbox
+to Stalwart v0.16's JMAP management surface with an `authCode` request,
+exchanges the client code for an in-memory bearer token, then posts
+`urn:stalwart:jmap` method calls to `/jmap/` to create or reuse the domain and
+individual mailbox principal. It finally performs a JMAP login to discover the
+account id for hail's local user row. The domain value may include a trailing
+dot in the UI; hail normalizes it to lowercase without the dot. The admin email
+must be under that same domain. Hail never stores or logs the Stalwart admin
+password, client code, or bearer token. If `stalwart.management_url` is
+intentionally unset, the wizard does **not** mutate Stalwart; pre-create the
+domain and account with the Stalwart WebUI/CLI first, then use the same mailbox
 credentials in `/setup`.
 
 After setup, signed-in admins can go to **Admin → Domains** to create another

@@ -160,11 +160,13 @@ depth = 2
 #
 # Hail provisioning path:
 # - /setup with `stalwart.management_url` configured authenticates to Stalwart
-#   v0.16's REST API, creates the domain and mailbox with bearer-authorized
-#   `POST /api/principal` calls, then verifies the new mailbox via JMAP. If
-#   management_url is unset, /setup only verifies a pre-created account with
-#   JMAP.
-# - /admin Domains calls the same domain endpoint for create/delete.
+#   v0.16's JMAP management surface (`urn:stalwart:jmap`) and creates/reuses
+#   the domain plus mailbox via `/jmap/` method calls, then verifies the new
+#   mailbox via normal JMAP login. If management_url is unset, /setup only
+#   verifies a pre-created account with JMAP.
+# - /admin Domains and Users use the same JMAP Principal/* management methods
+#   for list/create/delete/reset flows; hail no longer uses legacy REST
+#   `/api/domain` or `/api/principal` management paths.
 # - /admin Create user ensures the user's email domain exists before creating
 #   the principal, so one shared domain can host many mailboxes without editing
 #   this file or restarting Stalwart.

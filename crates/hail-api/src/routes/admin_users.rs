@@ -16,8 +16,7 @@ use crate::audit;
 use crate::middleware::auth::AuthUser;
 use crate::routes::auth::UserView;
 use crate::routes::invites;
-use crate::routes::management_http;
-use crate::routes::response::{bad_request, error_response, internal, not_found};
+use crate::routes::response::{ApiError, bad_request, error_response, internal, not_found};
 use crate::routes::validation::valid_email;
 use crate::state::AppState;
 
@@ -25,20 +24,23 @@ pub trait StalwartUserManagement: Send + Sync + 'static {
     fn list_users<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ManagedUser>, UserManagementError>> + Send + 'a>>;
 
     fn ensure_domain<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
-        let _ = (state, domain);
+        let _ = (state, bearer, domain);
         Box::pin(async { Ok(()) })
     }
 
     fn create_user<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         email: &'a str,
         password: SecretString,
         display_name: Option<&'a str>,
@@ -47,12 +49,14 @@ pub trait StalwartUserManagement: Send + Sync + 'static {
     fn delete_user<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         email: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>>;
 
     fn reset_password<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         email: &'a str,
         password: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<ManagedUser, UserManagementError>> + Send + 'a>>;
@@ -71,41 +75,46 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
     fn list_users<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ManagedUser>, UserManagementError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let base = management_base(state)?;
-            let response = management_http::client()
-                .get(format!("{}/api/principal", base))
-                .send()
-                .await
-                .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
-            if !response.status().is_success() {
-                return Err(UserManagementError::Upstream(format!(
-                    "GET /api/principal returned HTTP {}",
-                    response.status()
-                )));
-            }
-            decode_user_list(response).await
+            let session = management_session(state, bearer).await?;
+            Ok(session
+                .list_individuals()
+                .await?
+                .into_iter()
+                .map(managed_user_from_principal)
+                .collect())
         })
     }
 
     fn create_user<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         email: &'a str,
         password: SecretString,
         display_name: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<ManagedUser, UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            create_or_update_principal(&base, email, &password, display_name).await?;
-            let session = hail_jmap::login_basic(&state.config.stalwart.jmap_url, email, password)
-                .await
-                .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
+            let session = management_session(state, bearer).await?;
+            let id = match session
+                .create_individual(email, &password, display_name)
+                .await?
+            {
+                Some(id) => id,
+                None => session
+                    .list_individuals()
+                    .await?
+                    .into_iter()
+                    .find(|principal| principal.name.eq_ignore_ascii_case(email))
+                    .map(|principal| principal.id)
+                    .unwrap_or_else(|| email.to_string()),
+            };
             Ok(ManagedUser {
                 email: email.to_string(),
-                jmap_account_id: session.account_id().to_string(),
+                jmap_account_id: id,
                 display_name: display_name.map(str::to_owned),
             })
         })
@@ -114,52 +123,45 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
     fn ensure_domain<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            create_stalwart_domain(&base, domain).await
+            let session = management_session(state, bearer).await?;
+            session.create_domain(domain).await?;
+            Ok(())
         })
     }
 
     fn delete_user<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         email: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            let response = management_http::client()
-                .delete(management_path(&base, &["api", "principal", email]))
-                .send()
-                .await
-                .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                Err(UserManagementError::Upstream(format!(
-                    "DELETE /api/principal/{email} returned HTTP {}",
-                    response.status()
-                )))
-            }
+            let session = management_session(state, bearer).await?;
+            session.destroy_individual(email).await?;
+            Ok(())
         })
     }
 
     fn reset_password<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         email: &'a str,
         password: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<ManagedUser, UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            create_or_update_principal(&base, email, &password, None).await?;
-            let session = hail_jmap::login_basic(&state.config.stalwart.jmap_url, email, password)
-                .await
-                .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
+            let session = management_session(state, bearer).await?;
+            let id = session
+                .reset_individual_secret(email, &password)
+                .await?
+                .unwrap_or_else(|| email.to_string());
             Ok(ManagedUser {
                 email: email.to_string(),
-                jmap_account_id: session.account_id().to_string(),
+                jmap_account_id: id,
                 display_name: None,
             })
         })
@@ -170,6 +172,8 @@ impl StalwartUserManagement for HttpStalwartUserManagement {
 pub enum UserManagementError {
     #[error("stalwart.management_url is not configured")]
     NotConfigured,
+    #[error("stalwart management API returned HTTP {status}: {detail}")]
+    Api { status: StatusCode, detail: String },
     #[error("stalwart user management request failed: {0}")]
     Upstream(String),
 }
@@ -242,7 +246,7 @@ where
         return forbidden_admin();
     }
 
-    let managed = match management.list_users(&state).await {
+    let managed = match management.list_users(&state, user.jmap_token.clone()).await {
         Ok(users) => users,
         Err(err) => return management_error(err),
     };
@@ -287,12 +291,21 @@ where
         return invalid_input("email");
     };
 
-    if let Err(err) = management.ensure_domain(&state, domain).await {
+    if let Err(err) = management
+        .ensure_domain(&state, user.jmap_token.clone(), domain)
+        .await
+    {
         return management_error(err);
     }
 
     let managed = match management
-        .create_user(&state, &email, body.password, display_name.as_deref())
+        .create_user(
+            &state,
+            user.jmap_token.clone(),
+            &email,
+            body.password,
+            display_name.as_deref(),
+        )
         .await
     {
         Ok(user) => user,
@@ -380,7 +393,10 @@ where
         return not_found("not_found");
     };
 
-    if let Err(err) = management.delete_user(&state, &email).await {
+    if let Err(err) = management
+        .delete_user(&state, user.jmap_token.clone(), &email)
+        .await
+    {
         return management_error(err);
     }
 
@@ -431,7 +447,7 @@ where
     };
 
     let managed = match management
-        .reset_password(&state, &email, body.password)
+        .reset_password(&state, user.jmap_token.clone(), &email, body.password)
         .await
     {
         Ok(user) => user,
@@ -526,6 +542,14 @@ async fn upsert_local_user(
     })
 }
 
+async fn management_session(
+    state: &AppState,
+    bearer: SecretString,
+) -> Result<hail_jmap::management::ManagementSession, UserManagementError> {
+    let base = management_base(state)?;
+    Ok(hail_jmap::management::ManagementSession::connect(&base, bearer).await?)
+}
+
 fn management_base(state: &AppState) -> Result<String, UserManagementError> {
     state
         .config
@@ -538,124 +562,32 @@ fn management_base(state: &AppState) -> Result<String, UserManagementError> {
         .ok_or(UserManagementError::NotConfigured)
 }
 
-fn management_path(base: &str, segments: &[&str]) -> String {
-    let mut url = base.trim_end_matches('/').to_string();
-    for segment in segments {
-        url.push('/');
-        url.push_str(&url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>());
-    }
-    url
-}
-
-async fn create_or_update_principal(
-    base: &str,
-    email: &str,
-    password: &SecretString,
-    display_name: Option<&str>,
-) -> Result<(), UserManagementError> {
-    #[derive(Serialize)]
-    struct Principal<'a> {
-        #[serde(rename = "type")]
-        kind: &'static str,
-        name: &'a str,
-        secrets: [&'a str; 1],
-        emails: [&'a str; 1],
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<&'a str>,
-    }
-
-    let payload = Principal {
-        kind: "individual",
-        name: email,
-        secrets: [password.expose_secret()],
-        emails: [email],
-        description: display_name,
-    };
-    let response = management_http::client()
-        .post(format!("{}/api/principal", base))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(UserManagementError::Upstream(format!(
-            "POST /api/principal returned HTTP {}",
-            response.status()
-        )))
-    }
-}
-
-async fn create_stalwart_domain(base: &str, domain: &str) -> Result<(), UserManagementError> {
-    let response = management_http::client()
-        .post(management_path(&base, &["api", "domain", domain]))
-        .json(&serde_json::json!({ "domain": domain }))
-        .send()
-        .await
-        .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
-    if response.status().is_success() || response.status() == StatusCode::CONFLICT {
-        Ok(())
-    } else {
-        Err(UserManagementError::Upstream(format!(
-            "POST /api/domain/{domain} returned HTTP {}",
-            response.status()
-        )))
-    }
-}
-
-async fn decode_user_list(
-    response: reqwest::Response,
-) -> Result<Vec<ManagedUser>, UserManagementError> {
-    let value = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|err| UserManagementError::Upstream(err.to_string()))?;
-
-    let array = value
-        .as_array()
-        .or_else(|| value.get("users").and_then(serde_json::Value::as_array))
-        .or_else(|| value.get("data").and_then(serde_json::Value::as_array))
-        .ok_or_else(|| {
-            UserManagementError::Upstream(
-                "user list response was not an array or object with users/data".to_string(),
-            )
-        })?;
-
-    array.iter().map(managed_user_from_value).collect()
-}
-
-fn managed_user_from_value(value: &serde_json::Value) -> Result<ManagedUser, UserManagementError> {
-    if let Some(email) = value.as_str() {
-        return Ok(ManagedUser {
-            email: email.to_string(),
-            jmap_account_id: email.to_string(),
-            display_name: None,
-        });
-    }
-
-    let email = value
-        .get("email")
-        .or_else(|| value.get("name"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| UserManagementError::Upstream("user list entry missing email".to_string()))?
-        .to_string();
-    let jmap_account_id = value
-        .get("jmap_account_id")
-        .or_else(|| value.get("id"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&email)
-        .to_string();
-    let display_name = value
-        .get("display_name")
-        .or_else(|| value.get("description"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|s| normalize_display_name(Some(s)));
-    Ok(ManagedUser {
+fn managed_user_from_principal(
+    principal: hail_jmap::management::ManagementPrincipal,
+) -> ManagedUser {
+    let email = principal
+        .emails
+        .iter()
+        .find(|email| email.contains('@'))
+        .cloned()
+        .unwrap_or_else(|| principal.name.clone());
+    ManagedUser {
         email,
-        jmap_account_id,
-        display_name,
-    })
+        jmap_account_id: principal.id,
+        display_name: principal.description,
+    }
+}
+
+impl From<hail_jmap::management::ManagementError> for UserManagementError {
+    fn from(err: hail_jmap::management::ManagementError) -> Self {
+        match err {
+            hail_jmap::management::ManagementError::Api { status, detail } => Self::Api {
+                status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                detail,
+            },
+            other => Self::Upstream(other.to_string()),
+        }
+    }
 }
 
 fn email_domain(email: &str) -> Option<&str> {
@@ -689,6 +621,15 @@ fn management_error(err: UserManagementError) -> Response {
             StatusCode::NOT_IMPLEMENTED,
             "stalwart_management_unconfigured",
         ),
+        UserManagementError::Api { status, detail } if status.is_client_error() => {
+            ApiError::new("stalwart_management_failed")
+                .with_detail(detail)
+                .into_response(status)
+        }
+        UserManagementError::Api { status, detail } => {
+            tracing::warn!(%status, error = %detail, "stalwart user management failed");
+            error_response(StatusCode::BAD_GATEWAY, "stalwart_management_failed")
+        }
         UserManagementError::Upstream(message) => {
             tracing::warn!(error = %message, "stalwart user management failed");
             error_response(StatusCode::BAD_GATEWAY, "stalwart_management_failed")
@@ -706,14 +647,15 @@ mod tests {
     }
 
     #[test]
-    fn management_path_percent_encodes_email_path_segment() {
-        let url = management_path(
-            "http://stalwart.local/",
-            &["api", "principal", "User+tag@example.org"],
-        );
-        assert_eq!(
-            url,
-            "http://stalwart.local/api/principal/User%2Btag%40example.org"
-        );
+    fn maps_principal_email_and_id_to_managed_user() {
+        let managed = managed_user_from_principal(hail_jmap::management::ManagementPrincipal {
+            id: "principal-id".to_string(),
+            name: "alice".to_string(),
+            description: Some("Alice".to_string()),
+            emails: vec!["alice@example.org".to_string()],
+        });
+        assert_eq!(managed.email, "alice@example.org");
+        assert_eq!(managed.jmap_account_id, "principal-id");
+        assert_eq!(managed.display_name.as_deref(), Some("Alice"));
     }
 }
