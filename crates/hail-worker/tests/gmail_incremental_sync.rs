@@ -515,10 +515,16 @@ async fn account_error_class(pool: &sqlx::SqlitePool, provider_account_id: i64) 
 }
 
 #[tokio::test]
-async fn default_incremental_sync_tracks_message_additions_only() {
+async fn default_incremental_sync_tracks_inbox_message_additions_only() {
     let options = GmailIncrementalSyncOptions::into_mailboxes(["inbox"]);
 
     assert_eq!(options.history_types, vec!["messageAdded"]);
+    assert_eq!(options.label_id.as_deref(), Some("INBOX"));
+    assert_eq!(options.historical_fallback.label_ids, vec!["INBOX"]);
+    assert_eq!(
+        options.historical_fallback.target_mailbox_ids,
+        vec!["inbox"]
+    );
 }
 
 #[tokio::test]

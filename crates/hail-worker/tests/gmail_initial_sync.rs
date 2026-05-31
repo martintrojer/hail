@@ -221,6 +221,14 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
 }
 
 #[tokio::test]
+async fn initial_sync_default_options_import_only_gmail_inbox_label() {
+    let options = GmailInitialSyncOptions::into_mailboxes(["inbox"]);
+
+    assert_eq!(options.historical.label_ids, vec!["INBOX"]);
+    assert_eq!(options.historical.target_mailbox_ids, vec!["inbox"]);
+}
+
+#[tokio::test]
 async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_messages() {
     let (pool, _guard, _user_id, account) = setup().await;
     let gmail = FakeGmail::new(
@@ -248,7 +256,6 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
     let mut options = GmailInitialSyncOptions::into_mailboxes(["inbox"]);
     options.historical.max_messages = Some(2);
     options.historical.page_size = 50;
-    options.historical.label_ids = vec!["INBOX".to_owned()];
 
     let summary = run_gmail_initial_sync(
         &pool,

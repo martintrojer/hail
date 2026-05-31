@@ -268,6 +268,10 @@ Provider import v1.2 treats Gmail/provider state as follows:
   `includeSpamTrash` stays false and the importer adds a `-in:sent` discovery
   bound. Sent-copy import/dedupe may explicitly opt out of the Sent exclusion,
   but that is still a read-only provider scan.
+- Default inbound import is restricted to Gmail's system `INBOX` label. Archived
+  mail that exists only in All Mail or non-Inbox labels is not imported in v1.2.
+  A future configuration knob, `provider_import.gmail.include_archive`, may opt
+  a provider account into a wider All Mail/archive backfill.
 - Provider-created Sent copies are handled by the outbound sent-copy dedupe
   policy in [provider-outbound-strategy.md](./provider-outbound-strategy.md),
   never by mirroring Gmail Sent/label state into hail as a second source of
@@ -288,6 +292,13 @@ Production wiring should pass:
 - a `GmailClient<T: GmailTokenSource>` backed by encrypted provider tokens;
 - `StalwartJmapRfc822Importer` for the connected user's local Stalwart account;
 - bounded `GmailHistoricalImportOptions` chosen by the scheduler/UI.
+
+v1.2 Gmail provider import uses `labelIds=["INBOX"]` for both initial
+`messages.list` backfills and incremental history/fallback windows. Gmail
+messages that are archived out of Inbox but still present in All Mail, or that
+exist only under other labels, are deliberately not imported. Do not widen this
+default without an explicit product/config decision; the planned opt-in knob is
+`provider_import.gmail.include_archive`.
 
 The importer remains one-way: it reads Gmail labels/query filters as import
 bounds only and never mutates Gmail mailbox state. It first skips already-final
