@@ -340,6 +340,24 @@ function sampleThread(
             reason: '1x1 tracking pixel removed',
           },
         ],
+        attachments: [
+          {
+            filename: 'receipt.pdf',
+            size: 1536,
+            mime_type: 'application/pdf',
+            blob_id: 'blob-receipt',
+            download_url: '/api/attachments/blob-receipt/download',
+            inline: false,
+          },
+          {
+            filename: 'logo.png',
+            size: 512,
+            mime_type: 'image/png',
+            blob_id: 'blob-logo',
+            download_url: '/api/attachments/blob-logo/download',
+            inline: true,
+          },
+        ],
       },
       {
         email_id: 'message-plain',
@@ -352,6 +370,7 @@ function sampleThread(
           '<p>On date, Unknown sender wrote:</p><blockquote></blockquote>',
         preview: 'Plaintext fallback line one.\nPlaintext fallback line two.',
         blocked_trackers: [],
+        attachments: [],
       },
     ],
     notes: [],
@@ -386,6 +405,12 @@ describe('ThreadPage', () => {
     expect(screen.getByText('1 tracker blocked')).toHaveAttribute(
       'title',
       '1x1 tracking pixel removed',
+    );
+    expect(screen.getByText('receipt.pdf')).toBeInTheDocument();
+    expect(screen.queryByText('logo.png')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute(
+      'href',
+      '/api/attachments/blob-receipt/download',
     );
 
     const iframe = container.querySelector(
@@ -427,6 +452,7 @@ describe('ThreadPage', () => {
               '<p>On date, Alice wrote:</p><blockquote><p>First</p></blockquote>',
             preview: 'First',
             blocked_trackers: [],
+            attachments: [],
           },
           {
             email_id: 'email-2',
@@ -439,6 +465,7 @@ describe('ThreadPage', () => {
               '<p>On date, Bob wrote:</p><blockquote><p>Second</p></blockquote>',
             preview: 'Second',
             blocked_trackers: [],
+            attachments: [],
           },
         ],
       }),
@@ -488,6 +515,7 @@ describe('ThreadPage', () => {
               '<p>On date, Alice wrote:</p><blockquote><p>First</p></blockquote>',
             preview: 'First',
             blocked_trackers: [],
+            attachments: [],
           },
           {
             email_id: 'email-2',
@@ -500,6 +528,7 @@ describe('ThreadPage', () => {
               '<p>On date, Bob wrote:</p><blockquote><p>Second</p></blockquote>',
             preview: 'Second',
             blocked_trackers: [],
+            attachments: [],
           },
           {
             email_id: 'email-3',
@@ -512,6 +541,7 @@ describe('ThreadPage', () => {
               '<p>On date, Carol wrote:</p><blockquote><p>Third</p></blockquote>',
             preview: 'Third',
             blocked_trackers: [],
+            attachments: [],
           },
         ],
       }),
@@ -688,6 +718,7 @@ describe('ThreadPage', () => {
                 reason: 'image dimensions are 2x2 or smaller',
               },
             ],
+            attachments: [],
           },
         ],
       }),
@@ -728,6 +759,7 @@ describe('ThreadPage', () => {
               '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
             preview: 'Logo',
             blocked_trackers: [],
+            attachments: [],
           },
         ],
       }),
@@ -761,6 +793,7 @@ describe('ThreadPage', () => {
               '<p>On date, Alice Sender wrote:</p><blockquote><table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table></blockquote>',
             preview: 'Nested layout table',
             blocked_trackers: [],
+            attachments: [],
           },
         ],
       }),

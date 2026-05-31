@@ -322,6 +322,7 @@ export interface SearchParams {
 
 export type BlockedTracker = components['schemas']['BlockedTrackerResponse'];
 export type ThreadParticipant = components['schemas']['Participant'];
+export type ThreadAttachment = components['schemas']['Attachment'];
 export type ThreadMessage = components['schemas']['ThreadMessageResponse'];
 export type ThreadNote = components['schemas']['ThreadNoteResponse'];
 export type ThreadNotesResponse = NonNullable<ResponseBody<
