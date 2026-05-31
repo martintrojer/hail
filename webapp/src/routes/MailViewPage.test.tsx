@@ -1215,6 +1215,190 @@ describe('MailViewPage', () => {
     await waitFor(() => expect(client.markThreadCalls).toEqual([{ threadId: 'thread-one', read: true }]));
   });
 
+
+  it('Power Through opens with the first unread Imbox message expanded', async () => {
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-read',
+              subject: 'Already read',
+              unread: false,
+              feed_html: '<p>Read body.</p>',
+            }),
+            mailItem('imbox', {
+              thread_id: 'thread-unread',
+              from: 'Unread Sender',
+              subject: 'Unread body first',
+              unread: true,
+              feed_html: '<p>Full unread body.</p>',
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
+
+    expect(await screen.findByText('Unread body first')).toBeInTheDocument();
+    expect(screen.queryByText('Already read')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
+    const iframe = screen.getByTitle('Email body from Unread Sender') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(iframe.contentDocument?.body.textContent).toContain('Full unread body.');
+    });
+    expect(screen.queryByRole('button', { name: 'Show full message' })).not.toBeInTheDocument();
+  });
+
+  it('collapses a long Power Through body with Show full message', async () => {
+    renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', {
+              thread_id: 'thread-long-body',
+              from: 'Long Sender',
+              subject: 'Long body',
+              feed_html: longHtml(),
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
+
+    expect(await screen.findByText('Long body')).toBeInTheDocument();
+    const iframe = screen.getByTitle('Email body from Long Sender') as HTMLIFrameElement;
+    await waitFor(() => {
+      expect(iframe.contentDocument?.body.textContent).toContain('Long newsletter section');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show full message' }));
+    expect(screen.queryByRole('button', { name: 'Show full message' })).not.toBeInTheDocument();
+  });
+
+  it('scrolling past a Power Through card marks it seen once', async () => {
+    const observerInstances: Array<{
+      callback: IntersectionObserverCallback;
+      observed: Element[];
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    const originalObserver = window.IntersectionObserver;
+    window.IntersectionObserver = vi.fn(function MockIntersectionObserver(
+      this: IntersectionObserver,
+      callback: IntersectionObserverCallback,
+    ) {
+      const instance = { callback, observed: [] as Element[], disconnect: vi.fn() };
+      observerInstances.push(instance);
+      this.observe = (element: Element) => instance.observed.push(element);
+      this.unobserve = vi.fn();
+      this.disconnect = instance.disconnect;
+      this.takeRecords = () => [];
+      Object.defineProperties(this, {
+        root: { value: null },
+        rootMargin: { value: '' },
+        thresholds: { value: [] },
+      });
+    }) as unknown as typeof IntersectionObserver;
+
+    try {
+      const client = renderMailView(
+        'imbox',
+        new MailViewPageTestClient({
+          imbox: Promise.resolve(
+            mailViewResponse('imbox', [
+              mailItem('imbox', {
+                thread_id: 'thread-power-scroll',
+                subject: 'Scroll me read',
+                feed_html: '<p>Readable inline body.</p>',
+              }),
+            ]),
+          ),
+        }),
+      );
+
+      fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
+      expect(await screen.findByText('Scroll me read')).toBeInTheDocument();
+      await waitFor(() => expect(observerInstances[0]?.observed.length).toBe(1));
+      const instance = observerInstances.find((observer) =>
+        observer.observed.some((element) => (element as HTMLElement).dataset.hailThreadId === 'thread-power-scroll'),
+      );
+      expect(instance).toBeDefined();
+      const target = instance!.observed.find((element) =>
+        (element as HTMLElement).dataset.hailThreadId === 'thread-power-scroll',
+      )!;
+      instance!.callback(
+        [{ target, isIntersecting: false, boundingClientRect: { bottom: -1 } as DOMRectReadOnly } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      instance!.callback(
+        [{ target, isIntersecting: false, boundingClientRect: { bottom: -1 } as DOMRectReadOnly } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+
+      await waitFor(() => expect(client.markThreadCalls).toEqual([{ threadId: 'thread-power-scroll', read: true }]), { timeout: 1200 });
+    } finally {
+      window.IntersectionObserver = originalObserver;
+    }
+  });
+
+  it('Power Through quick action reclassifies and advances to next unread message', async () => {
+    const client = renderMailView(
+      'imbox',
+      new MailViewPageTestClient({
+        imbox: Promise.resolve(
+          mailViewResponse('imbox', [
+            mailItem('imbox', { thread_id: 'thread-first', subject: 'First unread' }),
+            mailItem('imbox', { thread_id: 'thread-second', subject: 'Second unread' }),
+          ]),
+        ),
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move to Feed' }));
+
+    await waitFor(() => expect(client.classifyCalls).toEqual([{ threadId: 'thread-first', to: 'feed' }]));
+    expect(await screen.findByText('Second unread')).toBeInTheDocument();
+    expect(screen.queryByText('First unread')).not.toBeInTheDocument();
+  });
+
+  it('j/k changes the active Power Through card', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      renderMailView(
+        'imbox',
+        new MailViewPageTestClient({
+          imbox: Promise.resolve(
+            mailViewResponse('imbox', [
+              mailItem('imbox', { thread_id: 'thread-j', subject: 'First active' }),
+              mailItem('imbox', { thread_id: 'thread-k', subject: 'Second active' }),
+            ]),
+          ),
+        }),
+      );
+
+      fireEvent.click(await screen.findByRole('button', { name: /Power through/ }));
+      await screen.findByText('First active');
+      expect(document.querySelector('[data-hail-thread-id="thread-j"]')).toHaveAttribute('aria-current', 'true');
+
+      fireEvent.keyDown(window, { key: 'j' });
+      await waitFor(() => expect(document.querySelector('[data-hail-thread-id="thread-k"]')).toHaveAttribute('aria-current', 'true'));
+      expect(scrollIntoView).toHaveBeenCalled();
+
+      fireEvent.keyDown(window, { key: 'k' });
+      await waitFor(() => expect(document.querySelector('[data-hail-thread-id="thread-j"]')).toHaveAttribute('aria-current', 'true'));
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
   it('powers through Imbox threads with thread actions and advances through the batch', async () => {
     const client = renderMailView(
       'imbox',

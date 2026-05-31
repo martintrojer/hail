@@ -5,16 +5,12 @@ import {
   type HailApiClient,
   type MailViewItem,
   type MailViewKind,
-  type ThreadVerbResponse,
 } from '../api/client';
 import {
-  useClassifyThreadMutation,
   useFeedView,
   useImboxSectioned,
   usePapertrailSectioned,
   useScreenerView,
-  useSetAsideThreadMutation,
-  useTrashThreadMutation,
 } from '../api/query';
 import { useApiClient } from '../api/ApiClientProvider';
 import { ActionableList } from '../components/ActionableList';
@@ -25,8 +21,8 @@ import { LoadingState } from '../components/LoadingState';
 import { StateCard } from '../components/StateCard';
 import { ThreadLink } from '../components/ThreadLink';
 import { MailRow as SharedMailRow, MailRowQuickActionsMenu } from '../components/MailRow';
+import { PowerThroughFeed } from '../components/PowerThroughFeed';
 import { ScreenerBanner } from '../components/ScreenerBanner';
-import { useUndoToast } from '../components/UndoToastProvider';
 import { AppShell } from '../layout/AppShell';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -38,7 +34,6 @@ import {
   CardHeader,
   CardTitle,
 } from '../components/ui/card';
-import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { actionErrorMessage, viewErrorMessage } from '../lib/errorMessages';
 
 interface MailViewPageProps {
@@ -535,85 +530,11 @@ export function SectionedListView({
   );
 }
 
-type PowerThroughAction = 'imbox' | 'feed' | 'papertrail' | 'set-aside' | 'trash';
-
-interface PowerThroughStatus {
-  busy: boolean;
-  error: Error | null;
-}
-
-function PowerThroughCard({
-  item,
-  index,
-  total,
-  busy = false,
-  error = null,
-  onAction,
-  onExit,
-}: {
-  item: MailViewItem;
-  index: number;
-  total: number;
-  busy?: boolean;
-  error?: Error | null;
-  onAction: (action: PowerThroughAction) => void;
-  onExit: () => void;
-}) {
-  return (
-    <Alert className="shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <AlertTitle>{index + 1} of {total}</AlertTitle>
-          <AlertDescription className="mt-2">
-            <span className="block text-sm font-medium text-foreground">
-              {item.from || 'Unknown sender'}
-            </span>
-            <span className="mt-1 block text-sm text-foreground">
-              {item.subject || '(no subject)'}
-            </span>
-            <span className="mt-1 line-clamp-2 block text-xs text-muted-foreground">
-              {item.preview || 'No preview available.'}
-            </span>
-          </AlertDescription>
-        </div>
-        <Button type="button" variant="ghost" size="sm" onClick={onExit}>
-          Exit
-        </Button>
-      </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button type="button" disabled={busy} onClick={() => onAction('imbox')} size="sm">
-          Keep in Imbox
-        </Button>
-        <Button type="button" disabled={busy} onClick={() => onAction('feed')} variant="outline" size="sm">
-          Move to Feed
-        </Button>
-        <Button type="button" disabled={busy} onClick={() => onAction('papertrail')} variant="outline" size="sm">
-          Move to Paper Trail
-        </Button>
-        <Button type="button" disabled={busy} onClick={() => onAction('set-aside')} variant="outline" size="sm">
-          Set Aside
-        </Button>
-        <Button type="button" disabled={busy} onClick={() => onAction('trash')} variant="destructive" size="sm">
-          Trash
-        </Button>
-      </div>
-      {error ? (
-        <p role="alert" className="mt-3 text-sm text-destructive">
-          {actionErrorMessage(error, 'Thread action')}
-        </p>
-      ) : null}
-    </Alert>
-  );
-}
-
 function ImboxSectionedList({
   data,
   client,
   powerThrough,
-  ptIndex,
-  powerThroughStatus,
   onStartPowerThrough,
-  onPowerThroughAction,
   onExitPowerThrough,
 }: {
   data: {
@@ -623,12 +544,9 @@ function ImboxSectionedList({
     new_count: number;
     previously_seen_total: number;
   };
-  client?: HailApiClient;
+  client: HailApiClient;
   powerThrough: boolean;
-  ptIndex: number;
-  powerThroughStatus: PowerThroughStatus;
   onStartPowerThrough: () => void;
-  onPowerThroughAction: (action: PowerThroughAction) => void;
   onExitPowerThrough: () => void;
 }) {
   const bubbledUp = data.bubbled_up;
@@ -679,19 +597,11 @@ function ImboxSectionedList({
           )}
         </div>
         {powerThrough ? (
-          ptIndex < newForYou.length ? (
-            <PowerThroughCard
-              item={newForYou[ptIndex]}
-              index={ptIndex}
-              total={newForYou.length}
-              busy={powerThroughStatus.busy}
-              error={powerThroughStatus.error}
-              onAction={onPowerThroughAction}
-              onExit={onExitPowerThrough}
-            />
-          ) : (
-            <StateCard title="All done!" body="You powered through every new thread." />
-          )
+          <PowerThroughFeed
+            items={newForYou}
+            client={client}
+            onExit={onExitPowerThrough}
+          />
         ) : newForYou.length === 0 ? (
           <StateCard title="You're all caught up." body="New mail will appear here." />
         ) : (
@@ -736,194 +646,23 @@ export function MailViewPage({
   const contextClient = useApiClient();
   const apiClient = client ?? contextClient;
   const query = useMailView(view, apiClient);
-  const undoToast = useUndoToast();
   const screenerQuery = useScreenerView(apiClient);
   const pendingCount = screenerQuery.data?.senders?.length ?? 0;
   const [powerThrough, setPowerThrough] = useState(false);
-  const [ptIndex, setPtIndex] = useState(0);
-  const [showPowerThroughDone, setShowPowerThroughDone] = useState(false);
 
   useEffect(() => {
     if (view !== 'imbox') {
       setPowerThrough(false);
-      setPtIndex(0);
-      setShowPowerThroughDone(false);
     }
   }, [view]);
 
-
-  const classifyPowerThrough = useClassifyThreadMutation(apiClient);
-  const setAsidePowerThrough = useSetAsideThreadMutation(apiClient);
-  const trashPowerThrough = useTrashThreadMutation(apiClient);
-  const [markSeenPowerThrough, setMarkSeenPowerThrough] = useState<PowerThroughStatus>({
-    busy: false,
-    error: null,
-  });
-  const powerThroughStatus = {
-    busy:
-      markSeenPowerThrough.busy ||
-      classifyPowerThrough.isPending ||
-      setAsidePowerThrough.isPending ||
-      trashPowerThrough.isPending,
-    error:
-      markSeenPowerThrough.error ??
-      classifyPowerThrough.error ??
-      setAsidePowerThrough.error ??
-      trashPowerThrough.error,
-  } satisfies PowerThroughStatus;
-
   function startPowerThrough() {
     setPowerThrough(true);
-    setPtIndex(0);
-    setShowPowerThroughDone(false);
-    setMarkSeenPowerThrough({ busy: false, error: null });
   }
 
   function exitPowerThrough() {
     setPowerThrough(false);
-    setPtIndex(0);
-    setShowPowerThroughDone(false);
-    setMarkSeenPowerThrough({ busy: false, error: null });
   }
-
-  function advancePowerThrough() {
-    setPtIndex((index) => index + 1);
-  }
-
-  function completePowerThrough() {
-    setPowerThrough(false);
-    setPtIndex(0);
-    setMarkSeenPowerThrough({ busy: false, error: null });
-    setShowPowerThroughDone(true);
-    window.setTimeout(() => setShowPowerThroughDone(false), 1500);
-  }
-
-  function handlePowerThroughSuccess(
-    message: string,
-    data?: ThreadVerbResponse,
-    undoSuccessMessage?: string,
-  ) {
-    undoToast.showToast({
-      message,
-      undo: data?.undo ? { id: data.undo.id } : null,
-      undoSuccessMessage,
-    });
-    if (isSectionedImboxData(query.data) && ptIndex + 1 >= query.data.new_for_you.length) {
-      completePowerThrough();
-    } else {
-      advancePowerThrough();
-    }
-  }
-
-  function handlePowerThroughAction(action: PowerThroughAction) {
-    if (!isSectionedImboxData(query.data) || powerThroughStatus.busy) {
-      return;
-    }
-
-    const item = query.data.new_for_you[ptIndex];
-    if (!item) {
-      completePowerThrough();
-      return;
-    }
-
-    if (action === 'imbox') {
-      setMarkSeenPowerThrough({ busy: true, error: null });
-      void apiClient.markThread(item.thread_id, true)
-        .then(() => handlePowerThroughSuccess('Kept thread in Imbox.'))
-        .catch((error: Error) => setMarkSeenPowerThrough({ busy: false, error }))
-        .finally(() => {
-          setMarkSeenPowerThrough((status) => ({ ...status, busy: false }));
-        });
-      return;
-    }
-
-    if (action === 'feed' || action === 'papertrail') {
-      classifyPowerThrough.mutate(
-        { threadId: item.thread_id, to: action },
-        {
-          onSuccess: (data, variables) =>
-            handlePowerThroughSuccess(
-              `Moved thread to ${viewLabels[variables.to]}.`,
-              data,
-              'Thread classification undone.',
-            ),
-        },
-      );
-      return;
-    }
-
-    if (action === 'set-aside') {
-      setAsidePowerThrough.mutate(
-        { threadId: item.thread_id },
-        {
-          onSuccess: (data) =>
-            handlePowerThroughSuccess(
-              'Thread added to Set Aside.',
-              data,
-              'Set Aside undone.',
-            ),
-        },
-      );
-      return;
-    }
-
-    trashPowerThrough.mutate(
-      { threadId: item.thread_id },
-      {
-        onSuccess: (data) =>
-          handlePowerThroughSuccess(
-            'Thread moved to trash.',
-            data,
-            'Trash undone.',
-          ),
-      },
-    );
-  }
-
-  useEffect(() => {
-    if (!powerThrough) {
-      return;
-    }
-
-    function handlePowerThroughKeydown(event: KeyboardEvent) {
-      if (event.defaultPrevented) {
-        return;
-      }
-
-      const target = event.target;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target instanceof HTMLElement && target.isContentEditable)
-      ) {
-        return;
-      }
-
-      const shortcuts: Record<string, PowerThroughAction> = {
-        '1': 'imbox',
-        '2': 'feed',
-        '3': 'papertrail',
-        '4': 'set-aside',
-        '5': 'trash',
-      };
-
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        exitPowerThrough();
-        return;
-      }
-
-      const action = shortcuts[event.key];
-      if (action) {
-        event.preventDefault();
-        handlePowerThroughAction(action);
-      }
-    }
-
-    window.addEventListener('keydown', handlePowerThroughKeydown);
-    return () => window.removeEventListener('keydown', handlePowerThroughKeydown);
-  }, [powerThrough, powerThroughStatus.busy, ptIndex, query.data]);
 
   let list;
   if (query.isPending) {
@@ -939,21 +678,13 @@ export function MailViewPage({
     const emptyState = emptyStates[view];
     list = (
       <div>
-        {view === 'imbox' && showPowerThroughDone ? (
-          <div className="mb-4">
-            <StateCard title="All done!" body="You powered through every new thread." />
-          </div>
-        ) : null}
         {view === 'imbox' ? <ScreenerBanner pendingCount={pendingCount} /> : null}
         {view === 'imbox' && isSectionedImboxData(query.data) ? (
           <ImboxSectionedList
             data={query.data}
             client={apiClient}
             powerThrough={powerThrough}
-            ptIndex={ptIndex}
-            powerThroughStatus={powerThroughStatus}
             onStartPowerThrough={startPowerThrough}
-            onPowerThroughAction={handlePowerThroughAction}
             onExitPowerThrough={exitPowerThrough}
           />
         ) : view === 'feed' ? (
