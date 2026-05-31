@@ -66,6 +66,7 @@ impl StalwartUserManagement for FakeUserManagement {
     fn list_users<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ManagedUser>, UserManagementError>> + Send + 'a>>
     {
         Box::pin(async move {
@@ -77,6 +78,7 @@ impl StalwartUserManagement for FakeUserManagement {
     fn ensure_domain<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
@@ -91,6 +93,7 @@ impl StalwartUserManagement for FakeUserManagement {
     fn create_user<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         email: &'a str,
         _password: SecretString,
         display_name: Option<&'a str>,
@@ -110,6 +113,7 @@ impl StalwartUserManagement for FakeUserManagement {
     fn delete_user<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         email: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), UserManagementError>> + Send + 'a>> {
         Box::pin(async move {
@@ -122,6 +126,7 @@ impl StalwartUserManagement for FakeUserManagement {
     fn reset_password<'a>(
         &'a self,
         _state: &'a AppState,
+        _bearer: SecretString,
         email: &'a str,
         _password: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<ManagedUser, UserManagementError>> + Send + 'a>> {
@@ -410,5 +415,205 @@ async fn create_ensures_email_domain_before_creating_user() {
             "ensure_domain:shared.example",
             "create:new.user@shared.example"
         ]
+    );
+}
+
+#[derive(Debug, Clone)]
+struct JmapCall {
+    path: String,
+    body: serde_json::Value,
+}
+
+async fn start_fake_management() -> (
+    String,
+    Arc<Mutex<Vec<JmapCall>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    async fn handler(
+        axum::extract::State(calls): axum::extract::State<Arc<Mutex<Vec<JmapCall>>>>,
+        headers: axum::http::HeaderMap,
+        uri: axum::http::Uri,
+        body: String,
+    ) -> impl axum::response::IntoResponse {
+        let path = uri.path().to_string();
+        let body_json = if body.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&body).unwrap()
+        };
+        calls.lock().unwrap().push(JmapCall {
+            path: path.clone(),
+            body: body_json.clone(),
+        });
+        if path == "/.well-known/jmap" {
+            assert_eq!(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok()),
+                Some("Bearer dummy-token")
+            );
+            return (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({"primaryAccounts": {"urn:stalwart:jmap": "mgmt"}})),
+            );
+        }
+        if path == "/jmap/" {
+            assert_eq!(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok()),
+                Some("Bearer dummy-token")
+            );
+            let method = body_json["methodCalls"][0][0].as_str().unwrap();
+            return match method {
+                "Principal/query" => {
+                    let principal_type = body_json
+                        .pointer("/methodCalls/0/1/filter/type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap();
+                    if principal_type == "individual" {
+                        (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({"methodResponses": [
+                                ["Principal/query", {"accountId": "mgmt", "ids": ["user-id"]}, "query-0"],
+                                ["Principal/get", {"accountId": "mgmt", "list": [{"id": "user-id", "name": "bob@example.org", "type": "individual", "emails": ["bob@example.org"]}], "notFound": []}, "get-0"]
+                            ]})),
+                        )
+                    } else {
+                        (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({"methodResponses": [
+                                ["Principal/query", {"accountId": "mgmt", "ids": ["domain-id"]}, "query-0"],
+                                ["Principal/get", {"accountId": "mgmt", "list": [{"id": "domain-id", "name": "example.org", "type": "domain"}], "notFound": []}, "get-0"]
+                            ]})),
+                        )
+                    }
+                }
+                "Principal/set" => {
+                    if body_json.pointer("/methodCalls/0/1/create/new-0/type")
+                        == Some(&serde_json::json!("individual"))
+                    {
+                        (
+                            StatusCode::OK,
+                            axum::Json(
+                                serde_json::json!({"methodResponses": [["Principal/set", {"accountId": "mgmt", "notCreated": {"new-0": {"type": "primaryKeyViolation", "description": "already exists"}}}, "set-0"]]}),
+                            ),
+                        )
+                    } else if body_json.pointer("/methodCalls/0/1/create/new-0/type")
+                        == Some(&serde_json::json!("domain"))
+                    {
+                        (
+                            StatusCode::OK,
+                            axum::Json(
+                                serde_json::json!({"methodResponses": [["Principal/set", {"accountId": "mgmt", "created": {"new-0": {"id": "domain-id"}}}, "set-0"]]}),
+                            ),
+                        )
+                    } else if body_json
+                        .pointer("/methodCalls/0/1/update/user-id/secrets")
+                        .is_some()
+                    {
+                        (
+                            StatusCode::OK,
+                            axum::Json(
+                                serde_json::json!({"methodResponses": [["Principal/set", {"accountId": "mgmt", "updated": {"user-id": null}}, "set-0"]]}),
+                            ),
+                        )
+                    } else {
+                        (
+                            StatusCode::OK,
+                            axum::Json(
+                                serde_json::json!({"methodResponses": [["Principal/set", {"accountId": "mgmt", "destroyed": ["user-id"]}, "set-0"]]}),
+                            ),
+                        )
+                    }
+                }
+                other => panic!("unexpected method {other}"),
+            };
+        }
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"detail":"missing"})),
+        )
+    }
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let app = axum::Router::new()
+        .fallback(axum::routing::any(handler))
+        .with_state(calls.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), calls, handle)
+}
+
+fn production_user_app(state: AppState) -> Router {
+    let protected = hail_api::routes::admin_users::router().layer(
+        axum::middleware::from_fn_with_state(state.clone(), require_auth),
+    );
+    Router::new().merge(protected).with_state(state)
+}
+
+#[tokio::test]
+async fn production_user_routes_use_principal_jmap_shapes_and_are_idempotent() {
+    let (url, calls, _server) = start_fake_management().await;
+    let (mut state, key) = fixture_state().await;
+    state.config.stalwart.management_url = Some(url);
+    let (_admin_id, sid) = seed_session_with_admin(&state, &key, "admin@example.org", true).await;
+    let target_id = seed_user(&state, "bob@example.org", false).await;
+
+    let create = production_user_app(state.clone())
+        .oneshot(Request::builder().method(Method::POST).uri("/api/admin/users").header(header::COOKIE, format!("hail_session={sid}")).header(CSRF_HEADER, "1").header(header::CONTENT_TYPE, "application/json").body(Body::from(r#"{"email":"Bob@Example.ORG","password":"correct horse battery","display_name":"Bob"}"#)).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+
+    let reset = production_user_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/admin/users/{target_id}/reset-password"))
+                .header(header::COOKIE, format!("hail_session={sid}"))
+                .header(CSRF_HEADER, "1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"password":"new correct horse"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reset.status(), StatusCode::OK);
+
+    let delete = production_user_app(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!("/api/admin/users/{target_id}"))
+                .header(header::COOKIE, format!("hail_session={sid}"))
+                .header(CSRF_HEADER, "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::NO_CONTENT);
+
+    let observed = calls.lock().unwrap().clone();
+    assert!(observed.iter().any(|call| call.path == "/jmap/"
+        && call.body.pointer("/methodCalls/0/1/create/new-0/type")
+            == Some(&serde_json::json!("individual"))
+        && call.body.pointer("/methodCalls/0/1/create/new-0/secrets/0")
+            == Some(&serde_json::json!("correct horse battery"))));
+    assert!(observed.iter().any(|call| {
+        call.body
+            .pointer("/methodCalls/0/1/update/user-id/secrets/0")
+            == Some(&serde_json::json!("new correct horse"))
+    }));
+    assert!(
+        observed
+            .iter()
+            .any(|call| call.body.pointer("/methodCalls/0/1/destroy/0")
+                == Some(&serde_json::json!("user-id")))
     );
 }

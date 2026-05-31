@@ -17,7 +17,6 @@ use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
 use crate::routes::jmap_helpers::jmap_session;
-use crate::routes::management_http;
 use crate::routes::response::{error_response, internal};
 use crate::state::AppState;
 
@@ -27,6 +26,7 @@ pub trait StalwartStatsProvider: Send + Sync + 'static {
     fn stats<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<AdminStatsResponse, StatsError>> + Send + 'a>>;
 }
 
@@ -36,9 +36,10 @@ impl StalwartStatsProvider for HttpStalwartStatsProvider {
     fn stats<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<AdminStatsResponse, StatsError>> + Send + 'a>> {
         Box::pin(async move {
-            let status = stalwart_status(state).await;
+            let status = stalwart_status(state, &bearer).await;
             let users = load_stats_users(state).await?;
             Ok(AdminStatsResponse {
                 users,
@@ -107,7 +108,7 @@ async fn get_admin_stats(
         return forbidden_admin();
     }
 
-    match provider.stats(&state).await {
+    match provider.stats(&state, user.jmap_token.clone()).await {
         Ok(stats) => Json(stats).into_response(),
         Err(err) => {
             tracing::error!(error = %err, "admin stats: load failed");
@@ -144,8 +145,19 @@ async fn load_stats_users(state: &AppState) -> Result<Vec<AdminUserStats>, Stats
             email,
             jmap_token_enc,
         };
-        let (total_emails, mailbox_count) = match row.jmap_token_enc.as_deref() {
-            Some(token_enc) => match jmap_mailbox_counts(state, token_enc).await {
+        let token = match row.jmap_token_enc.as_deref() {
+            Some(token_enc) => match jmap_token(state, token_enc) {
+                Ok(token) => Some(token),
+                Err(err) => {
+                    tracing::warn!(email = %row.email, error = %err, "admin stats: JMAP token decrypt failed");
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let (total_emails, mailbox_count) = match token.clone() {
+            Some(token) => match jmap_mailbox_counts(state, token).await {
                 Ok(counts) => counts,
                 Err(err) => {
                     tracing::warn!(email = %row.email, error = %err, "admin stats: JMAP mailbox count failed");
@@ -155,12 +167,15 @@ async fn load_stats_users(state: &AppState) -> Result<Vec<AdminUserStats>, Stats
             None => (0, 0),
         };
 
-        let total_size_bytes = match stalwart_quota_size(state, &row.email).await {
-            Ok(size) => size,
-            Err(err) => {
-                tracing::debug!(email = %row.email, error = %err, "admin stats: quota size unavailable");
-                None
-            }
+        let total_size_bytes = match token {
+            Some(token) => match jmap_quota_size(state, token, &row.email).await {
+                Ok(size) => size,
+                Err(err) => {
+                    tracing::debug!(email = %row.email, error = %err, "admin stats: quota size unavailable");
+                    None
+                }
+            },
+            None => None,
         };
 
         users.push(AdminUserStats {
@@ -174,12 +189,18 @@ async fn load_stats_users(state: &AppState) -> Result<Vec<AdminUserStats>, Stats
     Ok(users)
 }
 
-async fn jmap_mailbox_counts(
+fn jmap_token(
     state: &AppState,
     token_enc: &[u8],
-) -> Result<(u64, u64), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<SecretString, Box<dyn std::error::Error + Send + Sync>> {
     let token_bytes = hail_core::open(token_enc, &state.server_key)?;
-    let token = SecretString::from(String::from_utf8(token_bytes)?);
+    Ok(SecretString::from(String::from_utf8(token_bytes)?))
+}
+
+async fn jmap_mailbox_counts(
+    state: &AppState,
+    token: SecretString,
+) -> Result<(u64, u64), Box<dyn std::error::Error + Send + Sync>> {
     let session = jmap_session(state, token).await?;
     let mut request = session.client().build();
     request.get_mailbox().properties([
@@ -196,109 +217,42 @@ async fn jmap_mailbox_counts(
     Ok((total_emails, mailbox_count))
 }
 
-async fn stalwart_status(state: &AppState) -> StalwartStatus {
-    match management_base(state) {
-        Some(base) if management_health_connected(&base).await => StalwartStatus::Connected,
-        _ => StalwartStatus::Unreachable,
-    }
-}
-
-async fn management_health_connected(base: &str) -> bool {
-    let client = management_http::client();
-    for path in ["/api/healthz", "/healthz", "/healthz/live"] {
-        let Ok(response) = client.get(format!("{base}{path}")).send().await else {
-            continue;
-        };
-        if response.status().is_success() || response.status() == StatusCode::NO_CONTENT {
-            return true;
+async fn stalwart_status(state: &AppState, bearer: &SecretString) -> StalwartStatus {
+    match state.config.stalwart.management_url.as_deref() {
+        Some(base) => {
+            match hail_jmap::management::ManagementSession::connect(base, bearer.clone()).await {
+                Ok(_) => StalwartStatus::Connected,
+                Err(err) => {
+                    tracing::debug!(error = %err, "admin stats: JMAP management status check failed");
+                    StalwartStatus::Unreachable
+                }
+            }
         }
+        None => StalwartStatus::Unreachable,
     }
-    false
 }
 
-async fn stalwart_quota_size(
+async fn jmap_quota_size(
     state: &AppState,
+    token: SecretString,
     email: &str,
 ) -> Result<Option<u64>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some(base) = management_base(state) else {
-        return Ok(None);
-    };
-    let response = management_http::client()
-        .get(management_path(&base, &["api", "store", "quota", email]))
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        return Ok(None);
+    let session = jmap_session(state, token.clone()).await?;
+    match hail_jmap::management::quota_used_bytes(
+        &state.config.stalwart.jmap_url,
+        &token,
+        session.account_id(),
+    )
+    .await
+    {
+        Ok(size) => Ok(size),
+        Err(err) => {
+            tracing::debug!(email, error = %err, "admin stats: Quota/get failed; leaving size unknown");
+            Ok(None)
+        }
     }
-    let value = response.json::<serde_json::Value>().await?;
-    Ok(size_bytes_from_value(&value))
-}
-
-fn management_base(state: &AppState) -> Option<String> {
-    state
-        .config
-        .stalwart
-        .management_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|url| !url.is_empty())
-        .map(|url| url.trim_end_matches('/').to_string())
-}
-
-fn management_path(base: &str, segments: &[&str]) -> String {
-    let mut url = base.trim_end_matches('/').to_string();
-    for segment in segments {
-        url.push('/');
-        url.push_str(&url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>());
-    }
-    url
-}
-
-fn size_bytes_from_value(value: &serde_json::Value) -> Option<u64> {
-    value
-        .get("total_size_bytes")
-        .or_else(|| value.get("totalSizeBytes"))
-        .or_else(|| value.get("used_bytes"))
-        .or_else(|| value.get("usedBytes"))
-        .or_else(|| value.get("size"))
-        .or_else(|| value.get("used"))
-        .or_else(|| value.get("quota").and_then(|quota| quota.get("used")))
-        .and_then(serde_json::Value::as_u64)
 }
 
 fn forbidden_admin() -> Response {
     error_response(StatusCode::FORBIDDEN, "admin_required")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_size_bytes_from_common_quota_shapes() {
-        assert_eq!(
-            size_bytes_from_value(&serde_json::json!({ "totalSizeBytes": 42 })),
-            Some(42)
-        );
-        assert_eq!(
-            size_bytes_from_value(&serde_json::json!({ "quota": { "used": 99 } })),
-            Some(99)
-        );
-        assert_eq!(
-            size_bytes_from_value(&serde_json::json!({ "quota": {} })),
-            None
-        );
-    }
-
-    #[test]
-    fn management_path_percent_encodes_email_path_segment() {
-        let url = management_path(
-            "http://stalwart.local/",
-            &["api", "store", "quota", "User+tag@example.org"],
-        );
-        assert_eq!(
-            url,
-            "http://stalwart.local/api/store/quota/User%2Btag%40example.org"
-        );
-    }
 }

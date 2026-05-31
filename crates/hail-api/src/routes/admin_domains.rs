@@ -1,9 +1,8 @@
 //! Admin domain management endpoints.
 //!
-//! These routes are mounted behind the global auth/CSRF middleware. Handlers
-//! additionally require `AuthUser::is_admin` before touching Stalwart. The
-//! Stalwart management surface is isolated behind [`StalwartManagement`] so
-//! tests can use a fake and production can grow with Stalwart API details.
+//! Routes are mounted behind auth/CSRF middleware. Production uses Stalwart's
+//! JMAP management capability (`urn:stalwart:jmap`) via Principal/*; tests can
+//! still inject a fake through [`StalwartManagement`].
 
 use std::future::Future;
 use std::pin::Pin;
@@ -13,112 +12,79 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::management_http;
-use crate::routes::response::{bad_request, error_response};
+use crate::routes::response::{ApiError, bad_request, error_response};
 use crate::routes::validation::valid_domain;
 use crate::state::AppState;
 
-/// Dependency-injection seam for Stalwart domain administration.
 pub trait StalwartManagement: Send + Sync + 'static {
     fn list_domains<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ManagementError>> + Send + 'a>>;
 
     fn add_domain<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ManagementError>> + Send + 'a>>;
 
     fn delete_domain<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ManagementError>> + Send + 'a>>;
 }
 
-/// Production Stalwart management implementation.
-///
-/// If `stalwart.management_url` is absent, handlers return a clear 501 so
-/// operators know the admin surface is unavailable rather than silently doing
-/// nothing. If it is present, we call the currently expected Stalwart domain
-/// management paths; non-success responses are surfaced as upstream errors.
 pub struct HttpStalwartManagement;
 
 impl StalwartManagement for HttpStalwartManagement {
     fn list_domains<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            let url = format!("{}/api/domain", base);
-            let response = management_http::client()
-                .get(&url)
-                .send()
-                .await
-                .map_err(|err| ManagementError::Upstream(err.to_string()))?;
-            if !response.status().is_success() {
-                return Err(ManagementError::Upstream(format!(
-                    "GET /api/domain returned HTTP {}",
-                    response.status()
-                )));
-            }
-            decode_domain_list(response).await
+            let session = management_session(state, bearer).await?;
+            Ok(session
+                .list_domains()
+                .await?
+                .into_iter()
+                .map(|principal| principal.name)
+                .collect())
         })
     }
 
     fn add_domain<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            let url = management_path(&base, &["api", "domain", domain]);
-            let response = management_http::client()
-                .post(&url)
-                .json(&serde_json::json!({ "domain": domain }))
-                .send()
-                .await
-                .map_err(|err| ManagementError::Upstream(err.to_string()))?;
-            if response.status().is_success() || response.status() == StatusCode::CONFLICT {
-                Ok(())
-            } else {
-                Err(ManagementError::Upstream(format!(
-                    "POST /api/domain/{domain} returned HTTP {}",
-                    response.status()
-                )))
-            }
+            let session = management_session(state, bearer).await?;
+            session.create_domain(domain).await?;
+            Ok(())
         })
     }
 
     fn delete_domain<'a>(
         &'a self,
         state: &'a AppState,
+        bearer: SecretString,
         domain: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ManagementError>> + Send + 'a>> {
         Box::pin(async move {
-            let base = management_base(state)?;
-            let url = management_path(&base, &["api", "domain", domain]);
-            let response = management_http::client()
-                .delete(&url)
-                .send()
-                .await
-                .map_err(|err| ManagementError::Upstream(err.to_string()))?;
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                Err(ManagementError::Upstream(format!(
-                    "DELETE /api/domain/{domain} returned HTTP {}",
-                    response.status()
-                )))
-            }
+            let session = management_session(state, bearer).await?;
+            session.destroy_domain(domain).await?;
+            Ok(())
         })
     }
 }
@@ -127,8 +93,22 @@ impl StalwartManagement for HttpStalwartManagement {
 pub enum ManagementError {
     #[error("stalwart.management_url is not configured")]
     NotConfigured,
+    #[error("stalwart management API returned HTTP {status}: {detail}")]
+    Api { status: StatusCode, detail: String },
     #[error("stalwart management request failed: {0}")]
     Upstream(String),
+}
+
+impl From<hail_jmap::management::ManagementError> for ManagementError {
+    fn from(err: hail_jmap::management::ManagementError) -> Self {
+        match err {
+            hail_jmap::management::ManagementError::Api { status, detail } => Self::Api {
+                status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                detail,
+            },
+            other => Self::Upstream(other.to_string()),
+        }
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -176,9 +156,13 @@ where
         return forbidden_admin();
     }
 
-    match management.list_domains(&state).await {
+    match management
+        .list_domains(&state, user.jmap_token.clone())
+        .await
+    {
         Ok(mut domains) => {
             domains.sort_unstable();
+            domains.dedup();
             Json(DomainListResponse { domains }).into_response()
         }
         Err(err) => management_error(err),
@@ -203,7 +187,10 @@ where
         return invalid_domain();
     }
 
-    match management.add_domain(&state, &domain).await {
+    match management
+        .add_domain(&state, user.jmap_token.clone(), &domain)
+        .await
+    {
         Ok(()) => {
             if let Err(err) = audit::record(
                 &state.db,
@@ -239,7 +226,10 @@ where
         return invalid_domain();
     }
 
-    match management.delete_domain(&state, &domain).await {
+    match management
+        .delete_domain(&state, user.jmap_token.clone(), &domain)
+        .await
+    {
         Ok(()) => {
             if let Err(err) = audit::record(
                 &state.db,
@@ -257,6 +247,14 @@ where
     }
 }
 
+async fn management_session(
+    state: &AppState,
+    bearer: SecretString,
+) -> Result<hail_jmap::management::ManagementSession, ManagementError> {
+    let base = management_base(state)?;
+    Ok(hail_jmap::management::ManagementSession::connect(&base, bearer).await?)
+}
+
 fn management_base(state: &AppState) -> Result<String, ManagementError> {
     state
         .config
@@ -267,48 +265,6 @@ fn management_base(state: &AppState) -> Result<String, ManagementError> {
         .filter(|url| !url.is_empty())
         .map(|url| url.trim_end_matches('/').to_string())
         .ok_or(ManagementError::NotConfigured)
-}
-
-fn management_path(base: &str, segments: &[&str]) -> String {
-    let mut url = base.trim_end_matches('/').to_string();
-    for segment in segments {
-        url.push('/');
-        url.push_str(&url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>());
-    }
-    url
-}
-
-async fn decode_domain_list(response: reqwest::Response) -> Result<Vec<String>, ManagementError> {
-    let value = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|err| ManagementError::Upstream(err.to_string()))?;
-
-    if let Some(domains) = value.as_array() {
-        return domains
-            .iter()
-            .map(|v| {
-                v.as_str().map(str::to_owned).ok_or_else(|| {
-                    ManagementError::Upstream("domain list contained a non-string".to_string())
-                })
-            })
-            .collect();
-    }
-
-    if let Some(domains) = value.get("domains").and_then(serde_json::Value::as_array) {
-        return domains
-            .iter()
-            .map(|v| {
-                v.as_str().map(str::to_owned).ok_or_else(|| {
-                    ManagementError::Upstream("domain list contained a non-string".to_string())
-                })
-            })
-            .collect();
-    }
-
-    Err(ManagementError::Upstream(
-        "domain list response was not an array or { domains: [...] }".to_string(),
-    ))
 }
 
 fn normalize_domain(domain: &str) -> String {
@@ -329,26 +285,18 @@ fn management_error(err: ManagementError) -> Response {
             StatusCode::NOT_IMPLEMENTED,
             "stalwart_management_unconfigured",
         ),
+        ManagementError::Api { status, detail } if status.is_client_error() => {
+            ApiError::new("stalwart_management_failed")
+                .with_detail(detail)
+                .into_response(status)
+        }
+        ManagementError::Api { status, detail } => {
+            tracing::warn!(%status, error = %detail, "stalwart domain management failed");
+            error_response(StatusCode::BAD_GATEWAY, "stalwart_management_failed")
+        }
         ManagementError::Upstream(message) => {
             tracing::warn!(error = %message, "stalwart domain management failed");
             error_response(StatusCode::BAD_GATEWAY, "stalwart_management_failed")
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn management_path_percent_encodes_each_path_segment() {
-        let url = management_path(
-            "http://stalwart.local/",
-            &["api", "domain", "Example+Domain/xn--bcher-kva.example"],
-        );
-        assert_eq!(
-            url,
-            "http://stalwart.local/api/domain/Example%2BDomain%2Fxn--bcher-kva.example"
-        );
     }
 }

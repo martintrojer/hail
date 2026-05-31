@@ -59,6 +59,33 @@ pub enum InviteProvisionError {
 
 pub struct StalwartInviteProvisioner;
 
+async fn latest_inviter_management_bearer(
+    state: &AppState,
+    email: &str,
+) -> Result<SecretString, InviteProvisionError> {
+    let row = sqlx::query_scalar::<_, Vec<u8>>(
+        "SELECT s.jmap_token_enc \
+         FROM user_invites i \
+         JOIN sessions s ON s.user_id = i.created_by_user_id \
+         WHERE i.email = ?1 AND s.expires_at > ?2 \
+         ORDER BY i.created_at DESC, s.last_used_at DESC \
+         LIMIT 1",
+    )
+    .bind(email)
+    .bind(Utc::now())
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|err| InviteProvisionError::Management(err.to_string()))?
+    .ok_or_else(|| {
+        InviteProvisionError::Management("inviter admin session is no longer active".to_string())
+    })?;
+    let token_bytes = hail_core::open(&row, &state.server_key)
+        .map_err(|err| InviteProvisionError::Management(err.to_string()))?;
+    String::from_utf8(token_bytes)
+        .map(SecretString::from)
+        .map_err(|err| InviteProvisionError::Management(err.to_string()))
+}
+
 impl InviteProvisioner for StalwartInviteProvisioner {
     fn provision<'a>(
         &'a self,
@@ -76,9 +103,11 @@ impl InviteProvisioner for StalwartInviteProvisioner {
                     "invite email missing domain".to_string(),
                 ));
             };
+            let management_bearer = latest_inviter_management_bearer(state, email).await?;
             crate::routes::admin_users::StalwartUserManagement::ensure_domain(
                 &management,
                 state,
+                management_bearer.clone(),
                 domain,
             )
             .await
@@ -86,6 +115,7 @@ impl InviteProvisioner for StalwartInviteProvisioner {
             let managed = crate::routes::admin_users::StalwartUserManagement::create_user(
                 &management,
                 state,
+                management_bearer,
                 email,
                 password.clone(),
                 display_name,

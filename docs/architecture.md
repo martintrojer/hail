@@ -340,18 +340,23 @@ startup. The configured admin email is elevated to `is_admin=1` on its first
 successful Stalwart/JMAP login, using the real `jmap_account_id` from that
 session. Both paths converge on the same database state.
 
-The wizard provisioning path uses Stalwart v0.16's JMAP management API when
-`stalwart.management_url` is configured. `/setup` asks the operator for the
-hail bootstrap token plus Stalwart admin credentials; hail exchanges those
+The wizard and admin-management paths use Stalwart v0.16's JMAP management
+API when `stalwart.management_url` is configured. `/setup` asks the operator for
+the hail bootstrap token plus Stalwart admin credentials; hail exchanges those
 credentials via Stalwart's `authCode` flow for a short-lived in-memory bearer
-token, then posts to `/jmap/` with `urn:stalwart:jmap` method calls. It creates
-or reuses the `x:Domain` object, resolves that domain id, then creates or
-reuses the `x:Account` user with a password credential and the built-in User
-role before doing the normal JMAP basic login to discover the account id. The
-bearer token, auth code, and passwords are never stored or logged. If
-`stalwart.management_url` is unset, hail deliberately skips management
-provisioning and falls back to the documented opt-out: the domain and mailbox
-must already exist and `/setup` only verifies them via JMAP login.
+token, then posts to `/jmap/` with `urn:stalwart:jmap` method calls. Admin
+domain, user, and stats routes also wrap that same management surface through
+JMAP `Principal/*` and `Quota/get` calls using the already-authenticated admin
+session bearer for the lifetime of each request. Stalwart's legacy REST
+management API (`/api/domain`, `/api/principal`, `/api/settings`, and friends)
+is no longer used by hail. The setup path creates or reuses the `x:Domain`
+object, resolves that domain id, then creates or reuses the `x:Account` user
+with a password credential and the built-in User role before doing the normal
+JMAP basic login to discover the account id. The bearer token, auth code, and
+passwords are never stored or logged. If `stalwart.management_url` is unset,
+hail deliberately skips management provisioning and falls back to the documented
+opt-out: the domain and mailbox must already exist and `/setup` only verifies
+them via JMAP login.
 
 Compose deployments include a one-shot `stalwart-init` sidecar between Stalwart
 and hail. On clean or existing volumes it waits for Stalwart health, authenticates
