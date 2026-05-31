@@ -1133,6 +1133,160 @@ async fn reimport_requires_auth() {
 }
 
 #[tokio::test]
+async fn stop_requires_auth() {
+    let (state, _key) = app_state().await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+
+    let resp = app(state, client)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/provider-accounts/123/stop")
+                .header(CSRF_HEADER, "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(json_body(resp).await["error"], "unauthorized");
+}
+
+#[tokio::test]
+async fn stop_active_provider_import_pauses_and_audits_for_owner_only() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let (other_user_id, _other_session) = seed_session(&state, &key, "bob@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let next_sync = now + chrono::Duration::hours(1);
+
+    async fn insert_account(
+        state: &AppState,
+        user_id: i64,
+        provider_account_id: &str,
+        status: &str,
+        next_sync: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO provider_accounts \
+             (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+              granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, sync_backoff_secs, \
+              last_error_class, last_error_message, created_at, updated_at) \
+             VALUES (?1, 'acct-a', 'gmail', ?2, ?3, '[]', \
+                     ?4, ?5, ?6, 300, 'network', 'timeout', ?7, ?7) \
+             RETURNING id",
+        )
+        .bind(user_id)
+        .bind(provider_account_id)
+        .bind(format!("{provider_account_id}@gmail.example"))
+        .bind(vec![3_u8; 29])
+        .bind(status)
+        .bind(next_sync)
+        .bind(now)
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+    }
+
+    let active_id = insert_account(&state, user_id, "gmail-active-stop", "active", next_sync, now).await;
+    let other_id = insert_account(&state, other_user_id, "gmail-bob-stop", "active", next_sync, now).await;
+
+    let resp = app(state.clone(), client.clone())
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{active_id}/stop"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["account"]["id"], active_id);
+    assert_eq!(body["account"]["sync_status"], "paused");
+    assert!(body["account"]["next_sync_after"].is_null());
+    assert!(body["account"]["sync_backoff_secs"].is_null());
+    assert_eq!(body["account"]["last_error_class"], "operator_paused");
+    assert_eq!(body["account"]["last_error_event"]["event_type"], "sync_paused");
+
+    let row: (String, Option<String>, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class, last_error_message \
+         FROM provider_accounts WHERE id = ?1",
+    )
+    .bind(active_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        row,
+        (
+            "paused".to_owned(),
+            None,
+            None,
+            Some("operator_paused".to_owned()),
+            None,
+        )
+    );
+
+    let event: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT operation_kind, event_type, safe_error_class, safe_error_message \
+         FROM provider_sync_events WHERE provider_account_id = ?1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(active_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(event.0, "sync");
+    assert_eq!(event.1, "sync_paused");
+    assert_eq!(event.2.as_deref(), Some("operator_paused"));
+    assert_eq!(event.3.as_deref(), Some("Gmail import paused by operator"));
+
+    let resp = app(state.clone(), client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{other_id}/stop"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stop_paused_provider_import_conflicts() {
+    let (state, key) = app_state().await;
+    let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let now = chrono::Utc::now();
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail-paused-stop', 'paused-stop@gmail.example', \
+                 '[]', ?2, 'paused', ?3, ?3) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(vec![3_u8; 29])
+    .bind(now)
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+
+    let resp = app(state, client)
+        .oneshot(auth_request(
+            Method::POST,
+            &format!("/api/provider-accounts/{account_id}/stop"),
+            &session_id,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(resp).await["error"], "provider_sync_not_in_flight");
+}
+
+#[tokio::test]
 async fn reimport_disconnected_account_returns_not_found() {
     let (state, key) = app_state().await;
     let (user_id, session_id) = seed_session(&state, &key, "alice@example.com").await;

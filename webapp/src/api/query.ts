@@ -65,6 +65,7 @@ import {
   type LabelItemResponse,
   type ProviderAccountResponse,
   type ProviderReimportResponse,
+  type ProviderStopSyncResponse,
   type ProviderSyncStatusListResponse,
   type ProviderSyncTriggerResponse,
   type ProviderSyncStatus,
@@ -368,6 +369,35 @@ export function useTriggerProviderSyncMutation(
 
   return useMutation({
     mutationFn: (id) => client.triggerProviderSync(id),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData<ProviderSyncStatusListResponse>(
+        queryKeys.providerSyncStatuses(),
+        (current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            accounts: current.accounts.map((account) =>
+              account.id === data.account.id ? data.account : account,
+            ),
+          };
+        },
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useStopProviderSyncMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<number, ProviderStopSyncResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id) => client.stopProviderSync(id),
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       queryClient.setQueryData<ProviderSyncStatusListResponse>(

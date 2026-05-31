@@ -1063,9 +1063,15 @@ async fn mark_sync_error(
     message: &str,
 ) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now().to_rfc3339();
+    let status = if class == "operator_paused" {
+        "paused"
+    } else {
+        "error"
+    };
     sqlx::query(
-        "UPDATE provider_accounts SET sync_status = 'error', last_error_class = ?1, last_error_message = ?2, updated_at = ?3 WHERE id = ?4",
+        "UPDATE provider_accounts SET sync_status = ?1, last_error_class = ?2, last_error_message = ?3, updated_at = ?4 WHERE id = ?5",
     )
+    .bind(status)
     .bind(class)
     .bind(message)
     .bind(now)

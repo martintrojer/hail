@@ -158,11 +158,11 @@ function MailResultCard({ item }: { item: MailSearchResult }) {
           </p>
           <LabelChips labels={item.labels} className="flex min-w-0 flex-wrap items-center gap-1" />
           <div className="flex flex-wrap gap-1">
-            {item.message_count > 1 ? (
-              <Badge variant="outline">{item.message_count} messages</Badge>
+            {('message_count' in item) && (item as { message_count?: number }).message_count && (item as { message_count?: number }).message_count! > 1 ? (
+              <Badge variant="outline">{(item as { message_count?: number }).message_count} messages</Badge>
             ) : null}
-            {item.unread_count > 0 ? (
-              <Badge variant="secondary">{item.unread_count} unread</Badge>
+            {('unread_count' in item) && (item as { unread_count?: number }).unread_count && (item as { unread_count?: number }).unread_count! > 0 ? (
+              <Badge variant="secondary">{(item as { unread_count?: number }).unread_count} unread</Badge>
             ) : null}
           </div>
         </CardContent>

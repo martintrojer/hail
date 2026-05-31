@@ -305,6 +305,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-accounts/{id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["stop_provider_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-accounts/{id}/sync": {
         parameters: {
             query?: never;
@@ -2716,6 +2732,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProviderSyncTriggerResponse"];
                 };
+            };
+        };
+    };
+    stop_provider_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider account import paused after operator stop. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSyncTriggerResponse"];
+                };
+            };
+            /** @description Provider account import is not currently in-flight. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

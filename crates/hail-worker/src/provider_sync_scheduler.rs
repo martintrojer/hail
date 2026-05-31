@@ -191,18 +191,29 @@ pub async fn process_provider_sync_tick(
     cancel: &CancellationToken,
 ) -> Result<ProviderSyncTickSummary> {
     let accounts = select_due_gmail_provider_accounts(db, now, options.sync_interval).await?;
+    process_provider_sync_accounts(db, runner, now, accounts, cancel).await
+}
+
+pub async fn process_provider_sync_accounts(
+    db: &SqlitePool,
+    runner: &dyn ProviderSyncRunner,
+    now: DateTime<Utc>,
+    accounts: Vec<ProviderSyncAccount>,
+    cancel: &CancellationToken,
+) -> Result<ProviderSyncTickSummary> {
     let mut summary = ProviderSyncTickSummary {
         considered: accounts.len(),
         ..ProviderSyncTickSummary::default()
     };
 
     for account in accounts {
+        let mode = sync_mode(&account);
         if cancel.is_cancelled() {
             summary.cancelled = true;
+            mark_scheduler_paused(db, &account, mode).await?;
             break;
         }
 
-        let mode = sync_mode(&account);
         mark_scheduler_attempt_started(db, account.id).await?;
 
         let run = match mode {
@@ -219,7 +230,7 @@ pub async fn process_provider_sync_tick(
 
         let Some(run) = run else {
             summary.cancelled = true;
-            mark_scheduler_cancelled(db, &account, mode).await?;
+            mark_scheduler_paused(db, &account, mode).await?;
             break;
         };
 
@@ -234,6 +245,11 @@ pub async fn process_provider_sync_tick(
                     completed = outcome.completed,
                     "provider sync succeeded"
                 );
+            }
+            Err(error) if error.class == "operator_paused" => {
+                summary.failed += 1;
+                mark_scheduler_paused(db, &account, mode).await?;
+                info!(provider_account_id = account.id, user_id = account.user_id, mode = mode.as_str(), "provider sync paused by operator");
             }
             Err(error) => {
                 summary.failed += 1;
@@ -460,28 +476,33 @@ async fn mark_scheduler_failed(
     Ok(())
 }
 
-async fn mark_scheduler_cancelled(
+async fn mark_scheduler_paused(
     db: &SqlitePool,
     account: &ProviderSyncAccount,
     mode: ProviderSyncMode,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query("UPDATE provider_accounts SET last_error_class = 'cancelled', last_error_message = 'sync cancelled', updated_at = ?1 WHERE id = ?2")
-        .bind(now)
-        .bind(account.id)
-        .execute(db)
-        .await
-        .with_context(|| format!("mark provider_account {} sync cancelled", account.id))?;
+    sqlx::query(
+        "UPDATE provider_accounts \
+         SET sync_status = 'paused', last_error_class = 'operator_paused', \
+             last_error_message = NULL, next_sync_after = NULL, sync_backoff_secs = NULL, updated_at = ?1 \
+         WHERE id = ?2",
+    )
+    .bind(now)
+    .bind(account.id)
+    .execute(db)
+    .await
+    .with_context(|| format!("mark provider_account {} sync paused", account.id))?;
 
     let metadata = serde_json::json!({ "mode": mode.as_str() }).to_string();
     audit_scheduler_event(
         db,
         account,
-        ProviderSyncOperationKind::Failure,
-        ProviderSyncEventType::SyncFailed,
-        ProviderSyncResultStatus::Failed,
-        Some("cancelled"),
-        Some("sync cancelled"),
+        ProviderSyncOperationKind::Sync,
+        ProviderSyncEventType::SyncPaused,
+        ProviderSyncResultStatus::Info,
+        Some("operator_paused"),
+        Some("Gmail import paused by operator"),
         Some(&metadata),
     )
     .await?;
@@ -537,6 +558,7 @@ fn safe_error_message(error: &impl std::fmt::Display) -> String {
 pub mod live {
     use super::*;
     use crate::gmail_client::CachedGmailTokenSource;
+    use crate::gmail_historical_import::GmailHistoricalImportError;
     use hail_core::{ProviderOAuthTokenKind, ProviderTokenContext, open_provider_oauth_token};
 
     pub struct LiveProviderSyncRunner {
@@ -851,6 +873,9 @@ pub mod live {
             GmailInitialSyncError::ProfileMismatch { .. } => {
                 ProviderSyncRunError::permanent("gmail_profile_mismatch", error)
             }
+            GmailInitialSyncError::Import(GmailHistoricalImportError::Cancelled) => {
+                ProviderSyncRunError::permanent("operator_paused", "Gmail import paused by operator")
+            }
             GmailInitialSyncError::Import(source) => {
                 ProviderSyncRunError::retryable("gmail_initial_import", source)
             }
@@ -866,7 +891,7 @@ pub mod live {
                 ProviderSyncRunError::retryable("missing_history_cursor", error)
             }
             GmailIncrementalSyncError::Cancelled => {
-                ProviderSyncRunError::retryable("cancelled", error)
+                ProviderSyncRunError::permanent("operator_paused", "Gmail import paused by operator")
             }
             GmailIncrementalSyncError::Database(source) => {
                 ProviderSyncRunError::retryable("database", source)

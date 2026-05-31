@@ -146,6 +146,9 @@ type ProviderSyncTriggerSuccess = ResponseBody<
 type ProviderReimportSuccess = ResponseBody<
   paths['/api/provider-accounts/{id}/reimport']['post']['responses']['200']
 >;
+type ProviderStopSyncSuccess = ResponseBody<
+  paths['/api/provider-accounts/{id}/stop']['post']['responses']['200']
+>;
 type SpeakeasyGetSuccess = ResponseBody<
   paths['/api/speakeasy']['get']['responses']['200']
 >;
@@ -204,6 +207,7 @@ export type ProviderSyncStatus = components['schemas']['ProviderSyncStatusRespon
 export type ProviderSyncStatusListResponse = ProviderSyncStatusListSuccess;
 export type ProviderSyncTriggerResponse = ProviderSyncTriggerSuccess;
 export type ProviderReimportResponse = ProviderReimportSuccess;
+export type ProviderStopSyncResponse = ProviderStopSyncSuccess;
 
 export interface AcceptInviteRequest {
   password: string;
@@ -577,6 +581,19 @@ export class HailApiClient {
     return this.#json<ProviderReimportResponse>(
       await this.#request(
         `/api/provider-accounts/${encodeURIComponent(String(id))}/reimport`,
+        {
+          method: 'POST',
+          mutating: true,
+        },
+      ),
+      200,
+    );
+  }
+
+  async stopProviderSync(id: number): Promise<ProviderStopSyncResponse> {
+    return this.#json<ProviderStopSyncResponse>(
+      await this.#request(
+        `/api/provider-accounts/${encodeURIComponent(String(id))}/stop`,
         {
           method: 'POST',
           mutating: true,

@@ -5,6 +5,7 @@ import {
   useDisconnectProviderAccountMutation,
   useProviderSyncStatuses,
   useReimportProviderAccountMutation,
+  useStopProviderSyncMutation,
   useTriggerProviderSyncMutation,
 } from '../api/query';
 import { StateCard } from '../components/StateCard';
@@ -39,6 +40,7 @@ type ProviderSyncStatusValue =
   | 'initial_sync'
   | 'active'
   | 'error'
+  | 'paused'
   | 'revoked'
   | 'disconnected'
   | (string & {});
@@ -50,6 +52,7 @@ function statusLabel(status: ProviderSyncStatusValue, recovered = false) {
     case 'initial_sync': return 'Initial import running';
     case 'active': return 'Connected';
     case 'error': return 'Needs attention';
+    case 'paused': return 'Paused';
     case 'revoked': return 'Access revoked';
     case 'disconnected': return 'Disconnected';
     default: return status || 'Unknown';
@@ -99,6 +102,7 @@ function isRecovered(status: ProviderSyncStatus) {
 }
 
 function isServerSyncing(status: ProviderSyncStatus) {
+  if (status.sync_status === 'paused') return false;
   return status.sync_status === 'initial_sync' || Boolean(
     status.last_sync_attempted_at &&
     (!status.last_sync_succeeded_at || new Date(status.last_sync_attempted_at) > new Date(status.last_sync_succeeded_at)),
@@ -191,20 +195,27 @@ function FailureCard({ status, recovered }: { status: ProviderSyncStatus; recove
   );
 }
 
-function ProviderSyncStatusCard({ status, syncing, reimporting, syncError, reimportError, onSync, onReimport }: {
+function ProviderSyncStatusCard({ status, syncing, reimporting, stopping, syncError, reimportError, stopError, onSync, onReimport, onStop }: {
   status: ProviderSyncStatus;
   syncing: boolean;
   reimporting: boolean;
+  stopping: boolean;
   syncError: Error | null;
   reimportError: Error | null;
+  stopError: Error | null;
   onSync: () => void;
   onReimport: () => void;
+  onStop: () => void;
 }) {
   const recovered = isRecovered(status);
   const serverSyncing = isServerSyncing(status);
   const syncInProgress = syncing || serverSyncing;
   const initialSync = status.sync_status === 'initial_sync';
-  const actionsDisabled = syncInProgress || reimporting;
+  const paused = status.sync_status === 'paused';
+  const showStopImport = serverSyncing || initialSync;
+  const actionsDisabled = syncInProgress || reimporting || stopping;
+  const syncDisabled = actionsDisabled || (!paused && !canTriggerSync(status.sync_status));
+  const reimportDisabled = actionsDisabled;
   const title = initialSync ? 'Re-importing from Gmail…' : (status.display_email || status.provider_email);
   return (
     <section>
@@ -224,13 +235,34 @@ function ProviderSyncStatusCard({ status, syncing, reimporting, syncError, reimp
             </div>
           </div>
           <CardAction className="flex flex-col gap-2 sm:flex-row">
-            <Button type="button" onClick={onSync} disabled={actionsDisabled || !canTriggerSync(status.sync_status)}>
+            {showStopImport ? (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" variant="destructive" disabled={stopping}>
+                    {stopping ? 'Pausing…' : 'Stop import'}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Stop Gmail import?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      The current sync will pause after the in-flight batch. Already-imported messages stay. Resume with Sync now or Re-import.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={stopping}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction disabled={stopping} onClick={onStop}>Stop import</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : null}
+            <Button type="button" onClick={onSync} disabled={syncDisabled}>
               {syncing ? 'Requesting sync…' : 'Sync now'}
             </Button>
             {canReimport(status.sync_status) ? (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button type="button" variant="outline" disabled={actionsDisabled}>
+                  <Button type="button" variant="outline" disabled={reimportDisabled}>
                     {reimporting ? 'Requesting re-import…' : 'Re-import from Gmail'}
                   </Button>
                 </AlertDialogTrigger>
@@ -251,6 +283,7 @@ function ProviderSyncStatusCard({ status, syncing, reimporting, syncError, reimp
           </CardAction>
         </CardHeader>
         <CardContent>
+          {paused ? <p className="mb-4 text-sm font-medium text-muted-foreground">Paused — click Sync now to resume</p> : null}
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <DetailTile label="Last sync attempt" value={formatDateTime(status.last_sync_attempted_at)} />
             <DetailTile label="Last successful sync" value={formatDateTime(status.last_sync_succeeded_at)} />
@@ -264,6 +297,7 @@ function ProviderSyncStatusCard({ status, syncing, reimporting, syncError, reimp
 
           {syncError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(syncError, 'Sync Gmail now')}</AlertDescription></Alert> : null}
           {reimportError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(reimportError, 'Re-import from Gmail')}</AlertDescription></Alert> : null}
+          {stopError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(stopError, 'Stop Gmail import')}</AlertDescription></Alert> : null}
         </CardContent>
       </Card>
     </section>
@@ -310,6 +344,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
   const syncStatuses = useProviderSyncStatuses(client);
   const triggerSync = useTriggerProviderSyncMutation(client);
   const reimportProviderAccount = useReimportProviderAccountMutation(client);
+  const stopProviderSync = useStopProviderSyncMutation(client);
   const { refetch: refetchSyncStatuses } = syncStatuses;
 
   useEffect(() => {
@@ -380,7 +415,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
         <>
           {gmailStatuses.map((status) => (
             <div key={status.id} className="flex flex-col gap-5">
-              <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} reimporting={reimportProviderAccount.isPending && reimportProviderAccount.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} reimportError={reimportProviderAccount.variables === status.id ? reimportProviderAccount.error : null} onSync={() => triggerSync.mutate(status.id)} onReimport={() => reimportProviderAccount.mutate(status.id)} />
+              <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} reimporting={reimportProviderAccount.isPending && reimportProviderAccount.variables === status.id} stopping={stopProviderSync.isPending && stopProviderSync.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} reimportError={reimportProviderAccount.variables === status.id ? reimportProviderAccount.error : null} stopError={stopProviderSync.variables === status.id ? stopProviderSync.error : null} onSync={() => triggerSync.mutate(status.id)} onReimport={() => reimportProviderAccount.mutate(status.id)} onStop={() => stopProviderSync.mutate(status.id)} />
               <ProviderAccountCard account={status} disconnecting={disconnectProviderAccount.isPending && disconnectProviderAccount.variables === status.id} disconnectError={disconnectProviderAccount.variables === status.id ? disconnectProviderAccount.error : null} onDisconnect={() => onDisconnect(status)} />
             </div>
           ))}
