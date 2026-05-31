@@ -8,10 +8,14 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
 use hail_api::routes::compose::{
-    ComposeError, Composer, OutboundMessage, ReplyContext, ReplyHeaders,
+    ComposeError, Composer, GmailOutboundSmtpFactory, OutboundMessage, ProviderOutboundAccount,
+    ProviderRoutingComposer, ReplyContext, ReplyHeaders,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
+use hail_worker::gmail_outbound_smtp::{
+    GmailOutboundMessage, GmailOutboundSmtp, GmailOutboundSmtpError,
+};
 use secrecy::SecretString;
 use tower::ServiceExt;
 
@@ -127,7 +131,7 @@ impl Composer for FakeComposer {
                 return Err(ComposeError::SenderIdentityUnavailable);
             }
             self.calls.lock().expect("calls mutex").push(Call::Create {
-                from: from.to_string(),
+                from: message.from.unwrap_or_else(|| from.to_string()),
                 to: message.to,
                 cc: message.cc,
                 bcc: message.bcc,
@@ -178,6 +182,125 @@ impl Composer for FakeComposer {
             Ok(self.context.lock().expect("context mutex").clone())
         })
     }
+}
+
+struct ProviderComposerAdapter(Arc<FakeComposer>);
+
+impl Composer for ProviderComposerAdapter {
+    fn create_draft<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        from: &'a str,
+        message: OutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
+        self.0.create_draft(state, token, from, message)
+    }
+
+    fn submit<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        from: &'a str,
+        email_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        self.0.submit(state, token, from, email_id)
+    }
+
+    fn thread_context<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ReplyContext>, ComposeError>> + Send + 'a>> {
+        self.0.thread_context(state, token, thread_id)
+    }
+}
+
+#[derive(Clone)]
+struct FakeGmailOutboundSmtpFactory {
+    calls: Arc<Mutex<Vec<GmailOutboundMessage>>>,
+}
+
+impl Default for FakeGmailOutboundSmtpFactory {
+    fn default() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl FakeGmailOutboundSmtpFactory {
+    fn calls(&self) -> Vec<GmailOutboundMessage> {
+        self.calls.lock().expect("smtp calls").clone()
+    }
+}
+
+impl GmailOutboundSmtpFactory for FakeGmailOutboundSmtpFactory {
+    fn build<'a>(
+        &'a self,
+        _state: &'a AppState,
+        _account: &'a ProviderOutboundAccount,
+    ) -> Pin<Box<dyn Future<Output = Result<Box<dyn GmailOutboundSmtp>, ComposeError>> + Send + 'a>>
+    {
+        let calls = self.calls.clone();
+        Box::pin(async move {
+            Ok(Box::new(FakeGmailOutboundSmtp { calls }) as Box<dyn GmailOutboundSmtp>)
+        })
+    }
+}
+
+struct FakeGmailOutboundSmtp {
+    calls: Arc<Mutex<Vec<GmailOutboundMessage>>>,
+}
+
+impl GmailOutboundSmtp for FakeGmailOutboundSmtp {
+    fn send_gmail<'a>(
+        &'a self,
+        message: &'a GmailOutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), GmailOutboundSmtpError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.lock().expect("smtp calls").push(message.clone());
+            Ok(())
+        })
+    }
+}
+
+fn app_with_provider_router(
+    state: AppState,
+    composer: Arc<FakeComposer>,
+    smtp: Arc<FakeGmailOutboundSmtpFactory>,
+) -> Router {
+    let protected = hail_api::routes::compose::router_with_composer(Arc::new(
+        ProviderRoutingComposer::new(ProviderComposerAdapter(composer), (*smtp).clone()),
+    ))
+    .layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        require_auth,
+    ));
+    Router::new().merge(protected).with_state(state)
+}
+
+async fn provider_request(
+    state: AppState,
+    composer: Arc<FakeComposer>,
+    smtp: Arc<FakeGmailOutboundSmtpFactory>,
+    sid: &str,
+    body: String,
+) -> axum::response::Response {
+    app_with_provider_router(state, composer, smtp)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/compose")
+                .header(header::COOKIE, format!("hail_session={sid}"))
+                .header(CSRF_HEADER, "1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
 }
 
 fn compose_body(send_at: Option<chrono::DateTime<Utc>>) -> String {
@@ -346,7 +469,9 @@ async fn compose_accepts_rich_body_html_sanitizes_and_derives_plaintext() {
     assert!(html.contains("<h2>Plan</h2>"));
     assert!(html.contains("<strong>Bob</strong>"));
     assert!(html.contains("<em>team</em>"));
-    assert!(html.contains("<ul><li><p>First item</p></li><li><p><a href=\"https://example.org/report?x=1&amp;y=2\""));
+    assert!(html.contains(
+        "<ul><li><p>First item</p></li><li><p><a href=\"https://example.org/report?x=1&amp;y=2\""
+    ));
     assert!(html.contains("rel=\"noopener noreferrer\""));
     assert!(html.contains("target=\"_blank\""));
     assert!(html.contains("<blockquote><p>Prior context</p></blockquote>"));
@@ -421,7 +546,10 @@ async fn reply_with_body_html_blockquote_keeps_client_quote_without_extra_server
         panic!("second call should create reply draft");
     };
     assert_eq!(plain_text, "Thanks. Original note");
-    assert_eq!(html, "<p>Thanks.</p><blockquote><p>Original note</p></blockquote>");
+    assert_eq!(
+        html,
+        "<p>Thanks.</p><blockquote><p>Original note</p></blockquote>"
+    );
     assert_eq!(html.matches("<blockquote>").count(), 1);
     assert_eq!(
         reply,
@@ -474,6 +602,93 @@ async fn provider_smarthost_mode_keeps_compose_on_existing_jmap_submit_path() {
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn compose_routes_connected_provider_from_address_via_gmail_smtp() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@gmail.example").await;
+    sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?1, 'account-test', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+                 ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
+    )
+    .bind(user_id)
+    .bind(r#"["https://www.googleapis.com/auth/gmail.readonly","https://www.googleapis.com/auth/gmail.send"]"#)
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let composer = Arc::new(FakeComposer::default());
+    let smtp = Arc::new(FakeGmailOutboundSmtpFactory::default());
+    let resp = provider_request(
+        state.clone(),
+        composer.clone(),
+        smtp.clone(),
+        &sid,
+        compose_body(None),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "sent");
+    assert_eq!(json["submission_id"], "provider:gmail:1");
+    assert_eq!(smtp.calls().len(), 1);
+    assert_eq!(
+        composer.calls().len(),
+        1,
+        "provider send creates draft but skips JMAP submit"
+    );
+
+    let event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_sync_events WHERE event_type = 'sent_via_provider'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap();
+    assert_eq!(event_count, 1);
+}
+
+#[tokio::test]
+async fn compose_provider_from_without_send_scope_marks_reauth() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@gmail.example").await;
+    sqlx::query(
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?1, 'account-test', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+                 ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
+    )
+    .bind(user_id)
+    .bind(r#"["https://www.googleapis.com/auth/gmail.readonly"]"#)
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let composer = Arc::new(FakeComposer::default());
+    let smtp = Arc::new(FakeGmailOutboundSmtpFactory::default());
+    let resp = provider_request(
+        state.clone(),
+        composer,
+        smtp.clone(),
+        &sid,
+        compose_body(None),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(smtp.calls().is_empty());
+    let status: String = sqlx::query_scalar("SELECT sync_status FROM provider_accounts LIMIT 1")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "needs_reauth");
 }
 
 #[tokio::test]

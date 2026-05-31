@@ -270,6 +270,7 @@ async fn account_cancel_maps_to_paused_status_and_sync_paused_event() {
         last_profile_history_id: Some("100".to_owned()),
         initial_sync_completed_at: Some("2026-01-01T00:10:00Z".to_owned()),
         sync_backoff_secs: None,
+        granted_scopes_json: r#"["https://www.googleapis.com/auth/gmail.send"]"#.to_string(),
     };
 
     let summary =

@@ -16,6 +16,7 @@ pub enum ProviderSyncOperationKind {
     Sync,
     MessageImport,
     MessageSkip,
+    OutboundSend,
     Retry,
     Failure,
     Token,
@@ -29,6 +30,7 @@ impl ProviderSyncOperationKind {
             Self::Sync => "sync",
             Self::MessageImport => "message_import",
             Self::MessageSkip => "message_skip",
+            Self::OutboundSend => "outbound_send",
             Self::Retry => "retry",
             Self::Failure => "failure",
             Self::Token => "token",
@@ -49,6 +51,7 @@ pub enum ProviderSyncEventType {
     MessageSkipped,
     MessageRetryScheduled,
     MessageFailed,
+    SentViaProvider,
     TokenRevoked,
     Disconnected,
 }
@@ -66,6 +69,7 @@ impl ProviderSyncEventType {
             Self::MessageSkipped => "message_skipped",
             Self::MessageRetryScheduled => "message_retry_scheduled",
             Self::MessageFailed => "message_failed",
+            Self::SentViaProvider => "sent_via_provider",
             Self::TokenRevoked => "token_revoked",
             Self::Disconnected => "disconnected",
         }

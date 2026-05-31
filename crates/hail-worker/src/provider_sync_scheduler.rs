@@ -17,8 +17,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::gmail_client::{
-    GmailAccessToken, GmailAccessTokenProvider, GmailApiErrorKind, GmailClient, GmailClientError,
-    provider_worker_http_client,
+    GMAIL_SEND_SCOPE, GmailAccessToken, GmailAccessTokenProvider, GmailApiErrorKind, GmailClient,
+    GmailClientError, provider_worker_http_client,
 };
 use crate::gmail_incremental_sync::{
     GmailIncrementalSyncError, GmailIncrementalSyncOptions, run_gmail_incremental_sync,
@@ -65,6 +65,7 @@ pub struct ProviderSyncAccount {
     pub last_profile_history_id: Option<String>,
     pub initial_sync_completed_at: Option<String>,
     pub sync_backoff_secs: Option<i64>,
+    pub granted_scopes_json: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,7 +288,9 @@ pub async fn process_provider_sync_accounts(
 }
 
 fn sync_mode(account: &ProviderSyncAccount) -> ProviderSyncMode {
-    if account.initial_sync_completed_at.is_none() {
+    if account.sync_status == "needs_reauth" {
+        ProviderSyncMode::Incremental
+    } else if account.initial_sync_completed_at.is_none() {
         ProviderSyncMode::Initial
     } else {
         ProviderSyncMode::Incremental
@@ -342,20 +345,21 @@ async fn select_due_gmail_provider_accounts(
             Option<String>,
             Option<String>,
             Option<i64>,
+            String,
         ),
     >(
         "SELECT id, user_id, jmap_account_id, provider_account_id, provider_email, sync_status, \
-                last_profile_history_id, initial_sync_completed_at, sync_backoff_secs \
+                last_profile_history_id, initial_sync_completed_at, sync_backoff_secs, granted_scopes_json \
          FROM provider_accounts \
          WHERE provider_kind = 'gmail' \
-           AND sync_status IN ('initial_sync', 'active', 'error') \
+           AND sync_status IN ('initial_sync', 'active', 'error', 'needs_reauth') \
            AND refresh_token_enc IS NOT NULL \
            AND length(refresh_token_enc) >= 29 \
            AND refresh_token_ref IS NULL \
            AND (next_sync_after IS NULL OR next_sync_after <= ?1) \
            AND (last_sync_attempted_at IS NULL OR last_sync_attempted_at <= ?2 \
-                OR sync_status IN ('initial_sync', 'error')) \
-         ORDER BY CASE sync_status WHEN 'initial_sync' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, \
+                OR sync_status IN ('initial_sync', 'error', 'needs_reauth')) \
+         ORDER BY CASE sync_status WHEN 'initial_sync' THEN 0 WHEN 'needs_reauth' THEN 1 WHEN 'error' THEN 2 ELSE 3 END, \
                   COALESCE(last_sync_attempted_at, ''), id",
     )
     .bind(&now_s)
@@ -376,6 +380,7 @@ async fn select_due_gmail_provider_accounts(
                     last_profile_history_id,
                     initial_sync_completed_at,
                     sync_backoff_secs,
+                    granted_scopes_json,
                 )| ProviderSyncAccount {
                     id,
                     user_id,
@@ -386,6 +391,7 @@ async fn select_due_gmail_provider_accounts(
                     last_profile_history_id,
                     initial_sync_completed_at,
                     sync_backoff_secs,
+                    granted_scopes_json,
                 },
             )
             .collect()
@@ -460,6 +466,8 @@ async fn mark_scheduler_failed(
         && error.class == "provider_rate_limited"
     {
         "initial_sync"
+    } else if error.class == "provider_scope_missing" {
+        "needs_reauth"
     } else {
         "error"
     };
@@ -861,6 +869,7 @@ pub mod live {
             account: ProviderSyncAccount,
             cancel: &CancellationToken,
         ) -> std::result::Result<ProviderSyncRunOutcome, ProviderSyncRunError> {
+            ensure_gmail_send_scope(&account)?;
             let gmail = self.gmail_client(&account).await?;
             let (importer, route_jmap) = self.importer(&account).await?;
             let router = ScreenerRfc822ImportRouter::new(&route_jmap);
@@ -911,6 +920,7 @@ pub mod live {
             account: ProviderSyncAccount,
             cancel: &CancellationToken,
         ) -> std::result::Result<ProviderSyncRunOutcome, ProviderSyncRunError> {
+            ensure_gmail_send_scope(&account)?;
             let gmail = self.gmail_client(&account).await?;
             let (importer, route_jmap) = self.importer(&account).await?;
             let router = ScreenerRfc822ImportRouter::new(&route_jmap);
@@ -1056,6 +1066,21 @@ pub mod live {
     {
         use serde::Deserialize;
         String::deserialize(deserializer).map(SecretString::from)
+    }
+
+    fn ensure_gmail_send_scope(
+        account: &ProviderSyncAccount,
+    ) -> std::result::Result<(), ProviderSyncRunError> {
+        let scopes = serde_json::from_str::<Vec<String>>(&account.granted_scopes_json)
+            .map_err(|err| ProviderSyncRunError::permanent("provider_scope_corrupt", err))?;
+        if scopes.iter().any(|scope| scope == GMAIL_SEND_SCOPE) {
+            Ok(())
+        } else {
+            Err(ProviderSyncRunError::permanent(
+                "provider_scope_missing",
+                "Re-authenticate Gmail to enable outbound sending",
+            ))
+        }
     }
 
     fn classify_initial_sync_error(error: GmailInitialSyncError) -> ProviderSyncRunError {

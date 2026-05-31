@@ -121,7 +121,11 @@ async fn reimport_provider_account(
 ) -> Response {
     match reset_provider_account_for_reimport(&state.db, user.id, id).await {
         Ok(ReimportResetResult::Updated(account)) => {
-            tracing::info!(provider_account_id = id, user_id = user.id, "provider reimport requested");
+            tracing::info!(
+                provider_account_id = id,
+                user_id = user.id,
+                "provider reimport requested"
+            );
             Json(ProviderSyncTriggerResponse { account }).into_response()
         }
         Ok(ReimportResetResult::AlreadyInitialSync) => {
@@ -148,7 +152,11 @@ async fn stop_provider_sync(
 ) -> Response {
     match pause_provider_account_sync(&state.db, user.id, id).await {
         Ok(StopSyncResult::Updated(account)) => {
-            tracing::info!(provider_account_id = id, user_id = user.id, "provider sync stop requested");
+            tracing::info!(
+                provider_account_id = id,
+                user_id = user.id,
+                "provider sync stop requested"
+            );
             Json(ProviderSyncTriggerResponse { account }).into_response()
         }
         Ok(StopSyncResult::NotInFlight) => {
@@ -174,7 +182,7 @@ async fn list_statuses(
                 sync_backoff_secs, last_error_class, last_profile_history_id, \
                 profile_synced_at \
          FROM provider_accounts \
-         WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'paused') \
+         WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
          ORDER BY provider_email COLLATE NOCASE, id",
     )
     .bind(user_id)
@@ -196,7 +204,7 @@ async fn mark_provider_account_due(
     let mut tx = db.begin().await?;
     let found: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM provider_accounts \
-         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'paused')",
+         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused')",
     )
     .bind(provider_account_id)
     .bind(user_id)
@@ -246,7 +254,7 @@ async fn reset_provider_account_for_reimport(
     let status: Option<String> = sqlx::query_scalar(
         "SELECT sync_status FROM provider_accounts \
          WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' \
-           AND sync_status IN ('active', 'error', 'initial_sync', 'paused') \
+           AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
            AND refresh_token_enc IS NOT NULL",
     )
     .bind(provider_account_id)
@@ -313,7 +321,10 @@ async fn pause_provider_account_sync(
         return Ok(StopSyncResult::NotFound);
     };
 
-    if !matches!(status.as_str(), "active" | "initial_sync" | "error") {
+    if !matches!(
+        status.as_str(),
+        "active" | "initial_sync" | "error" | "needs_reauth"
+    ) {
         tx.commit().await?;
         return Ok(StopSyncResult::NotInFlight);
     }

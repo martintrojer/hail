@@ -40,7 +40,7 @@ function providerAccount(
     provider_account_id: 'reader@gmail.com',
     provider_email: 'reader@gmail.com',
     display_email: 'Reader <reader@gmail.com>',
-    granted_scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+    granted_scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send'],
     sync_status: 'active',
     cached_access_token_expires_at: '2026-05-26T18:00:00Z',
     last_profile_history_id: '12345',

@@ -41,6 +41,7 @@ type ProviderSyncStatusValue =
   | 'active'
   | 'error'
   | 'paused'
+  | 'needs_reauth'
   | 'revoked'
   | 'disconnected'
   | (string & {});
@@ -52,6 +53,7 @@ function statusLabel(status: ProviderSyncStatusValue, recovered = false) {
     case 'initial_sync': return 'Initial import running';
     case 'active': return 'Connected';
     case 'error': return 'Needs attention';
+    case 'needs_reauth': return 'Reconnect for sending';
     case 'paused': return 'Paused';
     case 'revoked': return 'Access revoked';
     case 'disconnected': return 'Disconnected';
@@ -60,11 +62,11 @@ function statusLabel(status: ProviderSyncStatusValue, recovered = false) {
 }
 
 function canTriggerSync(status: ProviderSyncStatusValue) {
-  return !['disabled', 'disconnected', 'revoked'].includes(status);
+  return !['disabled', 'disconnected', 'revoked', 'needs_reauth'].includes(status);
 }
 
 function canReimport(status: ProviderSyncStatusValue) {
-  return !['disabled', 'disconnected', 'revoked'].includes(status);
+  return !['disabled', 'disconnected', 'revoked', 'needs_reauth'].includes(status);
 }
 
 function statusVariant(status: ProviderSyncStatusValue): 'secondary' | 'destructive' | 'outline' {
@@ -73,6 +75,7 @@ function statusVariant(status: ProviderSyncStatusValue): 'secondary' | 'destruct
     case 'initial_sync':
       return 'secondary';
     case 'error':
+    case 'needs_reauth':
     case 'revoked':
       return 'destructive';
     default:
@@ -102,7 +105,7 @@ function isRecovered(status: ProviderSyncStatus) {
 }
 
 function isServerSyncing(status: ProviderSyncStatus) {
-  if (status.sync_status === 'paused') return false;
+  if (status.sync_status === 'paused' || status.sync_status === 'needs_reauth') return false;
   return status.sync_status === 'initial_sync' || Boolean(
     status.last_sync_attempted_at &&
     (!status.last_sync_succeeded_at || new Date(status.last_sync_attempted_at) > new Date(status.last_sync_succeeded_at)),
@@ -110,6 +113,7 @@ function isServerSyncing(status: ProviderSyncStatus) {
 }
 
 function isHealthyBadge(status: ProviderSyncStatus, recovered: boolean) {
+  if (status.sync_status === 'needs_reauth') return false;
   return (status.sync_status === 'active' && (!status.last_error_event || recovered)) ||
     (status.sync_status === 'error' && recovered);
 }
@@ -130,6 +134,7 @@ function StatusBadge({ status }: { status: ProviderSyncStatus }) {
 }
 
 function failureText(status: ProviderSyncStatus) {
+  if (status.sync_status === 'needs_reauth') return 'Re-authenticate Gmail to enable outbound sending. Existing import keeps working.';
   if (isRecovered(status)) return 'No active failure — last sync succeeded';
   const className = status.last_error_event?.safe_error_class || status.last_error_class;
   if (className === 'provider_quota') {
@@ -262,9 +267,15 @@ function ProviderSyncStatusCard({ status, syncing, reimporting, stopping, syncEr
                 </AlertDialogContent>
               </AlertDialog>
             ) : null}
-            <Button type="button" onClick={onSync} disabled={syncDisabled}>
-              {syncing ? 'Requesting sync…' : 'Sync now'}
-            </Button>
+            {status.sync_status === 'needs_reauth' ? (
+              <Button type="button" onClick={() => { window.location.href = '/api/provider-accounts/gmail/connect'; }}>
+                Re-authenticate
+              </Button>
+            ) : (
+              <Button type="button" onClick={onSync} disabled={syncDisabled}>
+                {syncing ? 'Requesting sync…' : 'Sync now'}
+              </Button>
+            )}
             {canReimport(status.sync_status) ? (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
@@ -405,7 +416,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
         </CardHeader>
 
         <CardContent className="grid gap-3 sm:grid-cols-3">
-          <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Read-only scope</CardTitle><CardDescription>Hail requests Gmail read-only access for one-way import.</CardDescription></CardHeader></Card>
+          <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Read-only scope</CardTitle><CardDescription>Hail requests Gmail read-only and send access for import plus outbound Gmail SMTP.</CardDescription></CardHeader></Card>
           <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Tokens stay server-side</CardTitle><CardDescription>The browser only receives an authorization URL, never OAuth tokens.</CardDescription></CardHeader></Card>
           <Card size="sm" className="bg-muted/40 shadow-none"><CardHeader><CardTitle>Local truth</CardTitle><CardDescription>Imported messages are viewed and routed from Stalwart, not Gmail labels.</CardDescription></CardHeader></Card>
         </CardContent>
