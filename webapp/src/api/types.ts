@@ -1058,6 +1058,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/papertrail/sectioned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_papertrail_sectioned"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1262,6 +1278,7 @@ export interface components {
             new_for_you: components["schemas"]["MailViewItem"][];
             previously_seen: components["schemas"]["MailViewItem"][];
             previously_seen_total: number;
+            next_cursor?: string | null;
         };
         InviteAcceptResponse: {
             user: components["schemas"]["UserView"];
@@ -1631,6 +1648,12 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
+        };
+        SectionedMailViewResponse: {
+            bubble_up?: components["schemas"]["MailViewItem"][] | null;
+            new: components["schemas"]["MailViewItem"][];
+            seen: components["schemas"]["MailViewItem"][];
+            next_cursor?: string | null;
         };
     };
     responses: never;
@@ -4977,6 +5000,43 @@ export interface operations {
             };
             /** @description A dependency is unhealthy. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_papertrail_sectioned: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paper Trail mail view partitioned into unread and read sections. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionedMailViewResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Paper Trail sectioned view lookup failed. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

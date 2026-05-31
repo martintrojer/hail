@@ -36,6 +36,7 @@ import {
   type DraftRequest,
   type DraftResponse,
   type ImboxSectionedResponse,
+  type SectionedMailViewResponse,
   type LoginRequest,
   type PutContactNoteRequest,
   type RestoreThreadResponse,
@@ -624,6 +625,17 @@ export function useImboxSectioned(
   return useQuery({
     queryKey: queryKeys.imboxSectioned(),
     queryFn: () => client.getImboxSectioned(),
+    ...options,
+  });
+}
+
+export function usePapertrailSectioned(
+  client = defaultApiClient,
+  options?: QueryConfig<SectionedMailViewResponse>,
+) {
+  return useQuery({
+    queryKey: queryKeys.viewSectioned('papertrail'),
+    queryFn: () => client.getPapertrailSectioned(),
     ...options,
   });
 }

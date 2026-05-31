@@ -35,6 +35,9 @@ type ScreenerGetSuccess = ResponseBody<
 type ViewCountsGetSuccess = ResponseBody<
   paths['/api/views/counts']['get']['responses']['200']
 >;
+type PapertrailSectionedGetSuccess = ResponseBody<
+  paths['/api/views/papertrail/sectioned']['get']['responses']['200']
+>;
 type ScreenerAllowedGetSuccess = ResponseBody<
   paths['/api/views/screener/allowed']['get']['responses']['200']
 >;
@@ -271,7 +274,9 @@ export interface ImboxSectionedResponse {
   previously_seen: MailViewItem[];
   new_count: number;
   previously_seen_total: number;
+  next_cursor?: string | null;
 }
+export type SectionedMailViewResponse = PapertrailSectionedGetSuccess;
 export type TrashViewResponse = TrashGetSuccess;
 export type ArchiveViewResponse = ArchiveGetSuccess;
 export type SearchResult = components['schemas']['SearchResult'];
@@ -691,6 +696,13 @@ export class HailApiClient {
   async getImboxSectioned(): Promise<ImboxSectionedResponse> {
     return this.#json<ImboxSectionedResponse>(
       await this.#request('/api/views/imbox/sectioned'),
+      200,
+    );
+  }
+
+  async getPapertrailSectioned(): Promise<SectionedMailViewResponse> {
+    return this.#json<SectionedMailViewResponse>(
+      await this.#request('/api/views/papertrail/sectioned'),
       200,
     );
   }

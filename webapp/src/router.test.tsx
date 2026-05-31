@@ -121,6 +121,7 @@ beforeEach(() => {
         previously_seen: [],
         new_count: 0,
         previously_seen_total: 0,
+        next_cursor: null,
       });
     }
 

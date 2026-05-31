@@ -545,6 +545,7 @@ where
         .routes(routes!(get_imbox_sectioned).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_feed).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_papertrail).layer(Extension(mail_provider.clone())))
+        .routes(routes!(get_papertrail_sectioned).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_drafts).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_trash).layer(Extension(mail_provider.clone())))
         .routes(routes!(get_spam).layer(Extension(mail_provider.clone())))
@@ -820,6 +821,21 @@ struct ImboxSectionedResponse {
     previously_seen: Vec<MailViewItem>,
     new_count: usize,
     previously_seen_total: usize,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct SectionedMailViewResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bubble_up: Option<Vec<MailViewItem>>,
+    new: Vec<MailViewItem>,
+    seen: Vec<MailViewItem>,
+    next_cursor: Option<String>,
+}
+
+struct LoadedSectionedMailView {
+    response: SectionedMailViewResponse,
+    seen_total: usize,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -934,6 +950,53 @@ async fn get_papertrail(
     Query(query): Query<ViewQuery>,
 ) -> Response {
     get_view(state, user, provider, query, MailView::Papertrail).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/views/papertrail/sectioned",
+    tag = TAG,
+    params(ViewQuery),
+    responses(
+        (status = 200, description = "Paper Trail mail view partitioned into unread and read sections.", body = SectionedMailViewResponse),
+        (status = 401, description = "Missing or invalid session."),
+        (status = 500, description = "Paper Trail sectioned view lookup failed."),
+    ),
+)]
+async fn get_papertrail_sectioned(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Extension(provider): Extension<Arc<dyn MailViewProvider>>,
+    Query(query): Query<ViewQuery>,
+) -> Response {
+    match get_unread_sectioned_view(
+        &state,
+        &user,
+        provider,
+        query,
+        MailView::Papertrail,
+        false,
+        false,
+        true,
+        MAX_LIMIT,
+        None,
+    )
+    .await
+    {
+        Ok(sectioned) => Json(sectioned.response).into_response(),
+        Err(SectionedViewError::Provider(err)) => {
+            tracing::warn!(user_id = user.id, error = %err.0, "papertrail sectioned view lookup failed");
+            internal()
+        }
+        Err(SectionedViewError::Sqlx(err)) => {
+            tracing::error!(user_id = user.id, error = %err, "papertrail sectioned metadata lookup failed");
+            internal()
+        }
+        Err(SectionedViewError::Labels(err)) => {
+            tracing::error!(user_id = user.id, error = %err, "papertrail sectioned label lookup failed");
+            internal()
+        }
+    }
 }
 
 #[utoipa::path(
@@ -1379,74 +1442,157 @@ async fn get_imbox_sectioned_view(
     provider: Arc<dyn MailViewProvider>,
     query: ViewQuery,
 ) -> Response {
-    let _cursor = query.cursor.as_deref();
-    let limit = query.normalized_limit();
-
-    let mut items = match provider
-        .list(&state, user.jmap_token.clone(), MailView::Imbox, limit)
-        .await
+    match get_unread_sectioned_view(
+        &state,
+        &user,
+        provider,
+        query,
+        MailView::Imbox,
+        true,
+        true,
+        false,
+        25,
+        None,
+    )
+    .await
     {
-        Ok(items) => items,
-        Err(err) => {
+        Ok(sectioned) => Json(ImboxSectionedResponse {
+            bubbled_up: sectioned.response.bubble_up.unwrap_or_default(),
+            new_count: sectioned.response.new.len(),
+            new_for_you: sectioned.response.new,
+            previously_seen: sectioned.response.seen,
+            previously_seen_total: sectioned.seen_total,
+            next_cursor: sectioned.response.next_cursor,
+        })
+        .into_response(),
+        Err(SectionedViewError::Provider(err)) => {
             tracing::warn!(user_id = user.id, error = %err.0, "imbox sectioned view lookup failed");
-            return internal();
+            internal()
         }
-    };
-
-    if let Err(err) = annotate_note_flags(&state, user.id, &mut items).await {
-        tracing::error!(user_id = user.id, error = %err, "imbox sectioned note flag lookup failed");
-        return internal();
+        Err(SectionedViewError::Sqlx(err)) => {
+            tracing::error!(user_id = user.id, error = %err, "imbox sectioned metadata lookup failed");
+            internal()
+        }
+        Err(SectionedViewError::Labels(err)) => {
+            tracing::error!(user_id = user.id, error = %err, "imbox sectioned label lookup failed");
+            internal()
+        }
     }
-    if let Err(err) = annotate_item_labels(&state, user.id, &mut items).await {
-        tracing::error!(user_id = user.id, error = %err, "imbox sectioned label lookup failed");
-        return internal();
+}
+
+#[derive(Debug)]
+enum SectionedViewError {
+    Provider(MailViewError),
+    Sqlx(sqlx::Error),
+    Labels(hail_db::labels::LabelDbError),
+}
+
+impl From<MailViewError> for SectionedViewError {
+    fn from(value: MailViewError) -> Self {
+        Self::Provider(value)
     }
+}
 
-    let seen_thread_ids = match hail_db::seen_thread_ids(&state.db, user.id).await {
-        Ok(thread_ids) => thread_ids,
-        Err(err) => {
-            tracing::error!(user_id = user.id, error = %err, "seen thread id lookup failed");
-            return internal();
-        }
-    };
-    let fired_bubble_up_thread_ids = match hail_db::fired_bubble_up_thread_ids(&state.db, user.id)
-        .await
-    {
-        Ok(thread_ids) => thread_ids,
-        Err(err) => {
-            tracing::error!(user_id = user.id, error = %err, "fired bubble-up thread id lookup failed");
-            return internal();
-        }
+impl From<sqlx::Error> for SectionedViewError {
+    fn from(value: sqlx::Error) -> Self {
+        Self::Sqlx(value)
+    }
+}
+
+impl From<hail_db::labels::LabelDbError> for SectionedViewError {
+    fn from(value: hail_db::labels::LabelDbError) -> Self {
+        Self::Labels(value)
+    }
+}
+
+async fn get_unread_sectioned_view(
+    state: &AppState,
+    user: &AuthUser,
+    provider: Arc<dyn MailViewProvider>,
+    query: ViewQuery,
+    view: MailView,
+    include_bubble_up: bool,
+    use_thread_seen_state: bool,
+    overfetch_seen: bool,
+    seen_limit: usize,
+    seen_cursor: Option<usize>,
+) -> Result<LoadedSectionedMailView, SectionedViewError> {
+    let limit = query.normalized_limit();
+    let seen_offset = query
+        .cursor
+        .as_deref()
+        .and_then(|cursor| cursor.parse::<usize>().ok())
+        .or(seen_cursor)
+        .unwrap_or(0);
+
+    let fetch_limit = if overfetch_seen {
+        limit
+            .saturating_add(seen_offset)
+            .saturating_add(seen_limit)
+            .saturating_add(1)
+    } else {
+        limit
     };
 
-    let mut bubbled_up = Vec::new();
-    let mut new_for_you = Vec::new();
-    let mut previously_seen = Vec::new();
-    let mut previously_seen_total = 0;
+    let mut items = provider
+        .list(state, user.jmap_token.clone(), view, fetch_limit)
+        .await?;
+
+    annotate_note_flags(state, user.id, &mut items).await?;
+    annotate_item_labels(state, user.id, &mut items).await?;
+
+    let seen_thread_ids = if use_thread_seen_state {
+        hail_db::seen_thread_ids(&state.db, user.id).await?
+    } else {
+        HashSet::new()
+    };
+    let fired_bubble_up_thread_ids = if include_bubble_up {
+        hail_db::fired_bubble_up_thread_ids(&state.db, user.id).await?
+    } else {
+        HashSet::new()
+    };
+
+    let mut bubble_up = include_bubble_up.then(Vec::new);
+    let mut new = Vec::new();
+    let mut seen = Vec::new();
+    let mut seen_total = 0;
 
     for item in items {
         if fired_bubble_up_thread_ids.contains(&item.thread_id) {
-            bubbled_up.push(item);
-        } else if seen_thread_ids.contains(&item.thread_id) {
-            previously_seen_total += 1;
-            if previously_seen.len() < 25 {
-                previously_seen.push(item);
+            if let Some(bubble_up) = &mut bubble_up {
+                bubble_up.push(item);
             }
+            continue;
+        }
+
+        let is_seen = if use_thread_seen_state {
+            seen_thread_ids.contains(&item.thread_id)
         } else {
-            new_for_you.push(item);
+            !item.unread
+        };
+
+        if is_seen {
+            if seen_total >= seen_offset && seen.len() < seen_limit {
+                seen.push(item);
+            }
+            seen_total += 1;
+        } else if new.len() < limit {
+            new.push(item);
         }
     }
 
-    let new_count = new_for_you.len();
+    let next_cursor = (seen_total > seen_offset + seen.len())
+        .then(|| (seen_offset + seen.len()).to_string());
 
-    Json(ImboxSectionedResponse {
-        bubbled_up,
-        new_for_you,
-        previously_seen,
-        new_count,
-        previously_seen_total,
+    Ok(LoadedSectionedMailView {
+        response: SectionedMailViewResponse {
+            bubble_up,
+            new,
+            seen,
+            next_cursor,
+        },
+        seen_total,
     })
-    .into_response()
 }
 
 async fn annotate_note_flags(
