@@ -1,7 +1,7 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApiClientProvider } from '../api/ApiClientProvider';
 import {
   HailApiError,
@@ -37,7 +37,8 @@ class ThreadPageTestClient extends TestHailApiClient {
   readonly replyLaterCalls: string[] = [];
   readonly trashCalls: string[] = [];
   readonly archiveCalls: string[] = [];
-  readonly classifyCalls: Array<{ threadId: string; to: MailClassification }> = [];
+  readonly classifyCalls: Array<{ threadId: string; to: MailClassification }> =
+    [];
   readonly createdNotes: Array<{
     threadId: string;
     request: CreateThreadNoteRequest;
@@ -47,7 +48,10 @@ class ThreadPageTestClient extends TestHailApiClient {
     request: BubbleUpRequest;
   }> = [];
   readonly assignLabelCalls: Array<{ threadId: string; labelId: number }> = [];
-  readonly assignLabelNameCalls: Array<{ threadId: string; label_name: string }> = [];
+  readonly assignLabelNameCalls: Array<{
+    threadId: string;
+    label_name: string;
+  }> = [];
   readonly removeLabelCalls: Array<{ threadId: string; labelId: number }> = [];
   readonly markThreadCalls: Array<{ threadId: string; read: boolean }> = [];
 
@@ -87,12 +91,16 @@ class ThreadPageTestClient extends TestHailApiClient {
     labelId: number,
   ): Promise<LabelItemResponse> {
     this.assignLabelCalls.push({ threadId, labelId });
-    const label = (await this.listLabels()).labels.find((candidate) => candidate.id === labelId);
+    const label = (await this.listLabels()).labels.find(
+      (candidate) => candidate.id === labelId,
+    );
     if (!label) {
       throw new HailApiError(
         404,
         { error: 'missing label' },
-        new Response(JSON.stringify({ error: 'missing label' }), { status: 404 }),
+        new Response(JSON.stringify({ error: 'missing label' }), {
+          status: 404,
+        }),
       );
     }
     if (!this.thread.labels.some((existing) => existing.id === label.id)) {
@@ -105,15 +113,23 @@ class ThreadPageTestClient extends TestHailApiClient {
     threadId: string,
     request: { label_name: string },
   ): Promise<LabelItemResponse> {
-    this.assignLabelNameCalls.push({ threadId, label_name: request.label_name });
+    this.assignLabelNameCalls.push({
+      threadId,
+      label_name: request.label_name,
+    });
     const label = labelResponse(99, request.label_name);
     this.thread.labels = [...this.thread.labels, label];
     return { label };
   }
 
-  override async removeLabelFromThread(threadId: string, labelId: number): Promise<void> {
+  override async removeLabelFromThread(
+    threadId: string,
+    labelId: number,
+  ): Promise<void> {
     this.removeLabelCalls.push({ threadId, labelId });
-    this.thread.labels = this.thread.labels.filter((label) => label.id !== labelId);
+    this.thread.labels = this.thread.labels.filter(
+      (label) => label.id !== labelId,
+    );
   }
 
   override async markThread(threadId: string, read: boolean): Promise<void> {
@@ -209,6 +225,12 @@ let restoreNetworkFetch: (() => void) | null = null;
 function restoreRouterState() {
   window.history.pushState({}, '', '/');
 }
+
+beforeAll(() => {
+  if (!HTMLElement.prototype.scrollIntoView) {
+    HTMLElement.prototype.scrollIntoView = () => undefined;
+  }
+});
 
 afterEach(() => {
   cleanup();
@@ -307,8 +329,10 @@ function sampleThread(
         to: [{ name: 'Reader', email: 'reader@example.com' }],
         received_at: '2026-05-23T12:00:00Z',
         html: '<p><strong>Sanitized receipt</strong> ready.</p>',
-        html_with_remote_images: '<p><strong>Sanitized receipt</strong> ready.</p>',
-        reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><p><strong>Sanitized receipt</strong> ready.</p></blockquote>',
+        html_with_remote_images:
+          '<p><strong>Sanitized receipt</strong> ready.</p>',
+        reply_quote_html:
+          '<p>On date, Alice Sender wrote:</p><blockquote><p><strong>Sanitized receipt</strong> ready.</p></blockquote>',
         preview: 'Sanitized receipt ready.',
         blocked_trackers: [
           {
@@ -324,7 +348,8 @@ function sampleThread(
         received_at: null,
         html: '   ',
         html_with_remote_images: '   ',
-        reply_quote_html: '<p>On date, Unknown sender wrote:</p><blockquote></blockquote>',
+        reply_quote_html:
+          '<p>On date, Unknown sender wrote:</p><blockquote></blockquote>',
         preview: 'Plaintext fallback line one.\nPlaintext fallback line two.',
         blocked_trackers: [],
       },
@@ -339,10 +364,17 @@ describe('ThreadPage', () => {
   it('uses the centralized AppShell reading container instead of a route max-width wrapper', async () => {
     renderThread(sampleThread());
 
-    expect(await screen.findByRole('button', { name: 'Back' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Back' }),
+    ).toBeInTheDocument();
     const content = screen.getByTestId('app-shell-content');
     expect(content).toHaveAttribute('data-hail-content-layout', 'reading');
-    expect(content).toHaveClass('max-w-3xl', 'lg:max-w-4xl', 'xl:max-w-5xl', 'min-w-0');
+    expect(content).toHaveClass(
+      'max-w-3xl',
+      'lg:max-w-4xl',
+      'xl:max-w-5xl',
+      'min-w-0',
+    );
   });
 
   it('renders sanitized HTML in an isolated iframe and shows blocked trackers', async () => {
@@ -356,12 +388,17 @@ describe('ThreadPage', () => {
       '1x1 tracking pixel removed',
     );
 
-    const iframe = container.querySelector('iframe[title="Email body from Alice Sender"]') as HTMLIFrameElement | null;
+    const iframe = container.querySelector(
+      'iframe[title="Email body from Alice Sender"]',
+    ) as HTMLIFrameElement | null;
     expect(iframe).toHaveAttribute(
       'sandbox',
       'allow-same-origin allow-popups allow-popups-to-escape-sandbox',
     );
-    expect(iframe).not.toHaveAttribute('sandbox', expect.stringContaining('allow-scripts'));
+    expect(iframe).not.toHaveAttribute(
+      'sandbox',
+      expect.stringContaining('allow-scripts'),
+    );
 
     await waitFor(() => {
       expect(iframe?.contentDocument?.body.innerHTML).toBe(
@@ -370,7 +407,137 @@ describe('ThreadPage', () => {
     });
   });
 
+  it('moves the active message highlight with j/k and scrolls the active email into view', async () => {
+    const scrollIntoView = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+      scrollIntoView,
+    );
 
+    renderThread(
+      sampleThread({
+        messages: [
+          {
+            email_id: 'email-1',
+            from: [{ name: 'Alice Sender', email: 'alice@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T12:00:00Z',
+            html: '<p>First</p>',
+            html_with_remote_images: '<p>First</p>',
+            reply_quote_html:
+              '<p>On date, Alice wrote:</p><blockquote><p>First</p></blockquote>',
+            preview: 'First',
+            blocked_trackers: [],
+          },
+          {
+            email_id: 'email-2',
+            from: [{ name: 'Bob Sender', email: 'bob@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T13:00:00Z',
+            html: '<p>Second</p>',
+            html_with_remote_images: '<p>Second</p>',
+            reply_quote_html:
+              '<p>On date, Bob wrote:</p><blockquote><p>Second</p></blockquote>',
+            preview: 'Second',
+            blocked_trackers: [],
+          },
+        ],
+      }),
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'Back' }),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        document.querySelector('article[aria-current="true"]'),
+      ).toHaveAttribute('data-email-id', 'email-2');
+    });
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'k', bubbles: true }),
+    );
+    await waitFor(() => {
+      expect(
+        document.querySelector('article[aria-current="true"]'),
+      ).toHaveAttribute('data-email-id', 'email-1');
+    });
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'j', bubbles: true }),
+    );
+    await waitFor(() => {
+      expect(
+        document.querySelector('article[aria-current="true"]'),
+      ).toHaveAttribute('data-email-id', 'email-2');
+    });
+  });
+
+  it('routes keyboard reply through the active email id', async () => {
+    renderThread(
+      sampleThread({
+        messages: [
+          {
+            email_id: 'email-1',
+            from: [{ name: 'Alice Sender', email: 'alice@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T12:00:00Z',
+            html: '<p>First</p>',
+            html_with_remote_images: '<p>First</p>',
+            reply_quote_html:
+              '<p>On date, Alice wrote:</p><blockquote><p>First</p></blockquote>',
+            preview: 'First',
+            blocked_trackers: [],
+          },
+          {
+            email_id: 'email-2',
+            from: [{ name: 'Bob Sender', email: 'bob@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T13:00:00Z',
+            html: '<p>Second</p>',
+            html_with_remote_images: '<p>Second</p>',
+            reply_quote_html:
+              '<p>On date, Bob wrote:</p><blockquote><p>Second</p></blockquote>',
+            preview: 'Second',
+            blocked_trackers: [],
+          },
+          {
+            email_id: 'email-3',
+            from: [{ name: 'Carol Sender', email: 'carol@example.com' }],
+            to: [{ name: 'Reader', email: 'reader@example.com' }],
+            received_at: '2026-05-23T14:00:00Z',
+            html: '<p>Third</p>',
+            html_with_remote_images: '<p>Third</p>',
+            reply_quote_html:
+              '<p>On date, Carol wrote:</p><blockquote><p>Third</p></blockquote>',
+            preview: 'Third',
+            blocked_trackers: [],
+          },
+        ],
+      }),
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'Back' }),
+    ).toBeInTheDocument();
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'k', bubbles: true }),
+    );
+    await waitFor(() => {
+      expect(
+        document.querySelector('article[aria-current="true"]'),
+      ).toHaveAttribute('data-email-id', 'email-2');
+    });
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'r', bubbles: true }),
+    );
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/compose');
+      expect(window.location.search).toContain('replyTo=thread-1');
+      expect(window.location.search).toContain('in_reply_to=email-2');
+    });
+  });
 
   it('renders thread labels as leaf chips with full-path titles', async () => {
     renderThread(
@@ -389,17 +556,34 @@ describe('ThreadPage', () => {
       }),
     );
 
-    expect(await screen.findByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Manage labels' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Assign one or more labels to this thread.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manage thread labels' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manage thread labels' })).toHaveTextContent('Labels');
+    expect(
+      await screen.findByRole('heading', { name: 'Receipt' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Manage labels' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Assign one or more labels to this thread.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Manage thread labels' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Manage thread labels' }),
+    ).toHaveTextContent('Labels');
     expect(screen.getByLabelText('Thread labels')).toBeInTheDocument();
-    expect(screen.getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
+    expect(screen.getByText('Receipts')).toHaveAttribute(
+      'title',
+      'Work/Receipts',
+    );
     expect(screen.getByLabelText('Label Work/Receipts')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage thread labels' }));
-    expect(await screen.findByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Manage thread labels' }),
+    );
+    expect(
+      await screen.findByRole('heading', { name: 'Manage labels' }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Adding one label keeps/)).toBeInTheDocument();
   });
 
@@ -412,16 +596,26 @@ describe('ThreadPage', () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     expect(await screen.findByText('Receipts')).toBeInTheDocument();
-    expect(screen.queryByText('Assign one or more labels to this thread.')).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Manage labels' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Manage thread labels' }));
-    expect(await screen.findByRole('heading', { name: 'Manage labels' })).toBeInTheDocument();
+    expect(
+      screen.queryByText('Assign one or more labels to this thread.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Manage labels' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Manage thread labels' }),
+    );
+    expect(
+      await screen.findByRole('heading', { name: 'Manage labels' }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Adding one label keeps/)).toBeInTheDocument();
     expect(screen.getByText('Add or remove labels')).toBeInTheDocument();
     fireEvent.click(await screen.findByText('Hail'));
 
     await waitFor(() => {
-      expect(client.assignLabelCalls).toEqual([{ threadId: 'thread-1', labelId: 13 }]);
+      expect(client.assignLabelCalls).toEqual([
+        { threadId: 'thread-1', labelId: 13 },
+      ]);
     });
     await waitFor(() => {
       expect(
@@ -433,7 +627,9 @@ describe('ThreadPage', () => {
 
     fireEvent.click(screen.getAllByText('Receipts').at(-1)!);
     await waitFor(() => {
-      expect(client.removeLabelCalls).toEqual([{ threadId: 'thread-1', labelId: 12 }]);
+      expect(client.removeLabelCalls).toEqual([
+        { threadId: 'thread-1', labelId: 12 },
+      ]);
     });
     await waitFor(() => {
       expect(
@@ -461,7 +657,9 @@ describe('ThreadPage', () => {
           ?.labels.map((label) => label.name),
       ).toEqual(['Projects/Hail', 'Family/Kids']);
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.thread('thread-1'),
+    });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
   });
 
@@ -475,8 +673,10 @@ describe('ThreadPage', () => {
             to: [{ name: 'Reader', email: 'reader@example.com' }],
             received_at: '2026-05-23T12:00:00Z',
             html: '<p>Logo</p>',
-            html_with_remote_images: '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
-            reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
+            html_with_remote_images:
+              '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
+            reply_quote_html:
+              '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
             preview: 'Logo',
             blocked_trackers: [
               {
@@ -493,7 +693,9 @@ describe('ThreadPage', () => {
       }),
     );
 
-    const firstFrame = await screen.findByTitle('Email body from Alice Sender') as HTMLIFrameElement;
+    const firstFrame = (await screen.findByTitle(
+      'Email body from Alice Sender',
+    )) as HTMLIFrameElement;
     await waitFor(() => {
       expect(firstFrame.contentDocument?.querySelector('img')).toBeNull();
     });
@@ -506,7 +708,9 @@ describe('ThreadPage', () => {
         'https://cdn.example/logo.png',
       );
     });
-    expect(screen.getByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Hide remote images' }),
+    ).toBeInTheDocument();
 
     cleanup();
     renderThread(
@@ -518,24 +722,28 @@ describe('ThreadPage', () => {
             to: [{ name: 'Reader', email: 'reader@example.com' }],
             received_at: '2026-05-23T12:00:00Z',
             html: '<p>Logo</p>',
-            html_with_remote_images: '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
-            reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
+            html_with_remote_images:
+              '<p>Logo</p><img src="https://cdn.example/logo.png" alt="Logo">',
+            reply_quote_html:
+              '<p>On date, Alice Sender wrote:</p><blockquote><p>Logo</p></blockquote>',
             preview: 'Logo',
             blocked_trackers: [],
           },
         ],
       }),
     );
-    expect(await screen.findByRole('button', { name: 'Hide remote images' })).toBeInTheDocument();
-    const persistedFrame = await screen.findByTitle('Email body from Alice Sender') as HTMLIFrameElement;
+    expect(
+      await screen.findByRole('button', { name: 'Hide remote images' }),
+    ).toBeInTheDocument();
+    const persistedFrame = (await screen.findByTitle(
+      'Email body from Alice Sender',
+    )) as HTMLIFrameElement;
     await waitFor(() => {
-      expect(persistedFrame.contentDocument?.querySelector('img')).toHaveAttribute(
-        'src',
-        'https://cdn.example/logo.png',
-      );
+      expect(
+        persistedFrame.contentDocument?.querySelector('img'),
+      ).toHaveAttribute('src', 'https://cdn.example/logo.png');
     });
   });
-
 
   it('does not add artificial borders to email layout tables', async () => {
     renderThread(
@@ -547,8 +755,10 @@ describe('ThreadPage', () => {
             to: [{ name: 'Reader', email: 'reader@example.com' }],
             received_at: '2026-05-23T12:00:00Z',
             html: '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
-            html_with_remote_images: '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
-            reply_quote_html: '<p>On date, Alice Sender wrote:</p><blockquote><table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table></blockquote>',
+            html_with_remote_images:
+              '<table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table>',
+            reply_quote_html:
+              '<p>On date, Alice Sender wrote:</p><blockquote><table><tbody><tr><td>Outer<table><tbody><tr><td>Inner</td></tr></tbody></table></td></tr></tbody></table></blockquote>',
             preview: 'Nested layout table',
             blocked_trackers: [],
           },
@@ -556,7 +766,9 @@ describe('ThreadPage', () => {
       }),
     );
 
-    const iframe = await screen.findByTitle('Email body from Alice Sender') as HTMLIFrameElement;
+    const iframe = (await screen.findByTitle(
+      'Email body from Alice Sender',
+    )) as HTMLIFrameElement;
     await waitFor(() => {
       const htmlBoundary = iframe.contentDocument?.body;
       expect(htmlBoundary?.textContent).toContain('Outer');
@@ -666,17 +878,25 @@ describe('ThreadPage', () => {
     await waitFor(() => {
       expect(client.setAsideCalls).toEqual(['thread-1']);
     });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.thread('thread-1'),
+    });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
-    expect(await screen.findByText('Thread added to Set Aside.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Thread added to Set Aside.'),
+    ).toBeInTheDocument();
 
     fireEvent.click(actionButtons[0]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Feed' }));
 
     await waitFor(() => {
-      expect(client.classifyCalls).toEqual([{ threadId: 'thread-1', to: 'feed' }]);
+      expect(client.classifyCalls).toEqual([
+        { threadId: 'thread-1', to: 'feed' },
+      ]);
     });
-    expect(await screen.findByText('Moved thread to Feed.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Moved thread to Feed.'),
+    ).toBeInTheDocument();
   });
 
   it('keeps the thread open and shows an action error when a mutation fails', async () => {
@@ -692,7 +912,9 @@ describe('ThreadPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Thread action failed with HTTP 500.',
     );
-    expect(screen.getByRole('heading', { name: 'Receipt' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Receipt' }),
+    ).toBeInTheDocument();
     expect(client.trashCalls).toEqual(['thread-1']);
   });
 
@@ -730,7 +952,9 @@ describe('ThreadPage', () => {
     fireEvent.click(actionButtons[0]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Trash' }));
     await waitFor(() => expect(client.trashCalls).toEqual(['thread-1']));
-    expect(await screen.findByText('Thread moved to trash.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Thread moved to trash.'),
+    ).toBeInTheDocument();
 
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.thread('thread-1'),
@@ -754,6 +978,7 @@ describe('ThreadPage', () => {
       expect(window.location.pathname).toBe('/compose');
       expect(window.location.search).toContain('replyTo=thread-1');
       expect(window.location.search).toContain('replyAll=false');
+      expect(window.location.search).toContain('in_reply_to=message-html');
     });
 
     window.history.pushState({}, '', '/thread/thread-1');
@@ -767,6 +992,7 @@ describe('ThreadPage', () => {
       expect(window.location.pathname).toBe('/compose');
       expect(window.location.search).toContain('replyTo=thread-1');
       expect(window.location.search).toContain('replyAll=true');
+      expect(window.location.search).toContain('in_reply_to=message-html');
     });
 
     window.history.pushState({}, '', '/thread/thread-1');
@@ -778,7 +1004,24 @@ describe('ThreadPage', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Forward' }));
     await waitFor(() => {
       expect(window.location.pathname).toBe('/compose');
-      expect(window.location.search).toContain('forward=message-html');
+      expect(window.location.search).toContain('forward=thread-1');
+      expect(window.location.search).toContain('in_reply_to=message-html');
+    });
+  });
+
+  it('routes per-message reply popup actions through that message email id', async () => {
+    renderThread(sampleThread());
+
+    const actionButtons = await screen.findAllByRole('button', {
+      name: 'Message actions',
+    });
+    fireEvent.click(actionButtons[1]);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/compose');
+      expect(window.location.search).toContain('replyTo=thread-1');
+      expect(window.location.search).toContain('in_reply_to=message-plain');
     });
   });
 
@@ -797,14 +1040,18 @@ describe('ThreadPage', () => {
       expect(client.bubbleUpCalls).toHaveLength(1);
     });
     expect(client.bubbleUpCalls[0].threadId).toBe('thread-1');
-    expect(new Date(client.bubbleUpCalls[0].request.at).valueOf()).not.toBeNaN();
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.thread('thread-1') });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
-    expect(await screen.findByText(/Thread will bubble up at/)).toBeInTheDocument();
     expect(
-      fetchSpy.mock.calls.some(([url]) =>
-        String(url).endsWith('/api/auth/me'),
-      ),
+      new Date(client.bubbleUpCalls[0].request.at).valueOf(),
+    ).not.toBeNaN();
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: queryKeys.thread('thread-1'),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.views() });
+    expect(
+      await screen.findByText(/Thread will bubble up at/),
+    ).toBeInTheDocument();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/api/auth/me')),
     ).toBe(false);
   });
 });

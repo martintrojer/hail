@@ -334,7 +334,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   useImperativeHandle(ref, () => ({
     focus: (position = 'end') => {
       window.requestAnimationFrame(() => {
-        editor?.chain().focus(position).run();
+        if (!editor || editor.isDestroyed) return;
+        editor.chain().focus(position).run();
       });
     },
   }), [editor]);

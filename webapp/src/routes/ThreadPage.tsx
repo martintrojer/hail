@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   HailApiClient,
   type ThreadMessage,
@@ -23,7 +23,12 @@ import { BubbleUpSubmenu } from '../components/BubbleUpSubmenu';
 import { EmailFrame } from '../components/EmailFrame';
 import { ErrorState } from '../components/ErrorState';
 import { InlineNote, type InlineNoteProps } from '../components/InlineNote';
-import { ArrowLeft, MoreHorizontal, ShieldOff, StickyNote } from '../components/icons';
+import {
+  ArrowLeft,
+  MoreHorizontal,
+  ShieldOff,
+  StickyNote,
+} from '../components/icons';
 import { LabelChips } from '../components/LabelChips';
 import { ThreadLabelPicker } from '../components/ThreadLabelPicker';
 import { LoadingState } from '../components/LoadingState';
@@ -31,7 +36,12 @@ import { StateCard } from '../components/StateCard';
 import { Alert, AlertAction, AlertDescription } from '../components/ui/alert';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
 import { Separator } from '../components/ui/separator';
 import { MessageActionPopup } from '../components/MessageActionPopup';
 import { useUndoToast } from '../components/UndoToastProvider';
@@ -40,7 +50,11 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { AppShell } from '../layout/AppShell';
 import { formatFullDateTime } from '../lib/dates';
 import { actionErrorMessage, threadErrorMessage } from '../lib/errorMessages';
-import { formatParticipantEmail, formatParticipantList, formatParticipantName } from '../lib/participants';
+import {
+  formatParticipantEmail,
+  formatParticipantList,
+  formatParticipantName,
+} from '../lib/participants';
 
 interface ThreadPageProps {
   threadId: string;
@@ -63,13 +77,21 @@ function remoteImagesStorageKey(threadId: string, messageId: string) {
 function storedRemoteImagesPreference(threadId: string, messageId: string) {
   if (typeof window === 'undefined') return false;
   try {
-    return window.localStorage.getItem(remoteImagesStorageKey(threadId, messageId)) === '1';
+    return (
+      window.localStorage.getItem(
+        remoteImagesStorageKey(threadId, messageId),
+      ) === '1'
+    );
   } catch {
     return false;
   }
 }
 
-function storeRemoteImagesPreference(threadId: string, messageId: string, enabled: boolean) {
+function storeRemoteImagesPreference(
+  threadId: string,
+  messageId: string,
+  enabled: boolean,
+) {
   if (typeof window === 'undefined') return;
   try {
     const key = remoteImagesStorageKey(threadId, messageId);
@@ -216,6 +238,19 @@ function toLocalNote(note: ThreadNote): LocalNote {
   };
 }
 
+function isUnreadMessage(message: ThreadMessage) {
+  return Boolean((message as ThreadMessage & { unread?: boolean }).unread);
+}
+
+function initialActiveMessageId(messages: ThreadMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isUnreadMessage(messages[index])) {
+      return messages[index].email_id;
+    }
+  }
+
+  return messages.at(-1)?.email_id ?? null;
+}
 
 function MessageCard({
   threadId,
@@ -230,6 +265,8 @@ function MessageCard({
   onSaveNote,
   hiddenActions,
   actionBusy,
+  active,
+  messageRef,
 }: {
   threadId: string;
   message: ThreadMessage;
@@ -237,19 +274,28 @@ function MessageCard({
   addingNote: boolean;
   popupOpen: boolean;
   actionBusy: boolean;
+  active: boolean;
+  messageRef: (node: HTMLElement | null) => void;
   onTogglePopup: (messageId: string) => void;
   onClosePopup: () => void;
-  onPopupAction: (message: ThreadMessage, action: string, payload?: unknown) => void;
+  onPopupAction: (
+    message: ThreadMessage,
+    action: string,
+    payload?: unknown,
+  ) => void;
   onCancelAddNote: () => void;
   onSaveNote: (messageId: string, text: string) => void;
   hiddenActions?: string[];
 }) {
   const sender = firstSender(message);
-  const remoteImagesAvailable = message.html_with_remote_images !== message.html;
+  const remoteImagesAvailable =
+    message.html_with_remote_images !== message.html;
   const [showRemoteImages, setShowRemoteImages] = useState(() =>
     storedRemoteImagesPreference(threadId, message.email_id),
   );
-  const renderedHtml = showRemoteImages ? message.html_with_remote_images : message.html;
+  const renderedHtml = showRemoteImages
+    ? message.html_with_remote_images
+    : message.html;
 
   useEffect(() => {
     if (!remoteImagesAvailable && showRemoteImages) {
@@ -275,7 +321,12 @@ function MessageCard({
   }
 
   return (
-    <article className="py-5">
+    <article
+      ref={messageRef}
+      data-email-id={message.email_id}
+      aria-current={active ? 'true' : undefined}
+      className={`rounded-lg border-l-2 py-5 pl-3 pr-2 transition-colors ${active ? 'border-l-primary bg-primary/5' : 'border-l-transparent'}`}
+    >
       <header className="flex items-start gap-3">
         <div className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
           <span aria-hidden="true">{participantInitial(sender)}</span>
@@ -321,7 +372,8 @@ function MessageCard({
             <Alert className="mt-4 pr-40">
               <ShieldOff aria-hidden="true" />
               <AlertDescription>
-                Remote images are hidden by default. Tracking pixels stay blocked.
+                Remote images are hidden by default. Tracking pixels stay
+                blocked.
               </AlertDescription>
               <AlertAction>
                 <Button
@@ -330,7 +382,9 @@ function MessageCard({
                   size="xs"
                   onClick={toggleRemoteImages}
                 >
-                  {showRemoteImages ? 'Hide remote images' : 'Show remote images'}
+                  {showRemoteImages
+                    ? 'Hide remote images'
+                    : 'Show remote images'}
                 </Button>
               </AlertAction>
             </Alert>
@@ -362,7 +416,10 @@ function MessageCard({
           )}
 
           {addingNote ? (
-            <Card size="sm" className="mt-5 rounded-r-lg border-l-4 border-l-primary">
+            <Card
+              size="sm"
+              className="mt-5 rounded-r-lg border-l-4 border-l-primary"
+            >
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm">
                   <StickyNote aria-hidden="true" />
@@ -414,9 +471,15 @@ function ThreadHeader({
           </>
         ) : null}
       </p>
-      <div className="flex flex-wrap items-center gap-2" aria-label="Thread labels">
+      <div
+        className="flex flex-wrap items-center gap-2"
+        aria-label="Thread labels"
+      >
         {thread.labels.length > 0 ? (
-          <LabelChips labels={thread.labels} className="flex min-w-0 flex-wrap items-center gap-1.5" />
+          <LabelChips
+            labels={thread.labels}
+            className="flex min-w-0 flex-wrap items-center gap-1.5"
+          />
         ) : (
           <span className="text-xs text-muted-foreground">No labels</span>
         )}
@@ -449,14 +512,21 @@ function ThreadDocument({
     () => sortedMessages(thread.messages),
     [thread.messages],
   );
-  const hiddenPopupActions = sourceView === 'set-aside' || sourceView === 'reply-later'
-    ? ['bubble-up', 'set-aside', 'reply-later']
-    : [];
+  const hiddenPopupActions =
+    sourceView === 'set-aside' || sourceView === 'reply-later'
+      ? ['bubble-up', 'set-aside', 'reply-later']
+      : [];
   const [addingNoteFor, setAddingNoteFor] = useState<string | null>(null);
   const [messagePopup, setMessagePopup] = useState<string | null>(null);
   const [bubbleUpOpen, setBubbleUpOpen] = useState(false);
-  const [notes, setNotes] = useState<LocalNote[]>(() => thread.notes.map(toLocalNote));
+  const [notes, setNotes] = useState<LocalNote[]>(() =>
+    thread.notes.map(toLocalNote),
+  );
   const [actionError, setActionError] = useState<string | null>(null);
+  const messageRefs = useRef(new Map<string, HTMLElement>());
+  const [activeEmailId, setActiveEmailId] = useState<string | null>(() =>
+    initialActiveMessageId(messages),
+  );
 
   const setAside = useSetAsideThreadMutation(client);
   const replyLater = useReplyLaterThreadMutation(client);
@@ -477,6 +547,33 @@ function ThreadDocument({
   useEffect(() => {
     setNotes(thread.notes.map(toLocalNote));
   }, [thread.notes]);
+
+  useEffect(() => {
+    const messageIds = new Set(messages.map((message) => message.email_id));
+    if (!activeEmailId || !messageIds.has(activeEmailId)) {
+      setActiveEmailId(initialActiveMessageId(messages));
+    }
+  }, [activeEmailId, messages]);
+
+  useEffect(() => {
+    if (!activeEmailId) {
+      return;
+    }
+
+    messageRefs.current
+      .get(activeEmailId)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [activeEmailId]);
+
+  function setMessageRef(messageId: string) {
+    return (node: HTMLElement | null) => {
+      if (node) {
+        messageRefs.current.set(messageId, node);
+      } else {
+        messageRefs.current.delete(messageId);
+      }
+    };
+  }
 
   function toggleMessagePopup(messageId: string) {
     setMessagePopup((current) => (current === messageId ? null : messageId));
@@ -503,7 +600,8 @@ function ThreadDocument({
     try {
       return await operation();
     } catch (error) {
-      const normalizedError = error instanceof Error ? error : new Error('Thread action failed');
+      const normalizedError =
+        error instanceof Error ? error : new Error('Thread action failed');
       setActionError(actionErrorMessage(normalizedError, 'Thread action'));
       return null;
     }
@@ -512,12 +610,17 @@ function ThreadDocument({
   async function handleBubbleUpSelect(option: string) {
     const isoDate = bubbleUpOptionToIso(option);
     const response = await runThreadAction(() =>
-      bubbleUp.mutateAsync({ threadId: thread.thread_id, request: { at: isoDate } }),
+      bubbleUp.mutateAsync({
+        threadId: thread.thread_id,
+        request: { at: isoDate },
+      }),
     );
     if (!response) {
       return;
     }
-    showToast({ message: `Thread will bubble up at ${formatFullDateTime(isoDate)}` });
+    showToast({
+      message: `Thread will bubble up at ${formatFullDateTime(isoDate)}`,
+    });
     goBack();
   }
 
@@ -540,7 +643,11 @@ function ThreadDocument({
         if (!response) {
           return;
         }
-        showUndoToast('Thread added to Set Aside.', response, 'Set Aside undone.');
+        showUndoToast(
+          'Thread added to Set Aside.',
+          response,
+          'Set Aside undone.',
+        );
         goBack();
         return;
       }
@@ -551,7 +658,11 @@ function ThreadDocument({
         if (!response) {
           return;
         }
-        showUndoToast('Thread added to Reply Later.', response, 'Reply Later undone.');
+        showUndoToast(
+          'Thread added to Reply Later.',
+          response,
+          'Reply Later undone.',
+        );
         goBack();
         return;
       }
@@ -578,18 +689,39 @@ function ThreadDocument({
       }
       case 'reply':
         setActionError(null);
-        void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: false } });
+        void navigate({
+          to: '/compose',
+          search: {
+            replyTo: thread.thread_id,
+            replyAll: false,
+            in_reply_to: message.email_id,
+          },
+        });
         return;
       case 'reply-all':
         setActionError(null);
-        void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: true } });
+        void navigate({
+          to: '/compose',
+          search: {
+            replyTo: thread.thread_id,
+            replyAll: true,
+            in_reply_to: message.email_id,
+          },
+        });
         return;
       case 'forward':
         setActionError(null);
-        void navigate({ to: '/compose', search: { forward: message.email_id } });
+        void navigate({
+          to: '/compose',
+          search: { forward: thread.thread_id, in_reply_to: message.email_id },
+        });
         return;
       case 'move-to': {
-        if (payload !== 'imbox' && payload !== 'feed' && payload !== 'papertrail') {
+        if (
+          payload !== 'imbox' &&
+          payload !== 'feed' &&
+          payload !== 'papertrail'
+        ) {
           showToast({ message: 'Move target not supported.' });
           return;
         }
@@ -623,7 +755,11 @@ function ThreadDocument({
         if (!response) {
           return;
         }
-        showUndoToast('Thread marked as spam.', response, 'Spam action undone.');
+        showUndoToast(
+          'Thread marked as spam.',
+          response,
+          'Spam action undone.',
+        );
         goBack();
         return;
       }
@@ -632,33 +768,79 @@ function ThreadDocument({
     }
   }
 
+  function activeMessageForShortcut() {
+    return (
+      messages.find((message) => message.email_id === activeEmailId) ??
+      messages.at(-1) ??
+      null
+    );
+  }
 
-  function firstMessageForShortcut() {
-    return messages[0] ?? null;
+  function moveActiveMessage(delta: number) {
+    if (messages.length === 0) {
+      return;
+    }
+
+    const currentIndex = messages.findIndex(
+      (message) => message.email_id === activeEmailId,
+    );
+    const fallbackIndex = messages.length - 1;
+    const nextIndex = Math.min(
+      messages.length - 1,
+      Math.max(0, (currentIndex === -1 ? fallbackIndex : currentIndex) + delta),
+    );
+    setActiveEmailId(messages[nextIndex].email_id);
   }
 
   function handleReplyShortcut() {
-    setActionError(null);
-    void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: false } });
-  }
-
-  function handleReplyAllShortcut() {
-    setActionError(null);
-    void navigate({ to: '/compose', search: { replyTo: thread.thread_id, replyAll: true } });
-  }
-
-  function handleForwardShortcut() {
-    const message = firstMessageForShortcut();
+    const message = activeMessageForShortcut();
     if (!message) {
       return;
     }
 
     setActionError(null);
-    void navigate({ to: '/compose', search: { forward: message.email_id } });
+    void navigate({
+      to: '/compose',
+      search: {
+        replyTo: thread.thread_id,
+        replyAll: false,
+        in_reply_to: message.email_id,
+      },
+    });
+  }
+
+  function handleReplyAllShortcut() {
+    const message = activeMessageForShortcut();
+    if (!message) {
+      return;
+    }
+
+    setActionError(null);
+    void navigate({
+      to: '/compose',
+      search: {
+        replyTo: thread.thread_id,
+        replyAll: true,
+        in_reply_to: message.email_id,
+      },
+    });
+  }
+
+  function handleForwardShortcut() {
+    const message = activeMessageForShortcut();
+    if (!message) {
+      return;
+    }
+
+    setActionError(null);
+    void navigate({
+      to: '/compose',
+      search: { forward: thread.thread_id, in_reply_to: message.email_id },
+    });
   }
 
   function handleAddNoteShortcut() {
-    const message = firstMessageForShortcut();
+    const message = activeMessageForShortcut();
     if (!message) {
       return;
     }
@@ -667,8 +849,10 @@ function ThreadDocument({
     setAddingNoteFor(message.email_id);
   }
 
-  function handleThreadShortcut(action: 'archive' | 'trash' | 'set-aside' | 'reply-later') {
-    const message = firstMessageForShortcut();
+  function handleThreadShortcut(
+    action: 'archive' | 'trash' | 'set-aside' | 'reply-later',
+  ) {
+    const message = activeMessageForShortcut();
     if (!message || actionBusy) {
       return;
     }
@@ -677,15 +861,21 @@ function ThreadDocument({
   }
 
   function openActionMenuShortcut() {
-    // Find the last message's ··· button and click it
-    const buttons = document.querySelectorAll<HTMLButtonElement>('[aria-label="Message actions"]');
-    const lastButton = buttons[buttons.length - 1];
-    if (lastButton) {
-      lastButton.click();
+    const activeMessage = activeMessageForShortcut();
+    if (!activeMessage) {
+      return;
     }
+
+    const activeElement = messageRefs.current.get(activeMessage.email_id);
+    const button = activeElement?.querySelector<HTMLButtonElement>(
+      '[aria-label="Message actions"]',
+    );
+    button?.click();
   }
 
   useKeyboardShortcuts({
+    onNextThread: () => moveActiveMessage(1),
+    onPreviousThread: () => moveActiveMessage(-1),
     onReply: handleReplyShortcut,
     onReplyAll: handleReplyAllShortcut,
     onForward: handleForwardShortcut,
@@ -748,6 +938,8 @@ function ThreadDocument({
                 addingNote={addingNoteFor === message.email_id}
                 popupOpen={messagePopup === message.email_id}
                 actionBusy={actionBusy}
+                active={activeEmailId === message.email_id}
+                messageRef={setMessageRef(message.email_id)}
                 onTogglePopup={toggleMessagePopup}
                 onClosePopup={closeMessagePopup}
                 onPopupAction={(message, action, payload) => {
@@ -800,8 +992,21 @@ export function ThreadPage({ threadId, client, sourceView }: ThreadPageProps) {
       />
     );
   } else {
-    reading = <ThreadDocument thread={query.data} client={apiClient} sourceView={sourceView} />;
+    reading = (
+      <ThreadDocument
+        thread={query.data}
+        client={apiClient}
+        sourceView={sourceView}
+      />
+    );
   }
 
-  return <AppShell title="Thread" description={undefined} reading={reading} contentLayout="reading" />;
+  return (
+    <AppShell
+      title="Thread"
+      description={undefined}
+      reading={reading}
+      contentLayout="reading"
+    />
+  );
 }

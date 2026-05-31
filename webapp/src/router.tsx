@@ -29,7 +29,12 @@ import {
   CardHeader,
   CardTitle,
 } from './components/ui/card';
-import { Field, FieldDescription, FieldGroup, FieldLabel } from './components/ui/field';
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from './components/ui/field';
 import { Input } from './components/ui/input';
 import { Spinner } from './components/ui/spinner';
 import { useTheme } from './hooks/useTheme';
@@ -74,7 +79,9 @@ function CenteredPage({ children }: { children: ReactNode }) {
       <section className="mx-auto flex min-h-[calc(100vh-6rem)] w-full max-w-md flex-col justify-center">
         <div className="mb-8 flex flex-col items-center">
           <img src="/logo-icon-transparent.png" alt="hail" className="h-16" />
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-foreground">hail</h1>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-foreground">
+            hail
+          </h1>
         </div>
         {children}
       </section>
@@ -94,7 +101,12 @@ function ErrorMessage({ message }: { message: string | null }) {
   );
 }
 
-function SubmitButton({ form, isPending, pendingText, children }: {
+function SubmitButton({
+  form,
+  isPending,
+  pendingText,
+  children,
+}: {
   form?: string;
   isPending: boolean;
   pendingText: string;
@@ -104,10 +116,16 @@ function SubmitButton({ form, isPending, pendingText, children }: {
     <Button type="submit" form={form} disabled={isPending} className="w-full">
       {isPending ? (
         <>
-          <Spinner data-icon="inline-start" aria-hidden="true" role="presentation" />
+          <Spinner
+            data-icon="inline-start"
+            aria-hidden="true"
+            role="presentation"
+          />
           {pendingText}
         </>
-      ) : children}
+      ) : (
+        children
+      )}
     </Button>
   );
 }
@@ -132,8 +150,12 @@ function LoginPage() {
     <CenteredPage>
       <Card size="sm">
         <CardHeader>
-          <CardTitle role="heading" aria-level={2}>Sign in</CardTitle>
-          <CardDescription>Use your hail email and password to continue.</CardDescription>
+          <CardTitle role="heading" aria-level={2}>
+            Sign in
+          </CardTitle>
+          <CardDescription>
+            Use your hail email and password to continue.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form id="login-form" onSubmit={onSubmit}>
@@ -163,7 +185,10 @@ function LoginPage() {
               <ErrorMessage
                 message={
                   login.error
-                    ? formErrorMessage(login.error, 'Sign in failed. Try again.')
+                    ? formErrorMessage(
+                        login.error,
+                        'Sign in failed. Try again.',
+                      )
                     : null
                 }
               />
@@ -171,7 +196,11 @@ function LoginPage() {
           </form>
         </CardContent>
         <CardFooter>
-          <SubmitButton form="login-form" isPending={login.isPending} pendingText="Signing in…">
+          <SubmitButton
+            form="login-form"
+            isPending={login.isPending}
+            pendingText="Signing in…"
+          >
             Sign in
           </SubmitButton>
         </CardFooter>
@@ -179,7 +208,6 @@ function LoginPage() {
     </CenteredPage>
   );
 }
-
 
 function setupInactiveMessage(reason: string | undefined) {
   if (reason === 'config_admin_set') {
@@ -211,9 +239,13 @@ function InvitePage() {
     <CenteredPage>
       <Card size="sm">
         <CardHeader>
-          <CardTitle role="heading" aria-level={2}>Accept invite</CardTitle>
+          <CardTitle role="heading" aria-level={2}>
+            Accept invite
+          </CardTitle>
           {!invite.isPending && !invite.isError ? (
-            <CardDescription>Create a password for {invite.data.email}.</CardDescription>
+            <CardDescription>
+              Create a password for {invite.data.email}.
+            </CardDescription>
           ) : null}
         </CardHeader>
         <CardContent>
@@ -221,7 +253,9 @@ function InvitePage() {
             <p className="text-sm text-muted-foreground">Checking invite…</p>
           ) : invite.isError ? (
             <Alert variant="destructive">
-              <AlertDescription>This invite is invalid, expired, or already used.</AlertDescription>
+              <AlertDescription>
+                This invite is invalid, expired, or already used.
+              </AlertDescription>
             </Alert>
           ) : (
             <form id="invite-form" onSubmit={onSubmit}>
@@ -237,12 +271,17 @@ function InvitePage() {
                     required
                     minLength={12}
                   />
-                  <FieldDescription>Password must be at least 12 characters.</FieldDescription>
+                  <FieldDescription>
+                    Password must be at least 12 characters.
+                  </FieldDescription>
                 </Field>
                 <ErrorMessage
                   message={
                     acceptInvite.error
-                      ? formErrorMessage(acceptInvite.error, 'Invite failed. Try again.')
+                      ? formErrorMessage(
+                          acceptInvite.error,
+                          'Invite failed. Try again.',
+                        )
                       : null
                   }
                 />
@@ -265,7 +304,6 @@ function InvitePage() {
     </CenteredPage>
   );
 }
-
 
 function SetupPage() {
   const navigate = useNavigate();
@@ -307,7 +345,9 @@ function SetupPage() {
   if (setupState.isPending) {
     return (
       <CenteredPage>
-        <p className="text-center text-muted-foreground">Checking setup state…</p>
+        <p className="text-center text-muted-foreground">
+          Checking setup state…
+        </p>
       </CenteredPage>
     );
   }
@@ -317,11 +357,15 @@ function SetupPage() {
       <CenteredPage>
         <Card size="sm">
           <CardHeader>
-            <CardTitle role="heading" aria-level={2}>Setup unavailable</CardTitle>
+            <CardTitle role="heading" aria-level={2}>
+              Setup unavailable
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <Alert variant="destructive">
-              <AlertDescription>Could not read setup state. Refresh and try again.</AlertDescription>
+              <AlertDescription>
+                Could not read setup state. Refresh and try again.
+              </AlertDescription>
             </Alert>
           </CardContent>
         </Card>
@@ -334,8 +378,12 @@ function SetupPage() {
       <CenteredPage>
         <Card size="sm">
           <CardHeader>
-            <CardTitle role="heading" aria-level={2}>Setup inactive</CardTitle>
-            <CardDescription>{setupInactiveMessage(setupState.data.reason)}</CardDescription>
+            <CardTitle role="heading" aria-level={2}>
+              Setup inactive
+            </CardTitle>
+            <CardDescription>
+              {setupInactiveMessage(setupState.data.reason)}
+            </CardDescription>
           </CardHeader>
           <CardFooter>
             <Button asChild>
@@ -351,23 +399,27 @@ function SetupPage() {
     <CenteredPage>
       <Card size="sm">
         <CardHeader>
-          <CardTitle role="heading" aria-level={2}>First-run setup</CardTitle>
+          <CardTitle role="heading" aria-level={2}>
+            First-run setup
+          </CardTitle>
           <CardDescription>
             Create the first admin mailbox for this hail instance. If Stalwart
-            management is configured, hail authenticates to Stalwart v0.16&apos;s
-            management REST API with the Stalwart admin credentials below,
-            creates the domain and mailbox with a short-lived bearer token, and
-            then verifies the mailbox with JMAP. If management is disabled, the
-            domain and account must already exist in Stalwart and the wizard
-            verifies them with a JMAP login. You need the operator bootstrap
-            token from the server environment/config.
+            management is configured, hail authenticates to Stalwart
+            v0.16&apos;s management REST API with the Stalwart admin credentials
+            below, creates the domain and mailbox with a short-lived bearer
+            token, and then verifies the mailbox with JMAP. If management is
+            disabled, the domain and account must already exist in Stalwart and
+            the wizard verifies them with a JMAP login. You need the operator
+            bootstrap token from the server environment/config.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form id="setup-form" onSubmit={onSubmit}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="setup-bootstrap-token">Bootstrap token</FieldLabel>
+                <FieldLabel htmlFor="setup-bootstrap-token">
+                  Bootstrap token
+                </FieldLabel>
                 <Input
                   id="setup-bootstrap-token"
                   type="password"
@@ -379,28 +431,37 @@ function SetupPage() {
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="stalwart-admin-username">Stalwart admin user</FieldLabel>
+                <FieldLabel htmlFor="stalwart-admin-username">
+                  Stalwart admin user
+                </FieldLabel>
                 <Input
                   id="stalwart-admin-username"
                   value={stalwartAdminUsername}
-                  onChange={(event) => setStalwartAdminUsername(event.target.value)}
+                  onChange={(event) =>
+                    setStalwartAdminUsername(event.target.value)
+                  }
                   autoComplete="off"
                   required
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="stalwart-admin-password">Stalwart admin password</FieldLabel>
+                <FieldLabel htmlFor="stalwart-admin-password">
+                  Stalwart admin password
+                </FieldLabel>
                 <Input
                   id="stalwart-admin-password"
                   type="password"
                   value={stalwartAdminPassword}
-                  onChange={(event) => setStalwartAdminPassword(event.target.value)}
+                  onChange={(event) =>
+                    setStalwartAdminPassword(event.target.value)
+                  }
                   autoComplete="off"
                   required
                 />
                 <FieldDescription>
-                  Local compose defaults to admin/admin1234 via STALWART_RECOVERY_ADMIN.
-                  Use the recovery admin credentials for your Stalwart instance.
+                  Local compose defaults to admin/admin1234 via
+                  STALWART_RECOVERY_ADMIN. Use the recovery admin credentials
+                  for your Stalwart instance.
                 </FieldDescription>
               </Field>
               <Field>
@@ -447,9 +508,10 @@ function SetupPage() {
                   minLength={12}
                 />
                 <FieldDescription>
-                  Password must be at least 12 characters. The email must belong to
-                  the mail domain. The wizard accepts domains with or without a
-                  trailing dot; the API normalizes to lowercase before provisioning.
+                  Password must be at least 12 characters. The email must belong
+                  to the mail domain. The wizard accepts domains with or without
+                  a trailing dot; the API normalizes to lowercase before
+                  provisioning.
                 </FieldDescription>
               </Field>
               <ErrorMessage
@@ -478,7 +540,6 @@ function SetupPage() {
     </CenteredPage>
   );
 }
-
 
 function ImboxPage() {
   return (
@@ -519,8 +580,17 @@ function ScheduledRoutePage() {
 }
 
 function ComposePage() {
-  const { replyTo, replyAll, draftId, forward } = composeRoute.useSearch();
-  return <ComposerPage replyToThreadId={replyTo} replyAll={replyAll} forwardThreadId={forward} draftId={draftId} />;
+  const { replyTo, replyAll, draftId, forward, in_reply_to } =
+    composeRoute.useSearch();
+  return (
+    <ComposerPage
+      replyToThreadId={replyTo}
+      replyAll={replyAll}
+      forwardThreadId={forward}
+      inReplyToEmailId={in_reply_to}
+      draftId={draftId}
+    />
+  );
 }
 
 function ThreadReplyPage({ threadId }: { threadId: string }) {
@@ -756,6 +826,7 @@ interface ComposeSearch {
   draftId?: string;
   draft?: string;
   forward?: string;
+  in_reply_to?: string;
 }
 
 const composeRoute = createRoute({
@@ -763,21 +834,32 @@ const composeRoute = createRoute({
   path: '/compose',
   beforeLoad: requireAuth,
   validateSearch: (search: Record<string, unknown>): ComposeSearch => ({
-    replyTo: typeof search.replyTo === 'string' && search.replyTo.length > 0
-      ? search.replyTo
-      : undefined,
-    replyAll: search.replyAll === '1' || search.replyAll === 'true' || search.replyAll === true,
-    draftId: typeof search.draftId === 'string' && search.draftId.length > 0
-      ? search.draftId
-      : typeof search.draft === 'string' && search.draft.length > 0
+    replyTo:
+      typeof search.replyTo === 'string' && search.replyTo.length > 0
+        ? search.replyTo
+        : undefined,
+    replyAll:
+      search.replyAll === '1' ||
+      search.replyAll === 'true' ||
+      search.replyAll === true,
+    draftId:
+      typeof search.draftId === 'string' && search.draftId.length > 0
+        ? search.draftId
+        : typeof search.draft === 'string' && search.draft.length > 0
+          ? search.draft
+          : undefined,
+    draft:
+      typeof search.draft === 'string' && search.draft.length > 0
         ? search.draft
         : undefined,
-    draft: typeof search.draft === 'string' && search.draft.length > 0
-      ? search.draft
-      : undefined,
-    forward: typeof search.forward === 'string' && search.forward.length > 0
-      ? search.forward
-      : undefined,
+    forward:
+      typeof search.forward === 'string' && search.forward.length > 0
+        ? search.forward
+        : undefined,
+    in_reply_to:
+      typeof search.in_reply_to === 'string' && search.in_reply_to.length > 0
+        ? search.in_reply_to
+        : undefined,
   }),
   component: ComposePage,
 });

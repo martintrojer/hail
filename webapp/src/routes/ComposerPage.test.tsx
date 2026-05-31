@@ -56,7 +56,8 @@ class ComposerPageTestClient extends TestHailApiClient {
         to: [{ email: 'composer@example.com', name: 'Composer' }],
         html: '<p>Can you review this?</p>',
         html_with_remote_images: '<p>Can you review this?</p>',
-        reply_quote_html: '<p>On 2026-05-25T12:30:00+00:00, Alice wrote:</p><blockquote><p>Can you review this?</p></blockquote>',
+        reply_quote_html:
+          '<p>On 2026-05-25T12:30:00+00:00, Alice wrote:</p><blockquote><p>Can you review this?</p></blockquote>',
         preview: 'Can you review this?\nThanks!',
         received_at: '2026-05-25T12:30:00Z',
         blocked_trackers: [],
@@ -73,7 +74,8 @@ class ComposerPageTestClient extends TestHailApiClient {
     cc: ['carol@example.com'],
     bcc: ['dave@example.com'],
     subject: 'Saved draft subject',
-    body_html: '<p>Saved draft body.</p><blockquote><p>Earlier context.</p></blockquote>',
+    body_html:
+      '<p>Saved draft body.</p><blockquote><p>Earlier context.</p></blockquote>',
     body_markdown: 'Saved draft body. Earlier context.',
   };
 
@@ -96,7 +98,9 @@ class ComposerPageTestClient extends TestHailApiClient {
   override async getDraft(draftId: string) {
     this.getDraftCalls.push(draftId);
     if (this.getDraftError) throw this.getDraftError;
-    return this.draftResponse as Awaited<ReturnType<TestHailApiClient['getDraft']>>;
+    return this.draftResponse as Awaited<
+      ReturnType<TestHailApiClient['getDraft']>
+    >;
   }
 
   override async sendCompose(body: ComposeRequest): Promise<ComposeResponse> {
@@ -164,7 +168,10 @@ let restoreComposeRoute: (() => void) | null = null;
 declare global {
   interface Window {
     __HAIL_TEST_EDITOR_UPDATES__?: WeakMap<HTMLElement, (html: string) => void>;
-    __HAIL_TEST_EDITORS__?: WeakMap<HTMLElement, import('@tiptap/react').Editor>;
+    __HAIL_TEST_EDITORS__?: WeakMap<
+      HTMLElement,
+      import('@tiptap/react').Editor
+    >;
   }
 }
 
@@ -192,7 +199,8 @@ beforeAll(() => {
       },
     } as DOMRectList;
   };
-  Range.prototype.getBoundingClientRect = () => document.body.getBoundingClientRect();
+  Range.prototype.getBoundingClientRect = () =>
+    document.body.getBoundingClientRect();
 });
 
 afterEach(() => {
@@ -228,6 +236,7 @@ interface RenderComposerOptions {
   initialSubject?: string;
   replyAll?: boolean;
   draftId?: string;
+  inReplyToEmailId?: string;
 }
 
 function renderComposer({
@@ -237,6 +246,7 @@ function renderComposer({
   initialSubject,
   replyAll,
   draftId,
+  inReplyToEmailId,
 }: RenderComposerOptions = {}) {
   const queryClient = createTestQueryClient();
 
@@ -250,6 +260,7 @@ function renderComposer({
           replyToThreadId={replyToThreadId}
           replyAll={replyAll}
           draftId={draftId}
+          inReplyToEmailId={inReplyToEmailId}
           initialTo={initialTo}
           initialSubject={initialSubject}
         />
@@ -279,7 +290,9 @@ function testEditorForElement(editor: HTMLElement) {
 async function setEditorText(text: string) {
   const editor = await screen.findByLabelText('Body');
   setEditorHtmlForTest(editor, text ? `<p>${text}</p>` : '<p></p>');
-  fireEvent.input(editor, { target: { innerHTML: text ? `<p>${text}</p>` : '<p></p>' } });
+  fireEvent.input(editor, {
+    target: { innerHTML: text ? `<p>${text}</p>` : '<p></p>' },
+  });
 }
 
 function getEditorHtml() {
@@ -288,7 +301,11 @@ function getEditorHtml() {
 
 async function openLinkPopover() {
   const trigger = await screen.findByRole('button', { name: 'Link' });
-  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.pointerDown(trigger, {
+    button: 0,
+    ctrlKey: false,
+    pointerType: 'mouse',
+  });
   fireEvent.click(trigger);
 
   const input = await screen.findByLabelText('Link URL');
@@ -355,10 +372,17 @@ describe('ComposerPage', () => {
   it('uses the centralized AppShell composer container instead of a route max-width wrapper', async () => {
     renderComposer();
 
-    expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Cancel' }),
+    ).toBeInTheDocument();
     const content = screen.getByTestId('app-shell-content');
     expect(content).toHaveAttribute('data-hail-content-layout', 'composer');
-    expect(content).toHaveClass('max-w-3xl', 'lg:max-w-4xl', 'xl:max-w-5xl', 'min-w-0');
+    expect(content).toHaveClass(
+      'max-w-3xl',
+      'lg:max-w-4xl',
+      'xl:max-w-5xl',
+      'min-w-0',
+    );
   });
 
   it('blocks sending while attachments are selected', async () => {
@@ -450,7 +474,11 @@ describe('ComposerPage', () => {
       await screen.findByLabelText('Body'),
       '<p>Hello <strong>Alice</strong></p><ul><li><p>First</p></li></ul>',
     );
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Send now' }),
+      ).not.toBeDisabled(),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
 
@@ -460,7 +488,8 @@ describe('ComposerPage', () => {
       cc: [],
       bcc: [],
       subject: 'Rich message',
-      body_html: '<p>Hello <strong>Alice</strong></p><ul><li><p>First</p></li></ul><p></p>',
+      body_html:
+        '<p>Hello <strong>Alice</strong></p><ul><li><p>First</p></li></ul><p></p>',
       attachments: [],
     });
     expect(client.sendComposeCalls[0]).not.toHaveProperty('body_markdown');
@@ -481,7 +510,9 @@ describe('ComposerPage', () => {
       },
     });
 
-    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<strong>text</strong>'));
+    await waitFor(() =>
+      expect(getEditorHtml()).resolves.toContain('<strong>text</strong>'),
+    );
     const html = await getEditorHtml();
     expect(html).toContain('Safe');
     expect(html).toContain('bad');
@@ -500,7 +531,8 @@ describe('ComposerPage', () => {
 
     fireEvent.paste(editor, {
       clipboardData: {
-        getData: (type: string) => (type === 'text/plain' ? 'Read https://example.com/docs.' : ''),
+        getData: (type: string) =>
+          type === 'text/plain' ? 'Read https://example.com/docs.' : '',
       },
     });
 
@@ -525,7 +557,11 @@ describe('ComposerPage', () => {
     });
     applyLinkFromPopover(invalidPopover.content);
 
-    expect(await within(invalidPopover.content).findByText('Enter an http, https, or mailto URL.')).toBeInTheDocument();
+    expect(
+      await within(invalidPopover.content).findByText(
+        'Enter an http, https, or mailto URL.',
+      ),
+    ).toBeInTheDocument();
     expect(await getEditorHtml()).not.toContain('javascript:');
 
     const validPopover = await openLinkPopover();
@@ -542,7 +578,9 @@ describe('ComposerPage', () => {
 
     tiptapEditor.commands.setTextSelection({ from: 1, to: 8 });
     const removePopover = await openLinkPopover();
-    fireEvent.click(within(removePopover.content).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(
+      within(removePopover.content).getByRole('button', { name: 'Remove' }),
+    );
 
     await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<a'));
     html = await getEditorHtml();
@@ -557,10 +595,16 @@ describe('ComposerPage', () => {
     tiptapEditor.commands.setTextSelection({ from: 1, to: 11 });
 
     fireEvent.keyDown(editor, { key: 'b', ctrlKey: true });
-    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<strong>Bold words</strong>'));
+    await waitFor(() =>
+      expect(getEditorHtml()).resolves.toContain('<strong>Bold words</strong>'),
+    );
 
     fireEvent.keyDown(editor, { key: 'i', ctrlKey: true });
-    await waitFor(() => expect(getEditorHtml()).resolves.toContain('<strong><em>Bold words</em></strong>'));
+    await waitFor(() =>
+      expect(getEditorHtml()).resolves.toContain(
+        '<strong><em>Bold words</em></strong>',
+      ),
+    );
 
     tiptapEditor.commands.setContent('<p>List item</p>');
     tiptapEditor.commands.setTextSelection(1);
@@ -584,41 +628,56 @@ describe('ComposerPage', () => {
     tiptapEditor.commands.setContent('<blockquote><p></p></blockquote>');
     tiptapEditor.commands.setTextSelection(1);
     fireEvent.keyDown(editor, { key: 'Enter' });
-    await waitFor(() => expect(getEditorHtml()).resolves.not.toContain('<blockquote>'));
+    await waitFor(() =>
+      expect(getEditorHtml()).resolves.not.toContain('<blockquote>'),
+    );
   });
 
   it.each([
     ['Ctrl', { ctrlKey: true }],
     ['Meta', { metaKey: true }],
-  ] as const)('sends the current editor HTML on %s+Enter from editor focus', async (_label, modifier) => {
-    const client = renderComposer();
-    fireEvent.change(await screen.findByLabelText('To'), {
-      target: { value: 'alice@example.com' },
-    });
-    fireEvent.change(screen.getByLabelText('Subject'), {
-      target: { value: 'Shortcut message' },
-    });
-    const editor = await screen.findByLabelText('Body');
-    setEditorHtmlForTest(
-      editor,
-      '<p>Hello <strong>Alice</strong></p><blockquote><p>Previous context</p></blockquote>',
-    );
-    editor.focus();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled());
-    const currentBodyHtml = '<p>Hello <strong>Alice</strong></p><blockquote><p>Previous context</p></blockquote><p></p>';
+  ] as const)(
+    'sends the current editor HTML on %s+Enter from editor focus',
+    async (_label, modifier) => {
+      const client = renderComposer();
+      fireEvent.change(await screen.findByLabelText('To'), {
+        target: { value: 'alice@example.com' },
+      });
+      fireEvent.change(screen.getByLabelText('Subject'), {
+        target: { value: 'Shortcut message' },
+      });
+      const editor = await screen.findByLabelText('Body');
+      setEditorHtmlForTest(
+        editor,
+        '<p>Hello <strong>Alice</strong></p><blockquote><p>Previous context</p></blockquote>',
+      );
+      editor.focus();
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', { name: 'Send now' }),
+        ).not.toBeDisabled(),
+      );
+      const currentBodyHtml =
+        '<p>Hello <strong>Alice</strong></p><blockquote><p>Previous context</p></blockquote><p></p>';
 
-    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', target: editor, ...modifier });
+      fireEvent.keyDown(window, {
+        key: 'Enter',
+        code: 'Enter',
+        target: editor,
+        ...modifier,
+      });
 
-    await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
-    expect(client.sendComposeCalls[0]).toEqual({
-      to: ['alice@example.com'],
-      cc: [],
-      bcc: [],
-      subject: 'Shortcut message',
-      body_html: currentBodyHtml,
-      attachments: [],
-    });
-  });
+      await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
+      expect(client.sendComposeCalls[0]).toEqual({
+        to: ['alice@example.com'],
+        cc: [],
+        bcc: [],
+        subject: 'Shortcut message',
+        body_html: currentBodyHtml,
+        attachments: [],
+      });
+    },
+  );
 
   it('closes the composer on Escape from editor focus', async () => {
     renderComposer();
@@ -626,7 +685,11 @@ describe('ComposerPage', () => {
     const editor = await screen.findByLabelText('Body');
     editor.focus();
 
-    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape', target: editor });
+    fireEvent.keyDown(window, {
+      key: 'Escape',
+      code: 'Escape',
+      target: editor,
+    });
 
     expect(closeComposerMock).toHaveBeenCalledTimes(1);
   });
@@ -641,8 +704,18 @@ describe('ComposerPage', () => {
     editor.focus();
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
 
-    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', target: editor, ctrlKey: true });
-    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', target: editor, metaKey: true });
+    fireEvent.keyDown(window, {
+      key: 'Enter',
+      code: 'Enter',
+      target: editor,
+      ctrlKey: true,
+    });
+    fireEvent.keyDown(window, {
+      key: 'Enter',
+      code: 'Enter',
+      target: editor,
+      metaKey: true,
+    });
 
     expect(client.sendComposeCalls).toEqual([]);
   });
@@ -715,11 +788,17 @@ describe('ComposerPage', () => {
     expect(screen.getByLabelText('Bcc')).toHaveValue('dave@example.com');
     expect(screen.getByLabelText('Subject')).toHaveValue('Saved draft subject');
     expect(await getEditorText()).toBe('Saved draft body.Earlier context.');
-    expect(await getEditorHtml()).toContain('<blockquote><p>Earlier context.</p></blockquote>');
+    expect(await getEditorHtml()).toContain(
+      '<blockquote><p>Earlier context.</p></blockquote>',
+    );
     expect(client.getDraftCalls).toEqual(['draft-existing']);
 
     await setEditorText('Updated resumed draft body.');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save draft' }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
@@ -749,7 +828,11 @@ describe('ComposerPage', () => {
 
     expect(await getEditorText()).toBe('Legacy markdown draft body.');
     await setEditorText('Migrated legacy body.');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save draft' }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
@@ -787,7 +870,9 @@ describe('ComposerPage', () => {
   it('keeps send validation strict when a partial draft is saveable', async () => {
     const client = renderComposer();
     await setEditorText('Needs a recipient and subject first.');
-    await waitFor(() => expect(screen.getByText('Draft not saved yet')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText('Draft not saved yet')).toBeInTheDocument(),
+    );
 
     expect(screen.getByRole('button', { name: 'Send now' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send later' })).toBeDisabled();
@@ -825,7 +910,11 @@ describe('ComposerPage', () => {
     expect(client.updateDraftCalls).toEqual([]);
 
     await setEditorText('Updated draft body.');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save draft' })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save draft' }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
 
     await waitFor(() => expect(client.updateDraftCalls).toHaveLength(1));
@@ -896,8 +985,13 @@ describe('ComposerPage', () => {
     renderComposer({ client, draftId: 'draft-existing' });
 
     expect(await getEditorText()).toBe('Same visible text');
-    setEditorHtmlForTest(await screen.findByLabelText('Body'), '<blockquote><p>Same visible text</p></blockquote>');
-    await waitFor(() => expect(screen.getByText('Draft not saved yet')).toBeInTheDocument());
+    setEditorHtmlForTest(
+      await screen.findByLabelText('Body'),
+      '<blockquote><p>Same visible text</p></blockquote>',
+    );
+    await waitFor(() =>
+      expect(screen.getByText('Draft not saved yet')).toBeInTheDocument(),
+    );
 
     await vi.advanceTimersByTimeAsync(5000);
 
@@ -945,7 +1039,11 @@ describe('ComposerPage', () => {
       target: { value: 'ignored-cc@example.com' },
     });
     await fillReplyBody();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send now' })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Send now' }),
+      ).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
 
     await waitFor(() => expect(client.sendReplyCalls).toHaveLength(1));
@@ -983,7 +1081,8 @@ describe('ComposerPage', () => {
           ],
           html: '<p>Line one</p>',
           html_with_remote_images: '<p>Line one</p>',
-          reply_quote_html: '<p>On 2026-05-25T13:45:00+00:00, Bob Sender wrote:</p><blockquote><p>Line one</p></blockquote>',
+          reply_quote_html:
+            '<p>On 2026-05-25T13:45:00+00:00, Bob Sender wrote:</p><blockquote><p>Line one</p></blockquote>',
           preview: 'Line one\nLine two',
           received_at: '2026-05-25T13:45:00Z',
           blocked_trackers: [],
@@ -1004,6 +1103,68 @@ describe('ComposerPage', () => {
     expect(bodyText).toContain('Bob Sender wrote:');
     expect(bodyText).toContain('Line one');
     expect(client.getThreadCalls).toEqual(['thread-456']);
+  });
+
+  it('prefills the quote from in_reply_to instead of the last thread message', async () => {
+    const client = new ComposerPageTestClient();
+    client.threadResponse = {
+      thread_id: 'thread-789',
+      subject: 'Specific message quote',
+      participants: [],
+      notes: [],
+      labels: [],
+      messages: [
+        {
+          email_id: 'email-1',
+          from: [{ email: 'alice@example.com', name: 'Alice' }],
+          to: [{ email: 'composer@example.com', name: 'Composer' }],
+          html: '<p>First body</p>',
+          html_with_remote_images: '<p>First body</p>',
+          reply_quote_html:
+            '<p>Alice wrote:</p><blockquote><p>First body</p></blockquote>',
+          preview: 'First body',
+          received_at: '2026-05-25T12:00:00Z',
+          blocked_trackers: [],
+        },
+        {
+          email_id: 'email-2',
+          from: [{ email: 'bob@example.com', name: 'Bob' }],
+          to: [{ email: 'composer@example.com', name: 'Composer' }],
+          html: '<p>Specific email two body</p>',
+          html_with_remote_images: '<p>Specific email two body</p>',
+          reply_quote_html:
+            '<p>Bob wrote:</p><blockquote><p>Specific email two body</p></blockquote>',
+          preview: 'Specific email two body',
+          received_at: '2026-05-25T13:00:00Z',
+          blocked_trackers: [],
+        },
+        {
+          email_id: 'email-4',
+          from: [{ email: 'dana@example.com', name: 'Dana' }],
+          to: [{ email: 'composer@example.com', name: 'Composer' }],
+          html: '<p>Last message body</p>',
+          html_with_remote_images: '<p>Last message body</p>',
+          reply_quote_html:
+            '<p>Dana wrote:</p><blockquote><p>Last message body</p></blockquote>',
+          preview: 'Last message body',
+          received_at: '2026-05-25T15:00:00Z',
+          blocked_trackers: [],
+        },
+      ],
+    } as unknown as ThreadViewResponse;
+
+    renderComposer({
+      client,
+      replyToThreadId: 'thread-789',
+      inReplyToEmailId: 'email-2',
+    });
+
+    const editorHtml = await getEditorHtml();
+    expect(editorHtml).toContain(
+      '<blockquote><p>Specific email two body</p></blockquote>',
+    );
+    expect(editorHtml).not.toContain('Last message body');
+    expect(screen.getByLabelText('To')).toHaveValue('bob@example.com');
   });
 
   it('renders thread notes when replying', async () => {
@@ -1043,7 +1204,9 @@ describe('ComposerPage', () => {
     expect(await getEditorHtml()).toContain(
       '<blockquote><p>Can you review this?</p></blockquote>',
     );
-    expect((await screen.findByLabelText('Body')).textContent).toContain('Can you review this?');
+    expect((await screen.findByLabelText('Body')).textContent).toContain(
+      'Can you review this?',
+    );
   });
 
   it('shows send mutation error messages from API failures', async () => {

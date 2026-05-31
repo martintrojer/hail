@@ -23,7 +23,10 @@ import {
   useUpdateDraftMutation,
 } from '../api/query';
 import { useAuth } from '../auth/AuthProvider';
-import { RichTextEditor, type RichTextEditorHandle } from '../components/Composer/RichTextEditor';
+import {
+  RichTextEditor,
+  type RichTextEditorHandle,
+} from '../components/Composer/RichTextEditor';
 import { ArrowLeft, Paperclip, iconSizeProps } from '../components/icons';
 import { InlineNote } from '../components/InlineNote';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
@@ -42,6 +45,7 @@ interface ComposerPageProps {
   replyToThreadId?: string;
   replyAll?: boolean;
   forwardThreadId?: string;
+  inReplyToEmailId?: string;
   draftId?: string;
   initialTo?: string[];
   initialSubject?: string;
@@ -65,15 +69,20 @@ interface AttachmentDraft {
 }
 
 const autosaveIntervalMs = 5000;
-const unsupportedAttachmentMessage = 'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
-const lineInputClass = 'h-12 border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0';
+const unsupportedAttachmentMessage =
+  'Attachments are selected, but sending and saving attachments is not supported yet. Remove them before sending, scheduling, or saving this draft.';
+const lineInputClass =
+  'h-12 border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0';
 
 function htmlToPlainTextFallback(html: string) {
   const document = new DOMParser().parseFromString(html, 'text/html');
   return document.body.textContent?.replace(/\u00a0/g, ' ').trim() ?? '';
 }
 
-function draftBodyFromResponse(draft: { body_html?: string | null; body_markdown?: string | null }) {
+function draftBodyFromResponse(draft: {
+  body_html?: string | null;
+  body_markdown?: string | null;
+}) {
   return draft.body_html ?? draft.body_markdown ?? '';
 }
 
@@ -96,11 +105,19 @@ function draftSnapshot(payload: {
 }
 
 function htmlHasContent(html: string) {
-  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim().length > 0;
+  return (
+    html
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim().length > 0
+  );
 }
 
 function splitAddresses(value: string) {
-  return value.split(/[;,]/).map((address) => address.trim()).filter(Boolean);
+  return value
+    .split(/[;,]/)
+    .map((address) => address.trim())
+    .filter(Boolean);
 }
 
 function toFutureIsoDateTimeLocal(value: string, now = new Date()) {
@@ -142,9 +159,14 @@ function uniqueEmails(emails: string[]) {
   return unique;
 }
 
-function withoutCurrentUser(emails: string[], currentUserEmail: string | undefined) {
+function withoutCurrentUser(
+  emails: string[],
+  currentUserEmail: string | undefined,
+) {
   const current = currentUserEmail?.trim().toLowerCase();
-  return uniqueEmails(emails).filter((email) => email.toLowerCase() !== current);
+  return uniqueEmails(emails).filter(
+    (email) => email.toLowerCase() !== current,
+  );
 }
 
 function replySubject(subject: string) {
@@ -180,7 +202,9 @@ function escapeHtmlText(value: string) {
 }
 
 function buildReplyQuoteHtml(message: ThreadMessage) {
-  const serverQuote = (message as ThreadMessage & { reply_quote_html?: string | null }).reply_quote_html;
+  const serverQuote = (
+    message as ThreadMessage & { reply_quote_html?: string | null }
+  ).reply_quote_html;
   if (serverQuote?.trim()) return serverQuote;
 
   return `<p>On ${escapeHtmlText(formatFullDateTime(message.received_at, 'an earlier message'))}, ${escapeHtmlText(formatParticipant(message.from[0]))} wrote:</p><blockquote>${message.html}</blockquote>`;
@@ -197,25 +221,47 @@ function sortedThreadMessages(thread: ThreadViewResponse) {
   });
 }
 
+function messageForQuote(
+  thread: ThreadViewResponse,
+  inReplyToEmailId: string | undefined,
+) {
+  const messages = sortedThreadMessages(thread);
+  if (inReplyToEmailId) {
+    const selectedMessage = messages.find(
+      (message) => message.email_id === inReplyToEmailId,
+    );
+    if (selectedMessage) return selectedMessage;
+  }
+
+  return messages.at(-1) ?? null;
+}
+
 function prefillFromThread(
   thread: ThreadViewResponse,
   replyAll: boolean,
   currentUserEmail: string | undefined,
+  inReplyToEmailId: string | undefined,
 ): ComposerForm | null {
-  const messages = sortedThreadMessages(thread);
-  const lastMessage = messages.at(-1);
+  const lastMessage = messageForQuote(thread, inReplyToEmailId);
   if (!lastMessage) return null;
 
   const senderEmail = lastMessage.from[0]?.email ?? '';
   const to = replyAll
     ? withoutCurrentUser(
-        [senderEmail, ...lastMessage.to.map((participant) => participant.email)],
+        [
+          senderEmail,
+          ...lastMessage.to.map((participant) => participant.email),
+        ],
         currentUserEmail,
       )
     : uniqueEmails(senderEmail ? [senderEmail] : []);
-  const possibleCc = (lastMessage as ThreadMessage & { cc?: ThreadParticipant[] }).cc ?? [];
+  const possibleCc =
+    (lastMessage as ThreadMessage & { cc?: ThreadParticipant[] }).cc ?? [];
   const cc = replyAll
-    ? withoutCurrentUser(possibleCc.map((participant) => participant.email), currentUserEmail)
+    ? withoutCurrentUser(
+        possibleCc.map((participant) => participant.email),
+        currentUserEmail,
+      )
     : [];
 
   return {
@@ -228,9 +274,11 @@ function prefillFromThread(
   };
 }
 
-function prefillForwardFromThread(thread: ThreadViewResponse): ComposerForm | null {
-  const messages = sortedThreadMessages(thread);
-  const lastMessage = messages.at(-1);
+function prefillForwardFromThread(
+  thread: ThreadViewResponse,
+  inReplyToEmailId: string | undefined,
+): ComposerForm | null {
+  const lastMessage = messageForQuote(thread, inReplyToEmailId);
   if (!lastMessage) return null;
 
   return {
@@ -247,7 +295,16 @@ function placeCaretAtStart(editor: RichTextEditorHandle | null) {
   editor?.focus('start');
 }
 
-export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadId, draftId: initialDraftId, initialTo = [], initialSubject = '', client }: ComposerPageProps) {
+export function ComposerPage({
+  replyToThreadId,
+  replyAll = false,
+  forwardThreadId,
+  inReplyToEmailId,
+  draftId: initialDraftId,
+  initialTo = [],
+  initialSubject = '',
+  client,
+}: ComposerPageProps) {
   const contextClient = useApiClient();
   const apiClient = client ?? contextClient;
   const closeComposer = useGoBack();
@@ -274,9 +331,15 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
   const createDraft = useCreateDraftMutation(apiClient);
-  const draftQuery = useDraft(initialDraftId, apiClient, { enabled: Boolean(initialDraftId) && !replyToThreadId && !forwardThreadId });
-  const replyThreadQuery = useThread(replyToThreadId ?? '', apiClient, { enabled: Boolean(replyToThreadId) });
-  const forwardThreadQuery = useThread(forwardThreadId ?? '', apiClient, { enabled: Boolean(forwardThreadId) && !replyToThreadId });
+  const draftQuery = useDraft(initialDraftId, apiClient, {
+    enabled: Boolean(initialDraftId) && !replyToThreadId && !forwardThreadId,
+  });
+  const replyThreadQuery = useThread(replyToThreadId ?? '', apiClient, {
+    enabled: Boolean(replyToThreadId),
+  });
+  const forwardThreadQuery = useThread(forwardThreadId ?? '', apiClient, {
+    enabled: Boolean(forwardThreadId) && !replyToThreadId,
+  });
   const updateDraft = useUpdateDraftMutation(apiClient);
   const hasUnsupportedAttachments = attachments.length > 0;
   const sendCompose = useSendComposeMutation(apiClient, {
@@ -285,7 +348,8 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
       setSendError(null);
       setSuccessMessage(composeResultMessage(response));
     },
-    onError: (error) => setSendError(composeErrorMessage(error, 'Message could not be sent.')),
+    onError: (error) =>
+      setSendError(composeErrorMessage(error, 'Message could not be sent.')),
   });
 
   const draftPayload = useMemo(() => {
@@ -302,15 +366,23 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
   }, [form]);
 
   const canSaveDraft = !replyToThreadId && !forwardThreadId;
-  const replyPrefillLoading = Boolean(replyToThreadId) && replyThreadQuery.isLoading;
-  const forwardPrefillLoading = Boolean(forwardThreadId) && !replyToThreadId && forwardThreadQuery.isLoading;
-  const prefillLoading = replyPrefillLoading || forwardPrefillLoading || draftQuery.isLoading;
-  const canSubmit = !prefillLoading
-    && (Boolean(replyToThreadId) || draftPayload.to.length > 0)
-    && (Boolean(replyToThreadId) || form.subject.trim().length > 0)
-    && htmlHasContent(draftPayload.body_html);
-  const canManualSaveDraft = dirty && canSaveDraft && !hasUnsupportedAttachments;
-  const threadNotes = replyToThreadId && replyThreadQuery.data ? replyThreadQuery.data.notes : [];
+  const replyPrefillLoading =
+    Boolean(replyToThreadId) && replyThreadQuery.isLoading;
+  const forwardPrefillLoading =
+    Boolean(forwardThreadId) &&
+    !replyToThreadId &&
+    forwardThreadQuery.isLoading;
+  const prefillLoading =
+    replyPrefillLoading || forwardPrefillLoading || draftQuery.isLoading;
+  const canSubmit =
+    !prefillLoading &&
+    (Boolean(replyToThreadId) || draftPayload.to.length > 0) &&
+    (Boolean(replyToThreadId) || form.subject.trim().length > 0) &&
+    htmlHasContent(draftPayload.body_html);
+  const canManualSaveDraft =
+    dirty && canSaveDraft && !hasUnsupportedAttachments;
+  const threadNotes =
+    replyToThreadId && replyThreadQuery.data ? replyThreadQuery.data.notes : [];
 
   function updateField(field: keyof ComposerForm, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -319,12 +391,14 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
   }
 
   function onAttachmentsChange(event: ChangeEvent<HTMLInputElement>) {
-    setAttachments(Array.from(event.target.files ?? []).map((file, index) => ({
-      id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
-      name: file.name,
-      size: file.size,
-      type: file.type || 'application/octet-stream',
-    })));
+    setAttachments(
+      Array.from(event.target.files ?? []).map((file, index) => ({
+        id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+      })),
+    );
     setDirty(true);
     setSuccessMessage(null);
     setSendError(null);
@@ -362,7 +436,13 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
   }
 
   useEffect(() => {
-    if (!initialDraftId || replyToThreadId || forwardThreadId || !draftQuery.data) return;
+    if (
+      !initialDraftId ||
+      replyToThreadId ||
+      forwardThreadId ||
+      !draftQuery.data
+    )
+      return;
 
     const loadedBody = draftBodyFromResponse(draftQuery.data);
     const nextForm = {
@@ -390,10 +470,23 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
   }, [draftQuery.data, initialDraftId, replyToThreadId, forwardThreadId]);
 
   useEffect(() => {
-    if (draftQuery.isError && initialDraftId && !replyToThreadId && !forwardThreadId) {
-      setSendError(composeErrorMessage(draftQuery.error, 'Draft could not be loaded.'));
+    if (
+      draftQuery.isError &&
+      initialDraftId &&
+      !replyToThreadId &&
+      !forwardThreadId
+    ) {
+      setSendError(
+        composeErrorMessage(draftQuery.error, 'Draft could not be loaded.'),
+      );
     }
-  }, [draftQuery.error, draftQuery.isError, initialDraftId, replyToThreadId, forwardThreadId]);
+  }, [
+    draftQuery.error,
+    draftQuery.isError,
+    initialDraftId,
+    replyToThreadId,
+    forwardThreadId,
+  ]);
 
   useEffect(() => {
     if (!replyToThreadId) {
@@ -402,22 +495,38 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
     }
     if (!replyThreadQuery.data) return;
 
-    const prefillKey = `${replyToThreadId}:${replyAll}:${user?.email ?? ''}`;
+    const prefillKey = `${replyToThreadId}:${replyAll}:${inReplyToEmailId ?? ''}:${user?.email ?? ''}`;
     if (replyPrefillKeyRef.current === prefillKey) return;
 
     setSendError(null);
-    const nextForm = prefillFromThread(replyThreadQuery.data, replyAll, user?.email);
+    const nextForm = prefillFromThread(
+      replyThreadQuery.data,
+      replyAll,
+      user?.email,
+      inReplyToEmailId,
+    );
     if (nextForm) {
       setForm(nextForm);
       setShowCarbonCopyFields(nextForm.cc.length > 0);
       setDirty(false);
     }
     replyPrefillKeyRef.current = prefillKey;
-  }, [replyAll, replyThreadQuery.data, replyToThreadId, user?.email]);
+  }, [
+    inReplyToEmailId,
+    replyAll,
+    replyThreadQuery.data,
+    replyToThreadId,
+    user?.email,
+  ]);
 
   useEffect(() => {
     if (replyThreadQuery.isError && replyToThreadId) {
-      setSendError(composeErrorMessage(replyThreadQuery.error, 'Reply details could not be loaded.'));
+      setSendError(
+        composeErrorMessage(
+          replyThreadQuery.error,
+          'Reply details could not be loaded.',
+        ),
+      );
     }
   }, [replyThreadQuery.error, replyThreadQuery.isError, replyToThreadId]);
 
@@ -428,24 +537,42 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
     }
     if (!forwardThreadQuery.data) return;
 
-    const prefillKey = forwardThreadId;
+    const prefillKey = `${forwardThreadId}:${inReplyToEmailId ?? ''}`;
     if (forwardPrefillKeyRef.current === prefillKey) return;
 
     setSendError(null);
-    const nextForm = prefillForwardFromThread(forwardThreadQuery.data);
+    const nextForm = prefillForwardFromThread(
+      forwardThreadQuery.data,
+      inReplyToEmailId,
+    );
     if (nextForm) {
       setForm(nextForm);
       setShowCarbonCopyFields(false);
       setDirty(false);
     }
     forwardPrefillKeyRef.current = prefillKey;
-  }, [forwardThreadId, forwardThreadQuery.data, replyToThreadId]);
+  }, [
+    forwardThreadId,
+    forwardThreadQuery.data,
+    inReplyToEmailId,
+    replyToThreadId,
+  ]);
 
   useEffect(() => {
     if (forwardThreadQuery.isError && forwardThreadId && !replyToThreadId) {
-      setSendError(composeErrorMessage(forwardThreadQuery.error, 'Forward details could not be loaded.'));
+      setSendError(
+        composeErrorMessage(
+          forwardThreadQuery.error,
+          'Forward details could not be loaded.',
+        ),
+      );
     }
-  }, [forwardThreadId, forwardThreadQuery.error, forwardThreadQuery.isError, replyToThreadId]);
+  }, [
+    forwardThreadId,
+    forwardThreadQuery.error,
+    forwardThreadQuery.isError,
+    replyToThreadId,
+  ]);
 
   useEffect(() => {
     if (replyToThreadId && !replyPrefillLoading) {
@@ -454,7 +581,12 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
     if (forwardThreadId && !forwardPrefillLoading) {
       placeCaretAtStart(bodyRef.current);
     }
-  }, [forwardPrefillLoading, forwardThreadId, replyPrefillLoading, replyToThreadId]);
+  }, [
+    forwardPrefillLoading,
+    forwardThreadId,
+    replyPrefillLoading,
+    replyToThreadId,
+  ]);
 
   useEffect(() => {
     const timer = window.setInterval(saveDraft, autosaveIntervalMs);
@@ -515,19 +647,24 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
     : forwardThreadId
       ? 'Forward this thread to new recipients.'
       : savingDraft
-      ? 'Saving draft…'
-      : lastSavedAt
-        ? 'Draft saved'
-        : dirty
-          ? 'Draft not saved yet'
-          : 'Draft saved';
+        ? 'Saving draft…'
+        : lastSavedAt
+          ? 'Draft saved'
+          : dirty
+            ? 'Draft not saved yet'
+            : 'Draft saved';
 
   return (
     <AppShell
-      title={replyToThreadId ? 'Reply' : forwardThreadId ? 'Forward' : 'Compose'}
+      title={
+        replyToThreadId ? 'Reply' : forwardThreadId ? 'Forward' : 'Compose'
+      }
       contentLayout="composer"
       reading={
-        <section className="flex min-h-[calc(100vh-11rem)] flex-col" aria-labelledby="composer-title">
+        <section
+          className="flex min-h-[calc(100vh-11rem)] flex-col"
+          aria-labelledby="composer-title"
+        >
           <Button
             type="button"
             onClick={closeComposer}
@@ -540,147 +677,287 @@ export function ComposerPage({ replyToThreadId, replyAll = false, forwardThreadI
           </Button>
 
           <div className="sr-only">
-            <h2 id="composer-title">{replyToThreadId ? 'Reply to thread' : forwardThreadId ? 'Forward thread' : 'Compose message'}</h2>
+            <h2 id="composer-title">
+              {replyToThreadId
+                ? 'Reply to thread'
+                : forwardThreadId
+                  ? 'Forward thread'
+                  : 'Compose message'}
+            </h2>
           </div>
 
           {prefillLoading ? (
             <Card className="flex min-h-[22rem] flex-1 items-center justify-center text-muted-foreground">
               <CardContent>
-                {draftQuery.isLoading ? 'Loading draft…' : forwardPrefillLoading ? 'Loading forward details…' : 'Loading reply details…'}
+                {draftQuery.isLoading
+                  ? 'Loading draft…'
+                  : forwardPrefillLoading
+                    ? 'Loading forward details…'
+                    : 'Loading reply details…'}
               </CardContent>
             </Card>
           ) : (
-          <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
-            <Card>
-              <CardContent>
-                <FieldGroup className="gap-0">
-                  <Field orientation="horizontal" className="items-center gap-3 border-b border-border px-1 py-1">
-                    <FieldLabel htmlFor="compose-to" className="w-16 shrink-0 pl-2 text-muted-foreground">To</FieldLabel>
-                    <Input
-                      id="compose-to"
-                      type="text"
-                      value={form.to}
-                      onChange={(event) => updateField('to', event.target.value)}
-                      placeholder="alice@example.com, bob@example.com"
-                      className={lineInputClass}
-                      autoComplete="email"
-                      autoFocus={!replyToThreadId && !forwardThreadId && !initialDraftId}
-                    />
-                    <Button
-                      type="button"
-                      onClick={() => setShowCarbonCopyFields((shown) => !shown)}
-                      variant="ghost"
-                      size="sm"
-                      aria-expanded={showCarbonCopyFields}
-                      aria-controls="compose-carbon-copy-fields"
+            <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
+              <Card>
+                <CardContent>
+                  <FieldGroup className="gap-0">
+                    <Field
+                      orientation="horizontal"
+                      className="items-center gap-3 border-b border-border px-1 py-1"
                     >
-                      Cc / Bcc
-                    </Button>
-                  </Field>
+                      <FieldLabel
+                        htmlFor="compose-to"
+                        className="w-16 shrink-0 pl-2 text-muted-foreground"
+                      >
+                        To
+                      </FieldLabel>
+                      <Input
+                        id="compose-to"
+                        type="text"
+                        value={form.to}
+                        onChange={(event) =>
+                          updateField('to', event.target.value)
+                        }
+                        placeholder="alice@example.com, bob@example.com"
+                        className={lineInputClass}
+                        autoComplete="email"
+                        autoFocus={
+                          !replyToThreadId &&
+                          !forwardThreadId &&
+                          !initialDraftId
+                        }
+                      />
+                      <Button
+                        type="button"
+                        onClick={() =>
+                          setShowCarbonCopyFields((shown) => !shown)
+                        }
+                        variant="ghost"
+                        size="sm"
+                        aria-expanded={showCarbonCopyFields}
+                        aria-controls="compose-carbon-copy-fields"
+                      >
+                        Cc / Bcc
+                      </Button>
+                    </Field>
 
-                  <div id="compose-carbon-copy-fields" className={showCarbonCopyFields ? 'grid gap-0' : 'hidden'}>
-                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border px-1 py-1">
-                      <FieldLabel htmlFor="compose-cc" className="w-16 shrink-0 pl-2 text-muted-foreground">Cc</FieldLabel>
+                    <div
+                      id="compose-carbon-copy-fields"
+                      className={showCarbonCopyFields ? 'grid gap-0' : 'hidden'}
+                    >
+                      <Field
+                        orientation="horizontal"
+                        className="items-center gap-3 border-b border-border px-1 py-1"
+                      >
+                        <FieldLabel
+                          htmlFor="compose-cc"
+                          className="w-16 shrink-0 pl-2 text-muted-foreground"
+                        >
+                          Cc
+                        </FieldLabel>
+                        <Input
+                          id="compose-cc"
+                          type="text"
+                          value={form.cc}
+                          onChange={(event) =>
+                            updateField('cc', event.target.value)
+                          }
+                          className={lineInputClass}
+                          autoComplete="email"
+                        />
+                      </Field>
+                      <Field
+                        orientation="horizontal"
+                        className="items-center gap-3 border-b border-border px-1 py-1"
+                      >
+                        <FieldLabel
+                          htmlFor="compose-bcc"
+                          className="w-16 shrink-0 pl-2 text-muted-foreground"
+                        >
+                          Bcc
+                        </FieldLabel>
+                        <Input
+                          id="compose-bcc"
+                          type="text"
+                          value={form.bcc}
+                          onChange={(event) =>
+                            updateField('bcc', event.target.value)
+                          }
+                          className={lineInputClass}
+                          autoComplete="email"
+                        />
+                      </Field>
+                    </div>
+
+                    <Field
+                      orientation="horizontal"
+                      className="items-center gap-3 px-1 py-1"
+                    >
+                      <FieldLabel
+                        htmlFor="compose-subject"
+                        className="w-16 shrink-0 pl-2 text-muted-foreground"
+                      >
+                        Subject
+                      </FieldLabel>
                       <Input
-                        id="compose-cc"
+                        id="compose-subject"
                         type="text"
-                        value={form.cc}
-                        onChange={(event) => updateField('cc', event.target.value)}
+                        value={form.subject}
+                        onChange={(event) =>
+                          updateField('subject', event.target.value)
+                        }
                         className={lineInputClass}
-                        autoComplete="email"
+                        placeholder="Subject"
                       />
                     </Field>
-                    <Field orientation="horizontal" className="items-center gap-3 border-b border-border px-1 py-1">
-                      <FieldLabel htmlFor="compose-bcc" className="w-16 shrink-0 pl-2 text-muted-foreground">Bcc</FieldLabel>
-                      <Input
-                        id="compose-bcc"
-                        type="text"
-                        value={form.bcc}
-                        onChange={(event) => updateField('bcc', event.target.value)}
-                        className={lineInputClass}
-                        autoComplete="email"
+                  </FieldGroup>
+                </CardContent>
+              </Card>
+
+              <div className="mt-6 flex min-h-[22rem] flex-1 flex-col">
+                {threadNotes.length > 0 && (
+                  <div className="mb-4 flex flex-col gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Notes on this thread
+                    </p>
+                    {threadNotes.map((note) => (
+                      <InlineNote
+                        key={note.id}
+                        text={note.body}
+                        author="You"
+                        timestamp={formatDate(note.created_at)}
                       />
-                    </Field>
+                    ))}
                   </div>
-
-                  <Field orientation="horizontal" className="items-center gap-3 px-1 py-1">
-                    <FieldLabel htmlFor="compose-subject" className="w-16 shrink-0 pl-2 text-muted-foreground">Subject</FieldLabel>
-                    <Input
-                      id="compose-subject"
-                      type="text"
-                      value={form.subject}
-                      onChange={(event) => updateField('subject', event.target.value)}
-                      className={lineInputClass}
-                      placeholder="Subject"
-                    />
-                  </Field>
-                </FieldGroup>
-              </CardContent>
-            </Card>
-
-            <div className="mt-6 flex min-h-[22rem] flex-1 flex-col">
-              {threadNotes.length > 0 && (
-                <div className="mb-4 flex flex-col gap-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notes on this thread</p>
-                  {threadNotes.map((note) => (
-                    <InlineNote key={note.id} text={note.body} author="You" timestamp={formatDate(note.created_at)} />
-                  ))}
-                </div>
-              )}
-              <Field className="min-h-[22rem] flex-1">
-                <FieldLabel htmlFor="compose-body" className="sr-only">Body</FieldLabel>
-                <RichTextEditor
-                  ref={bodyRef}
-                  id="compose-body"
-                  aria-label="Body"
-                  value={form.body}
-                  onChange={(html) => updateField('body', html)}
-                  autoFocus={Boolean(replyToThreadId || forwardThreadId)}
-                />
-              </Field>
-            </div>
-
-            <div className="mt-3 flex min-h-6 items-center justify-between gap-4">
-              <div className="flex items-center gap-3 text-muted-foreground">
-                <Button type="button" variant="ghost" size="sm" asChild>
-                  <label htmlFor="compose-attachments" className="cursor-pointer">
-                    <Paperclip data-icon="inline-start" {...iconSizeProps.sm} />
-                    <span>Attachments</span>
-                  </label>
-                </Button>
-                <Input id="compose-attachments" type="file" multiple onChange={onAttachmentsChange} className="sr-only" />
-                <Field className="w-44">
-                  <FieldLabel htmlFor="compose-send-at" className="sr-only">Send later</FieldLabel>
-                  <Input
-                    id="compose-send-at"
-                    type="datetime-local"
-                    value={form.sendAt}
-                    min={minSendAt}
-                    onChange={(event) => updateField('sendAt', event.target.value)}
-                    className="h-8 text-xs text-muted-foreground"
+                )}
+                <Field className="min-h-[22rem] flex-1">
+                  <FieldLabel htmlFor="compose-body" className="sr-only">
+                    Body
+                  </FieldLabel>
+                  <RichTextEditor
+                    ref={bodyRef}
+                    id="compose-body"
+                    aria-label="Body"
+                    value={form.body}
+                    onChange={(html) => updateField('body', html)}
+                    autoFocus={Boolean(replyToThreadId || forwardThreadId)}
                   />
                 </Field>
               </div>
-              <Badge variant="outline" className={`transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId || forwardThreadId ? 'opacity-100' : 'opacity-0'}`}>
-                {autosaveText}
-              </Badge>
-            </div>
 
-            {attachments.length > 0 ? <AttachmentNotice attachments={attachments} /> : null}
+              <div className="mt-3 flex min-h-6 items-center justify-between gap-4">
+                <div className="flex items-center gap-3 text-muted-foreground">
+                  <Button type="button" variant="ghost" size="sm" asChild>
+                    <label
+                      htmlFor="compose-attachments"
+                      className="cursor-pointer"
+                    >
+                      <Paperclip
+                        data-icon="inline-start"
+                        {...iconSizeProps.sm}
+                      />
+                      <span>Attachments</span>
+                    </label>
+                  </Button>
+                  <Input
+                    id="compose-attachments"
+                    type="file"
+                    multiple
+                    onChange={onAttachmentsChange}
+                    className="sr-only"
+                  />
+                  <Field className="w-44">
+                    <FieldLabel htmlFor="compose-send-at" className="sr-only">
+                      Send later
+                    </FieldLabel>
+                    <Input
+                      id="compose-send-at"
+                      type="datetime-local"
+                      value={form.sendAt}
+                      min={minSendAt}
+                      onChange={(event) =>
+                        updateField('sendAt', event.target.value)
+                      }
+                      className="h-8 text-xs text-muted-foreground"
+                    />
+                  </Field>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={`transition-opacity duration-500 ${savingDraft || lastSavedAt || dirty || replyToThreadId || forwardThreadId ? 'opacity-100' : 'opacity-0'}`}
+                >
+                  {autosaveText}
+                </Badge>
+              </div>
 
-            <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-border pt-5">
-              <Button type="submit" disabled={!canSubmit || hasUnsupportedAttachments || sendCompose.isPending}>{sendCompose.isPending && !form.sendAt ? 'Sending…' : 'Send now'}</Button>
-              <Button type="button" onClick={sendLater} disabled={!canSubmit || !form.sendAt || hasUnsupportedAttachments || sendCompose.isPending} variant="secondary">{sendCompose.isPending && form.sendAt ? 'Scheduling…' : 'Send later'}</Button>
-              {!replyToThreadId ? <Button type="button" onClick={saveDraft} disabled={!canManualSaveDraft || savingDraft} variant="outline">{savingDraft ? 'Saving…' : 'Save draft'}</Button> : null}
-              <Button type="button" onClick={closeComposer} variant="ghost" className="ml-auto">Discard</Button>
-            </div>
+              {attachments.length > 0 ? (
+                <AttachmentNotice attachments={attachments} />
+              ) : null}
 
-            <div className="mt-4 flex flex-col gap-2">
-              {autosaveError ? <Status kind="warn" message={composeErrorMessage(autosaveError, 'Draft autosave failed.')} /> : null}
-              {sendError ? <Status kind="error" message={sendError} /> : null}
-              {successMessage ? <Status kind="success" message={successMessage} /> : null}
-            </div>
-          </form>
+              <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-border pt-5">
+                <Button
+                  type="submit"
+                  disabled={
+                    !canSubmit ||
+                    hasUnsupportedAttachments ||
+                    sendCompose.isPending
+                  }
+                >
+                  {sendCompose.isPending && !form.sendAt
+                    ? 'Sending…'
+                    : 'Send now'}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={sendLater}
+                  disabled={
+                    !canSubmit ||
+                    !form.sendAt ||
+                    hasUnsupportedAttachments ||
+                    sendCompose.isPending
+                  }
+                  variant="secondary"
+                >
+                  {sendCompose.isPending && form.sendAt
+                    ? 'Scheduling…'
+                    : 'Send later'}
+                </Button>
+                {!replyToThreadId ? (
+                  <Button
+                    type="button"
+                    onClick={saveDraft}
+                    disabled={!canManualSaveDraft || savingDraft}
+                    variant="outline"
+                  >
+                    {savingDraft ? 'Saving…' : 'Save draft'}
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  onClick={closeComposer}
+                  variant="ghost"
+                  className="ml-auto"
+                >
+                  Discard
+                </Button>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-2">
+                {autosaveError ? (
+                  <Status
+                    kind="warn"
+                    message={composeErrorMessage(
+                      autosaveError,
+                      'Draft autosave failed.',
+                    )}
+                  />
+                ) : null}
+                {sendError ? <Status kind="error" message={sendError} /> : null}
+                {successMessage ? (
+                  <Status kind="success" message={successMessage} />
+                ) : null}
+              </div>
+            </form>
           )}
         </section>
       }
@@ -695,7 +972,12 @@ function AttachmentNotice({ attachments }: { attachments: AttachmentDraft[] }) {
         Attachments are not supported for sending or saving yet.
         <AlertDescription>
           <ul className="mt-2 flex flex-col gap-1">
-            {attachments.map((attachment) => <li key={attachment.id}>{attachment.name} · {fileSizeLabel(attachment.size)} · {attachment.type}</li>)}
+            {attachments.map((attachment) => (
+              <li key={attachment.id}>
+                {attachment.name} · {fileSizeLabel(attachment.size)} ·{' '}
+                {attachment.type}
+              </li>
+            ))}
           </ul>
         </AlertDescription>
       </AlertTitle>
@@ -703,7 +985,13 @@ function AttachmentNotice({ attachments }: { attachments: AttachmentDraft[] }) {
   );
 }
 
-function Status({ kind, message }: { kind: 'error' | 'success' | 'warn'; message: string }) {
+function Status({
+  kind,
+  message,
+}: {
+  kind: 'error' | 'success' | 'warn';
+  message: string;
+}) {
   return (
     <Alert variant={kind === 'error' ? 'destructive' : 'default'}>
       <AlertDescription>{message}</AlertDescription>
