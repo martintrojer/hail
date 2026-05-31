@@ -2,6 +2,7 @@ export const queryKeys = {
   all: ['hail'] as const,
   auth: () => [...queryKeys.all, 'auth'] as const,
   me: () => [...queryKeys.auth(), 'me'] as const,
+  userPrefs: () => [...queryKeys.auth(), 'prefs'] as const,
   setup: () => [...queryKeys.all, 'setup'] as const,
   setupState: () => [...queryKeys.setup(), 'state'] as const,
   invite: (token: string) => [...queryKeys.all, 'invite', token] as const,

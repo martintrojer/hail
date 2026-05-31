@@ -9,8 +9,8 @@ use axum::http::{Method, Request, StatusCode, header};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
-    MailSearchResult, MailView, MailViewError, MailViewPage, MailViewProvider, SearchError,
-    SearchMailbox, SearchProvider,
+    MailSearchResult, MailView, MailViewError, MailViewListOpts, MailViewPage, MailViewProvider,
+    SearchError, SearchMailbox, SearchProvider,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -60,6 +60,7 @@ impl MailViewProvider for EmptyMailViewProvider {
         _view: MailView,
         _cursor: Option<String>,
         _limit: usize,
+        _opts: MailViewListOpts,
     ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
         Box::pin(async { Ok(MailViewPage { items: Vec::new(), next_cursor: None }) })
     }

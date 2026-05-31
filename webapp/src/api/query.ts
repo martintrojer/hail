@@ -53,6 +53,8 @@ import {
   type NotSpamThreadResponse,
   type UndoDenyRequest,
   type UndoDenyResponse,
+  type UserPrefs,
+  type UpdateUserPrefsRequest,
   type SearchParams,
   type SearchResponse,
   type SetupAdminRequest,
@@ -592,6 +594,34 @@ export function useViewCounts(
     queryKey: queryKeys.viewCounts(),
     queryFn: () => client.getViewCounts(),
     ...options,
+  });
+}
+
+export function useUserPrefs(
+  client = defaultApiClient,
+  options?: QueryConfig<UserPrefs>,
+) {
+  return useQuery({
+    queryKey: queryKeys.userPrefs(),
+    queryFn: () => client.getUserPrefs(),
+    ...options,
+  });
+}
+
+export function useUpdateUserPrefsMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<UpdateUserPrefsRequest, UserPrefs>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.updateUserPrefs(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      queryClient.setQueryData(queryKeys.userPrefs(), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.view('feed') });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
   });
 }
 

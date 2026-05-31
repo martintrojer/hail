@@ -11,6 +11,7 @@ import {
   useImboxSectioned,
   usePapertrailSectioned,
   useScreenerView,
+  useUserPrefs,
 } from '../api/query';
 import { useApiClient } from '../api/ApiClientProvider';
 import { ActionableList } from '../components/ActionableList';
@@ -174,8 +175,10 @@ function FeedCard({
   markError?: Error;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const feedHtml = item.feed_html?.trim() || '';
+  const [showImages, setShowImages] = useState(false);
+  const feedHtml = (showImages ? item.feed_html_with_images : item.feed_html)?.trim() || '';
   const trackers = item.feed_blocked_trackers ?? [];
+  const blockedImages = item.feed_blocked_images ?? 0;
   const shouldClamp = isLongFeedHtml(feedHtml);
   const clamped = shouldClamp && !expanded;
 
@@ -214,6 +217,14 @@ function FeedCard({
         </CardHeader>
 
         <CardContent className="p-4 sm:p-5">
+          {blockedImages > 0 && !showImages ? (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              <span>{blockedImages} image{blockedImages === 1 ? '' : 's'} blocked for privacy.</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setShowImages(true)}>
+                Show images ({blockedImages} blocked)
+              </Button>
+            </div>
+          ) : null}
           {feedHtml.length > 0 ? (
             <div className="relative">
               <div
@@ -646,6 +657,7 @@ export function MailViewPage({
   const contextClient = useApiClient();
   const apiClient = client ?? contextClient;
   const query = useMailView(view, apiClient);
+  useUserPrefs(apiClient, { enabled: view === 'feed' });
   const screenerQuery = useScreenerView(apiClient);
   const pendingCount = screenerQuery.data?.senders?.length ?? 0;
   const [powerThrough, setPowerThrough] = useState(false);

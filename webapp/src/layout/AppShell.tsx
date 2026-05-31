@@ -662,6 +662,16 @@ function AppSidebar({
             activePath={activePath}
             counts={counts}
           />
+          <NavMenuItem
+            item={{
+              to: '/preferences',
+              label: 'Preferences',
+              description: 'Privacy and display preferences.',
+              Icon: SlidersHorizontal,
+            }}
+            activePath={activePath}
+            counts={counts}
+          />
           {isAdmin ? (
             <NavMenuItem
               item={{

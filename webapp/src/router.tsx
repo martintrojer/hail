@@ -55,6 +55,7 @@ import { ScreenerSpeakeasyPage } from './routes/ScreenerSpeakeasyPage';
 import { SearchPage } from './routes/SearchPage';
 import { ScheduledSendsPage } from './routes/ScheduledSendsPage';
 import { ProviderAccountsPage } from './routes/ProviderAccountsPage';
+import { PreferencesPage } from './routes/PreferencesPage';
 import { ThreadPage } from './routes/ThreadPage';
 import { TrashPage } from './routes/TrashPage';
 import { SpamPage } from './routes/SpamPage';
@@ -871,6 +872,13 @@ const adminRoute = createRoute({
   component: AdminPage,
 });
 
+const preferencesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/preferences',
+  beforeLoad: requireAuth,
+  component: PreferencesPage,
+});
+
 const workflowsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workflows',
@@ -906,6 +914,7 @@ const routeTree = rootRoute.addChildren([
   archiveRoute,
   composeRoute,
   adminRoute,
+  preferencesRoute,
   workflowsRoute,
 ]);
 

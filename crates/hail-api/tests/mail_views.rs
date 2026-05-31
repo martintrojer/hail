@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
     JmapMailViewProvider, MailView, MailViewClassification, MailViewError, MailViewItem,
-    MailViewPage, MailViewProvider,
+    MailViewPage, MailViewProvider, MailViewListOpts,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -26,10 +26,13 @@ fn app(state: AppState, provider: Arc<FakeProvider>) -> Router {
 }
 
 fn jmap_app(state: AppState) -> Router {
-    let protected =
-        hail_api::routes::views::router_with_provider(Arc::new(JmapMailViewProvider)).layer(
-            axum::middleware::from_fn_with_state(state.clone(), require_auth),
-        );
+    let protected = Router::new()
+        .merge(hail_api::routes::views::router_with_provider(Arc::new(JmapMailViewProvider)))
+        .merge(hail_api::routes::users::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
     Router::new().merge(protected).with_state(state)
 }
 
@@ -70,6 +73,7 @@ impl MailViewProvider for FakeProvider {
         view: MailView,
         cursor: Option<String>,
         limit: usize,
+        _opts: MailViewListOpts,
     ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.lock().expect("calls lock").push((view, limit));
@@ -142,6 +146,17 @@ fn authed_get(path: &str, sid: Option<&str>) -> Request<Body> {
     builder.body(Body::empty()).unwrap()
 }
 
+fn authed_patch(path: &str, sid: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(Method::PATCH)
+        .uri(path)
+        .header(header::COOKIE, format!("hail_session={sid}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("X-Hail-Request", "1")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
 fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
     MailViewItem {
         thread_id: format!("thread-{n}"),
@@ -162,7 +177,9 @@ fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
         has_notes: false,
         labels: Vec::new(),
         feed_html: None,
+        feed_html_with_images: None,
         feed_blocked_trackers: None,
+        feed_blocked_images: None,
     }
 }
 
@@ -385,7 +402,9 @@ async fn feed_view_returns_many_inline_body_items() {
             .map(|n| {
                 let mut item = item_with_view(n, MailView::Feed);
                 item.feed_html = Some(format!("<p>Feed body {n}</p>"));
+                item.feed_html_with_images = Some(format!("<p>Feed body with images {n}</p>"));
                 item.feed_blocked_trackers = Some(Vec::new());
+                item.feed_blocked_images = Some(0);
                 item
             })
             .collect(),
@@ -462,6 +481,67 @@ async fn jmap_feed_view_chunks_body_value_fetches() {
         assert_eq!(arguments["fetchTextBodyValues"], true);
         assert_eq!(arguments["maxBodyValueBytes"], 64 * 1024);
     }
+
+    fake_jmap.abort();
+}
+
+#[tokio::test]
+async fn jmap_feed_view_uses_pref_to_render_remote_images_and_patch_persists() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (mut state, key) = fixture_state().await;
+    let (jmap_url, fake_jmap) = start_fake_feed_jmap(
+        vec![FakeFeedEmail {
+            id: "feed-email-images".to_string(),
+            html: r#"<article><p>Issue</p><img src="https://cdn.example/hero.png" width="640" height="320"><img src="https://track.mailgun.net/open.gif" width="1" height="1"></article>"#.to_string(),
+        }],
+        requests,
+    )
+    .await;
+    state.config.stalwart.jmap_url = jmap_url;
+    let (_user_id, sid) = seed_session(&state, &key, "feed-pref@example.org").await;
+
+    let resp = jmap_app(state.clone())
+        .oneshot(authed_get("/api/user/prefs", Some(&sid)))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let json = json_body(resp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["feed_load_remote_images"], false);
+
+    let resp = jmap_app(state.clone())
+        .oneshot(authed_get("/api/views/feed?limit=1", Some(&sid)))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let json = json_body(resp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let item = &json["items"][0];
+    assert_eq!(item["feed_blocked_images"], 1);
+    assert!(!item["feed_html"].as_str().unwrap().contains("cdn.example/hero.png"));
+    assert!(item["feed_html_with_images"].as_str().unwrap().contains("cdn.example/hero.png"));
+    assert!(!item["feed_html_with_images"].as_str().unwrap().contains("track.mailgun.net"));
+
+    let resp = jmap_app(state.clone())
+        .oneshot(authed_patch(
+            "/api/user/prefs",
+            &sid,
+            serde_json::json!({"feed_load_remote_images": true}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_body(resp).await["feed_load_remote_images"], true);
+
+    let resp = jmap_app(state)
+        .oneshot(authed_get("/api/views/feed?limit=1", Some(&sid)))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    let item = &json["items"][0];
+    assert!(item["feed_html"].as_str().unwrap().contains("cdn.example/hero.png"));
+    assert!(!item["feed_html"].as_str().unwrap().contains("track.mailgun.net"));
 
     fake_jmap.abort();
 }
