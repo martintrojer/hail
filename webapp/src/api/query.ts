@@ -66,6 +66,7 @@ import {
   type LabelListResponse,
   type LabelItemResponse,
   type ProviderAccountResponse,
+  type ProviderBidiSyncResponse,
   type ProviderReimportResponse,
   type ProviderStopSyncResponse,
   type ProviderSyncStatusListResponse,
@@ -315,10 +316,35 @@ function applyProviderAccountResponseToSyncStatus(
             provider_email: updated.provider_email,
             provider_kind: updated.provider_kind,
             sync_status: updated.sync_status,
+            bidirectional_sync_enabled: updated.bidirectional_sync_enabled,
+            bidirectional_sync_scope_missing: updated.bidirectional_sync_scope_missing,
+            pending_outbound_changes: updated.pending_outbound_changes,
           }
         : account,
     ),
   };
+}
+
+export function useSetProviderBidirectionalSyncMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<{ id: number; enabled: boolean }, ProviderBidiSyncResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, enabled }) => client.setProviderBidirectionalSync(id, enabled),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
+      if (data.status === 'updated' && data.account) {
+        queryClient.setQueryData<ProviderSyncStatusListResponse>(
+          queryKeys.providerSyncStatuses(),
+          (current) => applyProviderAccountResponseToSyncStatus(current, data.account as ProviderAccountResponse, variables.id),
+        );
+        void queryClient.invalidateQueries({ queryKey: queryKeys.providerSyncStatuses() });
+      }
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
 }
 
 export function useDisconnectProviderAccountMutation(

@@ -14,8 +14,8 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::gmail_client::{
-    GmailApiErrorKind, GmailClient, GmailClientError, GmailHistoryRecord, GmailLabel,
-    GmailTokenSource, ListHistoryParams, ListHistoryResponse, ListMessage,
+    GmailApiErrorKind, GmailClient, GmailClientError, GmailHistoryLabelChange, GmailHistoryRecord,
+    GmailLabel, GmailTokenSource, ListHistoryParams, ListHistoryResponse, ListMessage,
 };
 use crate::gmail_historical_import::{
     GMAIL_INBOX_LABEL_ID, GmailHistoricalImportAccount, GmailHistoricalImportError,
@@ -81,6 +81,8 @@ pub struct GmailIncrementalSyncSummary {
     pub history_records: usize,
     pub messages_seen: usize,
     pub imported: usize,
+    pub inbound_label_changes: usize,
+    pub loop_prevented: usize,
     pub duplicates: usize,
     pub skipped: usize,
     pub failed: usize,
@@ -133,6 +135,8 @@ pub enum GmailIncrementalSyncError {
     GmailHistory(#[source] GmailClientError),
     #[error(transparent)]
     Import(#[from] GmailHistoricalImportError),
+    #[error("label database error during Gmail incremental sync: {0}")]
+    Labels(#[from] hail_db::labels::LabelDbError),
 }
 
 #[allow(dead_code)]
@@ -328,6 +332,7 @@ where
             }
             high_water_history_id = Some(record.id.clone());
             summary.history_records += 1;
+            apply_history_label_changes(db, &account, &record, &user_labels, &mut summary).await?;
             for listed in history_record_messages(record) {
                 if seen_message_ids.insert(listed.id.clone()) {
                     summary.messages_seen += 1;
@@ -435,6 +440,133 @@ where
     };
     audit_sync_completed(db, &account, &summary).await?;
     Ok(summary)
+}
+
+async fn apply_history_label_changes(
+    db: &SqlitePool,
+    account: &GmailIncrementalSyncAccount,
+    record: &GmailHistoryRecord,
+    user_labels: &std::collections::HashMap<String, GmailLabel>,
+    summary: &mut GmailIncrementalSyncSummary,
+) -> Result<(), GmailIncrementalSyncError> {
+    for change in &record.labels_added {
+        apply_one_history_label_change(db, account, change, true, user_labels, summary).await?;
+    }
+    for change in &record.labels_removed {
+        apply_one_history_label_change(db, account, change, false, user_labels, summary).await?;
+    }
+    Ok(())
+}
+
+async fn apply_one_history_label_change(
+    db: &SqlitePool,
+    account: &GmailIncrementalSyncAccount,
+    change: &GmailHistoryLabelChange,
+    added: bool,
+    user_labels: &std::collections::HashMap<String, GmailLabel>,
+    summary: &mut GmailIncrementalSyncSummary,
+) -> Result<(), GmailIncrementalSyncError> {
+    for label_id in &change.label_ids {
+        let Some(local_change_type) = local_change_type_for_gmail_label(label_id, added) else {
+            continue;
+        };
+        if hail_db::provider_outbound_changes::recently_applied_outbound_change_exists(
+            db,
+            account.provider_account_id,
+            &change.message.id,
+            local_change_type,
+            60,
+        )
+        .await?
+        {
+            summary.loop_prevented += 1;
+            continue;
+        }
+        match label_id.as_str() {
+            "UNREAD" | "TRASH" => {
+                apply_local_mapping_exists(db, account.provider_account_id, &change.message.id)
+                    .await?;
+                summary.inbound_label_changes += 1;
+            }
+            label_id => {
+                if let Some(label) = user_labels.get(label_id) {
+                    apply_local_user_label(
+                        db,
+                        account.user_id,
+                        account.provider_account_id,
+                        &change.message.id,
+                        &label.id,
+                        &label.name,
+                        added,
+                    )
+                    .await?;
+                    summary.inbound_label_changes += 1;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn local_change_type_for_gmail_label(label_id: &str, added: bool) -> Option<&'static str> {
+    match (label_id, added) {
+        ("UNREAD", true) => Some("unread"),
+        ("UNREAD", false) => Some("read"),
+        ("TRASH", true) => Some("trash"),
+        ("TRASH", false) => Some("untrash"),
+        (_, true) => Some("label_add"),
+        (_, false) => Some("label_remove"),
+    }
+}
+
+async fn apply_local_mapping_exists(
+    db: &SqlitePool,
+    provider_account_id: i64,
+    provider_message_id: &str,
+) -> Result<(), sqlx::Error> {
+    let _ = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT jmap_email_id FROM provider_message_mappings WHERE provider_account_id = ?1 AND provider_message_id = ?2",
+    )
+    .bind(provider_account_id)
+    .bind(provider_message_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(())
+}
+
+async fn apply_local_user_label(
+    db: &SqlitePool,
+    user_id: i64,
+    provider_account_id: i64,
+    provider_message_id: &str,
+    provider_label_id: &str,
+    label_name: &str,
+    added: bool,
+) -> Result<(), GmailIncrementalSyncError> {
+    let Some(thread_id) = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT jmap_thread_id FROM provider_message_mappings WHERE provider_account_id = ?1 AND provider_message_id = ?2",
+    )
+    .bind(provider_account_id)
+    .bind(provider_message_id)
+    .fetch_optional(db)
+    .await?
+    .flatten() else {
+        return Ok(());
+    };
+    let label = hail_db::labels::upsert_gmail_label(
+        db,
+        user_id,
+        provider_label_id,
+        label_name,
+        None,
+    )
+    .await?;
+    if added {
+        hail_db::labels::assign_label_to_thread(db, user_id, &thread_id, label.id).await?;
+    } else {
+        hail_db::labels::remove_label_from_thread(db, user_id, &thread_id, label.id).await?;
+    }
+    Ok(())
 }
 
 fn history_record_messages(record: GmailHistoryRecord) -> Vec<ListMessage> {
@@ -603,6 +735,8 @@ async fn audit_sync_completed(
         "historyRecords": summary.history_records,
         "messagesSeen": summary.messages_seen,
         "imported": summary.imported,
+        "inboundLabelChanges": summary.inbound_label_changes,
+        "loopPrevented": summary.loop_prevented,
         "duplicates": summary.duplicates,
         "skipped": summary.skipped,
         "failed": summary.failed,

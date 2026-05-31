@@ -1,9 +1,9 @@
 //! Local label endpoints.
 //!
 //! Labels are local, per-user, thread-level tags stored in the hail sidecar DB.
-//! This module owns label management plus thread assignment/removal. Assignment
-//! is scoped solely by the authenticated hail user and sidecar label ownership;
-//! it does not mutate provider labels.
+//! This module owns label management plus thread assignment/removal. When a
+//! connected provider account has bidirectional sync enabled, assignment/removal
+//! also enqueues provider outbound label mutations for worker-side push.
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Path, Query, State};
@@ -399,10 +399,23 @@ async fn assign_label_to_thread(
     };
 
     match labels::assign_label_to_thread(&state.db, user.id, &thread_id, label.id).await {
-        Ok(_) => Json(LabelItemResponse {
-            label: LabelResponse::from(label),
-        })
-        .into_response(),
+        Ok(_) => {
+            if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_label_change_if_bidi_enabled(
+                &state.db,
+                user.id,
+                &thread_id,
+                &label.name,
+                true,
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, label_id = label.id, error = %err, "provider outbound label-add enqueue failed");
+            }
+            Json(LabelItemResponse {
+                label: LabelResponse::from(label),
+            })
+            .into_response()
+        },
         Err(err) => label_db_error(err, user.id, "label assignment failed"),
     }
 }
@@ -436,12 +449,26 @@ async fn remove_label_from_thread(
         return not_found("label");
     }
 
-    if let Err(err) = labels::get_label(&state.db, user.id, label_id).await {
-        return label_db_error(err, user.id, "label removal lookup failed");
-    }
+    let label = match labels::get_label(&state.db, user.id, label_id).await {
+        Ok(label) => label,
+        Err(err) => return label_db_error(err, user.id, "label removal lookup failed"),
+    };
 
     match labels::remove_label_from_thread(&state.db, user.id, &thread_id, label_id).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_label_change_if_bidi_enabled(
+                &state.db,
+                user.id,
+                &thread_id,
+                &label.name,
+                false,
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, label_id, error = %err, "provider outbound label-remove enqueue failed");
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(err) => label_db_error(err, user.id, "label assignment removal failed"),
     }
 }
@@ -476,10 +503,23 @@ async fn assign_label_name_to_thread(
     match labels::assign_label_name_to_thread(&state.db, user.id, &thread_id, &body.label_name)
         .await
     {
-        Ok(label) => Json(LabelItemResponse {
-            label: LabelResponse::from(label),
-        })
-        .into_response(),
+        Ok(label) => {
+            if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_label_change_if_bidi_enabled(
+                &state.db,
+                user.id,
+                &thread_id,
+                &label.name,
+                true,
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, label_id = label.id, error = %err, "provider outbound inline label-add enqueue failed");
+            }
+            Json(LabelItemResponse {
+                label: LabelResponse::from(label),
+            })
+            .into_response()
+        }
         Err(err) => label_db_error(err, user.id, "inline label assignment failed"),
     }
 }
@@ -535,10 +575,25 @@ async fn assign_label_to_threads(
             Err(err) => return label_db_error(err, user.id, "batch label lookup failed"),
         };
         match labels::assign_label_to_threads(&state.db, user.id, &thread_ids, label.id).await {
-            Ok(_) => Json(LabelItemResponse {
-                label: LabelResponse::from(label),
-            })
-            .into_response(),
+            Ok(_) => {
+                for thread_id in &body.thread_ids {
+                    if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_label_change_if_bidi_enabled(
+                        &state.db,
+                        user.id,
+                        thread_id,
+                        &label.name,
+                        true,
+                    )
+                    .await
+                    {
+                        tracing::warn!(user_id = user.id, thread_id = %thread_id, label_id = label.id, error = %err, "provider outbound batch label-add enqueue failed");
+                    }
+                }
+                Json(LabelItemResponse {
+                    label: LabelResponse::from(label),
+                })
+                .into_response()
+            }
             Err(err) => label_db_error(err, user.id, "batch label assignment failed"),
         }
     } else {
@@ -548,10 +603,25 @@ async fn assign_label_to_threads(
         match labels::assign_label_name_to_threads(&state.db, user.id, &thread_ids, &label_name)
             .await
         {
-            Ok(label) => Json(LabelItemResponse {
-                label: LabelResponse::from(label),
-            })
-            .into_response(),
+            Ok(label) => {
+                for thread_id in &body.thread_ids {
+                    if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_label_change_if_bidi_enabled(
+                        &state.db,
+                        user.id,
+                        thread_id,
+                        &label.name,
+                        true,
+                    )
+                    .await
+                    {
+                        tracing::warn!(user_id = user.id, thread_id = %thread_id, label_id = label.id, error = %err, "provider outbound batch inline label-add enqueue failed");
+                    }
+                }
+                Json(LabelItemResponse {
+                    label: LabelResponse::from(label),
+                })
+                .into_response()
+            }
             Err(err) => label_db_error(err, user.id, "batch inline label assignment failed"),
         }
     }

@@ -15,6 +15,8 @@ mod gmail_historical_import;
 mod gmail_incremental_sync;
 mod gmail_initial_sync;
 mod jmap_helpers;
+#[allow(dead_code)]
+mod provider_bidi_sync;
 mod provider_import_routing;
 mod provider_sync_scheduler;
 mod reconcile;

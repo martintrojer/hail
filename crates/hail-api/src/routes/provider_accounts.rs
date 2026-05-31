@@ -13,7 +13,7 @@ use rand::TryRngCore;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use url::Url;
 use utoipa::ToSchema;
 use utoipa_axum::{
@@ -31,6 +31,8 @@ pub const TAG: &str = "provider-accounts";
 const GMAIL_PROVIDER_KIND: &str = "gmail";
 const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
+const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
+const GMAIL_FULL_MAIL_SCOPE: &str = "https://mail.google.com/";
 const OAUTH_STATE_TTL_MINUTES: i64 = 10;
 const PROVIDER_REFRESH_TOKEN_KEY_ID: &str = "server_key:v1";
 
@@ -324,6 +326,10 @@ where
             "/api/provider-accounts/{id}/disconnect",
             axum::routing::post(disconnect_provider_account),
         )
+        .route(
+            "/api/provider-accounts/{id}/bidirectional-sync",
+            axum::routing::post(set_provider_bidirectional_sync),
+        )
         .layer(Extension(client))
 }
 
@@ -335,7 +341,8 @@ where
     OpenApiRouter::new()
         .routes(routes!(connect_gmail).layer(Extension(client.clone())))
         .routes(routes!(gmail_callback).layer(Extension(client.clone())))
-        .routes(routes!(disconnect_provider_account).layer(Extension(client)))
+        .routes(routes!(disconnect_provider_account).layer(Extension(client.clone())))
+        .routes(routes!(set_provider_bidirectional_sync).layer(Extension(client)))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -357,6 +364,26 @@ pub struct ProviderAccountResponse {
     #[schema(value_type = Option<String>, format = DateTime)]
     pub cached_access_token_expires_at: Option<chrono::DateTime<Utc>>,
     pub last_profile_history_id: Option<String>,
+    pub bidirectional_sync_enabled: bool,
+    pub bidirectional_sync_scope_missing: bool,
+    pub pending_outbound_changes: i64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct GmailConnectQuery {
+    scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct ProviderBidiSyncRequest {
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ProviderBidiSyncResponse {
+    Updated { account: ProviderAccountResponse },
+    ScopeMissing { authorization_url: String, scopes: Vec<String> },
 }
 
 #[derive(Debug, Deserialize)]
@@ -370,6 +397,7 @@ struct GmailCallbackQuery {
     responses((status = 200, description = "Gmail OAuth authorization URL.", body = GmailConnectResponse)))]
 async fn connect_gmail(
     State(state): State<AppState>,
+    Query(query): Query<GmailConnectQuery>,
     Extension(user): Extension<AuthUser>,
     Extension(session): Extension<AuthSession>,
     Extension(client): Extension<Arc<dyn GmailOAuthClient>>,
@@ -381,10 +409,7 @@ async fn connect_gmail(
         );
     };
     let redirect_uri = gmail_redirect_uri(&state);
-    let scopes = vec![
-        GMAIL_READONLY_SCOPE.to_string(),
-        GMAIL_SEND_SCOPE.to_string(),
-    ];
+    let scopes = gmail_connect_scopes(query.scope.as_deref());
     let state_token = match create_oauth_state(
         &state.db,
         user.id,
@@ -507,6 +532,79 @@ async fn disconnect_provider_account(
             internal()
         }
     }
+}
+
+#[utoipa::path(post, path = "/api/provider-accounts/{id}/bidirectional-sync", tag = TAG,
+    params(("id" = i64, Path)),
+    request_body(content = ProviderBidiSyncRequest, content_type = "application/json"),
+    responses((status = 200, description = "Provider account bidirectional sync setting updated or OAuth reconnect required.", body = ProviderBidiSyncResponse)))]
+async fn set_provider_bidirectional_sync(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(user): Extension<AuthUser>,
+    Extension(session): Extension<AuthSession>,
+    Extension(client): Extension<Arc<dyn GmailOAuthClient>>,
+    Json(body): Json<ProviderBidiSyncRequest>,
+) -> Response {
+    if !body.enabled {
+        return match set_bidirectional_sync_enabled(&state.db, user.id, id, false).await {
+            Ok(account) => Json(ProviderBidiSyncResponse::Updated { account }).into_response(),
+            Err(sqlx::Error::RowNotFound) => error_response(StatusCode::NOT_FOUND, "provider_account_not_found"),
+            Err(err) => {
+                tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: disabling bidi sync failed");
+                internal()
+            }
+        };
+    }
+
+    let scopes = match provider_account_scopes(&state.db, user.id, id).await {
+        Ok(scopes) => scopes,
+        Err(sqlx::Error::RowNotFound) => return error_response(StatusCode::NOT_FOUND, "provider_account_not_found"),
+        Err(err) => {
+            tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: scope lookup failed");
+            return internal();
+        }
+    };
+    if gmail_scope_allows_modify(&scopes) {
+        return match set_bidirectional_sync_enabled(&state.db, user.id, id, true).await {
+            Ok(account) => Json(ProviderBidiSyncResponse::Updated { account }).into_response(),
+            Err(sqlx::Error::RowNotFound) => error_response(StatusCode::NOT_FOUND, "provider_account_not_found"),
+            Err(err) => {
+                tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: enabling bidi sync failed");
+                internal()
+            }
+        };
+    }
+
+    if let Err(err) = mark_scope_missing(&state.db, user.id, id).await {
+        tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: mark scope missing failed");
+        return internal();
+    }
+    let Some(client_id) = state.config.provider_import.gmail.oauth_client_id.clone() else {
+        return error_response(StatusCode::SERVICE_UNAVAILABLE, "gmail_oauth_not_configured");
+    };
+    let redirect_uri = gmail_redirect_uri(&state);
+    let scopes = vec![GMAIL_READONLY_SCOPE.to_owned(), GMAIL_MODIFY_SCOPE.to_owned()];
+    let state_token = match create_oauth_state(&state.db, user.id, &session.id, &redirect_uri, &scopes).await {
+        Ok(token) => token,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = user.id, "gmail oauth: bidi state creation failed");
+            return internal();
+        }
+    };
+    let authorization_url = match client.authorization_url(GmailAuthorizationRequest {
+        client_id,
+        redirect_uri,
+        state: state_token,
+        scopes: scopes.clone(),
+    }) {
+        Ok(url) => url,
+        Err(err) => {
+            tracing::warn!(error = %err, user_id = user.id, "gmail oauth: bidi authorization URL failed");
+            return error_response(StatusCode::SERVICE_UNAVAILABLE, "gmail_oauth_not_configured");
+        }
+    };
+    Json(ProviderBidiSyncResponse::ScopeMissing { authorization_url, scopes }).into_response()
 }
 
 #[derive(Debug)]
@@ -708,56 +806,42 @@ async fn load_provider_account_response(
     user_id: i64,
     provider_account_id: i64,
 ) -> Result<ProviderAccountResponse, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, String, String, String, Option<String>, String, String, Option<chrono::DateTime<Utc>>, Option<String>)>(
-        "SELECT id, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, sync_status, cached_access_token_expires_at, last_profile_history_id \
+    let row = sqlx::query(
+        "SELECT id, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, sync_status, cached_access_token_expires_at, last_profile_history_id, bidirectional_sync_enabled \
          FROM provider_accounts WHERE id = ?1 AND user_id = ?2",
     )
     .bind(provider_account_id)
     .bind(user_id)
     .fetch_one(db)
     .await?;
-    row_to_response(row)
+    row_to_response(db, row).await
 }
 
-fn row_to_response(
-    row: (
-        i64,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        String,
-        Option<chrono::DateTime<Utc>>,
-        Option<String>,
-    ),
+async fn row_to_response(
+    db: &SqlitePool,
+    row: sqlx::sqlite::SqliteRow,
 ) -> Result<ProviderAccountResponse, sqlx::Error> {
-    let (
-        id,
-        provider_kind,
-        provider_account_id,
-        provider_email,
-        display_email,
-        granted_scopes_json,
-        sync_status,
-        cached_access_token_expires_at,
-        last_profile_history_id,
-    ) = row;
-    let granted_scopes = serde_json::from_str(&granted_scopes_json).map_err(|err| {
+    let id: i64 = row.get("id");
+    let granted_scopes_json: String = row.get("granted_scopes_json");
+    let granted_scopes: Vec<String> = serde_json::from_str(&granted_scopes_json).map_err(|err| {
         sqlx::Error::Protocol(format!(
             "provider account {id} granted_scopes_json must be valid JSON: {err}"
         ))
     })?;
+    let pending_outbound_changes = hail_db::provider_outbound_changes::pending_outbound_change_count(db, id).await?;
     Ok(ProviderAccountResponse {
         id,
-        provider_kind,
-        provider_account_id,
-        provider_email,
-        display_email,
+        provider_kind: row.get("provider_kind"),
+        provider_account_id: row.get("provider_account_id"),
+        provider_email: row.get("provider_email"),
+        display_email: row.get("display_email"),
+        bidirectional_sync_scope_missing: !gmail_scope_allows_modify(&granted_scopes),
         granted_scopes,
-        sync_status,
-        cached_access_token_expires_at,
-        last_profile_history_id,
+        sync_status: row.get("sync_status"),
+        cached_access_token_expires_at: row.get("cached_access_token_expires_at"),
+        last_profile_history_id: row.get("last_profile_history_id"),
+        bidirectional_sync_enabled: row.get::<i64, _>("bidirectional_sync_enabled") != 0,
+        pending_outbound_changes,
     })
 }
 
@@ -766,6 +850,81 @@ fn gmail_redirect_uri(state: &AppState) -> String {
         "{}/api/provider-accounts/gmail/callback",
         state.config.server.public_url.trim_end_matches('/')
     )
+}
+
+fn gmail_connect_scopes(scope: Option<&str>) -> Vec<String> {
+    if scope == Some("modify") {
+        vec![
+            GMAIL_READONLY_SCOPE.to_owned(),
+            GMAIL_SEND_SCOPE.to_owned(),
+            GMAIL_MODIFY_SCOPE.to_owned(),
+        ]
+    } else {
+        vec![GMAIL_READONLY_SCOPE.to_owned(), GMAIL_SEND_SCOPE.to_owned()]
+    }
+}
+
+fn gmail_scope_allows_modify(scopes: &[String]) -> bool {
+    scopes
+        .iter()
+        .any(|scope| scope == GMAIL_MODIFY_SCOPE || scope == GMAIL_FULL_MAIL_SCOPE)
+}
+
+async fn provider_account_scopes(
+    db: &SqlitePool,
+    user_id: i64,
+    provider_account_id: i64,
+) -> Result<Vec<String>, sqlx::Error> {
+    let json: String = sqlx::query_scalar(
+        "SELECT granted_scopes_json FROM provider_accounts WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
+    )
+    .bind(provider_account_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+    serde_json::from_str(&json).map_err(|err| sqlx::Error::Protocol(err.to_string()))
+}
+
+async fn set_bidirectional_sync_enabled(
+    db: &SqlitePool,
+    user_id: i64,
+    provider_account_id: i64,
+    enabled: bool,
+) -> Result<ProviderAccountResponse, sqlx::Error> {
+    let now = Utc::now();
+    let result = sqlx::query(
+        "UPDATE provider_accounts SET bidirectional_sync_enabled = ?1, last_error_class = CASE WHEN ?1 = 1 THEN NULL ELSE last_error_class END, last_error_message = CASE WHEN ?1 = 1 THEN NULL ELSE last_error_message END, updated_at = ?2 WHERE id = ?3 AND user_id = ?4 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
+    )
+    .bind(if enabled { 1_i64 } else { 0_i64 })
+    .bind(now)
+    .bind(provider_account_id)
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    load_provider_account_response(db, user_id, provider_account_id).await
+}
+
+async fn mark_scope_missing(
+    db: &SqlitePool,
+    user_id: i64,
+    provider_account_id: i64,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now();
+    let result = sqlx::query(
+        "UPDATE provider_accounts SET bidirectional_sync_enabled = 0, last_error_class = 'provider_scope_missing', last_error_message = 'Gmail bidirectional sync requires gmail.modify scope; reconnect Gmail', updated_at = ?1 WHERE id = ?2 AND user_id = ?3 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
+    )
+    .bind(now)
+    .bind(provider_account_id)
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(())
 }
 
 fn random_token() -> Result<String, rand::rand_core::OsError> {

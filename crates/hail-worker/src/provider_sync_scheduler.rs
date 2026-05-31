@@ -1116,6 +1116,9 @@ pub mod live {
             GmailIncrementalSyncError::Database(source) => {
                 ProviderSyncRunError::retryable("database", source)
             }
+            GmailIncrementalSyncError::Labels(source) => {
+                ProviderSyncRunError::retryable("labels", source)
+            }
             GmailIncrementalSyncError::GmailHistory(source) => {
                 classify_gmail_client_error("gmail_history", &source)
             }

@@ -273,6 +273,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/provider-accounts/{id}/bidirectional-sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["set_provider_bidirectional_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/provider-accounts/{id}/disconnect": {
         parameters: {
             query?: never;
@@ -1455,6 +1471,8 @@ export interface components {
             items: components["schemas"]["PileItem"][];
         };
         ProviderAccountResponse: {
+            bidirectional_sync_enabled: boolean;
+            bidirectional_sync_scope_missing: boolean;
             /** Format: date-time */
             cached_access_token_expires_at?: string | null;
             display_email?: string | null;
@@ -1462,10 +1480,25 @@ export interface components {
             /** Format: int64 */
             id: number;
             last_profile_history_id?: string | null;
+            /** Format: int64 */
+            pending_outbound_changes: number;
             provider_account_id: string;
             provider_email: string;
             provider_kind: string;
             sync_status: string;
+        };
+        ProviderBidiSyncRequest: {
+            enabled: boolean;
+        };
+        ProviderBidiSyncResponse: {
+            account: components["schemas"]["ProviderAccountResponse"];
+            /** @enum {string} */
+            status: "updated";
+        } | {
+            authorization_url: string;
+            scopes: string[];
+            /** @enum {string} */
+            status: "scope_missing";
         };
         ProviderSyncEventSummary: {
             /** Format: date-time */
@@ -1479,6 +1512,8 @@ export interface components {
             accounts: components["schemas"]["ProviderSyncStatusResponse"][];
         };
         ProviderSyncStatusResponse: {
+            bidirectional_sync_enabled: boolean;
+            bidirectional_sync_scope_missing: boolean;
             display_email?: string | null;
             /** Format: int64 */
             id: number;
@@ -1493,6 +1528,8 @@ export interface components {
             last_sync_succeeded_at?: string | null;
             /** Format: date-time */
             next_sync_after?: string | null;
+            /** Format: int64 */
+            pending_outbound_changes: number;
             /** Format: date-time */
             profile_synced_at?: string | null;
             provider_account_id: string;
@@ -2717,6 +2754,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderSyncStatusListResponse"];
+                };
+            };
+        };
+    };
+    set_provider_bidirectional_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderBidiSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Provider account bidirectional sync setting updated or OAuth reconnect required. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderBidiSyncResponse"];
                 };
             };
         };

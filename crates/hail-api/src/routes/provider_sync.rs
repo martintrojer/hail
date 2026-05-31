@@ -62,6 +62,9 @@ pub struct ProviderSyncStatusResponse {
     pub last_error_class: Option<String>,
     pub last_error_message: Option<String>,
     pub last_profile_history_id: Option<String>,
+    pub bidirectional_sync_enabled: bool,
+    pub bidirectional_sync_scope_missing: bool,
+    pub pending_outbound_changes: i64,
     #[schema(value_type = Option<String>, format = DateTime)]
     pub profile_synced_at: Option<DateTime<Utc>>,
     pub last_sync_event: Option<ProviderSyncEventSummary>,
@@ -180,7 +183,7 @@ async fn list_statuses(
         "SELECT id, provider_kind, provider_account_id, provider_email, display_email, \
                 sync_status, last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, \
                 sync_backoff_secs, last_error_class, last_profile_history_id, \
-                profile_synced_at \
+                profile_synced_at, granted_scopes_json, bidirectional_sync_enabled \
          FROM provider_accounts \
          WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
          ORDER BY provider_email COLLATE NOCASE, id",
@@ -375,7 +378,7 @@ async fn load_status(
         "SELECT id, provider_kind, provider_account_id, provider_email, display_email, \
                 sync_status, last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, \
                 sync_backoff_secs, last_error_class, last_profile_history_id, \
-                profile_synced_at \
+                profile_synced_at, granted_scopes_json, bidirectional_sync_enabled \
          FROM provider_accounts \
          WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail'",
     )
@@ -393,6 +396,12 @@ async fn row_to_status(
 ) -> Result<ProviderSyncStatusResponse, sqlx::Error> {
     let id: i64 = row.get("id");
     let last_error_class: Option<String> = row.get("last_error_class");
+    let granted_scopes: Vec<String> = row
+        .get::<Option<String>, _>("granted_scopes_json")
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+    let pending_outbound_changes = hail_db::provider_outbound_changes::pending_outbound_change_count(db, id).await?;
     let last_error_event = if last_error_class.is_some() {
         load_event_summary(db, user_id, id, None).await?
     } else {
@@ -412,9 +421,18 @@ async fn row_to_status(
         last_error_class,
         last_error_message: None,
         last_profile_history_id: row.get("last_profile_history_id"),
+        bidirectional_sync_enabled: row.get::<i64, _>("bidirectional_sync_enabled") != 0,
+        bidirectional_sync_scope_missing: !gmail_scope_allows_modify(&granted_scopes),
+        pending_outbound_changes,
         profile_synced_at: row.get("profile_synced_at"),
         last_sync_event: load_event_summary(db, user_id, id, None).await?,
         last_error_event,
+    })
+}
+
+fn gmail_scope_allows_modify(scopes: &[String]) -> bool {
+    scopes.iter().any(|scope| {
+        scope == "https://www.googleapis.com/auth/gmail.modify" || scope == "https://mail.google.com/"
     })
 }
 

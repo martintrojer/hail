@@ -433,3 +433,63 @@ Implementation details:
 Outbound through Gmail is provider-specific in v1.2. Other provider types and
 IMAP-only accounts still fall back to Stalwart submission unless a future
 provider send hook is added.
+
+## Bidirectional Gmail sync
+
+Bidirectional Gmail sync is an explicit per-account opt-in controlled by
+`provider_accounts.bidirectional_sync_enabled` (default `0`). When disabled,
+hail remains one-way import: local read state, labels, and Trash do not mutate
+Gmail.
+
+When enabled, hail records local actions in `provider_outbound_changes` and the
+worker drains those rows into Gmail `users.messages.batchModify` calls:
+
+- local read -> remove Gmail `UNREAD`;
+- local unread -> add Gmail `UNREAD`;
+- local hail label add/remove -> add/remove the corresponding Gmail label name;
+- local move to Trash -> add Gmail `TRASH`;
+- local restore/untrash -> remove Gmail `TRASH`.
+
+Outbound push is idempotent because Gmail label add/remove operations are safe to
+repeat. Hail never permanently deletes Gmail mail during push; Trash is only the
+Gmail `TRASH` label. Mapping rows in `provider_message_mappings` are retained on
+trash/untrash so later history events and restores can still reconcile.
+
+### OAuth scope
+
+The read-only import scope is not sufficient for push. Enabling bidirectional
+sync requires either:
+
+- `https://www.googleapis.com/auth/gmail.modify`, or
+- full mail scope `https://mail.google.com/`.
+
+If an existing account lacks one of those scopes, hail leaves the toggle off,
+sets `last_error_class = 'provider_scope_missing'`, and the SPA starts the Gmail
+connect flow again with the broader scope. Tokens remain server-side.
+
+### Pull-side label changes and loop prevention
+
+Gmail incremental history sync requests label events in addition to new message
+events. Gmail `labelAdded`/`labelRemoved` changes are translated into local
+state where hail has a local mapping:
+
+- `UNREAD` maps to local read/unread semantics;
+- user labels map through the `labels`/`thread_labels` sidecar tables;
+- `TRASH` is accepted as provider trash state but local operator trash remains
+  authoritative in conflicts.
+
+To prevent echo loops, the pull side checks for a recently applied outbound row
+for the same mapped Gmail message and change type within a 60 second window. If
+found, that Gmail history label event is skipped locally. The durable
+`provider_outbound_changes.applied_at` timestamp is used for this window; an
+in-memory cache can be layered later but restart persistence is not required.
+
+### Conflict policy
+
+Conflict resolution is last-writer-wins per `(gmail_message_id, change_type)`
+using the ISO timestamps on outbound rows and provider history/application time.
+For example, if hail adds label `X` and a later Gmail history record removes
+`X`, the later Gmail remove wins locally. Trash is the special case: if either
+side moved a message to Trash, hail's local trash action wins for outbound push
+because the operator clearly intended to remove the message from active mail.
+Hail still never issues Gmail permanent delete as part of bidirectional sync.
