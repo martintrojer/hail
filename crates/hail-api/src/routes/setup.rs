@@ -14,7 +14,6 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::{Duration, Utc};
-use rand::TryRngCore;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
@@ -26,7 +25,6 @@ use crate::middleware::session::{
     SESSION_TTL_DAYS, basic_bearer, build_session_cookie, new_session_id,
 };
 use crate::routes::auth::UserView;
-use crate::routes::management_http;
 use crate::routes::response::{error_response, internal};
 use crate::routes::validation::{valid_domain, valid_email};
 use crate::state::AppState;
@@ -127,15 +125,25 @@ impl UserProvisioner for StalwartProvisioner {
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(management_url) = state.config.stalwart.management_url.as_deref() {
-                let token = authenticate_stalwart_management(
+                let token = hail_jmap::management::login_authcode_to_bearer(
                     management_url,
                     stalwart_admin_username,
                     stalwart_admin_password,
                 )
-                .await?;
-                create_stalwart_domain(management_url, &token, domain).await?;
-                create_stalwart_principal(management_url, &token, email, &password, display_name)
-                    .await?;
+                .await
+                .map_err(management_error)?;
+                hail_jmap::management::principal_set_domain(management_url, &token, domain)
+                    .await
+                    .map_err(management_error)?;
+                hail_jmap::management::principal_set_individual(
+                    management_url,
+                    &token,
+                    email,
+                    &password,
+                    display_name,
+                )
+                .await
+                .map_err(management_error)?;
             } else {
                 tracing::info!(
                     email,
@@ -475,342 +483,13 @@ where
     }
 }
 
-async fn authenticate_stalwart_management(
-    management_url: &str,
-    username: &str,
-    password: SecretString,
-) -> Result<SecretString, ProvisionError> {
-    #[derive(Serialize)]
-    struct AuthCodeRequest<'a> {
-        #[serde(rename = "type")]
-        kind: &'static str,
-        #[serde(rename = "accountName")]
-        account_name: &'a str,
-        #[serde(rename = "accountSecret")]
-        account_secret: &'a str,
-        #[serde(rename = "clientId")]
-        client_id: &'static str,
-        #[serde(rename = "redirectUri")]
-        redirect_uri: &'static str,
-        nonce: &'a str,
-    }
-
-    let nonce = random_nonce()?;
-    let auth_body = AuthCodeRequest {
-        kind: "authCode",
-        account_name: username,
-        account_secret: password.expose_secret(),
-        client_id: "webadmin",
-        redirect_uri: "https://localhost/setup",
-        nonce: &nonce,
-    };
-    let auth_json = post_management_json(
-        management_url,
-        "/api/auth",
-        None,
-        &auth_body,
-        "invalid Stalwart admin credentials",
-    )
-    .await?;
-
-    let Some(code) = auth_json
-        .pointer("/data/code")
-        .and_then(serde_json::Value::as_str)
-    else {
-        if let Some(token) = extract_access_token(&auth_json) {
-            return Ok(SecretString::from(token));
+fn management_error(err: hail_jmap::management::ManagementError) -> ProvisionError {
+    match err {
+        hail_jmap::management::ManagementError::Nonce => ProvisionError::Nonce,
+        hail_jmap::management::ManagementError::Api { status, detail } => {
+            ProvisionError::ManagementApi { status, detail }
         }
-        return Err(ProvisionError::Management(
-            "Stalwart auth response did not include a client code or access token".to_string(),
-        ));
-    };
-
-    exchange_stalwart_client_code(management_url, code, &nonce).await
-}
-
-async fn exchange_stalwart_client_code(
-    management_url: &str,
-    code: &str,
-    nonce: &str,
-) -> Result<SecretString, ProvisionError> {
-    #[derive(Serialize)]
-    struct AuthTokenRequest<'a> {
-        #[serde(rename = "type")]
-        kind: &'static str,
-        code: &'a str,
-        #[serde(rename = "clientId")]
-        client_id: &'static str,
-        #[serde(rename = "redirectUri")]
-        redirect_uri: &'static str,
-        nonce: &'a str,
-    }
-
-    let token_body = AuthTokenRequest {
-        kind: "code",
-        code,
-        client_id: "webadmin",
-        redirect_uri: "https://localhost/setup",
-        nonce,
-    };
-    match post_management_json(
-        management_url,
-        "/api/auth/token",
-        None,
-        &token_body,
-        "Stalwart management token exchange failed",
-    )
-    .await
-    {
-        Ok(json) => extract_exchange_token(&json)
-            .map(SecretString::from)
-            .ok_or_else(|| {
-                ProvisionError::Management(
-                    "Stalwart token response did not include an access token".to_string(),
-                )
-            }),
-        Err(ProvisionError::ManagementPathNotFound { .. }) => {
-            #[derive(Serialize)]
-            struct OAuthRequest<'a> {
-                #[serde(rename = "type")]
-                kind: &'static str,
-                #[serde(rename = "client_id")]
-                client_id: &'static str,
-                #[serde(rename = "redirect_uri")]
-                redirect_uri: &'static str,
-                nonce: &'a str,
-            }
-
-            let oauth_body = OAuthRequest {
-                kind: "code",
-                client_id: "webadmin",
-                redirect_uri: "stalwart://auth",
-                nonce,
-            };
-            let json = post_management_json(
-                management_url,
-                "/api/oauth",
-                Some(code),
-                &oauth_body,
-                "Stalwart management token exchange failed",
-            )
-            .await?;
-            extract_exchange_token(&json)
-                .map(SecretString::from)
-                .ok_or_else(|| {
-                    ProvisionError::Management(
-                        "Stalwart OAuth response did not include an access token".to_string(),
-                    )
-                })
-        }
-        Err(err) => Err(err),
-    }
-}
-
-async fn create_stalwart_domain(
-    management_url: &str,
-    token: &SecretString,
-    domain: &str,
-) -> Result<(), ProvisionError> {
-    let body = serde_json::json!({
-        "type": "domain",
-        "name": domain,
-    });
-    post_management_json(
-        management_url,
-        "/api/principal",
-        Some(token.expose_secret()),
-        &body,
-        "Stalwart domain provisioning failed",
-    )
-    .await
-    .map(|_| ())
-}
-
-async fn create_stalwart_principal(
-    management_url: &str,
-    token: &SecretString,
-    email: &str,
-    password: &SecretString,
-    display_name: Option<&str>,
-) -> Result<(), ProvisionError> {
-    #[derive(Serialize)]
-    struct Principal<'a> {
-        #[serde(rename = "type")]
-        kind: &'static str,
-        name: &'a str,
-        secrets: [&'a str; 1],
-        emails: [&'a str; 1],
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<&'a str>,
-    }
-
-    let payload = Principal {
-        kind: "individual",
-        name: email,
-        secrets: [password.expose_secret()],
-        emails: [email],
-        description: display_name,
-    };
-    post_management_json(
-        management_url,
-        "/api/principal",
-        Some(token.expose_secret()),
-        &payload,
-        "Stalwart mailbox provisioning failed",
-    )
-    .await
-    .map(|_| ())
-}
-
-async fn post_management_json<T: Serialize + ?Sized>(
-    management_url: &str,
-    path: &str,
-    bearer: Option<&str>,
-    body: &T,
-    failure_context: &str,
-) -> Result<serde_json::Value, ProvisionError> {
-    let url = format!("{}{}", management_url.trim_end_matches('/'), path);
-    let mut request = management_http::client().post(&url).json(body);
-    if let Some(token) = bearer {
-        request = request.bearer_auth(token);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|err| ProvisionError::Management(err.to_string()))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| ProvisionError::Management(err.to_string()))?;
-
-    if status.is_success() || is_idempotent_already_exists(status, &text) {
-        if text.trim().is_empty() {
-            return Ok(serde_json::Value::Null);
-        }
-        return serde_json::from_str(&text)
-            .map_err(|err| ProvisionError::Management(format!("invalid Stalwart JSON: {err}")));
-    }
-
-    let sanitized = sanitized_management_body(&text);
-    let err = management_api_error(status, failure_context, &sanitized);
-    tracing::error!(%url, error = %err, status = %status, body = %sanitized, "setup: Stalwart management request failed");
-    if status.as_u16() == 404 {
-        return Err(ProvisionError::ManagementPathNotFound {
-            path: path.to_string(),
-        });
-    }
-    Err(err)
-}
-
-fn is_idempotent_already_exists(status: StatusCode, body: &str) -> bool {
-    if status != StatusCode::CONFLICT {
-        return false;
-    }
-    let lower = body.to_ascii_lowercase();
-    lower.contains("already exists") || lower.contains("already exist") || lower.contains("exists")
-}
-
-fn management_api_error(status: StatusCode, context: &str, body: &str) -> ProvisionError {
-    let detail = problem_detail(body).unwrap_or_else(|| {
-        if status == StatusCode::UNAUTHORIZED {
-            "invalid Stalwart admin credentials".to_string()
-        } else if body.trim().is_empty() {
-            context.to_string()
-        } else {
-            format!("{context}: {body}")
-        }
-    });
-    ProvisionError::ManagementApi { status, detail }
-}
-
-fn problem_detail(body: &str) -> Option<String> {
-    let json: serde_json::Value = serde_json::from_str(body).ok()?;
-    let title = json.get("title").and_then(serde_json::Value::as_str);
-    let detail = json
-        .get("detail")
-        .or_else(|| json.get("details"))
-        .or_else(|| json.get("reason"))
-        .and_then(serde_json::Value::as_str);
-    match (title, detail) {
-        (Some(title), Some(detail)) if !detail.is_empty() => Some(format!("{title}: {detail}")),
-        (Some(title), _) => Some(title.to_string()),
-        (_, Some(detail)) => Some(detail.to_string()),
-        _ => None,
-    }
-}
-
-fn extract_access_token(json: &serde_json::Value) -> Option<String> {
-    [
-        "/data/access_token",
-        "/data/accessToken",
-        "/data/token",
-        "/access_token",
-        "/accessToken",
-        "/token",
-    ]
-    .into_iter()
-    .find_map(|pointer| json.pointer(pointer)?.as_str().map(str::to_string))
-}
-
-fn extract_exchange_token(json: &serde_json::Value) -> Option<String> {
-    extract_access_token(json).or_else(|| {
-        json.pointer("/data/code")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-    })
-}
-
-fn random_nonce() -> Result<String, ProvisionError> {
-    let mut bytes = [0u8; 16];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut bytes)
-        .map_err(|_| ProvisionError::Nonce)?;
-    Ok(hex::encode(bytes))
-}
-
-fn sanitized_management_body(body: &str) -> String {
-    const MAX: usize = 2048;
-    let trimmed = body.trim();
-    if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        redact_secret_fields(&mut json);
-        return truncate(&json.to_string(), MAX);
-    }
-    truncate(trimmed, MAX)
-}
-
-fn redact_secret_fields(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                if matches!(
-                    key.as_str(),
-                    "accountSecret"
-                        | "account_secret"
-                        | "secret"
-                        | "secrets"
-                        | "password"
-                        | "access_token"
-                        | "accessToken"
-                        | "token"
-                        | "code"
-                ) {
-                    *value = serde_json::Value::String("<redacted>".to_string());
-                } else {
-                    redact_secret_fields(value);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => values.iter_mut().for_each(redact_secret_fields),
-        _ => {}
-    }
-}
-
-fn truncate(value: &str, max: usize) -> String {
-    if value.len() <= max {
-        value.to_string()
-    } else {
-        format!("{}…", &value[..max])
+        other => ProvisionError::Management(other.to_string()),
     }
 }
 
@@ -869,27 +548,4 @@ fn forbidden_setup_bootstrap_required() -> Response {
 
 fn conflict_setup_disabled() -> Response {
     error_response(StatusCode::CONFLICT, "setup_disabled")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sanitized_management_body_redacts_secret_fields() {
-        let body = serde_json::json!({
-            "accountSecret": "admin1234",
-            "access_token": "bearer-token",
-            "nested": { "secrets": ["mailbox-password"], "code": "client-code" },
-            "title": "Unauthorized"
-        })
-        .to_string();
-
-        let redacted = sanitized_management_body(&body);
-        assert!(!redacted.contains("admin1234"));
-        assert!(!redacted.contains("bearer-token"));
-        assert!(!redacted.contains("mailbox-password"));
-        assert!(!redacted.contains("client-code"));
-        assert!(redacted.contains("<redacted>"));
-    }
 }

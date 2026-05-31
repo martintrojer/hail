@@ -186,24 +186,41 @@ impl UserProvisioner for FakeProvisioner {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ManagementCall {
+    path: String,
+    body: serde_json::Value,
+}
+
 async fn start_fake_management(
     mode: FakeManagementMode,
-) -> (String, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+) -> (
+    String,
+    Arc<Mutex<Vec<ManagementCall>>>,
+    tokio::task::JoinHandle<()>,
+) {
     async fn handler(
-        State(state): State<(FakeManagementMode, Arc<Mutex<Vec<String>>>)>,
+        State(state): State<(FakeManagementMode, Arc<Mutex<Vec<ManagementCall>>>)>,
         headers: axum::http::HeaderMap,
         uri: axum::http::Uri,
         body: String,
     ) -> impl IntoResponse {
         let (mode, calls) = state;
         let path = uri.path().to_string();
-        calls.lock().expect("calls").push(path.clone());
+        let body_json = if body.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({"raw": body}))
+        };
+        calls.lock().expect("calls").push(ManagementCall {
+            path: path.clone(),
+            body: body_json.clone(),
+        });
 
         if path == "/api/auth" {
-            let json: serde_json::Value = serde_json::from_str(&body).expect("auth json");
-            assert_eq!(json["type"], "authCode");
-            assert_eq!(json["accountName"], "admin");
-            assert_eq!(json["accountSecret"], "admin1234");
+            assert_eq!(body_json["type"], "authCode");
+            assert_eq!(body_json["accountName"], "admin");
+            assert_eq!(body_json["accountSecret"], "admin1234");
             return match mode {
                 FakeManagementMode::Auth401 => (
                     StatusCode::UNAUTHORIZED,
@@ -216,59 +233,110 @@ async fn start_fake_management(
                 ),
                 _ => (
                     StatusCode::OK,
-                    axum::Json(serde_json::json!({ "data": { "code": "client-code" } })),
+                    axum::Json(serde_json::json!({ "client_code": "client-code" })),
                 ),
             };
         }
 
-        if path == "/api/auth/token" {
-            let json: serde_json::Value = serde_json::from_str(&body).expect("token json");
-            assert_eq!(json["code"], "client-code");
+        if path == "/auth/token" {
+            let raw = body_json
+                .get("raw")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            assert!(raw.contains("code=client-code"), "token body: {raw}");
             return (
                 StatusCode::OK,
-                axum::Json(serde_json::json!({ "data": { "access_token": "management-token" } })),
+                axum::Json(serde_json::json!({ "access_token": "management-token" })),
             );
         }
 
-        if path == "/api/principal" {
+        if path == "/.well-known/jmap" {
             assert_eq!(
                 headers
                     .get(header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok()),
                 Some("Bearer management-token")
             );
-            let json: serde_json::Value = serde_json::from_str(&body).expect("principal json");
-            if json["type"] == "domain" {
-                assert_eq!(json["name"], "example.org");
-                return match mode {
-                    FakeManagementMode::DomainExists => (
-                        StatusCode::CONFLICT,
-                        axum::Json(serde_json::json!({
-                            "title": "Conflict",
-                            "detail": "principal already exists"
-                        })),
-                    ),
-                    _ => (
-                        StatusCode::OK,
-                        axum::Json(serde_json::json!({ "data": {} })),
-                    ),
-                };
-            }
-            assert_eq!(json["type"], "individual");
-            assert_eq!(json["name"], "alice@example.org");
-            assert_eq!(json["secrets"][0], "correct horse battery");
-            return match mode {
-                FakeManagementMode::PrincipalExists => (
-                    StatusCode::CONFLICT,
+            return (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "primaryAccounts": { "urn:stalwart:jmap": "mgmt-account" }
+                })),
+            );
+        }
+
+        if path == "/jmap/" {
+            assert_eq!(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer management-token")
+            );
+            assert_eq!(
+                body_json["using"],
+                serde_json::json!(["urn:ietf:params:jmap:core", "urn:stalwart:jmap"])
+            );
+            let calls = body_json["methodCalls"]
+                .as_array()
+                .expect("methodCalls array");
+            let method = calls[0][0].as_str().expect("method name");
+            return match method {
+                "x:Domain/set" => {
+                    assert_eq!(calls[0][1]["accountId"], "mgmt-account");
+                    assert_eq!(calls[0][1]["create"]["new-0"]["name"], "example.org");
+                    match mode {
+                        FakeManagementMode::DomainExists => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({
+                                "methodResponses": [["x:Domain/set", {"accountId": "mgmt-account", "notCreated": {"new-0": {"type": "primaryKeyViolation", "properties": ["name"], "objectId": {"object": "Domain", "id": "domain-id"}}}}, "set-0"]]
+                            })),
+                        ),
+                        _ => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({
+                                "methodResponses": [["x:Domain/set", {"accountId": "mgmt-account", "created": {"new-0": {"id": "domain-id"}}}, "set-0"]]
+                            })),
+                        ),
+                    }
+                }
+                "x:Domain/query" => (
+                    StatusCode::OK,
                     axum::Json(serde_json::json!({
-                        "title": "Conflict",
-                        "detail": "principal already exists"
+                        "methodResponses": [
+                            ["x:Domain/query", {"accountId": "mgmt-account", "ids": ["domain-id"]}, "0"],
+                            ["x:Domain/get", {"accountId": "mgmt-account", "list": [{"id": "domain-id", "name": "example.org"}], "notFound": []}, "1"]
+                        ]
                     })),
                 ),
-                _ => (
-                    StatusCode::CREATED,
-                    axum::Json(serde_json::json!({ "data": {} })),
-                ),
+                "x:Account/set" => {
+                    assert_eq!(calls[0][1]["accountId"], "mgmt-account");
+                    let account = &calls[0][1]["create"]["new-0"];
+                    assert_eq!(account["@type"], "User");
+                    assert_eq!(account["name"], "alice");
+                    assert_eq!(account["domainId"], "domain-id");
+                    assert_eq!(account["description"], "Alice");
+                    assert_eq!(account["credentials"]["0"]["@type"], "Password");
+                    assert_eq!(
+                        account["credentials"]["0"]["secret"],
+                        "correct horse battery"
+                    );
+                    assert_eq!(account["roles"]["@type"], "User");
+                    match mode {
+                        FakeManagementMode::PrincipalExists => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({
+                                "methodResponses": [["x:Account/set", {"accountId": "mgmt-account", "notCreated": {"new-0": {"type": "primaryKeyViolation", "properties": ["name", "domainId"]}}}, "set-0"]]
+                            })),
+                        ),
+                        _ => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({
+                                "methodResponses": [["x:Account/set", {"accountId": "mgmt-account", "created": {"new-0": {"id": "user-id"}}}, "set-0"]]
+                            })),
+                        ),
+                    }
+                }
+                other => panic!("unexpected JMAP method {other}"),
             };
         }
 
@@ -280,7 +348,7 @@ async fn start_fake_management(
 
     let calls = Arc::new(Mutex::new(Vec::new()));
     let app = axum::Router::new()
-        .fallback(axum::routing::post(handler))
+        .fallback(axum::routing::any(handler))
         .with_state((mode, calls.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -1027,14 +1095,43 @@ async fn stalwart_provisioner_uses_auth_token_domain_principal_sequence() {
     .await;
 
     assert_eq!(resp.status(), StatusCode::CREATED);
+    let observed = calls.lock().expect("calls").clone();
+    let paths: Vec<String> = observed.iter().map(|call| call.path.clone()).collect();
     assert_eq!(
-        calls.lock().expect("calls").clone(),
+        paths,
         vec![
             "/api/auth",
-            "/api/auth/token",
-            "/api/principal",
-            "/api/principal"
+            "/auth/token",
+            "/.well-known/jmap",
+            "/jmap/",
+            "/.well-known/jmap",
+            "/jmap/",
+            "/jmap/",
         ]
+    );
+    let domain_set = observed
+        .iter()
+        .find(|call| {
+            call.body.pointer("/methodCalls/0/0") == Some(&serde_json::json!("x:Domain/set"))
+        })
+        .expect("domain set call");
+    assert_eq!(
+        domain_set
+            .body
+            .pointer("/methodCalls/0/1/create/new-0/name"),
+        Some(&serde_json::json!("example.org"))
+    );
+    let account_set = observed
+        .iter()
+        .find(|call| {
+            call.body.pointer("/methodCalls/0/0") == Some(&serde_json::json!("x:Account/set"))
+        })
+        .expect("account set call");
+    assert_eq!(
+        account_set
+            .body
+            .pointer("/methodCalls/0/1/create/new-0/credentials/0/@type"),
+        Some(&serde_json::json!("Password"))
     );
 }
 
@@ -1057,10 +1154,7 @@ async fn stalwart_provisioner_surfaces_auth_401_detail_as_setup_error() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["error"], "setup_provision_failed");
-    assert_eq!(
-        json["detail"],
-        "Unauthorized: invalid Stalwart admin credentials"
-    );
+    assert_eq!(json["detail"], "invalid Stalwart admin credentials");
 }
 
 #[tokio::test]
@@ -1074,19 +1168,18 @@ async fn stalwart_provisioner_treats_existing_domain_as_success() {
 
     let resp = post_admin(
         hail_api::routes::setup::router().with_state(state),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"Alice","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
     assert_eq!(resp.status(), StatusCode::CREATED);
-    assert_eq!(
-        calls.lock().expect("calls").clone(),
-        vec![
-            "/api/auth",
-            "/api/auth/token",
-            "/api/principal",
-            "/api/principal"
-        ]
+    assert!(
+        calls
+            .lock()
+            .expect("calls")
+            .iter()
+            .any(|call| call.body.pointer("/methodCalls/0/0")
+                == Some(&serde_json::json!("x:Domain/set")))
     );
 }
 
@@ -1101,18 +1194,17 @@ async fn stalwart_provisioner_treats_existing_principal_as_success() {
 
     let resp = post_admin(
         hail_api::routes::setup::router().with_state(state),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"Alice","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
     assert_eq!(resp.status(), StatusCode::CREATED);
-    assert_eq!(
-        calls.lock().expect("calls").clone(),
-        vec![
-            "/api/auth",
-            "/api/auth/token",
-            "/api/principal",
-            "/api/principal"
-        ]
+    assert!(
+        calls
+            .lock()
+            .expect("calls")
+            .iter()
+            .any(|call| call.body.pointer("/methodCalls/0/0")
+                == Some(&serde_json::json!("x:Account/set")))
     );
 }

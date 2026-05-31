@@ -961,8 +961,12 @@ dependencies = [
 name = "hail-jmap"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "jmap-client",
+ "rand 0.9.4",
+ "reqwest",
  "secrecy",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
@@ -2163,6 +2167,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
