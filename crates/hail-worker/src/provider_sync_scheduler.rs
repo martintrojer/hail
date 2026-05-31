@@ -254,6 +254,20 @@ fn sync_mode(account: &ProviderSyncAccount) -> ProviderSyncMode {
     }
 }
 
+#[must_use]
+pub fn gmail_initial_sync_options_for_inbox(
+    inbox_id: impl Into<String>,
+) -> GmailInitialSyncOptions {
+    GmailInitialSyncOptions::into_mailboxes([inbox_id])
+}
+
+#[must_use]
+pub fn gmail_incremental_sync_options_for_inbox(
+    inbox_id: impl Into<String>,
+) -> GmailIncrementalSyncOptions {
+    GmailIncrementalSyncOptions::into_mailboxes([inbox_id])
+}
+
 async fn cancel_or_complete<T>(
     cancel: &CancellationToken,
     future: impl std::future::Future<Output = T>,
@@ -640,7 +654,7 @@ pub mod live {
                 .inbox_id()
                 .await
                 .map_err(|err| ProviderSyncRunError::retryable("jmap_mailbox", err))?;
-            let mut options = GmailInitialSyncOptions::into_mailboxes([inbox_id]);
+            let mut options = gmail_initial_sync_options_for_inbox(inbox_id);
             options.historical.max_messages = self.initial_import_max_messages;
             if let Some(max_messages) = self.initial_import_max_messages {
                 info!(
@@ -690,7 +704,7 @@ pub mod live {
                 .inbox_id()
                 .await
                 .map_err(|err| ProviderSyncRunError::retryable("jmap_mailbox", err))?;
-            let options = GmailIncrementalSyncOptions::into_mailboxes([inbox_id]);
+            let options = gmail_incremental_sync_options_for_inbox(inbox_id);
             let account = crate::gmail_incremental_sync::load_gmail_incremental_sync_account_by_id(
                 &self.db, account.id,
             )

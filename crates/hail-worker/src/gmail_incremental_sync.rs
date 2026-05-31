@@ -18,9 +18,9 @@ use crate::gmail_client::{
     GmailTokenSource, ListHistoryParams, ListHistoryResponse, ListMessage,
 };
 use crate::gmail_historical_import::{
-    GmailHistoricalImportAccount, GmailHistoricalImportError, GmailHistoricalImportOptions,
-    GmailHistoricalImportSummary, GmailHistoricalImporter, GmailHistoricalSource,
-    gmail_user_label_map, import_gmail_history, import_one_message,
+    GMAIL_INBOX_LABEL_ID, GmailHistoricalImportAccount, GmailHistoricalImportError,
+    GmailHistoricalImportOptions, GmailHistoricalImportSummary, GmailHistoricalImporter,
+    GmailHistoricalSource, gmail_user_label_map, import_gmail_history, import_one_message,
 };
 
 const DEFAULT_HISTORY_PAGE_SIZE: u16 = 100;
@@ -56,10 +56,11 @@ impl GmailIncrementalSyncOptions {
             GmailHistoricalImportOptions::into_mailboxes(target_mailbox_ids);
         historical_fallback.resume = false;
         historical_fallback.max_messages = Some(500);
+        historical_fallback.label_ids = vec![GMAIL_INBOX_LABEL_ID.to_owned()];
         Self {
             page_size: DEFAULT_HISTORY_PAGE_SIZE,
             max_history_records: Some(1_000),
-            label_id: None,
+            label_id: Some(GMAIL_INBOX_LABEL_ID.to_owned()),
             history_types: vec!["messageAdded".to_owned()],
             historical_fallback,
         }

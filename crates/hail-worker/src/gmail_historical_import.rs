@@ -39,6 +39,7 @@ use crate::gmail_client::{
 };
 use crate::rfc822_import::{ImportedRfc822Message, Rfc822ImportRequest, Rfc822Importer};
 
+pub const GMAIL_INBOX_LABEL_ID: &str = "INBOX";
 const DEFAULT_PAGE_SIZE: u16 = 100;
 const MAX_PAGE_SIZE: u16 = 500;
 const CURSOR_KIND: &str = "gmail_historical_v1";

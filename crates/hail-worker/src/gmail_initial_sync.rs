@@ -39,11 +39,17 @@ pub struct GmailInitialSyncOptions {
 }
 
 impl GmailInitialSyncOptions {
+    /// Build default inbound Gmail initial-sync options for the target local mailboxes.
+    ///
+    /// v1.2 provider import intentionally imports only Gmail's system `INBOX` label by
+    /// default. Archived All Mail, Trash/Spam, and Sent are left out unless a future
+    /// explicit import mode opts into a wider provider window.
     #[must_use]
     pub fn into_mailboxes(target_mailbox_ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            historical: GmailHistoricalImportOptions::into_mailboxes(target_mailbox_ids),
-        }
+        let mut historical = GmailHistoricalImportOptions::into_mailboxes(target_mailbox_ids);
+        historical.label_ids =
+            vec![crate::gmail_historical_import::GMAIL_INBOX_LABEL_ID.to_owned()];
+        Self { historical }
     }
 }
 

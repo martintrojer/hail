@@ -8,7 +8,8 @@ use hail_db::provider_sync_audit::list_provider_sync_audit_logs;
 use hail_test::{TempDb, fresh_db_url};
 use hail_worker::provider_sync_scheduler::{
     ProviderSyncAccount, ProviderSyncRunError, ProviderSyncRunOutcome, ProviderSyncRunner,
-    ProviderSyncSchedulerOptions, process_provider_sync_tick,
+    ProviderSyncSchedulerOptions, gmail_incremental_sync_options_for_inbox,
+    gmail_initial_sync_options_for_inbox, process_provider_sync_tick,
 };
 use sqlx::SqlitePool;
 use tokio::sync::Barrier;
@@ -203,6 +204,29 @@ async fn provider_state(
     .fetch_one(pool)
     .await
     .expect("provider state")
+}
+
+#[tokio::test]
+async fn scheduler_initial_options_default_to_gmail_inbox_label() {
+    let options = gmail_initial_sync_options_for_inbox("local-inbox-id");
+
+    assert_eq!(options.historical.label_ids, vec!["INBOX"]);
+    assert_eq!(
+        options.historical.target_mailbox_ids,
+        vec!["local-inbox-id"]
+    );
+}
+
+#[tokio::test]
+async fn scheduler_incremental_options_default_to_gmail_inbox_label() {
+    let options = gmail_incremental_sync_options_for_inbox("local-inbox-id");
+
+    assert_eq!(options.label_id.as_deref(), Some("INBOX"));
+    assert_eq!(options.historical_fallback.label_ids, vec!["INBOX"]);
+    assert_eq!(
+        options.historical_fallback.target_mailbox_ids,
+        vec!["local-inbox-id"]
+    );
 }
 
 #[tokio::test]
