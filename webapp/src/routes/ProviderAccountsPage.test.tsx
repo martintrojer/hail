@@ -14,6 +14,7 @@ import type {
   ProviderAccount,
   ProviderAccountResponse,
   ProviderReimportResponse,
+  ProviderStopSyncResponse,
   ProviderSyncStatus,
   ProviderSyncStatusListResponse,
   ProviderSyncTriggerResponse,
@@ -113,6 +114,7 @@ class ProviderAccountsTestClient extends TestHailApiClient {
   syncStatusCalls = 0;
   triggerSyncCalls: number[] = [];
   reimportCalls: number[] = [];
+  stopCalls: number[] = [];
   syncStatuses: ProviderSyncStatus[] = [];
   syncStatusResponses: ProviderSyncStatusListResponse[] = [];
   connectResponse: GmailConnectResponse = {
@@ -123,11 +125,13 @@ class ProviderAccountsTestClient extends TestHailApiClient {
   triggerSyncResponse: ProviderSyncTriggerResponse | null = null;
   reimportResponse: ProviderReimportResponse | null = null;
   triggerSyncPromise: Promise<ProviderSyncTriggerResponse> | null = null;
+  stopResponse: ProviderStopSyncResponse | null = null;
   connectFailure: Error | null = null;
   disconnectFailure: Error | null = null;
   syncStatusFailure: Error | null = null;
   triggerSyncFailure: Error | null = null;
   reimportFailure: Error | null = null;
+  stopFailure: Error | null = null;
 
   override async connectGmail(): Promise<GmailConnectResponse> {
     this.connectCalls += 1;
@@ -214,6 +218,33 @@ class ProviderAccountsTestClient extends TestHailApiClient {
       last_error_message: null,
       last_error_event: null,
       last_profile_history_id: null,
+    });
+    this.syncStatuses = this.syncStatuses.map((status) => status.id === id ? account : status);
+    return { account };
+  }
+
+  override async stopProviderSync(
+    id: number,
+  ): Promise<ProviderStopSyncResponse> {
+    this.stopCalls.push(id);
+    if (this.stopFailure) {
+      throw this.stopFailure;
+    }
+    const account = this.stopResponse?.account ?? providerSyncStatus({
+      ...(this.syncStatuses.find((status) => status.id === id) ?? {}),
+      id,
+      sync_status: 'paused',
+      next_sync_after: null,
+      sync_backoff_secs: null,
+      last_error_class: 'operator_paused',
+      last_error_message: null,
+      last_error_event: {
+        event_type: 'sync_paused',
+        result_status: 'info',
+        safe_error_class: 'operator_paused',
+        safe_error_message: 'Gmail import paused by operator',
+        created_at: '2026-05-26T18:01:00Z',
+      },
     });
     this.syncStatuses = this.syncStatuses.map((status) => status.id === id ? account : status);
     return { account };
@@ -572,6 +603,7 @@ describe('ProviderAccountsPage', () => {
       { ...sampleSyncStatus, id: 2, provider_email: 'initial@gmail.com', display_email: 'Initial <initial@gmail.com>', sync_status: 'initial_sync' },
       { ...sampleSyncStatus, id: 3, provider_email: 'active@gmail.com', display_email: 'Active <active@gmail.com>', sync_status: 'active' },
       { ...sampleSyncStatus, id: 4, provider_email: 'error@gmail.com', display_email: 'Error <error@gmail.com>', sync_status: 'error' },
+      { ...sampleSyncStatus, id: 7, provider_email: 'paused@gmail.com', display_email: 'Paused <paused@gmail.com>', sync_status: 'paused' },
       { ...sampleSyncStatus, id: 5, provider_email: 'revoked@gmail.com', display_email: 'Revoked <revoked@gmail.com>', sync_status: 'revoked' },
       { ...sampleSyncStatus, id: 6, provider_email: 'unknown@gmail.com', display_email: 'Unknown <unknown@gmail.com>', sync_status: 'future_state' },
     ];
@@ -581,6 +613,7 @@ describe('ProviderAccountsPage', () => {
     expect(screen.getAllByText('Initial import running').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Paused').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Access revoked').length).toBeGreaterThan(0);
     expect(screen.getAllByText('future_state').length).toBeGreaterThan(0);
   });
@@ -591,6 +624,7 @@ describe('ProviderAccountsPage', () => {
       providerSyncStatus({ id: 1, display_email: 'Active Account', sync_status: 'active' }),
       providerSyncStatus({ id: 2, display_email: 'Error Account', sync_status: 'error' }),
       providerSyncStatus({ id: 3, display_email: 'Initial Account', sync_status: 'initial_sync' }),
+      providerSyncStatus({ id: 7, display_email: 'Paused Account', sync_status: 'paused' }),
       providerSyncStatus({ id: 4, display_email: 'Disabled Account', sync_status: 'disabled' }),
       providerSyncStatus({ id: 5, display_email: 'Revoked Account', sync_status: 'revoked' }),
       providerSyncStatus({ id: 6, display_email: 'Disconnected Account', sync_status: 'disconnected' }),
@@ -609,6 +643,10 @@ describe('ProviderAccountsPage', () => {
       within((await screen.findByRole('heading', { name: 'Re-importing from Gmail…' })).closest('section') as HTMLElement)
         .getByRole('button', { name: 'Re-import from Gmail' }),
     ).toBeDisabled();
+    expect(
+      within((await screen.findByRole('heading', { name: 'Paused Account' })).closest('section') as HTMLElement)
+        .getByRole('button', { name: 'Re-import from Gmail' }),
+    ).toBeEnabled();
 
     for (const accountName of ['Disabled Account', 'Revoked Account', 'Disconnected Account']) {
       expect(
@@ -616,6 +654,63 @@ describe('ProviderAccountsPage', () => {
           .queryByRole('button', { name: 'Re-import from Gmail' }),
       ).not.toBeInTheDocument();
     }
+  });
+
+  it('opens the stop import confirmation dialog; cancel does nothing; confirm pauses import', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [providerSyncStatus({
+      sync_status: 'active',
+      last_sync_attempted_at: '2026-05-26T18:00:00Z',
+      last_sync_succeeded_at: '2026-05-26T17:00:00Z',
+    })];
+    renderPage({ client });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop import' }));
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('Stop Gmail import?');
+    expect(screen.getByText(/The current sync will pause after the in-flight batch/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(client.stopCalls).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop import' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop import' }));
+
+    await waitFor(() => {
+      expect(client.stopCalls).toEqual([42]);
+      expect(screen.getAllByText('Paused').length).toBeGreaterThan(0);
+      expect(screen.getByText('Paused — click Sync now to resume')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Re-import from Gmail' })).toBeEnabled();
+    });
+  });
+
+  it('shows the stop import button only during server sync or initial import', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [
+      providerSyncStatus({ id: 1, display_email: 'Active Account', sync_status: 'active' }),
+      providerSyncStatus({ id: 2, display_email: 'Syncing Account', sync_status: 'active', last_sync_attempted_at: '2026-05-26T18:00:00Z', last_sync_succeeded_at: '2026-05-26T17:00:00Z' }),
+      providerSyncStatus({ id: 3, display_email: 'Initial Account', sync_status: 'initial_sync' }),
+      providerSyncStatus({ id: 4, display_email: 'Paused Account', sync_status: 'paused' }),
+    ];
+    renderPage({ client });
+
+    expect(
+      within((await screen.findByRole('heading', { name: 'Active Account' })).closest('section') as HTMLElement)
+        .queryByRole('button', { name: 'Stop import' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within((await screen.findByRole('heading', { name: 'Syncing Account' })).closest('section') as HTMLElement)
+        .getByRole('button', { name: 'Stop import' }),
+    ).toBeEnabled();
+    expect(
+      within((await screen.findByRole('heading', { name: 'Re-importing from Gmail…' })).closest('section') as HTMLElement)
+        .getByRole('button', { name: 'Stop import' }),
+    ).toBeEnabled();
+    expect(
+      within((await screen.findByRole('heading', { name: 'Paused Account' })).closest('section') as HTMLElement)
+        .queryByRole('button', { name: 'Stop import' }),
+    ).not.toBeInTheDocument();
   });
 
   it('opens the re-import confirmation dialog and cancel does nothing', async () => {
@@ -707,6 +802,11 @@ describe('ProviderAccountsPage', () => {
         display_email: 'Revoked Account',
         sync_status: 'revoked',
       }),
+      providerSyncStatus({
+        id: 6,
+        display_email: 'Paused Account',
+        sync_status: 'paused',
+      }),
     ];
 
     renderPage({ client });
@@ -717,6 +817,7 @@ describe('ProviderAccountsPage', () => {
       ['Error Account', 'Needs attention'],
       ['Disabled Account', 'Disabled'],
       ['Revoked Account', 'Access revoked'],
+      ['Paused Account', 'Paused'],
     ]) {
       const section = (
         await screen.findByRole('heading', { name: accountName })
@@ -899,7 +1000,7 @@ describe('ProviderAccountsPage', () => {
 
   it('uses the real API client fetch path for provider account actions', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
-      const url = String(input);
+      const url = input instanceof Request ? input.url : String(input);
       if (url.endsWith('/api/provider-accounts/gmail/connect')) {
         return Promise.resolve(
           jsonResponse(200, {

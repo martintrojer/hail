@@ -9,7 +9,7 @@ use hail_test::{TempDb, fresh_db_url};
 use hail_worker::provider_sync_scheduler::{
     ProviderSyncAccount, ProviderSyncRunError, ProviderSyncRunOutcome, ProviderSyncRunner,
     ProviderSyncSchedulerOptions, gmail_incremental_sync_options_for_inbox,
-    gmail_initial_sync_options_for_inbox, process_provider_sync_tick,
+    gmail_initial_sync_options_for_inbox, process_provider_sync_accounts, process_provider_sync_tick,
 };
 use sqlx::SqlitePool;
 use tokio::sync::Barrier;
@@ -227,6 +227,72 @@ async fn scheduler_incremental_options_default_to_gmail_inbox_label() {
         options.historical_fallback.target_mailbox_ids,
         vec!["local-inbox-id"]
     );
+}
+
+#[tokio::test]
+async fn paused_accounts_are_skipped_by_scheduler_tick() {
+    let (pool, _guard, user_id) = setup().await;
+    let paused = insert_provider(&pool, user_id, "paused", Some("100"), None, None).await;
+    let active = insert_provider(&pool, user_id, "active", Some("101"), None, None).await;
+    let runner = FakeRunner::default();
+
+    let summary = process_provider_sync_tick(
+        &pool,
+        &runner,
+        Utc::now(),
+        ProviderSyncSchedulerOptions::default(),
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("provider sync tick");
+
+    assert_eq!(summary.considered, 1);
+    assert_eq!(runner.calls(), vec![(active, "incremental")]);
+    assert_eq!(provider_state(&pool, paused).await.0, "paused");
+}
+
+#[tokio::test]
+async fn account_cancel_maps_to_paused_status_and_sync_paused_event() {
+    let (pool, _guard, user_id) = setup().await;
+    let account_id = insert_provider(&pool, user_id, "active", Some("100"), None, None).await;
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let runner = FakeRunner::default();
+
+    let account = ProviderSyncAccount {
+        id: account_id,
+        user_id,
+        jmap_account_id: "acct-provider".to_owned(),
+        provider_account_id: "gmail-paused-by-token".to_owned(),
+        provider_email: "paused-by-token@gmail.example".to_owned(),
+        sync_status: "active".to_owned(),
+        last_profile_history_id: Some("100".to_owned()),
+        initial_sync_completed_at: Some("2026-01-01T00:10:00Z".to_owned()),
+        sync_backoff_secs: None,
+    };
+
+    let summary = process_provider_sync_accounts(
+        &pool,
+        &runner,
+        Utc::now(),
+        vec![account],
+        &cancel,
+    )
+    .await
+    .expect("provider sync accounts");
+
+    assert!(summary.cancelled);
+    let state = provider_state(&pool, account_id).await;
+    assert_eq!(state.0, "paused");
+    assert_eq!(state.2.as_deref(), Some("operator_paused"));
+    assert!(state.3.is_none());
+    assert!(state.4.is_none());
+
+    let events = list_provider_sync_audit_logs(&pool, user_id, account_id, 1)
+        .await
+        .expect("audit events");
+    assert_eq!(events[0].event_type, "sync_paused");
+    assert_eq!(events[0].safe_error_class.as_deref(), Some("operator_paused"));
 }
 
 #[tokio::test]
@@ -533,7 +599,7 @@ async fn tick_cancels_non_cooperative_blocked_runner_without_waiting_forever() {
     assert_eq!(summary.incremental_runs, 1);
     assert_eq!(
         provider_state(&pool, id).await.2.as_deref(),
-        Some("cancelled")
+        Some("operator_paused")
     );
 }
 
@@ -571,6 +637,6 @@ async fn tick_cancels_blocked_runner_without_waiting_forever() {
     assert!(summary.cancelled);
     assert_eq!(
         provider_state(&pool, id).await.2.as_deref(),
-        Some("cancelled")
+        Some("operator_paused")
     );
 }
