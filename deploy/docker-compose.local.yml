@@ -50,7 +50,9 @@ services:
     environment:
       - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
       - HAIL_STALWART__JMAP_URL=http://stalwart:8080
-      - HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080
+      # Intentionally unset HAIL_STALWART__MANAGEMENT_URL on local:
+      # current Stalwart REST management API requires OAuth bearer auth and moved paths;
+      # hail's first-run wizard falls back to JMAP login against a pre-created account when this is empty.
       - HAIL_SERVER__BIND=0.0.0.0:8080
       # Intentional difference from docker-compose.yml: local smoke default is loopback HTTP.
       - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-http://127.0.0.1:8080}
@@ -75,7 +77,7 @@ services:
     environment:
       - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
       - HAIL_STALWART__JMAP_URL=http://stalwart:8080
-      - HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080
+      # Intentionally unset HAIL_STALWART__MANAGEMENT_URL on local (see hail-api section).
       - HAIL_SERVER__BIND=0.0.0.0:8080
       # Intentional difference from docker-compose.yml: local smoke default is loopback HTTP.
       - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-http://127.0.0.1:8080}
