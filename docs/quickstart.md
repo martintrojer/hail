@@ -201,20 +201,26 @@ Then open `http://127.0.0.1:8080/setup`.
 In the wizard:
 
 1. Paste the setup bootstrap token from `HAIL_SETUP_BOOTSTRAP_TOKEN`.
-2. Create the admin user, for example `you@example.com`.
-3. Enter a strong password and display name.
-4. Add your mail domain, for example `example.com`.
-5. Submit, then sign in with that admin account.
+2. Enter Stalwart admin credentials. The local compose default is
+   `admin` / `admin1234` from `STALWART_RECOVERY_ADMIN`; production operators
+   should use their Stalwart recovery/admin credentials.
+3. Create the admin user, for example `you@example.com`.
+4. Enter a strong mailbox password and display name.
+5. Add your mail domain, for example `example.com`.
+6. Submit, then sign in with that admin account.
 
-When `stalwart.management_url` is configured, that single submit does the
-Stalwart provisioning in dependency order: `POST /api/domain/{domain}` to
-ensure the shared domain exists, then `POST /api/principal` to create/update
-the admin mailbox principal, then a JMAP login to discover the account id for
-hail's local user row. The domain value may include a trailing dot in the UI;
-hail normalizes it to lowercase without the dot. The admin email must be under
-that same domain. If `stalwart.management_url` is intentionally unset, the
-wizard does **not** mutate Stalwart; pre-create the domain and account with the
-Stalwart WebUI/CLI first, then use the same credentials in `/setup`.
+When `stalwart.management_url` is configured, that single submit authenticates
+to Stalwart v0.16's REST API with an `authCode` request, exchanges the client
+code for an in-memory bearer token, then calls `POST /api/principal` to create
+the domain principal and `POST /api/principal` again to create the individual
+mailbox principal. It finally performs a JMAP login to discover the account id
+for hail's local user row. The domain value may include a trailing dot in the
+UI; hail normalizes it to lowercase without the dot. The admin email must be
+under that same domain. Hail never stores or logs the Stalwart admin password,
+client code, or bearer token. If `stalwart.management_url` is intentionally
+unset, the wizard does **not** mutate Stalwart; pre-create the domain and
+account with the Stalwart WebUI/CLI first, then use the same mailbox
+credentials in `/setup`.
 
 After setup, signed-in admins can go to **Admin → Domains** to create another
 shared domain and **Admin → Create user** to add more mailboxes. User creation

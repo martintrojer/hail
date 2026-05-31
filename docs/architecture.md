@@ -80,7 +80,7 @@
 | ------------- | --------------- | ------------- | ------- | -------- | ----------- |
 | `hail-api`    | `hail-api`      | `hail:latest` | :8080   | Stalwart | `hail.db`   |
 | `hail-worker` | `hail-worker`   | `hail:latest` | none    | Stalwart | `hail.db`   |
-| `stalwart`    | (upstream)      | `stalwartlabs/stalwart:latest` | 25, 143, 465, 587, 993 (mail) | smarthost relay (outbound mail) | `/opt/stalwart` |
+| `stalwart`    | (upstream)      | `stalwartlabs/stalwart:v0.16` | 25, 143, 465, 587, 993 (mail) | smarthost relay (outbound mail) | `/opt/stalwart` |
 
 Both hail binaries are produced from the same Cargo workspace and ship
 in the **same Docker/Podman image**. The container's `CMD` selects which
@@ -339,6 +339,17 @@ store or verify an admin password hash and does not seed a fake user row at
 startup. The configured admin email is elevated to `is_admin=1` on its first
 successful Stalwart/JMAP login, using the real `jmap_account_id` from that
 session. Both paths converge on the same database state.
+
+The wizard provisioning path uses Stalwart v0.16's management REST API when
+`stalwart.management_url` is configured. `/setup` asks the operator for the
+hail bootstrap token plus Stalwart admin credentials; hail exchanges those
+credentials via Stalwart's `authCode` flow for a short-lived in-memory bearer
+token, then calls `POST /api/principal` to create the domain principal and the
+individual mailbox principal before doing the normal JMAP basic login to
+discover the account id. The bearer token, auth code, and passwords are never
+stored or logged. If `stalwart.management_url` is unset, hail deliberately skips
+management provisioning and falls back to the documented opt-out: the domain and
+mailbox must already exist and `/setup` only verifies them via JMAP login.
 
 ### 6.10 Cloudflare Tunnel support is MVP, not polish
 

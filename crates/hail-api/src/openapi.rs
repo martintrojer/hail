@@ -31,6 +31,7 @@ use crate::routes::health;
     tags(
         (name = health::TAG, description = "Liveness, readiness, and operational probes."),
         (name = crate::routes::invites::TAG, description = "Public invite preview and acceptance endpoints."),
+        (name = "setup", description = "First-run setup wizard endpoints."),
         (name = crate::routes::labels::TAG, description = "Local label management endpoints."),
         (name = crate::routes::admin_stats::TAG, description = "Administrator-only user, domain, and system status endpoints."),
         (name = crate::routes::attachments::TAG, description = "Attachment listing and download endpoints."),

@@ -63,6 +63,7 @@ interface ApiState {
   user: UserEnvelope | null;
   loginCalls: LoginRequest[];
   setupAdminCalls: SetupAdminRequest[];
+  setupAdminError?: { status: number; body: unknown };
 }
 
 let api: ApiState;
@@ -105,6 +106,9 @@ beforeEach(() => {
     if (url.pathname === '/api/setup/admin' && method === 'POST') {
       const body = JSON.parse(init?.body as string) as SetupAdminRequest;
       api.setupAdminCalls.push(body);
+      if (api.setupAdminError) {
+        return jsonResponse(api.setupAdminError.body, api.setupAdminError.status);
+      }
       api.user = adminUser;
       api.setup = { wizard_active: false, reason: 'admin_user_exists' };
       return jsonResponse(adminUser, 201);
@@ -396,8 +400,19 @@ describe('SPA auth/router flows', () => {
 
     renderRouterAt('/setup');
 
+    expect(await screen.findByLabelText('Bootstrap token')).toBeRequired();
+    expect(screen.getByLabelText('Stalwart admin user')).toBeRequired();
+    expect(screen.getByLabelText('Stalwart admin password')).toBeRequired();
+    expect(screen.getByLabelText('Stalwart admin user')).toHaveValue('admin');
+
     fireEvent.change(await screen.findByLabelText('Bootstrap token'), {
       target: { value: 'operator-bootstrap-token' },
+    });
+    fireEvent.change(screen.getByLabelText('Stalwart admin user'), {
+      target: { value: 'root-admin' },
+    });
+    fireEvent.change(screen.getByLabelText('Stalwart admin password'), {
+      target: { value: 'recovery-secret' },
     });
     fireEvent.change(screen.getByLabelText('Admin email'), {
       target: { value: 'admin@example.com' },
@@ -424,7 +439,43 @@ describe('SPA auth/router flows', () => {
         display_name: 'Admin User',
         domain: 'example.com',
         bootstrap_token: 'operator-bootstrap-token',
+        stalwart_admin_username: 'root-admin',
+        stalwart_admin_password: 'recovery-secret',
       },
     ]);
+  });
+
+  it('renders backend setup error detail in the setup alert', async () => {
+    api.setup = { wizard_active: true };
+    api.setupAdminError = {
+      status: 400,
+      body: {
+        error: 'setup_provision_failed',
+        detail: 'Unauthorized: invalid Stalwart admin credentials',
+      },
+    };
+
+    renderRouterAt('/setup');
+
+    fireEvent.change(await screen.findByLabelText('Bootstrap token'), {
+      target: { value: 'operator-bootstrap-token' },
+    });
+    fireEvent.change(screen.getByLabelText('Stalwart admin password'), {
+      target: { value: 'wrong-secret' },
+    });
+    fireEvent.change(screen.getByLabelText('Admin email'), {
+      target: { value: 'admin@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Mail domain'), {
+      target: { value: 'example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'correct horse battery staple' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create admin' }));
+
+    expect(
+      await screen.findByText('Unauthorized: invalid Stalwart admin credentials'),
+    ).toBeInTheDocument();
   });
 });

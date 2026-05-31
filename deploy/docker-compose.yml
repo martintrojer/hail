@@ -31,8 +31,7 @@
 
 services:
   stalwart:
-    # Operators should pin this image to a specific v0.16.x tag after testing.
-    image: docker.io/stalwartlabs/stalwart:latest
+    image: docker.io/stalwartlabs/stalwart:v0.16
     ports:
       - "25:25"       # SMTP
       - "465:465"     # submission SSL

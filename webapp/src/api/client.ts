@@ -241,6 +241,8 @@ export interface SetupAdminRequest {
   display_name?: string | null;
   domain: string;
   bootstrap_token: string;
+  stalwart_admin_username: string;
+  stalwart_admin_password: string;
 }
 
 export type MailClassification = components['schemas']['MailClassification'];

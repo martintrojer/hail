@@ -68,6 +68,10 @@ export function actionErrorMessage(error: Error, context = 'Action'): string {
 
 export function formErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof HailApiError) {
+    const detail = apiErrorDetail(error);
+    if (detail) {
+      return detail;
+    }
     if (error.status === 401) {
       return 'Email or password was not accepted.';
     }
@@ -80,6 +84,13 @@ export function formErrorMessage(error: unknown, fallback: string): string {
   }
 
   return fallback;
+}
+
+function apiErrorDetail(error: HailApiError): string | null {
+  const body = error.body;
+  return body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string'
+    ? body.detail
+    : null;
 }
 
 export function composeErrorMessage(error: unknown, fallback: string): string {

@@ -64,6 +64,7 @@ fn build_api_router(
     // mounted only in the auth-wrapped `protected` subtree.
     let api_router: OpenApiRouter<AppState> = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(routes::health::router())
+        .merge(routes::setup::openapi_router())
         .merge(routes::invites::openapi_router());
     let (open_router, mut api) = api_router.with_state(state.clone()).split_for_parts();
     for protected_api in [
@@ -208,7 +209,6 @@ fn build_api_router(
         .merge(open_router) // /healthz, /readyz
         .route("/api/openapi.json", openapi_route)
         .merge(routes::auth::public_router())
-        .merge(routes::setup::router())
         // Protected routes, behind the auth middleware layer.
         .merge(protected)
         .with_state(state.clone())

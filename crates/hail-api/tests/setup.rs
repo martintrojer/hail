@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{Method, Request, StatusCode, header};
+use axum::response::IntoResponse;
 use chrono::{Duration as ChronoDuration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::middleware::session::SESSION_COOKIE;
@@ -17,9 +19,17 @@ use hail_core::{AdminConfig, KEY_LEN, SetupConfig};
 use hail_db::connect;
 use hail_test::fixture_config;
 use http_body_util::BodyExt;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::sync::Barrier;
 use tower::ServiceExt;
+
+#[derive(Clone, Copy)]
+enum FakeManagementMode {
+    Success,
+    Auth401,
+    DomainExists,
+    PrincipalExists,
+}
 
 async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) {
     let uniq = uuid_like();
@@ -34,6 +44,7 @@ async fn fixture_state(admin: Option<AdminConfig>) -> (AppState, [u8; KEY_LEN]) 
         bootstrap_enabled: true,
         bootstrap_token: Some(SecretString::from("setup-test-bootstrap-token")),
     };
+    config.stalwart.management_url = None;
 
     let state = AppState {
         db,
@@ -96,6 +107,8 @@ struct ProvisionCall {
     email: String,
     display_name: Option<String>,
     domain: String,
+    stalwart_admin_username: String,
+    stalwart_admin_password: String,
 }
 
 #[derive(Default)]
@@ -140,8 +153,10 @@ impl UserProvisioner for FakeProvisioner {
         _state: &'a AppState,
         email: &'a str,
         _password: SecretString,
-        _display_name: Option<&'a str>,
+        display_name: Option<&'a str>,
         domain: &'a str,
+        stalwart_admin_username: &'a str,
+        stalwart_admin_password: SecretString,
     ) -> Pin<Box<dyn Future<Output = Result<ProvisionedUser, ProvisionError>> + Send + 'a>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.observed
@@ -149,8 +164,10 @@ impl UserProvisioner for FakeProvisioner {
             .expect("observed calls")
             .push(ProvisionCall {
                 email: email.to_string(),
-                display_name: _display_name.map(str::to_string),
+                display_name: display_name.map(str::to_string),
                 domain: domain.to_string(),
+                stalwart_admin_username: stalwart_admin_username.to_string(),
+                stalwart_admin_password: stalwart_admin_password.expose_secret().to_string(),
             });
         Box::pin(async move {
             if let Some(delay) = self.delay {
@@ -167,6 +184,172 @@ impl UserProvisioner for FakeProvisioner {
             })
         })
     }
+}
+
+async fn start_fake_management(
+    mode: FakeManagementMode,
+) -> (String, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+    async fn handler(
+        State(state): State<(FakeManagementMode, Arc<Mutex<Vec<String>>>)>,
+        headers: axum::http::HeaderMap,
+        uri: axum::http::Uri,
+        body: String,
+    ) -> impl IntoResponse {
+        let (mode, calls) = state;
+        let path = uri.path().to_string();
+        calls.lock().expect("calls").push(path.clone());
+
+        if path == "/api/auth" {
+            let json: serde_json::Value = serde_json::from_str(&body).expect("auth json");
+            assert_eq!(json["type"], "authCode");
+            assert_eq!(json["accountName"], "admin");
+            assert_eq!(json["accountSecret"], "admin1234");
+            return match mode {
+                FakeManagementMode::Auth401 => (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "type": "about:blank",
+                        "status": 401,
+                        "title": "Unauthorized",
+                        "detail": "invalid Stalwart admin credentials"
+                    })),
+                ),
+                _ => (
+                    StatusCode::OK,
+                    axum::Json(serde_json::json!({ "data": { "code": "client-code" } })),
+                ),
+            };
+        }
+
+        if path == "/api/auth/token" {
+            let json: serde_json::Value = serde_json::from_str(&body).expect("token json");
+            assert_eq!(json["code"], "client-code");
+            return (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({ "data": { "access_token": "management-token" } })),
+            );
+        }
+
+        if path == "/api/principal" {
+            assert_eq!(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer management-token")
+            );
+            let json: serde_json::Value = serde_json::from_str(&body).expect("principal json");
+            if json["type"] == "domain" {
+                assert_eq!(json["name"], "example.org");
+                return match mode {
+                    FakeManagementMode::DomainExists => (
+                        StatusCode::CONFLICT,
+                        axum::Json(serde_json::json!({
+                            "title": "Conflict",
+                            "detail": "principal already exists"
+                        })),
+                    ),
+                    _ => (
+                        StatusCode::OK,
+                        axum::Json(serde_json::json!({ "data": {} })),
+                    ),
+                };
+            }
+            assert_eq!(json["type"], "individual");
+            assert_eq!(json["name"], "alice@example.org");
+            assert_eq!(json["secrets"][0], "correct horse battery");
+            return match mode {
+                FakeManagementMode::PrincipalExists => (
+                    StatusCode::CONFLICT,
+                    axum::Json(serde_json::json!({
+                        "title": "Conflict",
+                        "detail": "principal already exists"
+                    })),
+                ),
+                _ => (
+                    StatusCode::CREATED,
+                    axum::Json(serde_json::json!({ "data": {} })),
+                ),
+            };
+        }
+
+        (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({ "title": "Not Found" })),
+        )
+    }
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let app = axum::Router::new()
+        .fallback(axum::routing::post(handler))
+        .with_state((mode, calls.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake management");
+    let addr = listener.local_addr().expect("fake management addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("fake management server");
+    });
+    (format!("http://{addr}"), calls, handle)
+}
+
+async fn start_fake_jmap() -> (String, tokio::task::JoinHandle<()>) {
+    async fn session(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        assert!(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("Basic "))
+        );
+        let base_url = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .map(|host| format!("http://{host}"))
+            .unwrap_or_else(|| "http://127.0.0.1:0".to_owned());
+        axum::Json(serde_json::json!({
+            "capabilities": {
+                "urn:ietf:params:jmap:core": {
+                    "maxSizeUpload": 50000000,
+                    "maxConcurrentUpload": 4,
+                    "maxSizeRequest": 10000000,
+                    "maxConcurrentRequests": 4,
+                    "maxCallsInRequest": 16,
+                    "maxObjectsInGet": 500,
+                    "maxObjectsInSet": 500,
+                    "collationAlgorithms": ["i;unicode-casemap"]
+                },
+                "urn:ietf:params:jmap:mail": {}
+            },
+            "accounts": {
+                "account-test": {
+                    "name": "Alice",
+                    "isPersonal": true,
+                    "isReadOnly": false,
+                    "accountCapabilities": { "urn:ietf:params:jmap:mail": {} }
+                }
+            },
+            "primaryAccounts": { "urn:ietf:params:jmap:mail": "account-test" },
+            "username": "alice@example.org",
+            "apiUrl": format!("{base_url}/jmap/"),
+            "downloadUrl": format!("{base_url}/download/{{accountId}}/{{blobId}}/{{name}}?accept={{type}}"),
+            "uploadUrl": format!("{base_url}/upload/{{accountId}}/"),
+            "eventSourceUrl": format!("{base_url}/eventsource/?types={{types}}&closeafter={{closeafter}}&ping={{ping}}"),
+            "state": "fake-state"
+        }))
+    }
+
+    let app = axum::Router::new().route("/.well-known/jmap", axum::routing::get(session));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake jmap");
+    let addr = listener.local_addr().expect("fake jmap addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app.into_make_service())
+            .await
+            .expect("fake jmap server");
+    });
+    (format!("http://{addr}"), handle)
 }
 
 async fn get_json(app: Router, uri: &str) -> (StatusCode, serde_json::Value) {
@@ -277,7 +460,7 @@ async fn post_setup_admin_requires_enabled_bootstrap_token() {
     let disabled_provisioner = Arc::new(FakeProvisioner::default());
     let disabled = post_admin(
         app_with_provisioner(disabled_state, disabled_provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(disabled.status(), StatusCode::FORBIDDEN);
@@ -291,7 +474,7 @@ async fn post_setup_admin_requires_enabled_bootstrap_token() {
     let missing_token_provisioner = Arc::new(FakeProvisioner::default());
     let missing_token = post_admin(
         app_with_provisioner(missing_token_state, missing_token_provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(missing_token.status(), StatusCode::FORBIDDEN);
@@ -305,7 +488,7 @@ async fn post_setup_admin_rejects_missing_or_wrong_bootstrap_token() {
 
     let missing = post_admin_raw(
         app_with_provisioner(state.clone(), provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(missing.status(), StatusCode::FORBIDDEN);
@@ -317,7 +500,7 @@ async fn post_setup_admin_rejects_missing_or_wrong_bootstrap_token() {
     let wrong = post_admin_raw(
         app_with_provisioner(state, provisioner.clone()),
         &body_with_bootstrap_token(
-            r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+            r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
             "wrong-token",
         ),
     )
@@ -335,7 +518,7 @@ async fn post_setup_admin_rate_limited_by_forwarded_ip_without_provisioning() {
     state.auth_rate_limiter = Arc::new(IpRateLimiter::new(2, Duration::from_secs(60)));
     let provisioner = Arc::new(FakeProvisioner::default());
     let body = body_with_bootstrap_token(
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
         "setup-test-bootstrap-token",
     );
 
@@ -397,7 +580,7 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
     let api = app_with_protected_auth_and_provisioner(state, Arc::new(FakeProvisioner::default()));
     let resp = post_admin(
         api.clone(),
-        r#"{"email":"Alice@Example.org","password":"correct horse battery","display_name":"Alice","domain":"example.org"}"#,
+        r#"{"email":"Alice@Example.org","password":"correct horse battery","display_name":"Alice","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
@@ -462,7 +645,7 @@ async fn post_setup_admin_twice_returns_409_second_time_without_reprovisioning()
     let provisioner = Arc::new(FakeProvisioner::default());
     let first = post_admin(
         app_with_provisioner(state.clone(), provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(first.status(), StatusCode::CREATED);
@@ -470,7 +653,7 @@ async fn post_setup_admin_twice_returns_409_second_time_without_reprovisioning()
 
     let second = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"bob@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"bob@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(second.status(), StatusCode::CONFLICT);
@@ -505,7 +688,7 @@ async fn concurrent_setup_admin_posts_only_provision_once() {
         first_barrier.wait().await;
         post_admin(
             app_with_provisioner(first_state, first_provisioner),
-            r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+            r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
         )
         .await
     });
@@ -517,7 +700,7 @@ async fn concurrent_setup_admin_posts_only_provision_once() {
         second_barrier.wait().await;
         post_admin(
             app_with_provisioner(second_state, second_provisioner),
-            r#"{"email":"bob@example.org","password":"correct horse battery","domain":"example.org"}"#,
+            r#"{"email":"bob@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
         )
         .await
     });
@@ -568,7 +751,7 @@ async fn post_setup_admin_returns_409_and_does_not_provision_when_config_admin_s
 
     let resp = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
@@ -596,7 +779,7 @@ async fn post_setup_admin_returns_409_and_does_not_provision_when_admin_user_exi
 
     let resp = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
@@ -612,7 +795,7 @@ async fn post_setup_admin_rejects_invalid_email_or_short_password() {
     let (state, _key) = fixture_state(None).await;
     let bad_email = post_admin(
         app(state.clone()),
-        r#"{"email":"not-an-email","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"not-an-email","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(bad_email.status(), StatusCode::BAD_REQUEST);
@@ -623,7 +806,7 @@ async fn post_setup_admin_rejects_invalid_email_or_short_password() {
 
     let short_password = post_admin(
         app(state),
-        r#"{"email":"alice@example.org","password":"too-short","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"too-short","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(short_password.status(), StatusCode::BAD_REQUEST);
@@ -658,6 +841,8 @@ async fn post_setup_admin_rejects_invalid_domain() {
             "email": "alice@example.org",
             "password": "correct horse battery",
             "domain": domain,
+            "stalwart_admin_username": "admin",
+            "stalwart_admin_password": "admin1234",
         })
         .to_string();
 
@@ -679,7 +864,7 @@ async fn post_setup_admin_normalizes_trailing_dot_domain() {
 
     let resp = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"Example.ORG."}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"Example.ORG.","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
@@ -690,6 +875,8 @@ async fn post_setup_admin_normalizes_trailing_dot_domain() {
             email: "alice@example.org".to_string(),
             display_name: None,
             domain: "example.org".to_string(),
+            stalwart_admin_username: "admin".to_string(),
+            stalwart_admin_password: "admin1234".to_string(),
         }]
     );
 }
@@ -701,7 +888,7 @@ async fn post_setup_admin_rejects_email_domain_mismatch() {
 
     let resp = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.net"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.net","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
@@ -720,7 +907,7 @@ async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
     let trim_provisioner = Arc::new(FakeProvisioner::default());
     let trim_resp = post_admin(
         app_with_provisioner(trim_state, trim_provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"  Alice Example  ","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"  Alice Example  ","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(trim_resp.status(), StatusCode::CREATED);
@@ -730,6 +917,8 @@ async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
             email: "alice@example.org".to_string(),
             display_name: Some("Alice Example".to_string()),
             domain: "example.org".to_string(),
+            stalwart_admin_username: "admin".to_string(),
+            stalwart_admin_password: "admin1234".to_string(),
         }]
     );
     let stored_display_name: Option<String> =
@@ -745,7 +934,7 @@ async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
     let empty_provisioner = Arc::new(FakeProvisioner::default());
     let empty_resp = post_admin(
         app_with_provisioner(empty_state, empty_provisioner.clone()),
-        r#"{"email":"bob@example.org","password":"correct horse battery","display_name":"   ","domain":"example.org"}"#,
+        r#"{"email":"bob@example.org","password":"correct horse battery","display_name":"   ","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
     assert_eq!(empty_resp.status(), StatusCode::CREATED);
@@ -755,6 +944,8 @@ async fn post_setup_admin_trims_display_name_and_omits_empty_display_name() {
             email: "bob@example.org".to_string(),
             display_name: None,
             domain: "example.org".to_string(),
+            stalwart_admin_username: "admin".to_string(),
+            stalwart_admin_password: "admin1234".to_string(),
         }]
     );
     let stored_display_name: Option<String> =
@@ -773,7 +964,7 @@ async fn post_setup_admin_passes_lowercased_email_to_provisioner() {
 
     let resp = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"  Alice@Example.ORG  ","password":"correct horse battery","domain":" EXAMPLE.org "}"#,
+        r#"{"email":"  Alice@Example.ORG  ","password":"correct horse battery","domain":" EXAMPLE.org ","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
@@ -784,6 +975,8 @@ async fn post_setup_admin_passes_lowercased_email_to_provisioner() {
             email: "alice@example.org".to_string(),
             display_name: None,
             domain: "example.org".to_string(),
+            stalwart_admin_username: "admin".to_string(),
+            stalwart_admin_password: "admin1234".to_string(),
         }]
     );
 }
@@ -796,11 +989,15 @@ async fn post_setup_admin_failing_provisioner_leaves_no_users_or_sessions() {
 
     let resp = post_admin(
         app_with_provisioner(state, provisioner.clone()),
-        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org"}"#,
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
     )
     .await;
 
-    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_provision_failed");
+    assert_eq!(json["detail"], "fake provision failure");
     assert_eq!(provisioner.call_count(), 1);
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&db)
@@ -812,4 +1009,110 @@ async fn post_setup_admin_failing_provisioner_leaves_no_users_or_sessions() {
         .await
         .unwrap();
     assert_eq!(session_count, 0);
+}
+
+#[tokio::test]
+async fn stalwart_provisioner_uses_auth_token_domain_principal_sequence() {
+    let (management_url, calls, _management) =
+        start_fake_management(FakeManagementMode::Success).await;
+    let (jmap_url, _jmap) = start_fake_jmap().await;
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.stalwart.management_url = Some(management_url);
+    state.config.stalwart.jmap_url = jmap_url;
+
+    let resp = post_admin(
+        hail_api::routes::setup::router().with_state(state),
+        r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"Alice","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        calls.lock().expect("calls").clone(),
+        vec![
+            "/api/auth",
+            "/api/auth/token",
+            "/api/principal",
+            "/api/principal"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn stalwart_provisioner_surfaces_auth_401_detail_as_setup_error() {
+    let (management_url, _calls, _management) =
+        start_fake_management(FakeManagementMode::Auth401).await;
+    let (jmap_url, _jmap) = start_fake_jmap().await;
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.stalwart.management_url = Some(management_url);
+    state.config.stalwart.jmap_url = jmap_url;
+
+    let resp = post_admin(
+        hail_api::routes::setup::router().with_state(state),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "setup_provision_failed");
+    assert_eq!(
+        json["detail"],
+        "Unauthorized: invalid Stalwart admin credentials"
+    );
+}
+
+#[tokio::test]
+async fn stalwart_provisioner_treats_existing_domain_as_success() {
+    let (management_url, calls, _management) =
+        start_fake_management(FakeManagementMode::DomainExists).await;
+    let (jmap_url, _jmap) = start_fake_jmap().await;
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.stalwart.management_url = Some(management_url);
+    state.config.stalwart.jmap_url = jmap_url;
+
+    let resp = post_admin(
+        hail_api::routes::setup::router().with_state(state),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        calls.lock().expect("calls").clone(),
+        vec![
+            "/api/auth",
+            "/api/auth/token",
+            "/api/principal",
+            "/api/principal"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn stalwart_provisioner_treats_existing_principal_as_success() {
+    let (management_url, calls, _management) =
+        start_fake_management(FakeManagementMode::PrincipalExists).await;
+    let (jmap_url, _jmap) = start_fake_jmap().await;
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.stalwart.management_url = Some(management_url);
+    state.config.stalwart.jmap_url = jmap_url;
+
+    let resp = post_admin(
+        hail_api::routes::setup::router().with_state(state),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(
+        calls.lock().expect("calls").clone(),
+        vec![
+            "/api/auth",
+            "/api/auth/token",
+            "/api/principal",
+            "/api/principal"
+        ]
+    );
 }
