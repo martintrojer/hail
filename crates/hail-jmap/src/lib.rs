@@ -21,6 +21,7 @@
 
 mod error;
 mod mailbox;
+pub mod management;
 mod session;
 
 pub use error::Error;

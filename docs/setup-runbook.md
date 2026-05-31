@@ -76,9 +76,9 @@ Fill in:
   `example.com`.
 - **Password**: mailbox password, at least 12 characters.
 
-On submit, hail authenticates to Stalwart v0.16, creates the domain principal
-and mailbox principal with a bearer token, then logs in through JMAP and creates
-the hail admin session.
+On submit, hail authenticates to Stalwart v0.16, creates or reuses the domain
+and mailbox through Stalwart's `urn:stalwart:jmap` management calls, then logs
+in through JMAP and creates the hail admin session.
 
 ## 4. If setup fails
 
