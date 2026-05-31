@@ -48,6 +48,7 @@ services:
     environment:
       - STALWART_URL=http://stalwart:8080
       - STALWART_RECOVERY_ADMIN=${STALWART_RECOVERY_ADMIN:-admin:admin1234}
+      - HAIL_LOCAL_SINK=1
     restart: "no"
 
   hail-api:

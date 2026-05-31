@@ -41,6 +41,16 @@ then exits before `hail-api` and `hail-worker` start. The automatic settings are
   `maxConcurrentUploads = 16`.
 - HTTP rate limits: authenticated and anonymous requests both at
   `1000000` requests per `60000` ms.
+- Local smoke only: `deploy/docker-compose.local.yml` sets `HAIL_LOCAL_SINK=1`
+  on `stalwart-init`, which changes Stalwart's MTA outbound strategy to route
+  every queued recipient through the built-in `local` route instead of MX
+  delivery. This keeps compose-send smoke tests inside the local Stalwart
+  mailbox store, so messages sent from a local user to the same local user can
+  be verified without a Gmail round-trip or SPF/DKIM for `hail.test`.
+
+`deploy/docker-compose.yml` **must not** set `HAIL_LOCAL_SINK=1`. Production
+uses real SMTP/MX delivery (or a deliberately configured relay) and must not
+install the local-only loopback routing rule.
 
 This replaces the old manual "open Stalwart admin and adjust quota/rate-limit
 fields" step. The operator still finishes hail's setup wizard and then connects

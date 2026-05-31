@@ -7,6 +7,7 @@ STALWART_INIT_POLL_SECONDS="${STALWART_INIT_POLL_SECONDS:-2}"
 ADMIN_CREDS="${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN as user:password}"
 ADMIN_USER="${ADMIN_CREDS%%:*}"
 ADMIN_PASS="${ADMIN_CREDS#*:}"
+HAIL_LOCAL_SINK="${HAIL_LOCAL_SINK:-0}"
 
 if [[ -z "$ADMIN_USER" || -z "$ADMIN_PASS" || "$ADMIN_CREDS" != *:* ]]; then
   echo "stalwart-init: STALWART_RECOVERY_ADMIN must be user:password" >&2
@@ -193,10 +194,105 @@ verify_settings() {
   ' <<<"$response" >/dev/null
 }
 
+local_sink_enabled() {
+  case "${HAIL_LOCAL_SINK,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_local_outbound_sink() {
+  local access_token="$1" account_id response status
+  account_id=$(jmap_account_id "$access_token")
+  echo "stalwart-init: applying local smoke outbound sink"
+
+  # LOCAL SMOKE ONLY: do not run this against a production Stalwart.
+  # Stalwart v0.16 exposes MTA outbound routing through the singleton
+  # MtaOutboundStrategy object. Force every queued recipient through the built-in
+  # Local route instead of the default MX route so local smoke sends never try to
+  # deliver to the public internet from the unroutable hail.test domain.
+  response=$(jq -n --arg account_id "$account_id" --arg local_route "'local'" '{
+    using: ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"],
+    methodCalls: [
+      ["x:MtaOutboundStrategy/set", {
+        accountId: $account_id,
+        update: {
+          singleton: {
+            route: {
+              match: {},
+              else: $local_route
+            }
+          }
+        }
+      }, "mtaOutboundStrategy"],
+      ["x:Action/set", {
+        accountId: $account_id,
+        create: {
+          reloadSettings: { "@type": "ReloadSettings" }
+        }
+      }, "reload"]
+    ]
+  }' | curl "${curl_common[@]}" \
+    --header "Authorization: Bearer ${access_token}" \
+    --header 'Content-Type: application/json' \
+    --data-binary @- \
+    "${BASE_URL}/jmap/")
+
+  printf '%s\n' "$response" | redact_secrets
+
+  status=$(jq -er '
+    [ .methodResponses[]
+      | select(.[0] == "x:MtaOutboundStrategy/set" or .[0] == "x:Action/set")
+      | .[1]
+      | ((.notUpdated // {}) | length) + ((.notCreated // {}) | length) + ((.notDestroyed // {}) | length)
+    ] | add // 0
+  ' <<<"$response")
+  if [[ "$status" != "0" ]]; then
+    echo "stalwart-init: Stalwart rejected the local outbound sink settings" >&2
+    return 1
+  fi
+}
+
+verify_local_outbound_sink() {
+  local access_token="$1" account_id response
+  account_id=$(jmap_account_id "$access_token")
+  echo "stalwart-init: verifying local smoke outbound sink"
+
+  response=$(jq -n --arg account_id "$account_id" '{
+    using: ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"],
+    methodCalls: [
+      ["x:MtaOutboundStrategy/get", {
+        accountId: $account_id,
+        ids: ["singleton"],
+        properties: ["route"]
+      }, "mtaOutboundStrategy"]
+    ]
+  }' | curl "${curl_common[@]}" \
+    --header "Authorization: Bearer ${access_token}" \
+    --header 'Content-Type: application/json' \
+    --data-binary @- \
+    "${BASE_URL}/jmap/")
+
+  printf '%s\n' "$response" | redact_secrets
+
+  jq -e --arg local_route "'local'" '
+    .methodResponses[]
+    | select(.[0] == "x:MtaOutboundStrategy/get")
+    | .[1].list[0].route
+    | (.match == {}) and (.else == $local_route)
+  ' <<<"$response" >/dev/null
+}
+
 wait_for_stalwart
 ACCESS_TOKEN="$(authenticate)"
 apply_settings "$ACCESS_TOKEN"
 verify_settings "$ACCESS_TOKEN"
+if local_sink_enabled; then
+  apply_local_outbound_sink "$ACCESS_TOKEN"
+  verify_local_outbound_sink "$ACCESS_TOKEN"
+else
+  echo "stalwart-init: local smoke outbound sink disabled"
+fi
 unset ACCESS_TOKEN
 
 echo "stalwart-init: complete"
