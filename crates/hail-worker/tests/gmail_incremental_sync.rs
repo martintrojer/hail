@@ -285,6 +285,8 @@ fn history_page(
                         },
                     })
                     .collect(),
+                labels_added: Vec::new(),
+                labels_removed: Vec::new(),
                 messages: Vec::new(),
             })
             .collect(),

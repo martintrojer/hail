@@ -44,6 +44,9 @@ function providerAccount(
     sync_status: 'active',
     cached_access_token_expires_at: '2026-05-26T18:00:00Z',
     last_profile_history_id: '12345',
+    bidirectional_sync_enabled: false,
+    bidirectional_sync_scope_missing: true,
+    pending_outbound_changes: 0,
     ...overrides,
   };
 }
@@ -65,6 +68,9 @@ function providerSyncStatus(
     last_error_class: 'gmail_rate_limit',
     last_error_message: null,
     last_profile_history_id: '12345',
+    bidirectional_sync_enabled: false,
+    bidirectional_sync_scope_missing: true,
+    pending_outbound_changes: 0,
     profile_synced_at: '2026-05-26T16:00:00Z',
     last_sync_event: {
       event_type: 'history_import',
@@ -115,6 +121,7 @@ class ProviderAccountsTestClient extends TestHailApiClient {
   triggerSyncCalls: number[] = [];
   reimportCalls: number[] = [];
   stopCalls: number[] = [];
+  bidiCalls: Array<{ id: number; enabled: boolean }> = [];
   syncStatuses: ProviderSyncStatus[] = [];
   syncStatusResponses: ProviderSyncStatusListResponse[] = [];
   connectResponse: GmailConnectResponse = {
@@ -126,17 +133,25 @@ class ProviderAccountsTestClient extends TestHailApiClient {
   reimportResponse: ProviderReimportResponse | null = null;
   triggerSyncPromise: Promise<ProviderSyncTriggerResponse> | null = null;
   stopResponse: ProviderStopSyncResponse | null = null;
+  bidiResponse: { status: 'updated'; account: ProviderAccountResponse } | { status: 'scope_missing'; authorization_url: string; scopes: string[] } | null = null;
   connectFailure: Error | null = null;
   disconnectFailure: Error | null = null;
   syncStatusFailure: Error | null = null;
   triggerSyncFailure: Error | null = null;
   reimportFailure: Error | null = null;
   stopFailure: Error | null = null;
+  bidiFailure: Error | null = null;
 
-  override async connectGmail(): Promise<GmailConnectResponse> {
+  override async connectGmail(scope?: 'modify'): Promise<GmailConnectResponse> {
     this.connectCalls += 1;
     if (this.connectFailure) {
       throw this.connectFailure;
+    }
+    if (scope === 'modify') {
+      return {
+        authorization_url: 'https://accounts.google.test/oauth?scope=modify',
+        scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.modify'],
+      };
     }
     return this.connectResponse;
   }
@@ -248,6 +263,27 @@ class ProviderAccountsTestClient extends TestHailApiClient {
     });
     this.syncStatuses = this.syncStatuses.map((status) => status.id === id ? account : status);
     return { account };
+  }
+  override async setProviderBidirectionalSync(
+    id: number,
+    enabled: boolean,
+  ) {
+    this.bidiCalls.push({ id, enabled });
+    if (this.bidiFailure) {
+      throw this.bidiFailure;
+    }
+    if (this.bidiResponse) {
+      return this.bidiResponse;
+    }
+    const account = providerAccount({
+      ...(this.syncStatuses.find((status) => status.id === id) ?? {}),
+      id,
+      bidirectional_sync_enabled: enabled,
+      bidirectional_sync_scope_missing: false,
+      granted_scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.modify'],
+    });
+    this.syncStatuses = this.syncStatuses.map((status) => status.id === id ? { ...status, ...account } : status);
+    return { status: 'updated' as const, account };
   }
 }
 
@@ -1045,6 +1081,42 @@ describe('ProviderAccountsPage', () => {
       expect(
         screen.getByRole('button', { name: 'Disconnected' }),
       ).toBeDisabled();
+    });
+  });
+
+  it('redirects to OAuth reconnect when enabling bidirectional sync without modify scope', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [sampleSyncStatus];
+    client.bidiResponse = {
+      status: 'scope_missing',
+      authorization_url: 'https://accounts.google.test/oauth?scope=modify',
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.modify'],
+    };
+    const assign = vi.fn();
+    renderPage({ client, assign });
+
+    const toggle = await screen.findByRole('switch', { name: 'Sync hail actions back to Gmail' });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(client.bidiCalls).toEqual([{ id: 42, enabled: true }]);
+      expect(assign).toHaveBeenCalledWith('https://accounts.google.test/oauth?scope=modify');
+    });
+  });
+
+  it('persists bidirectional sync when modify scope is already granted', async () => {
+    const client = new ProviderAccountsTestClient();
+    client.syncStatuses = [providerSyncStatus({
+      bidirectional_sync_enabled: false,
+      bidirectional_sync_scope_missing: false,
+    })];
+    renderPage({ client });
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Sync hail actions back to Gmail' }));
+
+    await waitFor(() => {
+      expect(client.bidiCalls).toEqual([{ id: 42, enabled: true }]);
+      expect(screen.getByRole('switch', { name: 'Sync hail actions back to Gmail' })).toBeChecked();
     });
   });
 

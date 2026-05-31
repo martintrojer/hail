@@ -5,6 +5,7 @@ import {
   useDisconnectProviderAccountMutation,
   useProviderSyncStatuses,
   useReimportProviderAccountMutation,
+  useSetProviderBidirectionalSyncMutation,
   useStopProviderSyncMutation,
   useTriggerProviderSyncMutation,
 } from '../api/query';
@@ -23,6 +24,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Switch } from '../components/ui/switch';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { BadgeCheck, Loader2 } from '../components/icons';
 import { AppShell } from '../layout/AppShell';
@@ -321,11 +323,14 @@ function ProviderSyncStatusCard({ status, syncing, reimporting, stopping, syncEr
   );
 }
 
-function ProviderAccountCard({ account, disconnecting, disconnectError, onDisconnect }: {
+function ProviderAccountCard({ account, disconnecting, togglingBidi, disconnectError, bidiError, onDisconnect, onToggleBidi }: {
   account: ProviderSyncStatus;
   disconnecting: boolean;
+  togglingBidi: boolean;
   disconnectError: Error | null;
+  bidiError: Error | null;
   onDisconnect: () => void;
+  onToggleBidi: (enabled: boolean) => void;
 }) {
   const connected = account.sync_status !== 'disconnected';
 
@@ -345,9 +350,27 @@ function ProviderAccountCard({ account, disconnecting, disconnectError, onDiscon
       <dl className="grid gap-3 sm:grid-cols-2">
         <DetailTile label="Provider id" value={account.provider_account_id} />
         <DetailTile label="Gmail history cursor" value={account.last_profile_history_id || 'Not captured yet'} />
+        <DetailTile label="Pending push" value={String(account.pending_outbound_changes ?? 0)} />
         <DetailTile label="Profile synced" value={formatDateTime(account.profile_synced_at)} />
       </dl>
 
+      <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border p-3">
+        <div>
+          <p className="text-sm font-medium">Sync hail actions back to Gmail (read state, labels, trash)</p>
+          <p className="text-xs text-muted-foreground">
+            Off by default. Turning this on may require reconnecting Gmail with gmail.modify scope.
+          </p>
+          {account.bidirectional_sync_scope_missing ? <p className="mt-1 text-xs font-medium text-destructive">Reconnect Gmail to grant modify scope.</p> : null}
+        </div>
+        <Switch
+          checked={Boolean(account.bidirectional_sync_enabled)}
+          disabled={togglingBidi || !connected}
+          aria-label="Sync hail actions back to Gmail"
+          onCheckedChange={onToggleBidi}
+        />
+      </div>
+
+      {bidiError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(bidiError, 'Update bidirectional Gmail sync')}</AlertDescription></Alert> : null}
       {disconnectError ? <Alert variant="destructive" className="mt-4"><AlertDescription>{actionErrorMessage(disconnectError, 'Disconnect Gmail')}</AlertDescription></Alert> : null}
       </CardContent>
     </Card>
@@ -362,6 +385,13 @@ export function ProviderAccountsPage({ client, location = window.location, confi
   const triggerSync = useTriggerProviderSyncMutation(client);
   const reimportProviderAccount = useReimportProviderAccountMutation(client);
   const stopProviderSync = useStopProviderSyncMutation(client);
+  const setProviderBidi = useSetProviderBidirectionalSyncMutation(client, {
+    onSuccess: (data) => {
+      if (data.status === 'scope_missing' && data.authorization_url) {
+        location.assign(data.authorization_url);
+      }
+    },
+  });
   const { refetch: refetchSyncStatuses } = syncStatuses;
 
   useEffect(() => {
@@ -406,7 +436,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
           <div>
             <CardDescription className="text-xs font-semibold uppercase tracking-wide">Provider import mode</CardDescription>
             <CardTitle role="heading" aria-level={2}>Connect Gmail</CardTitle>
-            <CardDescription className="max-w-2xl leading-6">Gmail remains your public mailbox and spam filter. Hail imports a local Stalwart copy and the normal hail UI reads that local copy. During v1.2 import, hail actions do not archive, delete, mark read, or relabel Gmail mail.</CardDescription>
+            <CardDescription className="max-w-2xl leading-6">Gmail remains your public mailbox and spam filter. Hail imports a local Stalwart copy and the normal hail UI reads that local copy. Syncing hail actions back to Gmail is available per account and stays off until you opt in.</CardDescription>
           </div>
           <CardAction>
             <Button type="button" onClick={onConnect} disabled={connectGmail.isPending}>
@@ -433,7 +463,7 @@ export function ProviderAccountsPage({ client, location = window.location, confi
           {gmailStatuses.map((status) => (
             <div key={status.id} className="flex flex-col gap-5">
               <ProviderSyncStatusCard status={status} syncing={triggerSync.isPending && triggerSync.variables === status.id} reimporting={reimportProviderAccount.isPending && reimportProviderAccount.variables === status.id} stopping={stopProviderSync.isPending && stopProviderSync.variables === status.id} syncError={triggerSync.variables === status.id ? triggerSync.error : null} reimportError={reimportProviderAccount.variables === status.id ? reimportProviderAccount.error : null} stopError={stopProviderSync.variables === status.id ? stopProviderSync.error : null} onSync={() => triggerSync.mutate(status.id)} onReimport={() => reimportProviderAccount.mutate(status.id)} onStop={() => stopProviderSync.mutate(status.id)} />
-              <ProviderAccountCard account={status} disconnecting={disconnectProviderAccount.isPending && disconnectProviderAccount.variables === status.id} disconnectError={disconnectProviderAccount.variables === status.id ? disconnectProviderAccount.error : null} onDisconnect={() => onDisconnect(status)} />
+              <ProviderAccountCard account={status} disconnecting={disconnectProviderAccount.isPending && disconnectProviderAccount.variables === status.id} togglingBidi={setProviderBidi.isPending && setProviderBidi.variables?.id === status.id} disconnectError={disconnectProviderAccount.variables === status.id ? disconnectProviderAccount.error : null} bidiError={setProviderBidi.variables?.id === status.id ? setProviderBidi.error : null} onDisconnect={() => onDisconnect(status)} onToggleBidi={(enabled) => setProviderBidi.mutate({ id: status.id, enabled })} />
             </div>
           ))}
         </>

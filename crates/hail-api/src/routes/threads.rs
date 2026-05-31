@@ -873,6 +873,16 @@ async fn trash_thread(
             &thread_id,
         )
         .await;
+        if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_trash_change_if_bidi_enabled(
+            &state.db,
+            user.id,
+            &thread_id,
+            true,
+        )
+        .await
+        {
+            tracing::warn!(user_id = user.id, thread_id = %thread_id, error = %err, "provider outbound trash enqueue failed");
+        }
 
         tracing::debug!(user_id = user.id, thread_id = %thread_id, "trash undo unavailable: previous mailbox snapshot not captured");
         Ok(None)
@@ -1002,6 +1012,16 @@ async fn restore_thread(
         hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id)
             .await
             .map_err(provider_error)?;
+        if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_trash_change_if_bidi_enabled(
+            &state.db,
+            user.id,
+            &thread_id,
+            false,
+        )
+        .await
+        {
+            tracing::warn!(user_id = user.id, thread_id = %thread_id, error = %err, "provider outbound untrash enqueue failed");
+        }
 
         tracing::debug!(user_id = user.id, thread_id = %thread_id, "restore undo unavailable: previous mailbox snapshot not captured");
         Ok(None)
@@ -1111,6 +1131,16 @@ async fn mark_thread(
                 && let Err(err) = hail_db::mark_thread_seen(&state.db, user.id, &thread_id).await
             {
                 tracing::warn!(user_id = user.id, thread_id = %thread_id, error = %err, "failed to mark thread seen in sidecar");
+            }
+            if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_read_state_if_bidi_enabled(
+                &state.db,
+                user.id,
+                &thread_id,
+                body.read,
+            )
+            .await
+            {
+                tracing::warn!(user_id = user.id, thread_id = %thread_id, read = body.read, error = %err, "provider outbound read-state enqueue failed");
             }
             StatusCode::NO_CONTENT.into_response()
         }

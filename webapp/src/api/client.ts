@@ -206,11 +206,24 @@ export interface CreatedInviteEnvelope {
 export type InvitePreview = InvitePreviewSuccess;
 export type InviteAcceptResponse = InviteAcceptSuccess;
 export type GmailConnectResponse = GmailConnectSuccess;
-export type ProviderAccount = components['schemas']['ProviderAccountResponse'];
-export type ProviderAccountResponse = ProviderAccountSuccess;
+export interface ProviderBidiSyncResponse {
+  status: 'updated' | 'scope_missing';
+  account?: ProviderAccount;
+  authorization_url?: string;
+  scopes?: string[];
+}
+
+export interface ProviderAccountExtras {
+  bidirectional_sync_enabled?: boolean;
+  bidirectional_sync_scope_missing?: boolean;
+  pending_outbound_changes?: number;
+}
+
+export type ProviderAccount = components['schemas']['ProviderAccountResponse'] & ProviderAccountExtras;
+export type ProviderAccountResponse = ProviderAccountSuccess & ProviderAccountExtras;
 export type ProviderSyncEventSummary = components['schemas']['ProviderSyncEventSummary'];
-export type ProviderSyncStatus = components['schemas']['ProviderSyncStatusResponse'];
-export type ProviderSyncStatusListResponse = ProviderSyncStatusListSuccess;
+export type ProviderSyncStatus = components['schemas']['ProviderSyncStatusResponse'] & ProviderAccountExtras;
+export type ProviderSyncStatusListResponse = Omit<ProviderSyncStatusListSuccess, 'accounts'> & { accounts: ProviderSyncStatus[] };
 export type ProviderSyncTriggerResponse = ProviderSyncTriggerSuccess;
 export type ProviderReimportResponse = ProviderReimportSuccess;
 export type ProviderStopSyncResponse = ProviderStopSyncSuccess;
@@ -540,9 +553,12 @@ export class HailApiClient {
     );
   }
 
-  async connectGmail(): Promise<GmailConnectResponse> {
+  async connectGmail(scope?: 'modify'): Promise<GmailConnectResponse> {
+    const path = scope === 'modify'
+      ? '/api/provider-accounts/gmail/connect?scope=modify'
+      : '/api/provider-accounts/gmail/connect';
     return this.#json<GmailConnectResponse>(
-      await this.#request('/api/provider-accounts/gmail/connect', {
+      await this.#request(path, {
         method: 'POST',
         mutating: true,
       }),
@@ -604,6 +620,23 @@ export class HailApiClient {
         `/api/provider-accounts/${encodeURIComponent(String(id))}/stop`,
         {
           method: 'POST',
+          mutating: true,
+        },
+      ),
+      200,
+    );
+  }
+
+  async setProviderBidirectionalSync(
+    id: number,
+    enabled: boolean,
+  ): Promise<ProviderBidiSyncResponse> {
+    return this.#json<ProviderBidiSyncResponse>(
+      await this.#request(
+        `/api/provider-accounts/${encodeURIComponent(String(id))}/bidirectional-sync`,
+        {
+          method: 'POST',
+          body: { enabled },
           mutating: true,
         },
       ),

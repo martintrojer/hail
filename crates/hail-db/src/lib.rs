@@ -7,6 +7,7 @@ pub mod app_events;
 pub mod labels;
 pub mod provider_audit_sanitizer;
 pub mod provider_message_mappings;
+pub mod provider_outbound_changes;
 pub mod provider_sync_audit;
 pub mod speakeasy;
 

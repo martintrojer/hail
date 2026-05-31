@@ -18,7 +18,7 @@ use base64::prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD};
 use reqwest::header::RETRY_AFTER;
 use reqwest::{StatusCode, Url};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const GMAIL_API_BASE_URL: &str = "https://gmail.googleapis.com/gmail/v1/";
@@ -43,6 +43,9 @@ pub fn provider_worker_http_client() -> Result<reqwest::Client, reqwest::Error> 
 
 /// OAuth scopes requested for Gmail import plus outbound send.
 pub const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+
+/// OAuth scope required for bidirectional read/label/trash mutations.
+pub const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 pub const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 
 #[derive(Debug, Error)]
@@ -475,6 +478,25 @@ where
         })
     }
 
+    /// `POST /gmail/v1/users/me/messages/batchModify`
+    pub async fn batch_modify_messages(
+        &self,
+        request: &BatchModifyMessagesRequest,
+    ) -> Result<(), GmailClientError> {
+        self.post_json_empty("users/me/messages/batchModify", request)
+            .await
+    }
+
+    /// `POST /gmail/v1/users/me/messages/{id}/modify`
+    pub async fn modify_message(
+        &self,
+        message_id: &str,
+        request: &ModifyMessageRequest,
+    ) -> Result<ModifyMessageResponse, GmailClientError> {
+        let path = format!("users/me/messages/{message_id}/modify");
+        self.post_json(&path, request).await
+    }
+
     async fn get_json<R>(&self, path: &str, query: &[(&str, &str)]) -> Result<R, GmailClientError>
     where
         R: serde::de::DeserializeOwned,
@@ -518,26 +540,149 @@ where
             return Ok(response.json().await?);
         }
 
-        let retry_after = retry_after_duration(response.headers().get(RETRY_AFTER));
-        let error_body = response.text().await.unwrap_or_default();
-        let parsed = parse_gmail_error(&error_body);
-        Err(GmailClientError::Api {
-            status,
-            kind: classify_gmail_error(status, parsed.reason.as_deref()),
-            reason: parsed.reason,
-            message: parsed.message.unwrap_or_else(|| {
-                if error_body.is_empty() {
-                    status
-                        .canonical_reason()
-                        .unwrap_or("unknown error")
-                        .to_owned()
-                } else {
-                    error_body
-                }
-            }),
-            retry_after,
-        })
+        gmail_error_from_response(response).await
     }
+    async fn post_json<B, R>(&self, path: &str, body: &B) -> Result<R, GmailClientError>
+    where
+        B: Serialize + ?Sized,
+        R: serde::de::DeserializeOwned,
+    {
+        let url = self.base_url.join(path)?;
+        let mut last_retryable_error = None;
+        for attempt in 1..=self.retry.attempts() {
+            let token = self.token_source.bearer_token().await?;
+            match self.send_json_request(url.clone(), token, Some(body)).await {
+                Ok(value) => return Ok(value),
+                Err(error) if attempt < self.retry.attempts() && error.is_retryable() => {
+                    let delay = self.retry.delay_for_retry(error.retry_after(), attempt);
+                    last_retryable_error = Some(error);
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_retryable_error.expect("retry loop always runs at least once"))
+    }
+
+    async fn post_json_empty<B>(&self, path: &str, body: &B) -> Result<(), GmailClientError>
+    where
+        B: Serialize + ?Sized,
+    {
+        let url = self.base_url.join(path)?;
+        let mut last_retryable_error = None;
+        for attempt in 1..=self.retry.attempts() {
+            let token = self.token_source.bearer_token().await?;
+            match self.send_empty_request(url.clone(), token, body).await {
+                Ok(()) => return Ok(()),
+                Err(error) if attempt < self.retry.attempts() && error.is_retryable() => {
+                    let delay = self.retry.delay_for_retry(error.retry_after(), attempt);
+                    last_retryable_error = Some(error);
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_retryable_error.expect("retry loop always runs at least once"))
+    }
+
+    async fn send_json_request<B, R>(
+        &self,
+        url: Url,
+        token: SecretString,
+        body: Option<&B>,
+    ) -> Result<R, GmailClientError>
+    where
+        B: Serialize + ?Sized,
+        R: serde::de::DeserializeOwned,
+    {
+        let request = self.http.post(url).bearer_auth(token.expose_secret());
+        let request = if let Some(body) = body {
+            request.json(body)
+        } else {
+            request
+        };
+        let response = request.send().await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response.json().await?);
+        }
+        gmail_error_from_response(response).await
+    }
+
+    async fn send_empty_request<B>(
+        &self,
+        url: Url,
+        token: SecretString,
+        body: &B,
+    ) -> Result<(), GmailClientError>
+    where
+        B: Serialize + ?Sized,
+    {
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(token.expose_secret())
+            .json(body)
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        gmail_error_from_response(response).await
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchModifyMessagesRequest {
+    pub ids: Vec<String>,
+    pub add_label_ids: Vec<String>,
+    pub remove_label_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyMessageRequest {
+    pub add_label_ids: Vec<String>,
+    pub remove_label_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyMessageResponse {
+    pub id: String,
+    #[serde(default)]
+    pub label_ids: Vec<String>,
+}
+
+async fn gmail_error_from_response<T>(response: reqwest::Response) -> Result<T, GmailClientError> {
+    let status = response.status();
+    let retry_after = retry_after_duration(response.headers().get(RETRY_AFTER));
+    let error_body = response.text().await.unwrap_or_default();
+    let parsed = parse_gmail_error(&error_body);
+    Err(GmailClientError::Api {
+        status,
+        kind: classify_gmail_error(status, parsed.reason.as_deref()),
+        reason: parsed.reason,
+        message: parsed.message.unwrap_or_else(|| {
+            if error_body.is_empty() {
+                status
+                    .canonical_reason()
+                    .unwrap_or("unknown error")
+                    .to_owned()
+            } else {
+                error_body
+            }
+        }),
+        retry_after,
+    })
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -643,6 +788,10 @@ pub struct GmailHistoryRecord {
     #[serde(default)]
     pub messages_added: Vec<GmailHistoryMessageRef>,
     #[serde(default)]
+    pub labels_added: Vec<GmailHistoryLabelChange>,
+    #[serde(default)]
+    pub labels_removed: Vec<GmailHistoryLabelChange>,
+    #[serde(default)]
     pub messages: Vec<GmailHistoryMessage>,
 }
 
@@ -650,6 +799,14 @@ pub struct GmailHistoryRecord {
 #[serde(rename_all = "camelCase")]
 pub struct GmailHistoryMessageRef {
     pub message: GmailHistoryMessage,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailHistoryLabelChange {
+    pub message: GmailHistoryMessage,
+    #[serde(default)]
+    pub label_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
