@@ -157,6 +157,14 @@ function MailResultCard({ item }: { item: MailSearchResult }) {
             {item.preview || 'No preview available.'}
           </p>
           <LabelChips labels={item.labels} className="flex min-w-0 flex-wrap items-center gap-1" />
+          <div className="flex flex-wrap gap-1">
+            {item.message_count > 1 ? (
+              <Badge variant="outline">{item.message_count} messages</Badge>
+            ) : null}
+            {item.unread_count > 0 ? (
+              <Badge variant="secondary">{item.unread_count} unread</Badge>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     </ThreadLink>

@@ -9,7 +9,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
-    MailSearchResult, MailView, MailViewError, MailViewItem, MailViewProvider, SearchError,
+    MailSearchResult, MailView, MailViewError, MailViewPage, MailViewProvider, SearchError,
     SearchMailbox, SearchProvider,
 };
 use hail_api::state::AppState;
@@ -58,9 +58,10 @@ impl MailViewProvider for EmptyMailViewProvider {
         _state: &'a AppState,
         _token: SecretString,
         _view: MailView,
+        _cursor: Option<String>,
         _limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
-        Box::pin(async { Ok(Vec::new()) })
+    ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
+        Box::pin(async { Ok(MailViewPage { items: Vec::new(), next_cursor: None }) })
     }
 
     fn count<'a>(
@@ -148,6 +149,9 @@ fn mail_item_with_thread(thread_id: &str, email_id: &str) -> MailSearchResult {
         from: "Ada <ada@example.org>".to_string(),
         subject: "Project update".to_string(),
         preview: "Needle in mail".to_string(),
+        message_count: 1,
+        unread_count: 0,
+        unread: false,
         received_at: Some(Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap()),
         labels: Vec::new(),
     }

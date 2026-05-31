@@ -207,6 +207,12 @@ function FeedCard({
           </div>
           <CardAction className="flex flex-col items-end gap-2">
             {item.unread ? <Badge>New</Badge> : null}
+            {item.message_count > 1 ? (
+              <Badge variant="outline">{item.message_count} messages</Badge>
+            ) : null}
+            {item.unread_count > 0 ? (
+              <Badge variant="secondary">{item.unread_count} unread</Badge>
+            ) : null}
             <TrackerSummary trackers={trackers} />
           </CardAction>
           <ScreenReaderThreadMetadata item={item} />
@@ -311,6 +317,8 @@ function ScreenReaderThreadMetadata({ item }: { item: MailViewItem }) {
       <span>{classificationLabel(item.classification)}</span>
       <span role="img" aria-label={item.unread ? 'Unread thread' : 'Read thread'} />
       {item.unread ? <span>Unread</span> : null}
+      {item.message_count > 1 ? <span>{item.message_count} messages</span> : null}
+      {item.unread_count > 0 ? <span>{item.unread_count} unread messages</span> : null}
     </span>
   );
 }
@@ -365,6 +373,8 @@ function MailThreadRow({
           selected={selected}
           onToggleSelect={onToggleSelect}
           labels={item.labels}
+          messageCount={item.message_count}
+          unreadCount={item.unread_count}
         />
       </ThreadLink>
       <div className="flex shrink-0 items-start px-2 py-2">

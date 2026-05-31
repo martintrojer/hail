@@ -37,6 +37,8 @@ export function MailThreadRow({
         selected={selected}
         onToggleSelect={onToggleSelect}
         labels={item.labels}
+        messageCount={item.message_count}
+        unreadCount={item.unread_count}
       />
     </ThreadLink>
   );

@@ -286,6 +286,8 @@ function mailItem(
     preview: 'The latest notes from Alice.',
     received_at: '2026-05-23T12:00:00Z',
     unread: true,
+    message_count: 1,
+    unread_count: 1,
     classification,
     has_notes: false,
     labels: [],
@@ -482,6 +484,8 @@ describe('MailViewPage', () => {
                   thread_count: 8,
                 },
               ],
+              message_count: 2,
+              unread_count: 1,
             }),
           ]),
         ),
@@ -499,6 +503,8 @@ describe('MailViewPage', () => {
     expect(within(link).getByLabelText('Thread has notes')).toBeInTheDocument();
     expect(within(link).getByText('Receipts')).toHaveAttribute('title', 'Work/Receipts');
     expect(within(link).getByLabelText('Label Work/Receipts')).toBeInTheDocument();
+    expect(within(link).getByText('2')).toHaveAccessibleName('2 messages in thread');
+    expect(within(link).getByText('1')).toHaveAccessibleName('1 unread messages in thread');
     expect(
       within(link).getByText('A direct note for the Imbox.'),
     ).toBeInTheDocument();
