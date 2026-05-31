@@ -142,10 +142,12 @@ impl JmapOpsLive {
 fn is_system_sender(from: &str) -> bool {
     let lower = from.to_ascii_lowercase();
     let local = lower.split('@').next().unwrap_or(&lower);
-    matches!(
-        local,
-        "mailer-daemon" | "postmaster" | "noreply" | "no-reply"
-    ) || lower.is_empty()
+    // Only true RFC-level system senders bypass the screener. Do NOT include
+    // noreply/no-reply here: those are the standard local-parts for newsletters
+    // and transactional mail, which must go through the screener like any other
+    // unknown sender (operator feedback: noreply senders were silently landing
+    // in Imbox on first import).
+    matches!(local, "mailer-daemon" | "postmaster") || lower.is_empty()
 }
 
 #[must_use]
@@ -423,8 +425,6 @@ mod tests {
         assert!(is_system_sender("Mailer-Daemon@mx.example.com"));
         assert!(is_system_sender("postmaster@example.com"));
         assert!(is_system_sender("POSTMASTER@example.com"));
-        assert!(is_system_sender("noreply@example.com"));
-        assert!(is_system_sender("no-reply@example.com"));
         assert!(is_system_sender("")); // null sender bounce
     }
 
@@ -434,6 +434,11 @@ mod tests {
         assert!(!is_system_sender("newsletter@company.com"));
         assert!(!is_system_sender("daemon@example.com"));
         assert!(!is_system_sender("reply@example.com"));
+        // Regression: noreply / no-reply are NOT system senders; they must go
+        // through the screener like any other unknown bulk sender.
+        assert!(!is_system_sender("noreply@example.com"));
+        assert!(!is_system_sender("no-reply@example.com"));
+        assert!(!is_system_sender("NoReply@notify.cloudflare.com"));
     }
 
     #[test]
