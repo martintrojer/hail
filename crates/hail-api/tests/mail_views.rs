@@ -11,7 +11,7 @@ use axum::response::IntoResponse;
 use hail_api::middleware::auth::require_auth;
 use hail_api::routes::views::{
     JmapMailViewProvider, MailView, MailViewClassification, MailViewError, MailViewItem,
-    MailViewProvider,
+    MailViewPage, MailViewProvider,
 };
 use hail_api::state::AppState;
 use hail_test::{fixture_state, json_body, seed_session};
@@ -68,20 +68,37 @@ impl MailViewProvider for FakeProvider {
         _state: &'a AppState,
         _token: SecretString,
         view: MailView,
+        cursor: Option<String>,
         limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
             self.calls.lock().expect("calls lock").push((view, limit));
             if let Some(message) = &self.error {
                 return Err(MailViewError::provider(message.clone()));
             }
-            Ok(self
+            let items = self
                 .items
                 .iter()
                 .filter(|item| item.classification == view.classification())
-                .take(limit)
                 .cloned()
-                .collect())
+                .collect::<Vec<_>>();
+            let offset = cursor
+                .as_deref()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut page_items = items
+                .into_iter()
+                .skip(offset)
+                .take(limit.saturating_add(1))
+                .collect::<Vec<_>>();
+            let has_more = page_items.len() > limit;
+            if has_more {
+                page_items.truncate(limit);
+            }
+            Ok(MailViewPage {
+                next_cursor: has_more.then(|| (offset + page_items.len()).to_string()),
+                items: page_items,
+            })
         })
     }
 
@@ -139,6 +156,8 @@ fn item(n: i64, classification: MailViewClassification) -> MailViewItem {
             Utc.with_ymd_and_hms(2026, 5, 23, 12, 0, 0).unwrap() - Duration::minutes(n),
         ),
         unread: n % 2 == 0,
+        message_count: 1,
+        unread_count: usize::from(n % 2 == 0),
         classification,
         has_notes: false,
         labels: Vec::new(),
@@ -761,7 +780,7 @@ async fn view_counts_returns_sidebar_summary_without_fetching_full_lists() {
     assert_eq!(
         json_body(resp).await,
         serde_json::json!({
-            "imbox_new": 1,
+            "imbox_new": 0,
             "feed_unread": 1,
             "papertrail_unread": 1,
             "screener_pending": 1,
@@ -785,6 +804,72 @@ async fn view_counts_returns_sidebar_summary_without_fetching_full_lists() {
             (MailView::Trash, 0),
         ],
     );
+}
+
+
+#[tokio::test]
+async fn flat_view_paginates_thread_rows() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "thread-page@example.org").await;
+    let provider = Arc::new(FakeProvider::new(vec![
+        item_with_view(1, MailView::Imbox),
+        item_with_view(2, MailView::Imbox),
+        item_with_view(3, MailView::Imbox),
+    ]));
+
+    let resp = get_view(
+        state.clone(),
+        provider.clone(),
+        Some(&sid),
+        "/api/views/imbox?limit=2",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(thread_ids(&json["items"]), vec!["thread-1", "thread-2"]);
+    assert_eq!(json["next_cursor"], "2");
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&sid),
+        "/api/views/imbox?limit=2&cursor=2",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(thread_ids(&json["items"]), vec!["thread-3"]);
+    assert_eq!(json["next_cursor"], Value::Null);
+}
+
+#[tokio::test]
+async fn sectioned_view_uses_unread_count_for_new_bucket() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "thread-unread-count@example.org").await;
+    let mut unread_thread = item_with_view(1, MailView::Papertrail);
+    unread_thread.unread = false;
+    unread_thread.message_count = 2;
+    unread_thread.unread_count = 1;
+    let mut seen_thread = item_with_view(2, MailView::Papertrail);
+    seen_thread.unread = true;
+    seen_thread.message_count = 2;
+    seen_thread.unread_count = 0;
+    let provider = Arc::new(FakeProvider::new(vec![unread_thread, seen_thread]));
+
+    let resp = get_view(
+        state,
+        provider,
+        Some(&sid),
+        "/api/views/papertrail/sectioned?limit=10",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(thread_ids(&json["new"]), vec!["thread-1"]);
+    assert_eq!(thread_ids(&json["seen"]), vec!["thread-2"]);
 }
 
 #[tokio::test]
@@ -846,14 +931,14 @@ async fn sectioned_imbox_partitions_bubbled_new_and_seen_items() {
     );
     assert_eq!(
         thread_ids(&json["new_for_you"]),
-        vec!["thread-2", "thread-5"]
+        vec!["thread-2"]
     );
     assert_eq!(
         thread_ids(&json["previously_seen"]),
-        vec!["thread-4", "thread-6"]
+        vec!["thread-4", "thread-5", "thread-6"]
     );
-    assert_eq!(json["new_count"], 2);
-    assert_eq!(json["previously_seen_total"], 2);
+    assert_eq!(json["new_count"], 1);
+    assert_eq!(json["previously_seen_total"], 3);
     assert_eq!(json["next_cursor"], Value::Null);
 }
 
@@ -894,6 +979,7 @@ async fn papertrail_sectioned_paginates_seen_tail() {
             .map(|n| {
                 let mut item = item_with_view(n, MailView::Papertrail);
                 item.unread = n <= 2;
+                item.unread_count = usize::from(item.unread);
                 item
             })
             .collect(),

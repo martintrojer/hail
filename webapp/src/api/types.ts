@@ -385,6 +385,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/setup/admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["setup_admin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["setup_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/speakeasy": {
         parameters: {
             query?: never;
@@ -849,6 +881,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/views/papertrail/sectioned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_papertrail_sectioned"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/views/reply-later": {
         parameters: {
             query?: never;
@@ -1058,22 +1106,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/views/papertrail/sectioned": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["get_papertrail_sectioned"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1104,6 +1136,11 @@ export interface components {
         };
         AllowedSendersResponse: {
             allowed: components["schemas"]["AllowedSender"][];
+        };
+        ApiError: {
+            code?: string | null;
+            detail?: string | null;
+            error: string;
         };
         AssignLabelNameRequest: {
             label_name: string;
@@ -1276,9 +1313,9 @@ export interface components {
             bubbled_up: components["schemas"]["MailViewItem"][];
             new_count: number;
             new_for_you: components["schemas"]["MailViewItem"][];
+            next_cursor?: string | null;
             previously_seen: components["schemas"]["MailViewItem"][];
             previously_seen_total: number;
-            next_cursor?: string | null;
         };
         InviteAcceptResponse: {
             user: components["schemas"]["UserView"];
@@ -1345,6 +1382,7 @@ export interface components {
             from: string;
             has_notes: boolean;
             labels: components["schemas"]["LabelResponse"][];
+            message_count: number;
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
@@ -1352,6 +1390,7 @@ export interface components {
             thread_id: string;
             to: string[];
             unread: boolean;
+            unread_count: number;
         };
         MailViewResponse: {
             items: components["schemas"]["MailViewItem"][];
@@ -1486,8 +1525,8 @@ export interface components {
             sender: string;
         };
         ScreenerViewResponse: {
-            senders: components["schemas"]["ScreenerSender"][];
             next_cursor?: string | null;
+            senders: components["schemas"]["ScreenerSender"][];
         };
         SearchResponse: {
             results: components["schemas"]["SearchResult"][];
@@ -1496,6 +1535,7 @@ export interface components {
             email_id: string;
             from: string;
             labels: components["schemas"]["LabelResponse"][];
+            message_count: number;
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
@@ -1503,6 +1543,8 @@ export interface components {
             thread_id: string;
             /** @enum {string} */
             type: "mail";
+            unread: boolean;
+            unread_count: number;
         } | {
             address: string;
             markdown: string;
@@ -1510,6 +1552,27 @@ export interface components {
             type: "contact_note";
             /** Format: date-time */
             updated_at: string;
+        };
+        SectionedMailViewResponse: {
+            bubble_up?: components["schemas"]["MailViewItem"][] | null;
+            new: components["schemas"]["MailViewItem"][];
+            next_cursor?: string | null;
+            seen: components["schemas"]["MailViewItem"][];
+        };
+        SetupAdminRequest: {
+            bootstrap_token?: string | null;
+            display_name?: string | null;
+            domain: string;
+            email: string;
+            password: string;
+            stalwart_admin_password: string;
+            stalwart_admin_username: string;
+        };
+        /** @enum {string} */
+        SetupDisabledReason: "config_admin_set" | "admin_user_exists";
+        SetupStateResponse: {
+            reason?: null | components["schemas"]["SetupDisabledReason"];
+            wizard_active: boolean;
         };
         SpeakeasyResponse: {
             speakeasy: components["schemas"]["SpeakeasyState"];
@@ -1537,10 +1600,10 @@ export interface components {
             from: components["schemas"]["Participant"][];
             html: string;
             html_with_remote_images: string;
-            reply_quote_html: string;
             preview: string;
             /** Format: date-time */
             received_at?: string | null;
+            reply_quote_html: string;
             to: components["schemas"]["Participant"][];
         };
         ThreadNoteResponse: {
@@ -1585,6 +1648,9 @@ export interface components {
             blob_id: string;
             size: number;
             type: string;
+        };
+        UserEnvelope: {
+            user: components["schemas"]["UserView"];
         };
         /**
          * @description Public JSON representation of a user. Mirrors the v1 schema in
@@ -1648,12 +1714,6 @@ export interface components {
         };
         WorkflowRuleResponse: {
             rule: components["schemas"]["WorkflowRule"];
-        };
-        SectionedMailViewResponse: {
-            bubble_up?: components["schemas"]["MailViewItem"][] | null;
-            new: components["schemas"]["MailViewItem"][];
-            seen: components["schemas"]["MailViewItem"][];
-            next_cursor?: string | null;
         };
     };
     responses: never;
@@ -2900,6 +2960,95 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    setup_admin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description Admin user created; session cookie has been set. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserEnvelope"];
+                };
+            };
+            /** @description Setup input or Stalwart provisioning failed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Setup bootstrap token is missing or invalid. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Setup wizard is no longer active. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Internal setup failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    setup_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description First-run setup wizard state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStateResponse"];
+                };
+            };
+            /** @description Failed to read setup state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
             };
         };
     };
@@ -4442,6 +4591,43 @@ export interface operations {
             };
         };
     };
+    get_papertrail_sectioned: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paper Trail mail view partitioned into unread and read sections. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SectionedMailViewResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Paper Trail sectioned view lookup failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_reply_later: {
         parameters: {
             query?: never;
@@ -4479,8 +4665,8 @@ export interface operations {
     get_screener: {
         parameters: {
             query?: {
-                cursor?: string | null;
-                limit?: number | null;
+                cursor?: string;
+                limit?: number;
             };
             header?: never;
             path?: never;
@@ -5000,43 +5186,6 @@ export interface operations {
             };
             /** @description A dependency is unhealthy. */
             503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    get_papertrail_sectioned: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                limit?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Paper Trail mail view partitioned into unread and read sections. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SectionedMailViewResponse"];
-                };
-            };
-            /** @description Missing or invalid session. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Paper Trail sectioned view lookup failed. */
-            500: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -5,8 +5,8 @@
 //! `$hail_papertrail`). Drafts are sourced from the user's JMAP Drafts mailbox
 //! or `$draft` keyword. Unified search combines JMAP mail text search with
 //! hail-owned contact notes stored in SQLite.
-//! `cursor` is accepted for API compatibility but intentionally ignored for v1;
-//! responses always return `next_cursor: null`.
+//! `cursor` is an opaque thread cursor. Mail views are collapsed by JMAP
+//! `threadId`; pagination advances by rendered conversations, not raw emails.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -53,8 +53,9 @@ pub trait MailViewProvider: Send + Sync + 'static {
         state: &'a AppState,
         token: SecretString,
         view: MailView,
+        cursor: Option<String>,
         limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>>;
 
     fn count<'a>(
         &'a self,
@@ -84,8 +85,9 @@ impl MailViewProvider for JmapMailViewProvider {
         state: &'a AppState,
         token: SecretString,
         view: MailView,
+        cursor: Option<String>,
         limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailViewItem>, MailViewError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
         Box::pin(async move {
             use hail_jmap::jmap_client::email::query as email_query;
 
@@ -93,62 +95,22 @@ impl MailViewProvider for JmapMailViewProvider {
                 .await
                 .map_err(MailViewError::provider)?;
             let Some(filter) = mail_view_filter(&session, view).await? else {
-                return Ok(Vec::new());
+                return Ok(MailViewPage::empty());
             };
 
-            let mut request = session.client().build();
-            request
-                .query_email()
-                .filter(filter)
-                .sort([email_query::Comparator::received_at().descending()])
-                .limit(limit);
-            let mut query = request
-                .send_query_email()
-                .await
-                .map_err(|err| MailViewError::provider(err.to_string()))?;
-            let ids = query.take_ids();
+            let ids = query_all_mail_view_ids(
+                &session,
+                filter,
+                Some(vec![email_query::Comparator::received_at().descending()]),
+            )
+            .await?;
             if ids.is_empty() {
-                return Ok(Vec::new());
+                return Ok(MailViewPage::empty());
             }
 
             let emails = fetch_mail_view_emails(&session, ids, view).await?;
-
-            let classification = view.classification();
-            emails
-                .into_iter()
-                .map(|email| {
-                    let thread_id = required_jmap_field(email.thread_id(), "threadId")
-                        .map_err(|err| MailViewError::malformed_email(err.field))?;
-                    let email_id = required_jmap_field(email.id(), "id")
-                        .map_err(|err| MailViewError::malformed_email(err.field))?;
-
-                    let feed_render = (view == MailView::Feed).then(|| render_feed_body(&email));
-                    let (feed_html, feed_blocked_trackers) = match feed_render {
-                        Some(render) => (Some(render.html), Some(render.blocked_trackers)),
-                        None => (None, None),
-                    };
-
-                    Ok(MailViewItem {
-                        thread_id,
-                        email_id,
-                        from: format_from(email.from()),
-                        to: format_addresses(email.to()),
-                        cc: format_addresses(email.cc()),
-                        bcc: format_addresses(email.bcc()),
-                        subject: email.subject().unwrap_or_default().to_string(),
-                        preview: preview_from_email(&email),
-                        received_at: email
-                            .received_at()
-                            .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
-                        unread: !email.keywords().into_iter().any(|kw| kw == "$seen"),
-                        classification,
-                        has_notes: false,
-                        labels: Vec::new(),
-                        feed_html,
-                        feed_blocked_trackers,
-                    })
-                })
-                .collect()
+            let grouped = group_mail_view_emails(emails, view)?;
+            Ok(page_mail_view_items(grouped, cursor.as_deref(), limit))
         })
     }
 
@@ -170,12 +132,21 @@ impl MailViewProvider for JmapMailViewProvider {
                 return Ok(0);
             };
 
-            let mut filter = filter;
             if unread_only {
-                filter = Filter::and([
+                let filter = Filter::and([
                     filter,
                     Filter::not([email_query::Filter::has_keyword("$seen".to_string())]),
                 ]);
+                let ids = query_all_mail_view_ids(&session, filter, None).await?;
+                if ids.is_empty() {
+                    return Ok(0);
+                }
+                let emails = fetch_mail_view_emails(&session, ids, view).await?;
+                let thread_ids = emails
+                    .into_iter()
+                    .filter_map(|email| email.thread_id().map(ToOwned::to_owned))
+                    .collect::<HashSet<_>>();
+                return Ok(thread_ids.len());
             }
 
             let mut request = session.client().build();
@@ -294,6 +265,207 @@ async fn fetch_mail_view_emails(
     Ok(emails)
 }
 
+#[derive(Debug, Clone)]
+pub struct MailViewPage {
+    pub items: Vec<MailViewItem>,
+    pub next_cursor: Option<String>,
+}
+
+impl MailViewPage {
+    fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            next_cursor: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GroupedMailViewThread {
+    item: MailViewItem,
+    received_at_sort: i64,
+}
+
+type EmailQueryFilter =
+    hail_jmap::jmap_client::core::query::Filter<hail_jmap::jmap_client::email::query::Filter>;
+type EmailQueryComparator = hail_jmap::jmap_client::core::query::Comparator<
+    hail_jmap::jmap_client::email::query::Comparator,
+>;
+
+async fn query_all_mail_view_ids(
+    session: &hail_jmap::Session,
+    filter: EmailQueryFilter,
+    sort: Option<Vec<EmailQueryComparator>>,
+) -> Result<Vec<String>, MailViewError> {
+    const QUERY_CHUNK_SIZE: usize = 256;
+
+    let mut position = 0;
+    let mut ids = Vec::new();
+    loop {
+        let mut request = session.client().build();
+        let query = request.query_email();
+        query
+            .filter(filter.clone())
+            .position(position)
+            .limit(QUERY_CHUNK_SIZE);
+        if let Some(sort) = sort.as_ref() {
+            query.sort(sort.clone());
+        }
+        let mut response = request
+            .send_query_email()
+            .await
+            .map_err(|err| MailViewError::provider(err.to_string()))?;
+        let chunk = response.take_ids();
+        let chunk_len = chunk.len();
+        ids.extend(chunk);
+        if chunk_len < QUERY_CHUNK_SIZE {
+            break;
+        }
+        position += i32::try_from(chunk_len)
+            .map_err(|_| MailViewError::provider("Email/query position overflow"))?;
+    }
+
+    Ok(ids)
+}
+
+fn group_mail_view_emails(
+    emails: Vec<hail_jmap::jmap_client::email::Email>,
+    view: MailView,
+) -> Result<Vec<GroupedMailViewThread>, MailViewError> {
+    let classification = view.classification();
+    let mut by_thread: HashMap<String, (usize, usize, hail_jmap::jmap_client::email::Email)> =
+        HashMap::new();
+
+    for email in emails {
+        let thread_id = required_jmap_field(email.thread_id(), "threadId")
+            .map_err(|err| MailViewError::malformed_email(err.field))?;
+        let unread = !email.keywords().into_iter().any(|kw| kw == "$seen");
+        let received_at_sort = email.received_at().unwrap_or(0);
+        match by_thread.get_mut(&thread_id) {
+            Some((message_count, unread_count, newest)) => {
+                *message_count += 1;
+                if unread {
+                    *unread_count += 1;
+                }
+                let newest_received_at = newest.received_at().unwrap_or(0);
+                let newest_id = newest.id().unwrap_or_default();
+                let email_id = email.id().unwrap_or_default();
+                if received_at_sort > newest_received_at
+                    || (received_at_sort == newest_received_at && email_id > newest_id)
+                {
+                    *newest = email;
+                }
+            }
+            None => {
+                by_thread.insert(thread_id, (1, usize::from(unread), email));
+            }
+        }
+    }
+
+    let mut grouped = by_thread
+        .into_iter()
+        .map(|(thread_id, (message_count, unread_count, email))| {
+            let email_id = required_jmap_field(email.id(), "id")
+                .map_err(|err| MailViewError::malformed_email(err.field))?;
+            let feed_render = (view == MailView::Feed).then(|| render_feed_body(&email));
+            let (feed_html, feed_blocked_trackers) = match feed_render {
+                Some(render) => (Some(render.html), Some(render.blocked_trackers)),
+                None => (None, None),
+            };
+            let received_at_sort = email.received_at().unwrap_or(0);
+
+            Ok(GroupedMailViewThread {
+                received_at_sort,
+                item: MailViewItem {
+                    thread_id,
+                    email_id,
+                    from: format_from(email.from()),
+                    to: format_addresses(email.to()),
+                    cc: format_addresses(email.cc()),
+                    bcc: format_addresses(email.bcc()),
+                    subject: email.subject().unwrap_or_default().to_string(),
+                    preview: preview_from_email(&email),
+                    received_at: email
+                        .received_at()
+                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                    unread: unread_count > 0,
+                    message_count,
+                    unread_count,
+                    classification,
+                    has_notes: false,
+                    labels: Vec::new(),
+                    feed_html,
+                    feed_blocked_trackers,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, MailViewError>>()?;
+
+    grouped.sort_by(|left, right| {
+        right
+            .received_at_sort
+            .cmp(&left.received_at_sort)
+            .then_with(|| left.item.thread_id.cmp(&right.item.thread_id))
+    });
+    Ok(grouped)
+}
+
+fn page_mail_view_items(
+    grouped: Vec<GroupedMailViewThread>,
+    cursor: Option<&str>,
+    limit: usize,
+) -> MailViewPage {
+    let offset = cursor
+        .and_then(decode_thread_cursor)
+        .and_then(|cursor| {
+            grouped
+                .iter()
+                .position(|thread| {
+                    thread.item.thread_id == cursor.thread_id
+                        && thread.received_at_sort == cursor.received_at_sort
+                })
+                .map(|index| index + 1)
+        })
+        .unwrap_or(0);
+
+    let mut items = grouped
+        .into_iter()
+        .skip(offset)
+        .take(limit.saturating_add(1))
+        .collect::<Vec<_>>();
+    let has_more = items.len() > limit;
+    if has_more {
+        items.truncate(limit);
+    }
+    let next_cursor = has_more
+        .then(|| items.last().map(|thread| encode_thread_cursor(thread)))
+        .flatten();
+
+    MailViewPage {
+        items: items.into_iter().map(|thread| thread.item).collect(),
+        next_cursor,
+    }
+}
+
+#[derive(Debug)]
+struct ThreadCursor {
+    thread_id: String,
+    received_at_sort: i64,
+}
+
+fn encode_thread_cursor(thread: &GroupedMailViewThread) -> String {
+    format!("t:{}:{}", thread.received_at_sort, thread.item.thread_id)
+}
+
+fn decode_thread_cursor(value: &str) -> Option<ThreadCursor> {
+    let rest = value.strip_prefix("t:")?;
+    let (received_at, thread_id) = rest.split_once(':')?;
+    Some(ThreadCursor {
+        thread_id: thread_id.to_string(),
+        received_at_sort: received_at.parse().ok()?,
+    })
+}
+
 #[derive(Debug)]
 pub struct MailViewError(String);
 
@@ -313,10 +485,6 @@ pub struct SearchError(String);
 impl SearchError {
     pub fn provider(message: impl Into<String>) -> Self {
         Self(message.into())
-    }
-
-    fn malformed_email(field: &'static str) -> Self {
-        Self(format!("JMAP Email missing required {field}"))
     }
 }
 
@@ -442,17 +610,19 @@ impl SearchProvider for JmapSearchProvider {
                 None => text_filter,
             };
 
-            let mut request = session.client().build();
-            request
-                .query_email()
-                .filter(filter)
-                .sort([email_query::Comparator::received_at().descending()])
-                .limit(limit);
-            let mut query = request
-                .send_query_email()
-                .await
-                .map_err(|err| SearchError::provider(err.to_string()))?;
-            let ids = query.take_ids();
+            let ids = {
+                let mut request = session.client().build();
+                request
+                    .query_email()
+                    .filter(filter)
+                    .sort([email_query::Comparator::received_at().descending()])
+                    .limit(limit.saturating_mul(5).max(limit));
+                let mut query = request
+                    .send_query_email()
+                    .await
+                    .map_err(|err| SearchError::provider(err.to_string()))?;
+                query.take_ids()
+            };
             if ids.is_empty() {
                 return Ok(Vec::new());
             }
@@ -467,28 +637,27 @@ impl SearchProvider for JmapSearchProvider {
                 .await
                 .map_err(|err| SearchError::provider(err.to_string()))?;
 
-            response
-                .take_list()
+            let grouped = group_mail_view_emails(response.take_list(), MailView::Imbox)
+                .map_err(|err| SearchError::provider(err.0))?;
+            Ok(grouped
                 .into_iter()
-                .map(|email| {
-                    let thread_id = required_jmap_field(email.thread_id(), "threadId")
-                        .map_err(|err| SearchError::malformed_email(err.field))?;
-                    let email_id = required_jmap_field(email.id(), "id")
-                        .map_err(|err| SearchError::malformed_email(err.field))?;
-
-                    Ok(MailSearchResult {
-                        thread_id,
-                        email_id,
-                        from: format_from(email.from()),
-                        subject: email.subject().unwrap_or_default().to_string(),
-                        preview: preview_from_email(&email),
-                        received_at: email
-                            .received_at()
-                            .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                .take(limit)
+                .map(|thread| {
+                    let item = thread.item;
+                    MailSearchResult {
+                        thread_id: item.thread_id,
+                        email_id: item.email_id,
+                        from: item.from,
+                        subject: item.subject,
+                        preview: item.preview,
+                        message_count: item.message_count,
+                        unread_count: item.unread_count,
+                        unread: item.unread,
+                        received_at: item.received_at,
                         labels: Vec::new(),
-                    })
+                    }
                 })
-                .collect()
+                .collect())
         })
     }
 }
@@ -662,6 +831,8 @@ pub struct MailViewItem {
     #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
     pub unread: bool,
+    pub message_count: usize,
+    pub unread_count: usize,
     pub classification: MailViewClassification,
     pub has_notes: bool,
     pub labels: Vec<LabelResponse>,
@@ -681,6 +852,9 @@ pub struct MailSearchResult {
     pub from: String,
     pub subject: String,
     pub preview: String,
+    pub message_count: usize,
+    pub unread_count: usize,
+    pub unread: bool,
     #[schema(value_type = Option<String>, format = DateTime)]
     pub received_at: Option<DateTime<Utc>>,
     pub labels: Vec<LabelResponse>,
@@ -702,16 +876,19 @@ pub struct BubbleUpViewItem {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SearchResult {
-    Mail {
-        thread_id: String,
-        email_id: String,
-        from: String,
-        subject: String,
-        preview: String,
-        #[schema(value_type = Option<String>, format = DateTime)]
-        received_at: Option<DateTime<Utc>>,
-        labels: Vec<LabelResponse>,
-    },
+        Mail {
+            thread_id: String,
+            email_id: String,
+            from: String,
+            subject: String,
+            preview: String,
+            message_count: usize,
+            unread_count: usize,
+            unread: bool,
+            #[schema(value_type = Option<String>, format = DateTime)]
+            received_at: Option<DateTime<Utc>>,
+            labels: Vec<LabelResponse>,
+        },
     ContactNote {
         address: String,
         markdown: String,
@@ -728,6 +905,9 @@ impl From<MailSearchResult> for SearchResult {
             from: item.from,
             subject: item.subject,
             preview: item.preview,
+            message_count: item.message_count,
+            unread_count: item.unread_count,
+            unread: item.unread,
             received_at: item.received_at,
             labels: item.labels,
         }
@@ -1280,11 +1460,11 @@ async fn load_view_counts(
     user: &AuthUser,
     provider: Arc<dyn MailViewProvider>,
 ) -> Result<ViewCountsResponse, String> {
-    let imbox_items = provider
-        .list(state, user.jmap_token.clone(), MailView::Imbox, MAX_LIMIT)
+    let imbox_page = provider
+        .list(state, user.jmap_token.clone(), MailView::Imbox, None, MAX_LIMIT)
         .await
         .map_err(|err| err.0)?;
-    let imbox_new = count_imbox_new(state, user.id, imbox_items).await?;
+    let imbox_new = count_imbox_new(state, user.id, imbox_page.items).await?;
     let feed_unread = provider
         .count(state, user.jmap_token.clone(), MailView::Feed, true)
         .await
@@ -1356,7 +1536,8 @@ async fn count_imbox_new(
     Ok(items
         .into_iter()
         .filter(|item| {
-            !seen_thread_ids.contains(&item.thread_id)
+            item.unread
+                && !seen_thread_ids.contains(&item.thread_id)
                 && !fired_bubble_up_thread_ids.contains(&item.thread_id)
         })
         .count())
@@ -1404,13 +1585,10 @@ async fn get_view(
     query: ViewQuery,
     view: MailView,
 ) -> Response {
-    // TODO(cursor): implement opaque JMAP anchor/queryState pagination. v1 only
-    // accepts and ignores the cursor parameter, returning `next_cursor: null`.
-    let _cursor = query.cursor.as_deref();
     let limit = query.normalized_limit();
 
-    let mut items = match provider
-        .list(&state, user.jmap_token.clone(), view, limit)
+    let page = match provider
+        .list(&state, user.jmap_token.clone(), view, query.cursor, limit)
         .await
     {
         Ok(items) => items,
@@ -1419,6 +1597,8 @@ async fn get_view(
             return internal();
         }
     };
+
+    let mut items = page.items;
 
     if let Err(err) = annotate_note_flags(&state, user.id, &mut items).await {
         tracing::error!(user_id = user.id, view = ?view, error = %err, "thread note flag lookup failed");
@@ -1431,7 +1611,7 @@ async fn get_view(
 
     Json(MailViewResponse {
         items,
-        next_cursor: None,
+        next_cursor: page.next_cursor,
     })
     .into_response()
 }
@@ -1534,9 +1714,10 @@ async fn get_unread_sectioned_view(
         limit
     };
 
-    let mut items = provider
-        .list(state, user.jmap_token.clone(), view, fetch_limit)
+    let mut page = provider
+        .list(state, user.jmap_token.clone(), view, None, fetch_limit)
         .await?;
+    let mut items = std::mem::take(&mut page.items);
 
     annotate_note_flags(state, user.id, &mut items).await?;
     annotate_item_labels(state, user.id, &mut items).await?;
@@ -1566,9 +1747,9 @@ async fn get_unread_sectioned_view(
         }
 
         let is_seen = if use_thread_seen_state {
-            seen_thread_ids.contains(&item.thread_id)
+            seen_thread_ids.contains(&item.thread_id) || item.unread_count == 0
         } else {
-            !item.unread
+            item.unread_count == 0
         };
 
         if is_seen {

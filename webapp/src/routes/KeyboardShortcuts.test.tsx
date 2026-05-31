@@ -172,6 +172,8 @@ function mailItem(overrides: Partial<MailViewItem>): MailViewItem {
     preview: 'Shortcut preview.',
     received_at: '2026-05-23T12:00:00Z',
     unread: true,
+    message_count: 1,
+    unread_count: 1,
     classification: 'imbox',
     has_notes: false,
     labels: [],

@@ -263,8 +263,11 @@ export type CreateLabelRequest = components['schemas']['CreateLabelRequest'];
 export type RenameLabelRequest = components['schemas']['RenameLabelRequest'];
 export type AssignLabelNameRequest = components['schemas']['AssignLabelNameRequest'];
 export type BatchAssignLabelRequest = components['schemas']['BatchAssignLabelRequest'];
-export type LabelThreadItem = components['schemas']['LabelThreadItem'];
-export type LabelThreadsResponse = LabelThreadsGetSuccess;
+export type LabelThreadItem = components['schemas']['LabelThreadItem'] & {
+  message_count?: number;
+  unread_count?: number;
+};
+export type LabelThreadsResponse = Omit<LabelThreadsGetSuccess, 'items'> & { items: LabelThreadItem[] };
 export type MailViewItem = components['schemas']['MailViewItem'];
 export type MailViewResponse = MailViewGetSuccess;
 export type ViewCountsResponse = ViewCountsGetSuccess;

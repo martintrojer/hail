@@ -65,6 +65,8 @@ export interface MailRowProps {
   onToggleSelect?: () => void;
   labels?: components['schemas']['LabelResponse'][];
   children?: ReactNode;
+  messageCount?: number;
+  unreadCount?: number;
 }
 
 
@@ -265,6 +267,14 @@ function NewPill() {
   );
 }
 
+function CountPill({ count, label }: { count: number; label: string }) {
+  return (
+    <Badge variant="outline" className="h-4 px-1.5 text-[0.65rem] tabular-nums" aria-label={label}>
+      {count}
+    </Badge>
+  );
+}
+
 function SelectionToggle({
   from,
   selected,
@@ -302,6 +312,8 @@ export function MailRow({
   onToggleSelect,
   labels = [],
   children,
+  messageCount = 1,
+  unreadCount = 0,
 }: MailRowProps) {
   const content = (
     <div className="group/mail-row flex min-w-0 flex-1 items-start gap-2 px-3 py-2">
@@ -315,6 +327,12 @@ export function MailRow({
               {from || 'Unknown sender'}
             </p>
             {unread ? <NewPill /> : null}
+            {messageCount > 1 ? (
+              <CountPill count={messageCount} label={`${messageCount} messages in thread`} />
+            ) : null}
+            {unreadCount > 0 ? (
+              <CountPill count={unreadCount} label={`${unreadCount} unread messages in thread`} />
+            ) : null}
           </div>
           <time className={timeClass}>{formatDateTime(receivedAt, receivedAtFallback)}</time>
         </div>
