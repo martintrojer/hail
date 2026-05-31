@@ -3,7 +3,9 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
   type QueryClient,
+  type QueryKey,
   type UseMutationOptions,
   type UseQueryOptions,
 } from '@tanstack/react-query';
@@ -86,12 +88,65 @@ type QueryConfig<TData> = Omit<
   'queryKey' | 'queryFn'
 >;
 
-type MutationConfig<TVariables, TData> = Omit<
-  UseMutationOptions<TData, Error, TVariables>,
+type MutationConfig<TVariables, TData, TContext = unknown> = Omit<
+  UseMutationOptions<TData, Error, TVariables, TContext>,
   'mutationFn'
 >;
 
 type ViewKey = Parameters<typeof queryKeys.view>[0];
+type ScreenerInfiniteData = InfiniteData<ScreenerView, string | undefined>;
+type ScreenerCacheSnapshot = Array<[
+  QueryKey,
+  ScreenerInfiniteData | undefined,
+]>;
+
+function removeSenderFromScreenerInfiniteCache(
+  queryClient: QueryClient,
+  address: string,
+): ScreenerCacheSnapshot {
+  const normalizedAddress = address.trim().toLowerCase();
+  const previous = queryClient.getQueriesData<ScreenerInfiniteData>({
+    queryKey: queryKeys.screenerInfinite(),
+  });
+
+  queryClient.setQueriesData<ScreenerInfiniteData>(
+    { queryKey: queryKeys.screenerInfinite() },
+    (data) => {
+      if (!data) {
+        return data;
+      }
+
+      return {
+        ...data,
+        pages: data.pages.map((page) => ({
+          ...page,
+          senders: page.senders.filter(
+            (sender) => sender.sender.trim().toLowerCase() !== normalizedAddress,
+          ),
+        })),
+      };
+    },
+  );
+
+  return previous;
+}
+
+function restoreScreenerInfiniteCache(
+  queryClient: QueryClient,
+  previous: ScreenerCacheSnapshot | undefined,
+) {
+  previous?.forEach(([queryKey, data]) => {
+    queryClient.setQueryData(queryKey, data);
+  });
+}
+
+function invalidateScreenerInfinite(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.screenerInfinite(),
+    refetchType: 'all',
+  });
+}
+
 
 function createViewHook<TData>(
   key: ViewKey,
@@ -972,17 +1027,60 @@ export function useLogoutMutation(
 
 export function useScreenerDecisionMutation(
   client = defaultApiClient,
-  options?: MutationConfig<ScreenerDecisionRequest, ScreenerDecisionResponse>,
+  options?: MutationConfig<
+    ScreenerDecisionRequest,
+    ScreenerDecisionResponse,
+    ScreenerCacheSnapshot
+  >,
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return useMutation<
+    ScreenerDecisionResponse,
+    Error,
+    ScreenerDecisionRequest,
+    ScreenerCacheSnapshot
+  >({
     mutationFn: (body) => client.decideScreener(body),
     ...options,
+    onMutate: async (variables) => {
+      void queryClient.cancelQueries({ queryKey: queryKeys.screenerInfinite() });
+      const previousScreenerInfinite = removeSenderFromScreenerInfiniteCache(
+        queryClient,
+        variables.sender,
+      );
+      return previousScreenerInfinite;
+    },
+    onError: (error, variables, previousScreenerInfinite, mutationContext) => {
+      restoreScreenerInfiniteCache(
+        queryClient,
+        previousScreenerInfinite,
+      );
+      options?.onError?.(
+        error,
+        variables,
+        previousScreenerInfinite,
+        mutationContext,
+      );
+    },
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
-      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+      options?.onSuccess?.(
+        data,
+        variables,
+        onMutateResult,
+        mutationContext,
+      );
+    },
+    onSettled: (data, error, variables, onMutateResult, mutationContext) => {
+      invalidateScreenerInfinite(queryClient);
+      options?.onSettled?.(
+        data,
+        error,
+        variables,
+        onMutateResult,
+        mutationContext,
+      );
     },
   });
 }
@@ -994,18 +1092,61 @@ export interface UndoDenyMutationVariables {
 
 export function useUndoDenyMutation(
   client = defaultApiClient,
-  options?: MutationConfig<UndoDenyMutationVariables, UndoDenyResponse>,
+  options?: MutationConfig<
+    UndoDenyMutationVariables,
+    UndoDenyResponse,
+    ScreenerCacheSnapshot
+  >,
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation({
+  return useMutation<
+    UndoDenyResponse,
+    Error,
+    UndoDenyMutationVariables,
+    ScreenerCacheSnapshot
+  >({
     mutationFn: ({ address, classify_as }) =>
       client.undoDeny(address, { classify_as: classify_as ?? null }),
     ...options,
+    onMutate: async (variables) => {
+      void queryClient.cancelQueries({ queryKey: queryKeys.screenerInfinite() });
+      const previousScreenerInfinite = removeSenderFromScreenerInfiniteCache(
+        queryClient,
+        variables.address,
+      );
+      return previousScreenerInfinite;
+    },
+    onError: (error, variables, previousScreenerInfinite, mutationContext) => {
+      restoreScreenerInfiniteCache(
+        queryClient,
+        previousScreenerInfinite,
+      );
+      options?.onError?.(
+        error,
+        variables,
+        previousScreenerInfinite,
+        mutationContext,
+      );
+    },
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.screener() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.views() });
-      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+      options?.onSuccess?.(
+        data,
+        variables,
+        onMutateResult,
+        mutationContext,
+      );
+    },
+    onSettled: (data, error, variables, onMutateResult, mutationContext) => {
+      invalidateScreenerInfinite(queryClient);
+      options?.onSettled?.(
+        data,
+        error,
+        variables,
+        onMutateResult,
+        mutationContext,
+      );
     },
   });
 }
