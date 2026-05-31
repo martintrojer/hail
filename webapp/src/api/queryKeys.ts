@@ -15,6 +15,7 @@ export const queryKeys = {
   view: (view: 'imbox' | 'feed' | 'papertrail' | 'drafts' | 'trash' | 'spam' | 'archive' | 'set-aside' | 'reply-later' | 'bubble-up') =>
     [...queryKeys.views(), view] as const,
   imboxSectioned: () => [...queryKeys.view('imbox'), 'sectioned'] as const,
+  viewSectioned: (view: 'papertrail') => [...queryKeys.view(view), 'sectioned'] as const,
   labelThreadsRoot: (labelId: number) =>
     [...queryKeys.all, 'labels', labelId, 'threads'] as const,
   labelThreads: (labelId: number, cursor?: string) =>

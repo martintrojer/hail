@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   ImboxSectionedResponse,
+  SectionedMailViewResponse,
   LabelItemResponse,
   LabelListResponse,
   MailClassification,
@@ -39,6 +40,7 @@ const viewTitles: Record<MailViewKind, string> = {
 
 class MailViewPageTestClient extends TestHailApiClient {
   readonly calls: MailViewKind[] = [];
+  readonly sectionedCalls: MailViewKind[] = [];
   readonly classifyCalls: Array<{ threadId: string; to: MailClassification }> = [];
   readonly archiveCalls: string[] = [];
   readonly trashCalls: string[] = [];
@@ -72,7 +74,9 @@ class MailViewPageTestClient extends TestHailApiClient {
       previously_seen: [],
       new_count: response.items.length,
       previously_seen_total: 0,
+      next_cursor: null,
     };
+
   }
 
   override async getFeed(): Promise<MailViewResponse> {
@@ -86,6 +90,20 @@ class MailViewPageTestClient extends TestHailApiClient {
       this.responses.papertrail ??
       Promise.resolve(mailViewResponse('papertrail'))
     );
+  }
+
+  override async getPapertrailSectioned(): Promise<SectionedMailViewResponse> {
+    this.sectionedCalls.push('papertrail');
+    const response = await (
+      this.responses.papertrail ??
+      Promise.resolve(mailViewResponse('papertrail'))
+    );
+
+    return {
+      new: response.items.filter((item) => item.unread),
+      seen: response.items.filter((item) => !item.unread),
+      next_cursor: null,
+    };
   }
 
   override async classifyThread(
@@ -500,7 +518,7 @@ describe('MailViewPage', () => {
       expect(
         await screen.findByLabelText(`Loading ${title} mail`),
       ).toBeInTheDocument();
-      expect(client.calls).toEqual([view]);
+      expect(view === 'papertrail' ? client.sectionedCalls : client.calls).toEqual([view]);
     },
   );
 
@@ -659,7 +677,8 @@ describe('MailViewPage', () => {
     const link = await screen.findByRole('link', {
       name: 'Open Your receipt from Shop Example',
     });
-    expect(client.calls).toEqual(['papertrail']);
+    expect(client.sectionedCalls).toEqual(['papertrail']);
+    expect(client.calls).toEqual([]);
     expect(link).toHaveAttribute('href', '/thread/receipt%20id%2F2026');
     expect(within(link).getByText('Paper Trail')).toBeInTheDocument();
     expect(within(link).getByLabelText('Read thread')).toBeInTheDocument();
@@ -668,6 +687,43 @@ describe('MailViewPage', () => {
     expect(
       within(link).queryByText('Order #123 was paid.'),
     ).not.toBeInTheDocument();
+  });
+
+  it('renders Paper Trail unread above the previously read section', async () => {
+    renderMailView(
+      'papertrail',
+      new MailViewPageTestClient({
+        papertrail: Promise.resolve(
+          mailViewResponse('papertrail', [
+            mailItem('papertrail', {
+              thread_id: 'unread-receipt',
+              email_id: 'email-unread-receipt',
+              from: 'Unread Shop',
+              subject: 'Unread receipt',
+              unread: true,
+            }),
+            mailItem('papertrail', {
+              thread_id: 'read-receipt',
+              email_id: 'email-read-receipt',
+              from: 'Read Shop',
+              subject: 'Read receipt',
+              unread: false,
+            }),
+          ]),
+        ),
+      }),
+    );
+
+    const unreadLink = await screen.findByRole('link', {
+      name: 'Open Unread receipt from Unread Shop',
+    });
+    const readHeading = screen.getByRole('heading', { name: 'Previously read' });
+    const readLink = screen.getByRole('link', {
+      name: 'Open Read receipt from Read Shop',
+    });
+
+    expect(unreadLink.compareDocumentPosition(readHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(readHeading.compareDocumentPosition(readLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('selects rows from the avatar control and runs batch actions', async () => {

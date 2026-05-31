@@ -62,6 +62,7 @@ class KeyboardShortcutTestClient extends TestHailApiClient {
       ],
       new_count: 2,
       previously_seen_total: 1,
+      next_cursor: null,
     };
   }
 

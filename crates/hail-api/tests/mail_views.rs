@@ -854,6 +854,118 @@ async fn sectioned_imbox_partitions_bubbled_new_and_seen_items() {
     );
     assert_eq!(json["new_count"], 2);
     assert_eq!(json["previously_seen_total"], 2);
+    assert_eq!(json["next_cursor"], Value::Null);
+}
+
+#[tokio::test]
+async fn papertrail_sectioned_splits_unread_and_seen_items() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "paper-section@example.org").await;
+    let provider = Arc::new(FakeProvider::new(vec![
+        item_with_view(1, MailView::Papertrail),
+        item_with_view(2, MailView::Papertrail),
+        item_with_view(3, MailView::Papertrail),
+        item_with_view(4, MailView::Papertrail),
+    ]));
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&sid),
+        "/api/views/papertrail/sectioned?limit=4",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(provider.calls(), vec![(MailView::Papertrail, 105)]);
+    let json = json_body(resp).await;
+    assert!(json.get("bubble_up").is_none());
+    assert_eq!(thread_ids(&json["new"]), vec!["thread-2", "thread-4"]);
+    assert_eq!(thread_ids(&json["seen"]), vec!["thread-1", "thread-3"]);
+    assert_eq!(json["next_cursor"], Value::Null);
+}
+
+#[tokio::test]
+async fn papertrail_sectioned_paginates_seen_tail() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "paper-section-cursor@example.org").await;
+    let provider = Arc::new(FakeProvider::new(
+        (1..=105)
+            .map(|n| {
+                let mut item = item_with_view(n, MailView::Papertrail);
+                item.unread = n <= 2;
+                item
+            })
+            .collect(),
+    ));
+
+    let resp = get_view(
+        state.clone(),
+        provider.clone(),
+        Some(&sid),
+        "/api/views/papertrail/sectioned?limit=100",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(thread_ids(&json["new"]), vec!["thread-1", "thread-2"]);
+    assert_eq!(json["seen"].as_array().unwrap().len(), 100);
+    assert_eq!(json["next_cursor"], "100");
+
+    let resp = get_view(
+        state,
+        provider.clone(),
+        Some(&sid),
+        "/api/views/papertrail/sectioned?limit=100&cursor=100",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(thread_ids(&json["new"]), vec!["thread-1", "thread-2"]);
+    assert_eq!(thread_ids(&json["seen"]), vec!["thread-103", "thread-104", "thread-105"]);
+    assert_eq!(json["next_cursor"], Value::Null);
+    assert_eq!(
+        provider.calls(),
+        vec![(MailView::Papertrail, 201), (MailView::Papertrail, 301)]
+    );
+}
+
+#[tokio::test]
+async fn papertrail_sectioned_does_not_emit_imbox_bubble_up() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "paper-no-bubble@example.org").await;
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO bubble_ups (user_id, thread_id, surface_at, fired_at, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(user_id)
+    .bind("thread-1")
+    .bind(now)
+    .bind(now)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+    let provider = Arc::new(FakeProvider::new(vec![item_with_view(
+        1,
+        MailView::Papertrail,
+    )]));
+
+    let resp = get_view(
+        state,
+        provider,
+        Some(&sid),
+        "/api/views/papertrail/sectioned",
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert!(json.get("bubble_up").is_none());
+    assert_eq!(thread_ids(&json["seen"]), vec!["thread-1"]);
 }
 
 #[tokio::test]

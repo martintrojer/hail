@@ -11,7 +11,7 @@ import {
   useClassifyThreadMutation,
   useFeedView,
   useImboxSectioned,
-  usePapertrailView,
+  usePapertrailSectioned,
   useScreenerView,
   useSetAsideThreadMutation,
   useTrashThreadMutation,
@@ -76,7 +76,7 @@ function useMailView(view: MailViewKind, client?: HailApiClient) {
     case 'feed':
       return useFeedView(client);
     case 'papertrail':
-      return usePapertrailView(client);
+      return usePapertrailSectioned(client);
   }
 }
 
@@ -397,12 +397,30 @@ function isSectionedImboxData(data: unknown): data is {
   );
 }
 
-function getFlatViewItems(data: ReturnType<typeof useMailView>['data']): MailViewItem[] {
-  if (!data || isSectionedImboxData(data)) {
-    return [];
-  }
+function isSectionedMailViewData(data: unknown): data is {
+  bubble_up?: MailViewItem[];
+  new: MailViewItem[];
+  seen: MailViewItem[];
+  next_cursor: string | null;
+} {
+  return Boolean(
+    data &&
+      typeof data === 'object' &&
+      'new' in data &&
+      'seen' in data,
+  );
+}
 
-  return data.items;
+function isFlatMailViewData(data: unknown): data is { items: MailViewItem[] } {
+  return Boolean(
+    data &&
+      typeof data === 'object' &&
+      'items' in data,
+  );
+}
+
+function getFlatViewItems(data: ReturnType<typeof useMailView>['data']): MailViewItem[] {
+  return isFlatMailViewData(data) ? data.items : [];
 }
 
 function MailRows({
@@ -433,6 +451,77 @@ function MailRows({
       keyExtractor={(item) => item.thread_id}
       emptyState={null}
     />
+  );
+}
+
+export function SectionedListView({
+  sections,
+  view,
+  client,
+  emptyState,
+  onLoadMoreSeen,
+}: {
+  sections: {
+    bubbleUp?: MailViewItem[];
+    new: MailViewItem[];
+    seen: MailViewItem[];
+  };
+  view: MailViewKind;
+  client?: HailApiClient;
+  emptyState: { title: string; body: string };
+  onLoadMoreSeen?: () => void;
+}) {
+  const hasAnyItems =
+    (sections.bubbleUp?.length ?? 0) + sections.new.length + sections.seen.length > 0;
+
+  if (!hasAnyItems) {
+    return <StateCard title={emptyState.title} body={emptyState.body} />;
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      {sections.bubbleUp && sections.bubbleUp.length > 0 ? (
+        <section aria-labelledby={`${view}-bubble-up-heading`}>
+          <div className="mb-2 flex items-center gap-2 px-1">
+            <ArrowUpCircle className="text-primary" aria-hidden="true" />
+            <h2
+              id={`${view}-bubble-up-heading`}
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+            >
+              Bubbled Up
+            </h2>
+          </div>
+          <MailRows items={sections.bubbleUp} view={view} client={client} />
+        </section>
+      ) : null}
+
+      {sections.new.length > 0 ? (
+        <section aria-label="New">
+          <MailRows items={sections.new} view={view} client={client} />
+        </section>
+      ) : null}
+
+      {sections.seen.length > 0 ? (
+        <section aria-labelledby={`${view}-previously-read-heading`}>
+          <div className="mb-2 px-1">
+            <h2
+              id={`${view}-previously-read-heading`}
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+            >
+              Previously read
+            </h2>
+          </div>
+          <MailRows items={sections.seen} view={view} client={client} />
+          {onLoadMoreSeen ? (
+            <div className="mt-3 flex justify-center">
+              <Button type="button" variant="ghost" size="sm" onClick={onLoadMoreSeen}>
+                Load more read mail
+              </Button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -860,6 +949,17 @@ export function MailViewPage({
         ) : view === 'feed' ? (
           <FeedReadingStream
             items={getFlatViewItems(query.data)}
+            client={apiClient}
+            emptyState={emptyState}
+          />
+        ) : isSectionedMailViewData(query.data) ? (
+          <SectionedListView
+            sections={{
+              bubbleUp: query.data.bubble_up,
+              new: query.data.new,
+              seen: query.data.seen,
+            }}
+            view={view}
             client={apiClient}
             emptyState={emptyState}
           />
