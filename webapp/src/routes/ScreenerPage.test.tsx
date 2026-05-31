@@ -1,5 +1,5 @@
 import { RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -22,7 +22,7 @@ import { ScreenerPage } from './ScreenerPage';
 class ScreenerPageTestClient extends TestHailApiClient {
   readonly decideScreenerCalls: ScreenerDecisionRequest[] = [];
   readonly getScreenerViewCalls: Array<{ cursor?: string; limit?: number }> = [];
-  private viewPromise: Promise<ScreenerView> | null;
+  viewPromise?: Promise<ScreenerView>;
   private viewPages: ScreenerView[];
   private decisionHandler: (
     body: ScreenerDecisionRequest,
@@ -49,7 +49,7 @@ class ScreenerPageTestClient extends TestHailApiClient {
         is_admin: false,
       },
     });
-    this.viewPromise = viewPromise ?? null;
+    this.viewPromise = viewPromise;
     this.viewPages = viewPages ?? [view];
     this.decisionHandler =
       decisionHandler ??
@@ -134,7 +134,7 @@ function renderScreener(client = new ScreenerPageTestClient()) {
 
   renderWithQueryClient(<RouterProvider router={router} />, queryClient);
 
-  return client;
+  return { client, queryClient };
 }
 
 function sampleScreenerView(
@@ -257,7 +257,7 @@ describe('ScreenerPage', () => {
   it('loads additional pages when the sentinel intersects and stops at the final page', async () => {
     const intersection = installMockIntersectionObserver();
     try {
-      const client = renderScreener(
+      const { client } = renderScreener(
         new ScreenerPageTestClient({
           viewPages: [
             {
@@ -395,7 +395,7 @@ describe('ScreenerPage', () => {
   });
 
   it('opens routing choices before approving a sender with history backfill', async () => {
-    const client = renderScreener();
+    const { client } = renderScreener();
 
     openDropdown(await screen.findByRole('button', { name: 'Approve' }));
     expect(screen.getByRole('menu')).toBeInTheDocument();
@@ -418,7 +418,7 @@ describe('ScreenerPage', () => {
   });
 
   it('denies a sender without classification and applies the decision to history', async () => {
-    const client = renderScreener();
+    const { client } = renderScreener();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
 
@@ -432,7 +432,7 @@ describe('ScreenerPage', () => {
 
   it('shows initial pending, error, and empty states', async () => {
     const neverResolves = new Promise<ScreenerView>(() => undefined);
-    const pendingClient = renderScreener(
+    const { client: pendingClient } = renderScreener(
       new ScreenerPageTestClient({ viewPromise: neverResolves }),
     );
 
@@ -465,25 +465,29 @@ describe('ScreenerPage', () => {
     expect(await screen.findByText('No unknown senders')).toBeInTheDocument();
   });
 
-  it('disables card controls while a decision is pending', async () => {
+  it('removes a sender card while a decision is pending', async () => {
     const decisionPromise = new Promise<ScreenerDecisionResponse>(
       () => undefined,
     );
-    const client = renderScreener(
+    const { client } = renderScreener(
       new ScreenerPageTestClient({
         decisionHandler: () => decisionPromise,
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
+    expect(await screen.findByText('Newsletter dispatch')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
 
     await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
-    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
+    await waitFor(() =>
+      expect(screen.queryByText('Newsletter dispatch')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText('No unknown senders')).toBeInTheDocument();
   });
 
   it('shows a decision error after choosing a routing destination', async () => {
-    const client = renderScreener(
+    const { client } = renderScreener(
       new ScreenerPageTestClient({
         decisionHandler: () =>
           Promise.reject(new HailApiError(422, {}, response(422))),
@@ -506,8 +510,151 @@ describe('ScreenerPage', () => {
     });
   });
 
+  it('optimistically removes an approved sender before refetch resolves', async () => {
+    const neverRefetches = new Promise<ScreenerView>(() => undefined);
+    const { client } = renderScreener(
+      new ScreenerPageTestClient({
+        viewPages: [sampleScreenerView()],
+        decisionHandler: (body) => {
+          client.viewPromise = neverRefetches;
+          return Promise.resolve({
+            sender: body.sender,
+            decision: body.decision,
+            classify_as: 'feed',
+          });
+        },
+      }),
+    );
+
+    expect(await screen.findByText('Newsletter dispatch')).toBeInTheDocument();
+
+    openDropdown(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'The Feed' }));
+
+    await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.queryByText('Newsletter dispatch')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText('No unknown senders')).toBeInTheDocument();
+  });
+
+  it('optimistically removes a denied sender before refetch resolves', async () => {
+    const neverRefetches = new Promise<ScreenerView>(() => undefined);
+    const { client } = renderScreener(
+      new ScreenerPageTestClient({
+        viewPages: [sampleScreenerView()],
+        decisionHandler: (body) => {
+          client.viewPromise = neverRefetches;
+          return Promise.resolve({
+            sender: body.sender,
+            decision: body.decision,
+            classify_as: null,
+          });
+        },
+      }),
+    );
+
+    expect(await screen.findByText('Newsletter dispatch')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+
+    await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.queryByText('Newsletter dispatch')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText('No unknown senders')).toBeInTheDocument();
+  });
+
+  it('rolls back the removed sender when a decision fails', async () => {
+    const { client } = renderScreener(
+      new ScreenerPageTestClient({
+        decisionHandler: () =>
+          Promise.reject(new HailApiError(422, {}, response(422))),
+      }),
+    );
+
+    expect(await screen.findByText('Newsletter dispatch')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+
+    await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        screen.getByText('Newsletter dispatch'),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      await screen.findByText(
+        'The server rejected this decision. Refresh and try again.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('removes a decided sender from the second cached screener page', async () => {
+    const intersection = installMockIntersectionObserver();
+    const pageOneSenders = Array.from({ length: 50 }, (_, index) =>
+      sampleSender(
+        `page-one-${index}@example.com`,
+        `Page one sender ${index + 1}`,
+      ),
+    );
+    const pageTwoSenders = Array.from({ length: 15 }, (_, index) =>
+      sampleSender(
+        `page-two-${index}@example.com`,
+        `Page two sender ${index + 1}`,
+      ),
+    );
+    const neverRefetches = new Promise<ScreenerView>(() => undefined);
+    try {
+      const { client } = renderScreener(
+        new ScreenerPageTestClient({
+          viewPages: [
+            { senders: pageOneSenders, next_cursor: 'cursor-2' },
+            { senders: pageTwoSenders, next_cursor: null },
+          ],
+          decisionHandler: (body) => {
+            client.viewPromise = neverRefetches;
+            return Promise.resolve({
+              sender: body.sender,
+              decision: body.decision,
+              classify_as: 'imbox',
+            });
+          },
+        }),
+      );
+
+      expect(await screen.findByText('Page one sender 1')).toBeInTheDocument();
+      intersection.triggerLast();
+      expect(await screen.findByText('Page two sender 11')).toBeInTheDocument();
+
+      const targetCard = screen
+        .getByText('Page two sender 11')
+        .closest('[data-slot="card"]');
+      expect(targetCard).not.toBeNull();
+      openDropdown(
+        within(targetCard as HTMLElement).getByRole('button', {
+          name: 'Approve',
+        }),
+      );
+      fireEvent.click(screen.getByRole('menuitemradio', { name: 'The Imbox' }));
+
+      await waitFor(() => expect(client.decideScreenerCalls).toHaveLength(1));
+      expect(client.decideScreenerCalls[0]).toMatchObject({
+        sender: 'page-two-10@example.com',
+        decision: 'approve',
+      });
+      await waitFor(() =>
+        expect(screen.queryByText('Page two sender 11')).not.toBeInTheDocument(),
+      );
+      expect(screen.getByText('Page two sender 10')).toBeInTheDocument();
+      expect(screen.getByText('Page two sender 12')).toBeInTheDocument();
+    } finally {
+      intersection.restore();
+    }
+  });
+
   it('shows an undo toast for denied senders when the API returns an undo token', async () => {
-    const client = renderScreener(
+    const { client } = renderScreener(
       new ScreenerPageTestClient({
         decisionHandler: (body) =>
           Promise.resolve({
