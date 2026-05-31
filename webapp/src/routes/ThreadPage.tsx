@@ -19,6 +19,7 @@ import {
   useTrashThreadMutation,
 } from '../api/query';
 import { AddNoteForm } from '../components/AddNoteForm';
+import { AttachmentList } from '../components/AttachmentList';
 import { BubbleUpSubmenu } from '../components/BubbleUpSubmenu';
 import { EmailFrame } from '../components/EmailFrame';
 import { ErrorState } from '../components/ErrorState';
@@ -414,6 +415,8 @@ function MessageCard({
               {message.preview || 'This message has no renderable body.'}
             </p>
           )}
+
+          <AttachmentList items={message.attachments} />
 
           {addingNote ? (
             <Card

@@ -91,6 +91,7 @@ fn sample_message(email_id: &str, html: &str) -> AssembledMessage {
         text: String::new(),
         preview: "preview text".to_string(),
         inline_images: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 
@@ -539,4 +540,50 @@ async fn percent_encoded_cid_sources_are_rewritten() {
     assert!(html.contains(
         r#"src="/api/attachments/blob-image/download?disposition=inline&type=image%2Fjpeg""#
     ));
+}
+
+#[tokio::test]
+async fn response_includes_per_message_attachment_metadata() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "attachments-owner@example.org").await;
+    let mut message = sample_message("email-a", "<p>Report attached</p>");
+    message.attachments = vec![
+        hail_api::routes::threads_view::Attachment {
+            filename: "report.pdf".to_string(),
+            size: 1_500_000,
+            mime_type: "application/pdf".to_string(),
+            blob_id: "blob/report 1".to_string(),
+            download_url: "/api/attachments/blob%2Freport+1/download".to_string(),
+            inline: false,
+        },
+        hail_api::routes::threads_view::Attachment {
+            filename: "logo.png".to_string(),
+            size: 512,
+            mime_type: "image/png".to_string(),
+            blob_id: "blob-logo".to_string(),
+            download_url: "/api/attachments/blob-logo/download".to_string(),
+            inline: true,
+        },
+    ];
+    let thread = sample_thread(vec![message]);
+
+    let (status, json) =
+        get_json(state, &sid, Arc::new(FakeAssembler::new(Ok(Some(thread))))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let attachments = json["messages"][0]["attachments"]
+        .as_array()
+        .expect("attachments array");
+    assert_eq!(attachments.len(), 2);
+    assert_eq!(attachments[0]["filename"], "report.pdf");
+    assert_eq!(attachments[0]["size"], 1_500_000);
+    assert_eq!(attachments[0]["mime_type"], "application/pdf");
+    assert_eq!(attachments[0]["blob_id"], "blob/report 1");
+    assert_eq!(
+        attachments[0]["download_url"],
+        "/api/attachments/blob%2Freport+1/download"
+    );
+    assert_eq!(attachments[0]["inline"], false);
+    assert_eq!(attachments[1]["filename"], "logo.png");
+    assert_eq!(attachments[1]["inline"], true);
 }

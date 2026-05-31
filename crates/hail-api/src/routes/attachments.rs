@@ -331,7 +331,7 @@ fn is_safe_inline_image_type(content_type: &str) -> bool {
     )
 }
 
-fn attachment_name(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> String {
+pub(crate) fn attachment_name(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> String {
     part.name()
         .filter(|name| !name.trim().is_empty())
         .map(str::to_string)

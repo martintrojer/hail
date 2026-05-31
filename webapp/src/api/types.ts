@@ -1671,7 +1671,17 @@ export interface components {
         };
         /** @enum {string} */
         StalwartStatus: "connected" | "unreachable";
+        Attachment: {
+            blob_id: string;
+            download_url: string;
+            filename: string;
+            inline: boolean;
+            mime_type: string;
+            /** Format: int64 */
+            size: number;
+        };
         ThreadMessageResponse: {
+            attachments: components["schemas"]["Attachment"][];
             blocked_trackers: components["schemas"]["BlockedTrackerResponse"][];
             email_id: string;
             from: components["schemas"]["Participant"][];

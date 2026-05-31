@@ -133,6 +133,7 @@ impl ThreadAssembler for JmapThreadAssembler {
                     text: text_body_from_email(&email),
                     preview: email.preview().unwrap_or_default().to_string(),
                     inline_images: inline_images_from_email(&email),
+                    attachments: attachments_from_email(&email),
                 });
             }
 
@@ -170,6 +171,18 @@ pub struct AssembledMessage {
     pub text: String,
     pub preview: String,
     pub inline_images: Vec<InlineImage>,
+    pub attachments: Vec<Attachment>,
+}
+
+/// User-downloadable JMAP attachment metadata for a message in the thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct Attachment {
+    pub filename: String,
+    pub size: u64,
+    pub mime_type: String,
+    pub blob_id: String,
+    pub download_url: String,
+    pub inline: bool,
 }
 
 /// Inline image reference resolved from a MIME Content-ID to a JMAP blob.
@@ -225,6 +238,7 @@ struct ThreadMessageResponse {
     reply_quote_html: String,
     preview: String,
     blocked_trackers: Vec<BlockedTrackerResponse>,
+    attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -345,6 +359,7 @@ fn render_message(message: AssembledMessage) -> ThreadMessageResponse {
                 reason: tracker.reason,
             })
             .collect(),
+        attachments: message.attachments,
     }
 }
 
@@ -417,6 +432,40 @@ fn inline_images_from_email(email: &hail_jmap::jmap_client::email::Email) -> Vec
     images.sort_by(|a, b| a.cid.cmp(&b.cid).then(a.blob_id.cmp(&b.blob_id)));
     images.dedup_by(|a, b| a.cid == b.cid);
     images
+}
+
+fn attachments_from_email(email: &hail_jmap::jmap_client::email::Email) -> Vec<Attachment> {
+    email
+        .attachments()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(attachment_from_part)
+        .collect()
+}
+
+fn attachment_from_part(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> Option<Attachment> {
+    let blob_id = part.blob_id().filter(|value| !value.trim().is_empty())?;
+    let mime_type = part
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    Some(Attachment {
+        filename: crate::routes::attachments::attachment_name(part),
+        size: part.size() as u64,
+        mime_type,
+        blob_id: blob_id.to_string(),
+        download_url: format!("/api/attachments/{}/download", urlencoding(blob_id)),
+        inline: is_inline_attachment(part),
+    })
+}
+
+fn is_inline_attachment(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> bool {
+    part.content_id()
+        .and_then(normalize_cid)
+        .is_some_and(|cid| !cid.is_empty())
+        || part
+            .content_disposition()
+            .is_some_and(|value| value.eq_ignore_ascii_case("inline"))
 }
 
 fn collect_inline_images(
@@ -634,4 +683,80 @@ fn body_from_parts(
         body.push_str(value.value());
     }
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachments_from_email_uses_jmap_attachments_and_skips_body_parts() {
+        let email: hail_jmap::jmap_client::email::Email =
+            serde_json::from_value(serde_json::json!({
+                "id": "email-1",
+                "threadId": "thread-1",
+                "textBody": [
+                    {
+                        "partId": "text-body",
+                        "blobId": "blob-text-body",
+                        "type": "text/plain",
+                        "size": 42
+                    }
+                ],
+                "htmlBody": [
+                    {
+                        "partId": "html-body",
+                        "blobId": "blob-html-body",
+                        "type": "text/html",
+                        "size": 84
+                    }
+                ],
+                "attachments": [
+                    {
+                        "partId": "2",
+                        "blobId": "blob/report 1",
+                        "name": "report.pdf",
+                        "type": "application/pdf",
+                        "size": 1500000
+                    },
+                    {
+                        "partId": "3",
+                        "blobId": "blob-logo",
+                        "name": "logo.png",
+                        "type": "image/png",
+                        "size": 512,
+                        "cid": "logo@example.org",
+                        "disposition": "inline"
+                    },
+                    {
+                        "partId": "4",
+                        "name": "missing-blob.bin",
+                        "type": "application/octet-stream",
+                        "size": 10
+                    }
+                ]
+            }))
+            .expect("email fixture should parse");
+
+        let attachments = attachments_from_email(&email);
+
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments[0].filename, "report.pdf");
+        assert_eq!(attachments[0].size, 1_500_000);
+        assert_eq!(attachments[0].mime_type, "application/pdf");
+        assert_eq!(attachments[0].blob_id, "blob/report 1");
+        assert_eq!(
+            attachments[0].download_url,
+            "/api/attachments/blob%2Freport+1/download"
+        );
+        assert!(!attachments[0].inline);
+        assert_eq!(attachments[1].filename, "logo.png");
+        assert_eq!(attachments[1].blob_id, "blob-logo");
+        assert!(attachments[1].inline);
+        assert!(
+            attachments
+                .iter()
+                .all(|attachment| !attachment.blob_id.contains("body"))
+        );
+    }
 }

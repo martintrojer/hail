@@ -61,6 +61,7 @@ class ComposerPageTestClient extends TestHailApiClient {
         preview: 'Can you review this?\nThanks!',
         received_at: '2026-05-25T12:30:00Z',
         blocked_trackers: [],
+        attachments: [],
       },
     ],
   };
