@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -6,6 +7,7 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from 'react';
+import { useLocation, useNavigate } from '@tanstack/react-router';
 import {
   type ComposeRequest,
   type ComposeResponse,
@@ -144,6 +146,27 @@ function composeResultMessage(response: ComposeResponse) {
   return response.status === 'pending'
     ? `Scheduled for later. Draft ${response.draft_email_id} is queued.`
     : 'Sent.';
+}
+
+function composeReturnTarget({
+  stateFrom,
+  replyToThreadId,
+  forwardThreadId,
+}: {
+  stateFrom: unknown;
+  replyToThreadId?: string;
+  forwardThreadId?: string;
+}) {
+  if (
+    typeof stateFrom === 'string' &&
+    stateFrom.startsWith('/') &&
+    !stateFrom.startsWith('//')
+  ) {
+    return stateFrom;
+  }
+
+  const threadId = replyToThreadId ?? forwardThreadId;
+  return threadId ? `/thread/${threadId}` : '/imbox';
 }
 
 function uniqueEmails(emails: string[]) {
@@ -308,6 +331,8 @@ export function ComposerPage({
   const contextClient = useApiClient();
   const apiClient = client ?? contextClient;
   const closeComposer = useGoBack();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const [form, setForm] = useState<ComposerForm>({
     to: initialTo.join(', '),
@@ -328,6 +353,7 @@ export function ComposerPage({
   const snapshotRef = useRef('');
   const replyPrefillKeyRef = useRef<string | null>(null);
   const forwardPrefillKeyRef = useRef<string | null>(null);
+  const navigateAfterSendTimerRef = useRef<number | null>(null);
 
   const minSendAt = useMemo(() => minSendAtDateTimeLocal(), []);
   const createDraft = useCreateDraftMutation(apiClient);
@@ -342,11 +368,28 @@ export function ComposerPage({
   });
   const updateDraft = useUpdateDraftMutation(apiClient);
   const hasUnsupportedAttachments = attachments.length > 0;
+  const sendSuccessTarget = composeReturnTarget({
+    stateFrom: (location.state as { from?: unknown }).from,
+    replyToThreadId,
+    forwardThreadId,
+  });
+  const clearPendingSendNavigation = useCallback(() => {
+    if (navigateAfterSendTimerRef.current === null) return;
+    window.clearTimeout(navigateAfterSendTimerRef.current);
+    navigateAfterSendTimerRef.current = null;
+  }, []);
   const sendCompose = useSendComposeMutation(apiClient, {
     onSuccess: (response) => {
+      clearPendingSendNavigation();
       setDirty(false);
+      snapshotRef.current = draftSnapshot(draftPayload);
+      setLastSavedAt(null);
       setSendError(null);
       setSuccessMessage(composeResultMessage(response));
+      navigateAfterSendTimerRef.current = window.setTimeout(() => {
+        navigateAfterSendTimerRef.current = null;
+        void navigate({ href: sendSuccessTarget, ignoreBlocker: true });
+      }, 600);
     },
     onError: (error) =>
       setSendError(composeErrorMessage(error, 'Message could not be sent.')),
@@ -592,6 +635,8 @@ export function ComposerPage({
     const timer = window.setInterval(saveDraft, autosaveIntervalMs);
     return () => window.clearInterval(timer);
   });
+
+  useEffect(() => clearPendingSendNavigation, [clearPendingSendNavigation]);
 
   function buildComposeRequest(sendAt?: string): ComposeRequest {
     return {

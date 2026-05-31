@@ -237,6 +237,7 @@ interface RenderComposerOptions {
   replyAll?: boolean;
   draftId?: string;
   inReplyToEmailId?: string;
+  locationState?: Record<string, unknown>;
 }
 
 function renderComposer({
@@ -247,6 +248,7 @@ function renderComposer({
   replyAll,
   draftId,
   inReplyToEmailId,
+  locationState = {},
 }: RenderComposerOptions = {}) {
   const queryClient = createTestQueryClient();
 
@@ -268,7 +270,7 @@ function renderComposer({
     </AuthProvider>
   );
   installTestRouteComponent();
-  window.history.pushState({}, '', '/compose');
+  window.history.pushState(locationState, '', '/compose');
 
   renderWithQueryClient(<RouterProvider router={router} />, queryClient);
 
@@ -739,6 +741,69 @@ describe('ComposerPage', () => {
       attachments: [],
     });
     expect(await screen.findByText('Sent.')).toBeInTheDocument();
+  });
+
+  it('Sending from fresh compose route navigates to /imbox after success', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = renderComposer();
+    await fillSendableFields();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+
+    await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
+    expect(await screen.findByText('Sent.')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/compose');
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    await waitFor(() => expect(window.location.pathname).toBe('/imbox'));
+  });
+
+  it('Replying from a thread navigates back to that thread', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = renderComposer({
+      replyToThreadId: 'thread-123',
+      locationState: { from: '/thread/thread-123' },
+    });
+    await screen.findByText('Reply to thread');
+    await fillReplyBody();
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Send now' }),
+      ).not.toBeDisabled(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+
+    await waitFor(() => expect(client.sendReplyCalls).toHaveLength(1));
+    expect(await screen.findByText('Sent.')).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    await waitFor(() =>
+      expect(`${window.location.pathname}${window.location.search}`).toBe(
+        '/thread/thread-123',
+      ),
+    );
+  });
+
+  it('Unsaved-changes prompt does not fire after successful send', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    const client = renderComposer();
+    await fillSendableFields();
+
+    expect(screen.getByText('Draft not saved yet')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send now' }));
+
+    await waitFor(() => expect(client.sendComposeCalls).toHaveLength(1));
+    await screen.findByText('Sent.');
+    expect(screen.queryByText('Draft not saved yet')).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(600);
+
+    await waitFor(() => expect(window.location.pathname).toBe('/imbox'));
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('rejects stale send-later datetimes before calling the API', async () => {
