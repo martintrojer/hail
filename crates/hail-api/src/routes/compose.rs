@@ -63,10 +63,12 @@ pub trait Composer: Send + Sync + 'static {
         &'a self,
         state: &'a AppState,
         token: SecretString,
+        user_id: i64,
         from: &'a str,
         email_id: &'a str,
         _message: &'a OutboundMessage,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        let _ = user_id;
         self.submit(state, token, from, email_id)
     }
 
@@ -334,49 +336,66 @@ where
         &'a self,
         state: &'a AppState,
         token: SecretString,
+        user_id: i64,
         from: &'a str,
         email_id: &'a str,
         message: &'a OutboundMessage,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
             let effective_from = message.from.as_deref().unwrap_or(from);
-            let Some(account) = provider_outbound_account(state, effective_from).await? else {
+            let Some(account) = outbound_mail_account(state, user_id, effective_from).await? else {
                 return self
                     .inner
-                    .submit_message(state, token, from, email_id, message)
+                    .submit_message(state, token, user_id, from, email_id, message)
                     .await;
             };
-            if !account.has_gmail_send_scope() {
-                mark_provider_needs_reauth(state, &account).await?;
-                return Err(ComposeError::Provider(
-                    "provider_scope_missing: reconnect Gmail to enable outbound sending"
-                        .to_string(),
-                ));
-            }
-            let rfc822 = GmailOutboundMessage {
-                from: effective_from.to_string(),
-                to: message.to.clone(),
-                cc: message.cc.clone(),
-                bcc: message.bcc.clone(),
-                subject: message.subject.clone(),
-                plain_text: message.body.plain_text.clone(),
-                html: message.body.html.clone(),
-            };
-            let smtp = self.smtp_factory.build(state, &account).await?;
-            match smtp.send_gmail(&rfc822).await {
-                Ok(()) => {
-                    mark_provider_sent(state, &account, email_id, &rfc822).await?;
-                    Ok(Some(format!("provider:gmail:{}", account.id)))
+            match account.backend_kind {
+                MailAccountBackendKind::Jmap => {
+                    self.inner
+                        .submit_message(state, token, user_id, from, email_id, message)
+                        .await
                 }
-                Err(error) => {
-                    mark_provider_send_error(
-                        state,
-                        &account,
-                        error.error_class(),
-                        &error.to_string(),
-                    )
-                    .await?;
-                    Err(ComposeError::Provider(error.to_string()))
+                MailAccountBackendKind::Gmail => {
+                    if account.refresh_token_missing {
+                        return Err(ComposeError::Provider(
+                            "provider_token_missing: reconnect Gmail to enable outbound sending"
+                                .to_string(),
+                        ));
+                    }
+                    let account = account.into_provider_outbound_account()?;
+                    if !account.has_gmail_send_scope() {
+                        mark_provider_needs_reauth(state, &account).await?;
+                        return Err(ComposeError::Provider(
+                            "provider_scope_missing: reconnect Gmail to enable outbound sending"
+                                .to_string(),
+                        ));
+                    }
+                    let rfc822 = GmailOutboundMessage {
+                        from: effective_from.to_string(),
+                        to: message.to.clone(),
+                        cc: message.cc.clone(),
+                        bcc: message.bcc.clone(),
+                        subject: message.subject.clone(),
+                        plain_text: message.body.plain_text.clone(),
+                        html: message.body.html.clone(),
+                    };
+                    let smtp = self.smtp_factory.build(state, &account).await?;
+                    match smtp.send_gmail(&rfc822).await {
+                        Ok(()) => {
+                            mark_provider_sent(state, &account, email_id, &rfc822).await?;
+                            Ok(Some(format!("provider:gmail:{}", account.id)))
+                        }
+                        Err(error) => {
+                            mark_provider_send_error(
+                                state,
+                                &account,
+                                error.error_class(),
+                                &error.to_string(),
+                            )
+                            .await?;
+                            Err(ComposeError::Provider(error.to_string()))
+                        }
+                    }
                 }
             }
         })
@@ -797,6 +816,7 @@ async fn create_and_maybe_send(
         .submit_message(
             state,
             user.jmap_token.clone(),
+            user.id,
             &user.email,
             &draft_email_id,
             &message,
@@ -967,6 +987,52 @@ fn provider_failed(user_id: i64, err: String) -> Response {
     internal()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MailAccountBackendKind {
+    Gmail,
+    Jmap,
+}
+
+impl MailAccountBackendKind {
+    fn parse(value: &str) -> Result<Self, ComposeError> {
+        match value {
+            "gmail" => Ok(Self::Gmail),
+            "jmap" => Ok(Self::Jmap),
+            other => Err(ComposeError::Provider(format!(
+                "unsupported mail account backend_kind {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OutboundMailAccount {
+    id: i64,
+    user_id: i64,
+    backend_kind: MailAccountBackendKind,
+    provider_account_id: String,
+    provider_email: String,
+    granted_scopes: Vec<String>,
+    refresh_token_missing: bool,
+}
+
+impl OutboundMailAccount {
+    fn into_provider_outbound_account(self) -> Result<ProviderOutboundAccount, ComposeError> {
+        if self.backend_kind != MailAccountBackendKind::Gmail {
+            return Err(ComposeError::Provider(
+                "mail account is not a Gmail outbound account".to_string(),
+            ));
+        }
+        Ok(ProviderOutboundAccount {
+            id: self.id,
+            user_id: self.user_id,
+            provider_account_id: self.provider_account_id,
+            provider_email: self.provider_email,
+            granted_scopes: self.granted_scopes,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderOutboundAccount {
     id: i64,
@@ -984,34 +1050,51 @@ impl ProviderOutboundAccount {
     }
 }
 
-async fn provider_outbound_account(
+async fn outbound_mail_account(
     state: &AppState,
+    user_id: i64,
     from: &str,
-) -> Result<Option<ProviderOutboundAccount>, ComposeError> {
-    let row = sqlx::query_as::<_, (i64, i64, String, String, String)>(
-        "SELECT id, user_id, provider_account_id, provider_email, granted_scopes_json \
+) -> Result<Option<OutboundMailAccount>, ComposeError> {
+    let row = sqlx::query_as::<_, (i64, i64, String, String, String, String, bool)>(
+        "SELECT id, user_id, backend_kind, provider_account_id, provider_email, granted_scopes_json, \
+                refresh_token_enc IS NULL \
          FROM mail_accounts \
-         WHERE backend_kind = 'gmail' AND lower(provider_email) = lower(?1) \
-           AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
-           AND refresh_token_enc IS NOT NULL \
-         ORDER BY CASE WHEN sync_status = 'active' THEN 0 ELSE 1 END, id \
+         WHERE user_id = ?1 AND lower(provider_email) = lower(?2) \
+           AND ( \
+             backend_kind = 'jmap' \
+             OR (backend_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused')) \
+           ) \
+         ORDER BY CASE backend_kind WHEN 'gmail' THEN 0 WHEN 'jmap' THEN 1 ELSE 2 END, \
+                  CASE WHEN sync_status = 'active' THEN 0 ELSE 1 END, id \
          LIMIT 1",
     )
+    .bind(user_id)
     .bind(from.trim())
     .fetch_optional(&state.db)
     .await
     .map_err(|err| ComposeError::Provider(err.to_string()))?;
-    let Some((id, user_id, provider_account_id, provider_email, granted_scopes_json)) = row else {
+    let Some((
+        id,
+        user_id,
+        backend_kind,
+        provider_account_id,
+        provider_email,
+        granted_scopes_json,
+        refresh_token_missing,
+    )) = row
+    else {
         return Ok(None);
     };
     let granted_scopes = serde_json::from_str::<Vec<String>>(&granted_scopes_json)
         .map_err(|err| ComposeError::Provider(err.to_string()))?;
-    Ok(Some(ProviderOutboundAccount {
+    Ok(Some(OutboundMailAccount {
         id,
         user_id,
+        backend_kind: MailAccountBackendKind::parse(&backend_kind)?,
         provider_account_id,
         provider_email,
         granted_scopes,
+        refresh_token_missing,
     }))
 }
 
@@ -1128,9 +1211,7 @@ impl DbGmailOutboundTokenSource {
         .bind(account.user_id)
         .fetch_optional(db)
         .await?
-        .ok_or_else(|| {
-            sqlx::Error::Protocol("mail account has no refresh token".to_string())
-        })?;
+        .ok_or_else(|| sqlx::Error::Protocol("mail account has no refresh token".to_string()))?;
         let context = hail_core::ProviderTokenContext::new(
             account.user_id,
             account.id,

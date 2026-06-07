@@ -207,6 +207,19 @@ impl Composer for ProviderComposerAdapter {
         self.0.submit(state, token, from, email_id)
     }
 
+    fn submit_message<'a>(
+        &'a self,
+        state: &'a AppState,
+        token: SecretString,
+        user_id: i64,
+        from: &'a str,
+        email_id: &'a str,
+        message: &'a OutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        self.0
+            .submit_message(state, token, user_id, from, email_id, message)
+    }
+
     fn thread_context<'a>(
         &'a self,
         state: &'a AppState,
@@ -610,9 +623,9 @@ async fn compose_routes_connected_provider_from_address_via_gmail_smtp() {
     let (user_id, sid) = seed_session(&state, &key, "alice@gmail.example").await;
     sqlx::query(
         "INSERT INTO mail_accounts \
-         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
+         (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
           granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+         VALUES (10, ?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
                  ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
     )
     .bind(user_id)
@@ -636,7 +649,7 @@ async fn compose_routes_connected_provider_from_address_via_gmail_smtp() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = json_body(resp).await;
     assert_eq!(json["status"], "sent");
-    assert_eq!(json["submission_id"], "provider:gmail:1");
+    assert_eq!(json["submission_id"], "provider:gmail:10");
     assert_eq!(smtp.calls().len(), 1);
     assert_eq!(
         composer.calls().len(),
@@ -651,6 +664,164 @@ async fn compose_routes_connected_provider_from_address_via_gmail_smtp() {
     .await
     .unwrap();
     assert_eq!(event_count, 1);
+}
+
+#[tokio::test]
+async fn compose_falls_back_to_jmap_when_from_address_has_no_mail_account_owner() {
+    let (state, key) = fixture_state().await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@stalwart.example").await;
+    let composer = Arc::new(FakeComposer::default());
+    let smtp = Arc::new(FakeGmailOutboundSmtpFactory::default());
+    let resp = provider_request(
+        state,
+        composer.clone(),
+        smtp.clone(),
+        &sid,
+        compose_body(None),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["status"], "sent");
+    assert_eq!(json["submission_id"], "submission-1");
+    assert!(smtp.calls().is_empty());
+    assert_eq!(
+        composer.calls(),
+        vec![
+            Call::Create {
+                from: "alice@stalwart.example".to_string(),
+                to: vec!["bob@example.org".to_string()],
+                cc: vec!["carol@example.org".to_string()],
+                bcc: Vec::new(),
+                subject: "Hello".to_string(),
+                plain_text: "Hi Bob".to_string(),
+                html: "<p>Hi <strong>Bob</strong></p>\n".to_string(),
+                reply: None,
+            },
+            Call::Submit {
+                from: "alice@stalwart.example".to_string(),
+                email_id: "draft-1".to_string(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn compose_routes_jmap_owned_from_address_to_jmap_even_with_connected_gmail() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@stalwart.example").await;
+    sqlx::query(
+        "INSERT INTO mail_accounts \
+         (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (11, ?1, 'jmap-account', 'jmap', 'gmail', 'alice@stalwart.example', 'alice@stalwart.example', 'alice@stalwart.example', \
+                 '[]', NULL, 'disabled', ?2, ?2), \
+                (12, ?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+                 ?3, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?2, ?2)",
+    )
+    .bind(user_id)
+    .bind(Utc::now())
+    .bind(r#"["https://www.googleapis.com/auth/gmail.send"]"#)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let composer = Arc::new(FakeComposer::default());
+    let smtp = Arc::new(FakeGmailOutboundSmtpFactory::default());
+    let resp = provider_request(
+        state,
+        composer.clone(),
+        smtp.clone(),
+        &sid,
+        compose_body(None),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["submission_id"], "submission-1");
+    assert!(smtp.calls().is_empty());
+    assert_eq!(
+        composer
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Submit { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn compose_prefers_matching_gmail_owner_over_user_login_address() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@stalwart.example").await;
+    sqlx::query(
+        "INSERT INTO mail_accounts \
+         (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (13, ?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+                 ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
+    )
+    .bind(user_id)
+    .bind(r#"["https://www.googleapis.com/auth/gmail.send"]"#)
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let composer = Arc::new(FakeComposer::default());
+    let smtp = Arc::new(FakeGmailOutboundSmtpFactory::default());
+    let body = r#"{
+        "from":"alice@gmail.example",
+        "to":["bob@example.org"],
+        "subject":"Hello",
+        "body_markdown":"Hi **Bob**"
+    }"#
+    .to_string();
+    let resp = provider_request(state, composer.clone(), smtp.clone(), &sid, body).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["submission_id"], "provider:gmail:13");
+    assert_eq!(smtp.calls().len(), 1);
+    assert_eq!(composer.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn compose_does_not_route_other_users_matching_gmail_account() {
+    let (state, key) = fixture_state().await;
+    let (other_user_id, _other_sid) = seed_session(&state, &key, "other@stalwart.example").await;
+    let (_user_id, sid) = seed_session(&state, &key, "alice@stalwart.example").await;
+    sqlx::query(
+        "INSERT INTO mail_accounts \
+         (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
+          granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (14, ?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+                 ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
+    )
+    .bind(other_user_id)
+    .bind(r#"["https://www.googleapis.com/auth/gmail.send"]"#)
+    .bind(Utc::now())
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    let composer = Arc::new(FakeComposer::default());
+    let smtp = Arc::new(FakeGmailOutboundSmtpFactory::default());
+    let body = r#"{
+        "from":"alice@gmail.example",
+        "to":["bob@example.org"],
+        "subject":"Hello",
+        "body_markdown":"Hi **Bob**"
+    }"#
+    .to_string();
+    let resp = provider_request(state, composer.clone(), smtp.clone(), &sid, body).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = json_body(resp).await;
+    assert_eq!(json["submission_id"], "submission-1");
+    assert!(smtp.calls().is_empty());
 }
 
 #[tokio::test]
