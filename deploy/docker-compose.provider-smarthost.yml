@@ -1,13 +1,13 @@
 # Optional Compose overlay for Stalwart provider-import smarthost secrets.
 #
-# Use only with a Stalwart config that references these environment variables,
-# for example deploy/stalwart-provider-gmail-smarthost.example.toml or
-# deploy/stalwart-provider-generic-smarthost.example.toml. The canonical
-# docker-compose.yml does not include this overlay, so normal non-provider
+# Use only with the self-host flavour and a Stalwart config that references
+# these environment variables, for example
+# deploy/stalwart-provider-gmail-smarthost.example.toml or
+# deploy/stalwart-provider-generic-smarthost.example.toml. Normal non-provider
 # deployments remain unchanged.
 #
 # Example:
-#   docker compose -f docker-compose.yml -f docker-compose.provider-smarthost.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.selfhost.yml -f docker-compose.provider-smarthost.yml up -d
 #
 # Do not commit deploy/.env with real credentials. Store provider SMTP secrets in
 # your operator secret manager or a local .env file that remains gitignored.

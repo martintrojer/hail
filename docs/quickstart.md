@@ -146,12 +146,13 @@ needed to authorize the first admin creation form.
 ## 5. Optional: enable hail.db backups
 
 Litestream backup for the SQLite sidecar is an optional Compose overlay and is
-not required for local development:
+not required for local development. Add it to the same base + flavour command;
+for this self-host quickstart:
 
 ```bash
 cp deploy/litestream.example.yml deploy/litestream.yml
-podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml up -d
-# or: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml up -d
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml -f deploy/docker-compose.litestream.yml up -d
+# or: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml -f deploy/docker-compose.litestream.yml up -d
 ```
 
 The example config writes to a local file replica. For production S3/R2 setup
@@ -159,21 +160,30 @@ and restore drills, see `docs/backup.md`.
 
 ## 6. Start the stack
 
+The production Compose stack is split into a shared base plus a flavour overlay.
+This direct/simple quickstart uses the self-host overlay:
+
 Podman:
 
 ```bash
-podman compose -f deploy/docker-compose.yml up -d
-podman compose -f deploy/docker-compose.yml ps
-podman compose -f deploy/docker-compose.yml logs -f stalwart hail-api hail-worker
+cd deploy
+podman compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d
+podman compose -f docker-compose.yml -f docker-compose.selfhost.yml ps
+podman compose -f docker-compose.yml -f docker-compose.selfhost.yml logs -f stalwart hail-api hail-worker
 ```
 
 Docker:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
-docker compose -f deploy/docker-compose.yml ps
-docker compose -f deploy/docker-compose.yml logs -f stalwart hail-api hail-worker
+cd deploy
+docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.selfhost.yml ps
+docker compose -f docker-compose.yml -f docker-compose.selfhost.yml logs -f stalwart hail-api hail-worker
 ```
+
+For the Gmail-only flavour, use `-f docker-compose.yml -f docker-compose.gmail.yml`
+instead and follow [setup-runbook.md](./setup-runbook.md); it does not start
+Stalwart and does not require DNS/MX setup.
 
 Check readiness:
 
@@ -284,8 +294,8 @@ dig +short MX example.com
 dig +short TXT example.com
 dig +short A mail.example.com
 nc -vz mail.example.com 25
-podman compose -f deploy/docker-compose.yml logs --tail=200 stalwart
-# or: docker compose -f deploy/docker-compose.yml logs --tail=200 stalwart
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml logs --tail=200 stalwart
+# or: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml logs --tail=200 stalwart
 ```
 
 If port 25 fails from outside your network, this direct quickstart cannot
@@ -295,10 +305,10 @@ receive public mail yet. Choose an alternate ingress path in
 ### A container is failing
 
 ```bash
-podman compose -f deploy/docker-compose.yml ps
-podman compose -f deploy/docker-compose.yml logs --tail=200 hail-api
-podman compose -f deploy/docker-compose.yml logs --tail=200 hail-worker
-podman compose -f deploy/docker-compose.yml logs --tail=200 stalwart
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml ps
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml logs --tail=200 hail-api
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml logs --tail=200 hail-worker
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml logs --tail=200 stalwart
 ```
 
 Docker equivalent: replace `podman compose` with `docker compose`.
@@ -321,8 +331,8 @@ This deletes local container state. Do not run it on a real mailbox unless you
 have backups.
 
 ```bash
-podman compose -f deploy/docker-compose.yml down -v
-podman compose -f deploy/docker-compose.yml up -d
-# or: docker compose -f deploy/docker-compose.yml down -v
-#     docker compose -f deploy/docker-compose.yml up -d
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml down -v
+podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml up -d
+# or: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml down -v
+#     docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml up -d
 ```

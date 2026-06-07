@@ -19,7 +19,27 @@ hail has two separable surfaces:
 | Home server + direct SMTP | Static home IP/business ISP with TCP/25 open | Remote MTAs deliver directly to home Stalwart | Reverse proxy or Cloudflare Tunnel | Low-medium | Your home network can really receive public SMTP. |
 | Home server + VPS/WireGuard MX gateway | Home storage behind CGNAT/residential blocks | DNS-only MX points to a small VPS, then WireGuard to home Stalwart | Cloudflare Tunnel to `hail-api` | Medium | You want mail data at home while preserving normal SMTP delivery. |
 | Cloudflare Tunnel + Email Routing/import bridge | No public SMTP server and Cloudflare-managed domain | Cloudflare receives mail and forwards/imports into hail/Stalwart | Cloudflare Tunnel | Medium-high | You accept import/forwarding semantics instead of original SMTP sessions. |
-| Gmail/provider import into Stalwart | Existing Gmail/provider mailbox users | Gmail/provider remains public edge; hail imports via provider API | Cloudflare Tunnel or normal HTTPS | Medium | You want the hail UX and a local Stalwart archive without operating public MX first. |
+| Gmail flavour | Existing Gmail users who do not want to run an MTA | Gmail remains public edge; hail talks to Gmail directly | Cloudflare Tunnel or normal HTTPS | Low-medium | You want hail UX over Gmail with no DNS/MX/Stalwart. |
+| Gmail/provider import into Stalwart | Existing Gmail/provider mailbox users who want a Stalwart archive | Gmail/provider remains public edge; hail imports via provider API | Cloudflare Tunnel or normal HTTPS | Medium | You want a local Stalwart archive before moving MX records. |
+
+## Compose flavour files
+
+The shipped production Compose files are selected as a shared base plus one
+mail-backend overlay:
+
+```bash
+# Gmail flavour: hail-api + hail-worker only; no Stalwart, no DNS/MX.
+cd deploy
+docker compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
+
+# Self-host flavour: adds Stalwart and stalwart-init; uses JMAP.
+cd deploy
+docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
+```
+
+Use the equivalent `podman compose` command if you run Podman. See
+[setup-runbook.md](./setup-runbook.md) for first-run environment variables and
+wizard steps.
 
 ## Recommended shapes
 
@@ -105,7 +125,33 @@ Cloudflare Tunnel.”
 
 Deep dive: [cloudflare-tunnel.md, Recipe B](./cloudflare-tunnel.md#recipe-b-cloudflare-email-routing-plus-tunnel).
 
-### 5. Gmail/provider import into Stalwart
+### 5. Gmail flavour
+
+Use this when you want the hail UX over an existing Gmail mailbox and do not
+want to operate a public mail server.
+
+```text
+Gmail mailbox
+  --> Gmail backend / OAuth --> hail-api + hail-worker
+  --> hail.db + hail-blobs local cache/archive
+Browser --> HTTPS --> reverse proxy or Cloudflare Tunnel --> hail-api
+```
+
+Start it with the Gmail Compose overlay:
+
+```bash
+cd deploy
+docker compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
+# or: podman compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
+```
+
+No Stalwart service, `stalwart-init`, SMTP ports, MX records, SPF, DKIM, or
+DMARC are required for this flavour. Configure
+`HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID` and
+`HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET` in `deploy/.env`, then follow
+[setup-runbook.md](./setup-runbook.md).
+
+### 6. Gmail/provider import into Stalwart
 
 Use this when a working provider mailbox already exists and you want hail’s UI,
 workflow, and local archive without first moving MX records.
@@ -157,6 +203,7 @@ To avoid duplicate deployment material:
   Email Routing/import bridge, and VPS/WireGuard MX implementation details.
 - [cloudflare-testbed.md](./cloudflare-testbed.md) is an operator smoke-test
   runbook, not conceptual guidance.
+- [setup-runbook.md](./setup-runbook.md) specifies Compose flavour selection and first-run wizard steps.
 - [provider-import-architecture.md](./provider-import-architecture.md) specifies
   the Gmail/provider-import implementation.
 - [provider-outbound-strategy.md](./provider-outbound-strategy.md) specifies

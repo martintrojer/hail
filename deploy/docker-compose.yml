@@ -1,95 +1,44 @@
-# hail canonical Compose stack (Stalwart + hail-api + hail-worker)
+# hail shared Compose base (hail-api + hail-worker + hail sidecar storage).
 #
-# First run:
-#   1. cp .env.example .env
-#   2. Edit .env: generate HAIL_SERVER_KEY with `openssl rand -hex 32`,
-#      generate HAIL_SETUP_BOOTSTRAP_TOKEN with `openssl rand -hex 32`,
-#      and set HAIL_PUBLIC_URL to your public hail URL (no trailing slash).
-#   3. Review stalwart.example.toml and hail.example.toml before first boot.
-#   4. Start:  docker compose up -d --build
-#      or:     podman-compose up -d --build
+# Pick exactly one mail-backend flavour overlay:
 #
-# Operations:
-#   Logs:  docker compose logs -f
-#          podman-compose logs -f
-#   Stop:  docker compose down
-#          podman-compose down
+#   Gmail-only backend (no Stalwart, no public MX/DNS required):
+#     docker compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
+#
+#   Self-hosted backend (adds Stalwart + stalwart-init):
+#     docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
 #
 # Env file:
 #   Compose reads deploy/.env automatically when commands are run from deploy/.
 #   See deploy/.env.example for required variables.
 #
 # Volume layout:
-#   stalwart-data -> /opt/stalwart          (Stalwart config/state/data)
-#   hail-data     -> /var/lib/hail         (hail SQLite sidecar: hail.db)
-#   hail-blobs    -> /var/lib/hail/blobs   (hail content-addressed blob store)
+#   hail-data  -> /var/lib/hail         (hail SQLite sidecar: hail.db)
+#   hail-blobs -> /var/lib/hail/blobs   (hail content-addressed blob store)
 #
 # Optional hail.db backups: add docker-compose.litestream.yml; see docs/backup.md.
+# Back up hail-blobs alongside hail-data.
 #
 # Reverse proxy users: add a caddy or traefik service in your own override file;
 # docs/reverse-proxy.md covers that and it is intentionally out of scope here.
-# Cloudflare Tunnel users: see docker-compose.cloudflare.yml overlay (separate task).
+# Cloudflare Tunnel users: see docker-compose.cloudflare.yml overlay.
 
 services:
-  stalwart:
-    image: docker.io/stalwartlabs/stalwart:v0.16
-    environment:
-      - STALWART_PUBLIC_URL=${STALWART_PUBLIC_URL:-http://stalwart:8080/}
-      - STALWART_RECOVERY_ADMIN=${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN in .env}
-    ports:
-      - "25:25"       # SMTP
-      - "465:465"     # submission SSL
-      - "587:587"     # submission STARTTLS
-      - "143:143"     # IMAP STARTTLS (optional but exposed for other clients)
-      - "993:993"     # IMAP SSL
-    volumes:
-      - stalwart-data:/opt/stalwart
-      # Copy+edit deploy/stalwart.example.toml before first boot; docs/quickstart explains the flow.
-      - ./stalwart.example.toml:/opt/stalwart/etc/config.toml:ro
-    restart: unless-stopped
-    healthcheck:
-      # Validate Stalwart's built-in liveness endpoint before the init sidecar runs.
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz/live >/dev/null"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  stalwart-init:
-    build:
-      context: ./stalwart-init
-    image: hail-stalwart-init:local
-    depends_on:
-      stalwart:
-        condition: service_healthy
-    environment:
-      - STALWART_URL=http://stalwart:8080
-      - STALWART_RECOVERY_ADMIN=${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN in .env}
-    restart: "no"
-
   hail-api:
     build:
       context: ..
       dockerfile: Containerfile
     image: hail:local
-    depends_on:
-      stalwart-init:
-        condition: service_completed_successfully
     command: ["/usr/local/bin/hail-api"]
     environment:
-      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
-      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
-      - HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080
-      - HAIL_SERVER__BIND=0.0.0.0:8080
+      HAIL_DATABASE_URL: sqlite:///var/lib/hail/hail.db
+      HAIL_SERVER__BIND: 0.0.0.0:8080
       # Intentional difference from docker-compose.local.yml: production default is HTTPS.
-      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
-      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
-      - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
-      - HAIL_SETUP__BOOTSTRAP_TOKEN=${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}
-      - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID:-}
-      - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET:-}
-      - HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=${HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES:-}
-      - HAIL_MAIL__CACHE__BLOB_ROOT=${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}
+      HAIL_SERVER__PUBLIC_URL: "${HAIL_PUBLIC_URL:-https://hail.example.com}"
+      HAIL_SECRETS__SERVER_KEY: "${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}"
+      HAIL_SETUP__BOOTSTRAP_ENABLED: "${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}"
+      HAIL_SETUP__BOOTSTRAP_TOKEN: "${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}"
+      HAIL_MAIL__CACHE__BLOB_ROOT: "${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}"
     ports:
       - "8080:8080"   # SPA + REST + WS (reverse-proxy / CF tunnel terminates TLS upstream)
     volumes:
@@ -101,31 +50,23 @@ services:
   hail-worker:
     image: hail:local
     depends_on:
-      stalwart-init:
-        condition: service_completed_successfully
       hail-api:
         condition: service_started
     command: ["/usr/local/bin/hail-worker"]
     environment:
-      - HAIL_DATABASE_URL=sqlite:///var/lib/hail/hail.db
-      - HAIL_STALWART__JMAP_URL=http://stalwart:8080
-      - HAIL_STALWART__MANAGEMENT_URL=http://stalwart:8080
-      - HAIL_SERVER__BIND=0.0.0.0:8080
+      HAIL_DATABASE_URL: sqlite:///var/lib/hail/hail.db
+      HAIL_SERVER__BIND: 0.0.0.0:8080
       # Intentional difference from docker-compose.local.yml: production default is HTTPS.
-      - HAIL_SERVER__PUBLIC_URL=${HAIL_PUBLIC_URL:-https://hail.example.com}
-      - HAIL_SECRETS__SERVER_KEY=${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}
-      - HAIL_SETUP__BOOTSTRAP_ENABLED=${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}
-      - HAIL_SETUP__BOOTSTRAP_TOKEN=${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}
-      - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID:-}
-      - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET:-}
-      - HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=${HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES:-}
-      - HAIL_MAIL__CACHE__BLOB_ROOT=${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}
+      HAIL_SERVER__PUBLIC_URL: "${HAIL_PUBLIC_URL:-https://hail.example.com}"
+      HAIL_SECRETS__SERVER_KEY: "${HAIL_SERVER_KEY:?set HAIL_SERVER_KEY in .env}"
+      HAIL_SETUP__BOOTSTRAP_ENABLED: "${HAIL_SETUP_BOOTSTRAP_ENABLED:-true}"
+      HAIL_SETUP__BOOTSTRAP_TOKEN: "${HAIL_SETUP_BOOTSTRAP_TOKEN:?set HAIL_SETUP_BOOTSTRAP_TOKEN in .env}"
+      HAIL_MAIL__CACHE__BLOB_ROOT: "${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}"
     volumes:
-      - hail-data:/var/lib/hail   # shared with hail-api (SQLite file)
-      - hail-blobs:/var/lib/hail/blobs   # shared with hail-api (blob store)
+      - hail-data:/var/lib/hail       # shared with hail-api (SQLite file)
+      - hail-blobs:/var/lib/hail/blobs # shared with hail-api (blob store)
     restart: unless-stopped
 
 volumes:
-  stalwart-data: {}
   hail-data: {}
   hail-blobs: {}
