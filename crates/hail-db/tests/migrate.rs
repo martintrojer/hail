@@ -31,6 +31,16 @@ const EXPECTED_TABLES: &[&str] = &[
     "labels",
     "thread_labels",
     "speakeasy_passphrases",
+    "messages",
+    "message_keywords",
+    "attachments",
+    "messages_fts",
+    "messages_fts_data",
+    "messages_fts_idx",
+    "messages_fts_docsize",
+    "messages_fts_config",
+    "cache_policy",
+    "outbound_changes",
 ];
 
 /// Indices explicitly declared in §6.2. Partial indices count as well.
@@ -67,6 +77,13 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_labels_user_name",
     "idx_thread_labels_label",
     "idx_speakeasy_passphrases_rotates_at",
+    "idx_messages_thread",
+    "idx_messages_received",
+    "idx_messages_from",
+    "idx_messages_lru",
+    "idx_message_keywords_keyword",
+    "idx_attachments_message",
+    "idx_outbound_pending",
 ];
 
 const EXPECTED_SCHEDULED_SEND_COLUMNS: &[&str] = &[
