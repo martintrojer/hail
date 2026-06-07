@@ -43,6 +43,10 @@ pub enum Error {
     #[error("backend is temporarily unavailable")]
     TemporarilyUnavailable,
 
+    /// No provider account is currently connected for this backend.
+    #[error("mail backend account is not connected")]
+    NotConnected,
+
     /// Catch-all for implementation-specific failures.
     #[error("backend error: {0}")]
     Other(String),

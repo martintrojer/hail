@@ -10,6 +10,7 @@
 //! a real TCP listener — they hand-craft requests via `tower::ServiceExt`.
 
 pub mod audit;
+pub mod backend_factory;
 pub mod events;
 pub mod middleware;
 pub mod openapi;
