@@ -86,10 +86,10 @@ async fn insert_provider_account(
     jmap_account_id: &str,
 ) -> i64 {
     sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', ?, ?, ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', ?, ?, ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind(jmap_account_id)
@@ -102,7 +102,7 @@ async fn insert_provider_account(
     .await
     .expect("provider account insert");
 
-    sqlx::query_scalar("SELECT id FROM provider_accounts WHERE user_id = ?")
+    sqlx::query_scalar("SELECT id FROM mail_accounts WHERE user_id = ?")
         .bind(user_id)
         .fetch_one(pool)
         .await
@@ -287,7 +287,7 @@ async fn initial_sync_verifies_profile_persists_history_id_and_imports_bounded_m
 
     let row: (String, String, Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT sync_status, last_profile_history_id, profile_synced_at, initial_sync_completed_at, backfill_cursor_json, last_error_message \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(account.id)
     .fetch_one(&pool)
@@ -342,7 +342,7 @@ async fn initial_sync_rejects_wrong_gmail_profile_before_listing_messages() {
 
     let row: (String, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT sync_status, last_profile_history_id, last_error_class \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(account.id)
     .fetch_one(&pool)

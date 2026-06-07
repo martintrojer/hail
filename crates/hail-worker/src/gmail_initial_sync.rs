@@ -162,8 +162,8 @@ pub(crate) async fn load_gmail_provider_account_by_id(
 ) -> Result<Option<GmailProviderAccount>, sqlx::Error> {
     sqlx::query_as::<_, (i64, i64, String, String, String)>(
         "SELECT id, user_id, provider_account_id, provider_email, jmap_account_id \
-         FROM provider_accounts \
-         WHERE id = ?1 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
+         FROM mail_accounts \
+         WHERE id = ?1 AND backend_kind = 'gmail' AND sync_status != 'disconnected'",
     )
     .bind(provider_account_row_id)
     .fetch_optional(db)
@@ -190,7 +190,7 @@ async fn persist_profile_sync(
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET last_profile_history_id = ?1, profile_synced_at = ?2, updated_at = ?2 \
          WHERE id = ?3",
     )
@@ -210,7 +210,7 @@ async fn mark_initial_sync_error(
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'error', last_error_class = ?1, last_error_message = ?2, updated_at = ?3 \
          WHERE id = ?4",
     )

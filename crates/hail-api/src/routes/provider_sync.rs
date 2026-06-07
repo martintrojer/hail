@@ -180,12 +180,12 @@ async fn list_statuses(
     user_id: i64,
 ) -> Result<Vec<ProviderSyncStatusResponse>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id, provider_kind, provider_account_id, provider_email, display_email, \
+        "SELECT id, backend_kind, provider_account_id, provider_email, display_email, \
                 sync_status, last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, \
                 sync_backoff_secs, last_error_class, last_profile_history_id, \
                 profile_synced_at, granted_scopes_json, bidirectional_sync_enabled \
-         FROM provider_accounts \
-         WHERE user_id = ?1 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
+         FROM mail_accounts \
+         WHERE user_id = ?1 AND backend_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
          ORDER BY provider_email COLLATE NOCASE, id",
     )
     .bind(user_id)
@@ -206,8 +206,8 @@ async fn mark_provider_account_due(
 ) -> Result<Option<ProviderSyncStatusResponse>, sqlx::Error> {
     let mut tx = db.begin().await?;
     let found: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM provider_accounts \
-         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused')",
+        "SELECT id FROM mail_accounts \
+         WHERE id = ?1 AND user_id = ?2 AND backend_kind = 'gmail' AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused')",
     )
     .bind(provider_account_id)
     .bind(user_id)
@@ -221,7 +221,7 @@ async fn mark_provider_account_due(
 
     let now = Utc::now();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = CASE WHEN sync_status = 'paused' THEN 'active' ELSE sync_status END, \
              next_sync_after = NULL, sync_backoff_secs = NULL, \
              last_error_class = CASE WHEN sync_status = 'paused' THEN NULL ELSE last_error_class END, \
@@ -255,8 +255,8 @@ async fn reset_provider_account_for_reimport(
 ) -> Result<ReimportResetResult, sqlx::Error> {
     let mut tx = db.begin().await?;
     let status: Option<String> = sqlx::query_scalar(
-        "SELECT sync_status FROM provider_accounts \
-         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' \
+        "SELECT sync_status FROM mail_accounts \
+         WHERE id = ?1 AND user_id = ?2 AND backend_kind = 'gmail' \
            AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
            AND refresh_token_enc IS NOT NULL",
     )
@@ -277,7 +277,7 @@ async fn reset_provider_account_for_reimport(
 
     let now = Utc::now();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET last_profile_history_id = NULL, profile_synced_at = NULL, \
              initial_sync_completed_at = NULL, backfill_cursor_json = NULL, \
              last_error_class = NULL, last_error_message = NULL, sync_status = 'initial_sync', \
@@ -310,8 +310,8 @@ async fn pause_provider_account_sync(
 ) -> Result<StopSyncResult, sqlx::Error> {
     let mut tx = db.begin().await?;
     let status: Option<String> = sqlx::query_scalar(
-        "SELECT sync_status FROM provider_accounts \
-         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' \
+        "SELECT sync_status FROM mail_accounts \
+         WHERE id = ?1 AND user_id = ?2 AND backend_kind = 'gmail' \
            AND refresh_token_enc IS NOT NULL",
     )
     .bind(provider_account_id)
@@ -334,7 +334,7 @@ async fn pause_provider_account_sync(
 
     let now = Utc::now();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'paused', last_error_class = 'operator_paused', \
              last_error_message = NULL, next_sync_after = NULL, sync_backoff_secs = NULL, \
              updated_at = ?1 \
@@ -375,12 +375,12 @@ async fn load_status(
     provider_account_id: i64,
 ) -> Result<ProviderSyncStatusResponse, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, provider_kind, provider_account_id, provider_email, display_email, \
+        "SELECT id, backend_kind, provider_account_id, provider_email, display_email, \
                 sync_status, last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, \
                 sync_backoff_secs, last_error_class, last_profile_history_id, \
                 profile_synced_at, granted_scopes_json, bidirectional_sync_enabled \
-         FROM provider_accounts \
-         WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail'",
+         FROM mail_accounts \
+         WHERE id = ?1 AND user_id = ?2 AND backend_kind = 'gmail'",
     )
     .bind(provider_account_id)
     .bind(user_id)
@@ -409,7 +409,7 @@ async fn row_to_status(
     };
     Ok(ProviderSyncStatusResponse {
         id,
-        provider_kind: row.get("provider_kind"),
+        provider_kind: row.get("backend_kind"),
         provider_account_id: row.get("provider_account_id"),
         provider_email: row.get("provider_email"),
         display_email: row.get("display_email"),
