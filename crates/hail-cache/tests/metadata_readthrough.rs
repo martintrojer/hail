@@ -183,6 +183,7 @@ fn raw_message(id: &str, subject: &str, keywords: Vec<&str>) -> RawMessage {
     let mut metadata = BTreeMap::new();
     metadata.insert("subject".to_owned(), subject.to_owned());
     metadata.insert("preview".to_owned(), format!("preview {subject}"));
+    let attachment_blob = BlobRef::new(format!("blob-{id}"));
     RawMessage {
         id: BackendMsgId::new(id),
         thread_id: Some(format!("thread-{id}")),
@@ -194,7 +195,15 @@ fn raw_message(id: &str, subject: &str, keywords: Vec<&str>) -> RawMessage {
         }),
         received_at_epoch_secs: Some(1_700_000_000),
         size_bytes: Some(1234),
-        blob_refs: vec![BlobRef::new(format!("blob-{id}"))],
+        blob_refs: vec![attachment_blob.clone()],
+        attachments: vec![hail_backend::AttachmentMeta {
+            filename: format!("{id}.txt"),
+            mime_type: "text/plain".to_owned(),
+            size_bytes: 42,
+            blob_ref: Some(attachment_blob),
+            inline: false,
+            content_id: None,
+        }],
         metadata,
     }
 }
@@ -245,6 +254,17 @@ async fn metadata_miss_populates_sqlite_rows_and_second_get_hits_cache() {
     assert_eq!(message_rows, 1);
     assert_eq!(keyword_rows, 1);
     assert_eq!(attachment_rows, 1);
+
+    let attachment: (String, String, i64, Option<String>, i64) =
+        sqlx::query_as("SELECT filename, mime_type, size_bytes, blob_id, inline FROM attachments")
+            .fetch_one(cache.db())
+            .await
+            .expect("read attachment row");
+    assert_eq!(attachment.0, "msg-1.txt");
+    assert_eq!(attachment.1, "text/plain");
+    assert_eq!(attachment.2, 42);
+    assert_eq!(attachment.3.as_deref(), Some("blob-msg-1"));
+    assert_eq!(attachment.4, 0);
 
     let body_blob: Option<String> = sqlx::query_scalar("SELECT body_blob_id FROM messages")
         .fetch_one(cache.db())

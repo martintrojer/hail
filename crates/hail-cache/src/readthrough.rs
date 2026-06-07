@@ -152,6 +152,7 @@ async fn upsert_raw_metadata_tx(
     account_id: i64,
     raw: RawMessage,
 ) -> Result<i64> {
+    let attachments = raw.attachments.clone();
     let cached = cached_message_from_raw(raw);
     let now = Utc::now().to_rfc3339();
     let thread_id = cached
@@ -204,14 +205,19 @@ async fn upsert_raw_metadata_tx(
         .bind(message_id)
         .execute(&mut **tx)
         .await?;
-    for blob_ref in &cached.blob_refs {
+    for attachment in &attachments {
+        let size_bytes = i64::try_from(attachment.size_bytes).unwrap_or(i64::MAX);
+        let blob_id = attachment.blob_ref.as_ref().map(BlobRef::as_str);
         sqlx::query(
             "INSERT INTO attachments (message_id, filename, mime_type, size_bytes, blob_id, inline) \
-             VALUES (?1, ?2, ?3, 0, NULL, 0)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(message_id)
-        .bind(blob_ref.as_str())
-        .bind("application/octet-stream")
+        .bind(&attachment.filename)
+        .bind(&attachment.mime_type)
+        .bind(size_bytes)
+        .bind(blob_id)
+        .bind(i64::from(attachment.inline))
         .execute(&mut **tx)
         .await?;
     }
@@ -272,7 +278,7 @@ async fn message_from_row(
     .map(hail_backend::Keyword::new)
     .collect::<Vec<_>>();
     let blob_refs = sqlx::query_scalar::<_, String>(
-        "SELECT filename FROM attachments WHERE message_id = ?1 ORDER BY id",
+        "SELECT blob_id FROM attachments WHERE message_id = ?1 AND blob_id IS NOT NULL ORDER BY id",
     )
     .bind(message_id)
     .fetch_all(db)
