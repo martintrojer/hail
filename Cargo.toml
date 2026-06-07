@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/hail-backend",
     "crates/hail-core",
     "crates/hail-db",
     "crates/hail-jmap",
