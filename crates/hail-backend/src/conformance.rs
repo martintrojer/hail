@@ -66,7 +66,10 @@ where
         .get_message(&fixture.message_id)
         .await
         .expect("get_message should succeed");
-    assert_eq!(message, fixture.expected_message);
+    assert_eq!(
+        normalize_message_keywords(message),
+        normalize_message_keywords(fixture.expected_message.clone())
+    );
 
     let blob = backend
         .fetch_blob(&fixture.blob_ref)
@@ -106,7 +109,10 @@ where
         .poll_changes(&fixture.poll_cursor)
         .await
         .expect("poll_changes should succeed");
-    assert_eq!(changes, fixture.expected_changes);
+    assert_eq!(
+        normalize_change_keywords(changes),
+        normalize_change_keywords(fixture.expected_changes.clone())
+    );
     assert_eq!(next_cursor, fixture.expected_next_cursor);
 
     let mailboxes = backend
@@ -141,4 +147,38 @@ where
         .delete_permanently(&fixture.message_id)
         .await
         .expect("delete_permanently should succeed");
+}
+
+fn normalize_message_keywords(mut message: RawMessage) -> RawMessage {
+    message
+        .keywords
+        .sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    message
+}
+
+fn normalize_change_keywords(changes: Vec<Change>) -> Vec<Change> {
+    changes
+        .into_iter()
+        .map(|change| match change {
+            Change::MessageUpdated {
+                id,
+                mut keywords,
+                mut keywords_added,
+                mut keywords_removed,
+            } => {
+                if let Some(keywords) = keywords.as_mut() {
+                    keywords.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+                }
+                keywords_added.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+                keywords_removed.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+                Change::MessageUpdated {
+                    id,
+                    keywords,
+                    keywords_added,
+                    keywords_removed,
+                }
+            }
+            other => other,
+        })
+        .collect()
 }
