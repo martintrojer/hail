@@ -47,6 +47,7 @@ impl CachedMail {
             }
             Change::MessageUpdated {
                 id,
+                keywords,
                 keywords_added,
                 keywords_removed,
             } => {
@@ -55,14 +56,20 @@ impl CachedMail {
                     .await?
                 {
                     let mut tx = self.db().begin().await?;
-                    apply_keyword_delta(
-                        &mut tx,
-                        self.account_id(),
-                        &id,
-                        &keywords_added,
-                        &keywords_removed,
-                    )
-                    .await?;
+                    if let Some(authoritative) = keywords.as_deref() {
+                        // Backend hydrated the full keyword state; treat it as
+                        // authoritative over the add/remove delta.
+                        replace_keywords(&mut tx, self.account_id(), &id, authoritative).await?;
+                    } else {
+                        apply_keyword_delta(
+                            &mut tx,
+                            self.account_id(),
+                            &id,
+                            &keywords_added,
+                            &keywords_removed,
+                        )
+                        .await?;
+                    }
                     tx.commit().await?;
                 }
             }
@@ -199,6 +206,30 @@ fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+async fn replace_keywords(
+    tx: &mut Transaction<'_, Sqlite>,
+    account_id: i64,
+    backend_msg_id: &BackendMsgId,
+    keywords: &[Keyword],
+) -> Result<()> {
+    let Some(message_id) = cached_message_row_id(tx, account_id, backend_msg_id).await? else {
+        return Ok(());
+    };
+
+    sqlx::query("DELETE FROM message_keywords WHERE message_id = ?1")
+        .bind(message_id)
+        .execute(&mut **tx)
+        .await?;
+    for keyword in keywords {
+        sqlx::query("INSERT OR IGNORE INTO message_keywords (message_id, keyword) VALUES (?1, ?2)")
+            .bind(message_id)
+            .bind(keyword.as_str())
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn apply_keyword_delta(

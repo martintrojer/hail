@@ -285,6 +285,10 @@ pub enum Change {
     },
     MessageUpdated {
         id: BackendMsgId,
+        /// Current provider keyword state when the backend can cheaply
+        /// hydrate it for an update notification. Cache sync should treat
+        /// this as authoritative over the delta fields when present.
+        keywords: Option<Vec<Keyword>>,
         keywords_added: Vec<Keyword>,
         keywords_removed: Vec<Keyword>,
     },
