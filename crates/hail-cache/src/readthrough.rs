@@ -356,7 +356,7 @@ async fn count_cached_view(
     Ok(count)
 }
 
-fn cached_message_from_raw(raw: RawMessage) -> CachedMessage {
+pub(crate) fn cached_message_from_raw(raw: RawMessage) -> CachedMessage {
     let from = raw
         .envelope
         .as_ref()

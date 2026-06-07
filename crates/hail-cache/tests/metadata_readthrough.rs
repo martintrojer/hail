@@ -467,17 +467,32 @@ async fn bodies_attachment_blob_round_trips_through_blob_store() {
 }
 
 #[tokio::test]
-async fn downstream_methods_remain_not_implemented() {
+async fn get_thread_and_send_remain_not_implemented() {
     let (cache, _backend, _tempdir) = fixture(Vec::new(), MailCacheMode::Bounded).await;
 
-    let search_err = cache
-        .search("hello", None, 10)
+    let thread_err = cache
+        .get_thread("thread-1")
         .await
-        .expect_err("search task is downstream");
+        .expect_err("thread rendering task is downstream");
     assert!(matches!(
-        search_err,
+        thread_err,
         CacheError::NotImplemented {
-            operation: "search"
+            operation: "get_thread"
+        }
+    ));
+
+    let envelope = Envelope {
+        mail_from: "me@example.test".to_owned(),
+        rcpt_to: vec!["you@example.test".to_owned()],
+    };
+    let send_err = cache
+        .send_enqueue(b"Subject: hello\r\n\r\nbody", &envelope)
+        .await
+        .expect_err("send task is downstream");
+    assert!(matches!(
+        send_err,
+        CacheError::NotImplemented {
+            operation: "send_enqueue"
         }
     ));
 }
