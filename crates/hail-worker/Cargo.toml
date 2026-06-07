@@ -11,6 +11,7 @@ authors.workspace = true
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
 hail-gmail = { path = "../hail-gmail" }
+hail-backend = { path = "../hail-backend" }
 # hail-jmap is currently an empty crate; wired in now so future tasks (jmap-eventsource)
 # don't need to touch Cargo.toml. Verified to compile via `cargo check -p hail-jmap`.
 hail-jmap = { path = "../hail-jmap" }
@@ -24,6 +25,8 @@ anyhow = "1"
 thiserror = "2"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
 futures-util = "0.3"
+futures-core = "0.3"
+bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rand = "0.9"
 secrecy = "0.10"

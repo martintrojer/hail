@@ -8,6 +8,7 @@ pub use hail_gmail::rfc822_import;
 
 #[allow(dead_code)]
 pub mod app_events;
+pub mod outbox_drain;
 pub mod provider_bidi_sync;
 pub mod provider_sync_scheduler;
 #[allow(dead_code)]
