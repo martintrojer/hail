@@ -458,40 +458,40 @@ async fn gmail_callback(
     Extension(client): Extension<Arc<dyn GmailOAuthClient>>,
 ) -> Response {
     if query.error.is_some() {
-        return mail_accounts_callback_redirect("error", "oauth_denied");
+        return provider_accounts_callback_redirect("error", "oauth_denied");
     }
     let Some(state_token) = query.state.as_deref() else {
-        return mail_accounts_callback_redirect("error", "missing_state");
+        return provider_accounts_callback_redirect("error", "missing_state");
     };
     let Some(code) = query.code.as_deref() else {
-        return mail_accounts_callback_redirect("error", "missing_code");
+        return provider_accounts_callback_redirect("error", "missing_code");
     };
     let oauth_state = match consume_oauth_state(&state.db, user.id, &session.id, state_token).await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return mail_accounts_callback_redirect("error", "invalid_oauth_state"),
+        Ok(None) => return provider_accounts_callback_redirect("error", "invalid_oauth_state"),
         Err(err) => {
             tracing::error!(error = %err, user_id = user.id, "gmail oauth: state lookup failed");
-            return mail_accounts_callback_redirect("error", "callback_failed");
+            return provider_accounts_callback_redirect("error", "callback_failed");
         }
     };
     let exchange = match client.exchange_code(code, &oauth_state.redirect_uri).await {
         Ok(exchange) => exchange,
         Err(err) => {
             tracing::warn!(error = %err, user_id = user.id, "gmail oauth: exchange failed");
-            return mail_accounts_callback_redirect("error", "oauth_exchange_failed");
+            return provider_accounts_callback_redirect("error", "oauth_exchange_failed");
         }
     };
     match upsert_provider_account(&state, &user, exchange).await {
-        Ok(_) => mail_accounts_callback_redirect("connected", GMAIL_PROVIDER_KIND),
+        Ok(_) => provider_accounts_callback_redirect("connected", GMAIL_PROVIDER_KIND),
         Err(err) => {
             tracing::error!(error = %err, user_id = user.id, "gmail oauth: account store failed");
-            mail_accounts_callback_redirect("error", "callback_failed")
+            provider_accounts_callback_redirect("error", "callback_failed")
         }
     }
 }
 
-fn mail_accounts_callback_redirect(key: &str, value: &str) -> Response {
+fn provider_accounts_callback_redirect(key: &str, value: &str) -> Response {
     let query = url::form_urlencoded::Serializer::new(String::new())
         .append_pair(key, value)
         .finish();
@@ -698,13 +698,13 @@ async fn upsert_provider_account(
         serde_json::to_string(&scopes).map_err(|err| sqlx::Error::Protocol(err.to_string()))?;
     let mut tx = state.db.begin().await?;
     let row_id: i64 = sqlx::query_scalar(
-        "INSERT INTO mail_accounts \
-         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, consented_at, \
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, consented_at, \
           cached_access_token_expires_at, access_token_refreshed_at, last_profile_history_id, profile_synced_at, \
           sync_status, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?8, ?10, ?8, 'disabled', ?8, ?8) \
-         ON CONFLICT(user_id, backend_kind, provider_account_id) DO UPDATE SET \
-          jmap_account_id = excluded.jmap_account_id, provider_kind = excluded.provider_kind, provider_email = excluded.provider_email, display_email = excluded.display_email, \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?8, ?10, ?8, 'disabled', ?8, ?8) \
+         ON CONFLICT(user_id, provider_kind, provider_account_id) DO UPDATE SET \
+          jmap_account_id = excluded.jmap_account_id, provider_email = excluded.provider_email, display_email = excluded.display_email, \
           granted_scopes_json = excluded.granted_scopes_json, consented_at = excluded.consented_at, \
           cached_access_token_expires_at = excluded.cached_access_token_expires_at, access_token_refreshed_at = excluded.access_token_refreshed_at, \
           last_profile_history_id = excluded.last_profile_history_id, profile_synced_at = excluded.profile_synced_at, \
@@ -740,7 +740,7 @@ async fn upsert_provider_account(
     .into_bytes();
 
     sqlx::query(
-        "UPDATE mail_accounts \
+        "UPDATE provider_accounts \
          SET refresh_token_enc = ?1, refresh_token_ref = NULL, refresh_token_key_id = ?2, \
              sync_status = 'active', disconnected_at = NULL, revoked_at = NULL, \
              next_sync_after = NULL, sync_backoff_secs = NULL, \
@@ -763,7 +763,7 @@ async fn load_refresh_token_for_disconnect(
     provider_account_id: i64,
 ) -> Result<Option<SecretString>, sqlx::Error> {
     let row = sqlx::query_as::<_, (String, Option<Vec<u8>>)>(
-        "SELECT provider_account_id, refresh_token_enc FROM mail_accounts WHERE id = ?1 AND user_id = ?2 AND sync_status != 'disconnected'",
+        "SELECT provider_account_id, refresh_token_enc FROM provider_accounts WHERE id = ?1 AND user_id = ?2 AND sync_status != 'disconnected'",
     )
     .bind(provider_account_id)
     .bind(user_id)
@@ -791,7 +791,7 @@ async fn mark_provider_account_disconnected(
 ) -> Result<ProviderAccountResponse, sqlx::Error> {
     let now = Utc::now();
     sqlx::query(
-        "UPDATE mail_accounts SET refresh_token_enc = NULL, refresh_token_ref = NULL, refresh_token_key_id = NULL, sync_status = 'disconnected', disconnected_at = ?1, updated_at = ?1 WHERE id = ?2 AND user_id = ?3",
+        "UPDATE provider_accounts SET refresh_token_enc = NULL, refresh_token_ref = NULL, refresh_token_key_id = NULL, sync_status = 'disconnected', disconnected_at = ?1, updated_at = ?1 WHERE id = ?2 AND user_id = ?3",
     )
     .bind(now)
     .bind(provider_account_id)
@@ -807,8 +807,8 @@ async fn load_provider_account_response(
     provider_account_id: i64,
 ) -> Result<ProviderAccountResponse, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, backend_kind, provider_account_id, provider_email, display_email, granted_scopes_json, sync_status, cached_access_token_expires_at, last_profile_history_id, bidirectional_sync_enabled \
-         FROM mail_accounts WHERE id = ?1 AND user_id = ?2",
+        "SELECT id, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, sync_status, cached_access_token_expires_at, last_profile_history_id, bidirectional_sync_enabled \
+         FROM provider_accounts WHERE id = ?1 AND user_id = ?2",
     )
     .bind(provider_account_id)
     .bind(user_id)
@@ -831,7 +831,7 @@ async fn row_to_response(
     let pending_outbound_changes = hail_db::provider_outbound_changes::pending_outbound_change_count(db, id).await?;
     Ok(ProviderAccountResponse {
         id,
-        provider_kind: row.get("backend_kind"),
+        provider_kind: row.get("provider_kind"),
         provider_account_id: row.get("provider_account_id"),
         provider_email: row.get("provider_email"),
         display_email: row.get("display_email"),
@@ -876,7 +876,7 @@ async fn provider_account_scopes(
     provider_account_id: i64,
 ) -> Result<Vec<String>, sqlx::Error> {
     let json: String = sqlx::query_scalar(
-        "SELECT granted_scopes_json FROM mail_accounts WHERE id = ?1 AND user_id = ?2 AND backend_kind = 'gmail' AND sync_status != 'disconnected'",
+        "SELECT granted_scopes_json FROM provider_accounts WHERE id = ?1 AND user_id = ?2 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
     )
     .bind(provider_account_id)
     .bind(user_id)
@@ -893,7 +893,7 @@ async fn set_bidirectional_sync_enabled(
 ) -> Result<ProviderAccountResponse, sqlx::Error> {
     let now = Utc::now();
     let result = sqlx::query(
-        "UPDATE mail_accounts SET bidirectional_sync_enabled = ?1, last_error_class = CASE WHEN ?1 = 1 THEN NULL ELSE last_error_class END, last_error_message = CASE WHEN ?1 = 1 THEN NULL ELSE last_error_message END, updated_at = ?2 WHERE id = ?3 AND user_id = ?4 AND backend_kind = 'gmail' AND sync_status != 'disconnected'",
+        "UPDATE provider_accounts SET bidirectional_sync_enabled = ?1, last_error_class = CASE WHEN ?1 = 1 THEN NULL ELSE last_error_class END, last_error_message = CASE WHEN ?1 = 1 THEN NULL ELSE last_error_message END, updated_at = ?2 WHERE id = ?3 AND user_id = ?4 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
     )
     .bind(if enabled { 1_i64 } else { 0_i64 })
     .bind(now)
@@ -914,7 +914,7 @@ async fn mark_scope_missing(
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now();
     let result = sqlx::query(
-        "UPDATE mail_accounts SET bidirectional_sync_enabled = 0, last_error_class = 'provider_scope_missing', last_error_message = 'Gmail bidirectional sync requires gmail.modify scope; reconnect Gmail', updated_at = ?1 WHERE id = ?2 AND user_id = ?3 AND backend_kind = 'gmail' AND sync_status != 'disconnected'",
+        "UPDATE provider_accounts SET bidirectional_sync_enabled = 0, last_error_class = 'provider_scope_missing', last_error_message = 'Gmail bidirectional sync requires gmail.modify scope; reconnect Gmail', updated_at = ?1 WHERE id = ?2 AND user_id = ?3 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
     )
     .bind(now)
     .bind(provider_account_id)

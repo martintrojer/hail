@@ -93,10 +93,10 @@ async fn insert_provider_account(
     history_id: Option<&str>,
 ) -> i64 {
     sqlx::query(
-        "INSERT INTO mail_accounts \
-         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, last_profile_history_id, sync_status, created_at, updated_at) \
-         VALUES (?, 'acct-sync', 'gmail', 'gmail', ?, ?, ?, ?, 'active', ?, ?)",
+         VALUES (?, 'acct-sync', 'gmail', ?, ?, ?, ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind(format!("gmail-provider-{user_id}"))
@@ -109,7 +109,7 @@ async fn insert_provider_account(
     .await
     .expect("provider account insert");
 
-    sqlx::query_scalar("SELECT id FROM mail_accounts WHERE user_id = ?")
+    sqlx::query_scalar("SELECT id FROM provider_accounts WHERE user_id = ?")
         .bind(user_id)
         .fetch_one(pool)
         .await
@@ -415,7 +415,7 @@ async fn profile_history_cursor(
     pool: &sqlx::SqlitePool,
     provider_account_id: i64,
 ) -> Option<String> {
-    sqlx::query_scalar("SELECT last_profile_history_id FROM mail_accounts WHERE id = ?1")
+    sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
         .bind(provider_account_id)
         .fetch_one(pool)
         .await
@@ -509,7 +509,7 @@ async fn cancellation_interrupts_blocked_incremental_raw_fetch() {
 }
 
 async fn account_error_class(pool: &sqlx::SqlitePool, provider_account_id: i64) -> Option<String> {
-    sqlx::query_scalar("SELECT last_error_class FROM mail_accounts WHERE id = ?1")
+    sqlx::query_scalar("SELECT last_error_class FROM provider_accounts WHERE id = ?1")
         .bind(provider_account_id)
         .fetch_one(pool)
         .await
@@ -585,7 +585,7 @@ async fn incremental_history_imports_new_messages_and_advances_cursor() {
     assert_eq!(mapping.provider_history_id.as_deref(), Some("102"));
 
     let stored_cursor: Option<String> =
-        sqlx::query_scalar("SELECT last_profile_history_id FROM mail_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
             .bind(provider_account_id)
             .fetch_one(&pool)
             .await
@@ -903,7 +903,7 @@ async fn expired_history_cursor_runs_bounded_full_sync_and_audits_fallback() {
     assert_eq!(summary.end_history_id.as_deref(), Some(fallback.history_id));
 
     let stored_cursor: Option<String> =
-        sqlx::query_scalar("SELECT last_profile_history_id FROM mail_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
             .bind(provider_account_id)
             .fetch_one(&pool)
             .await
