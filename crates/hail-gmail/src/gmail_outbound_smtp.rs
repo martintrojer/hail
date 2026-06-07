@@ -12,9 +12,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
+use lettre::address::{Address, Envelope as LettreEnvelope};
 use lettre::message::Mailbox;
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
+use lettre::transport::smtp::response::Response;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
@@ -34,6 +36,18 @@ pub struct GmailOutboundMessage {
     pub subject: String,
     pub plain_text: String,
     pub html: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GmailRawOutboundMessage {
+    pub mail_from: String,
+    pub rcpt_to: Vec<String>,
+    pub rfc822: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GmailSmtpSubmission {
+    pub id: String,
 }
 
 #[derive(Debug, Error)]
@@ -69,6 +83,12 @@ pub trait GmailSmtpSender: Send + Sync {
         access_token: SecretString,
         message: &GmailOutboundMessage,
     ) -> Result<(), GmailOutboundSmtpError>;
+
+    async fn send_raw_message(
+        &self,
+        access_token: SecretString,
+        message: &GmailRawOutboundMessage,
+    ) -> Result<GmailSmtpSubmission, GmailOutboundSmtpError>;
 }
 
 pub struct LettreGmailSmtpSender;
@@ -94,6 +114,33 @@ impl GmailSmtpSender for LettreGmailSmtpSender {
         let send = mailer.send(email);
         match tokio::time::timeout(GMAIL_SMTP_TIMEOUT, send).await {
             Ok(Ok(_)) => Ok(()),
+            Ok(Err(err)) if is_smtp_auth_error(&err) => Err(GmailOutboundSmtpError::Authentication),
+            Ok(Err(err)) => Err(GmailOutboundSmtpError::Transport(err.to_string())),
+            Err(_) => Err(GmailOutboundSmtpError::Timeout),
+        }
+    }
+
+    async fn send_raw_message(
+        &self,
+        access_token: SecretString,
+        message: &GmailRawOutboundMessage,
+    ) -> Result<GmailSmtpSubmission, GmailOutboundSmtpError> {
+        let envelope = build_lettre_envelope(message)?;
+        let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(GMAIL_SMTP_HOST)
+            .map_err(|err| GmailOutboundSmtpError::Transport(err.to_string()))?
+            .port(GMAIL_SMTP_PORT)
+            .credentials(Credentials::new(
+                message.mail_from.clone(),
+                access_token.expose_secret().to_owned(),
+            ))
+            .authentication(vec![Mechanism::Xoauth2])
+            .build();
+
+        let send = mailer.send_raw(&envelope, &message.rfc822);
+        match tokio::time::timeout(GMAIL_SMTP_TIMEOUT, send).await {
+            Ok(Ok(response)) => Ok(GmailSmtpSubmission {
+                id: smtp_submission_id(&response),
+            }),
             Ok(Err(err)) if is_smtp_auth_error(&err) => Err(GmailOutboundSmtpError::Authentication),
             Ok(Err(err)) => Err(GmailOutboundSmtpError::Transport(err.to_string())),
             Err(_) => Err(GmailOutboundSmtpError::Timeout),
@@ -140,6 +187,29 @@ where
             Err(error) => Err(error),
         }
     }
+
+    pub async fn send_raw(
+        &self,
+        message: &GmailRawOutboundMessage,
+    ) -> Result<GmailSmtpSubmission, GmailOutboundSmtpError> {
+        let first_token = self
+            .token_source
+            .bearer_token()
+            .await
+            .map_err(GmailOutboundSmtpError::Token)?;
+        match self.sender.send_raw_message(first_token, message).await {
+            Ok(submission) => Ok(submission),
+            Err(GmailOutboundSmtpError::Authentication) => {
+                let retry_token = self
+                    .token_source
+                    .bearer_token()
+                    .await
+                    .map_err(GmailOutboundSmtpError::Token)?;
+                self.sender.send_raw_message(retry_token, message).await
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 #[must_use]
@@ -169,6 +239,19 @@ where
     }
 }
 
+fn build_lettre_envelope(
+    message: &GmailRawOutboundMessage,
+) -> Result<LettreEnvelope, GmailOutboundSmtpError> {
+    let from = parse_reverse_path(&message.mail_from)?;
+    let recipients = message
+        .rcpt_to
+        .iter()
+        .map(|recipient| parse_address(recipient))
+        .collect::<Result<Vec<_>, _>>()?;
+    LettreEnvelope::new(from, recipients)
+        .map_err(|err| GmailOutboundSmtpError::Message(err.to_string()))
+}
+
 fn build_lettre_message(message: &GmailOutboundMessage) -> Result<Message, GmailOutboundSmtpError> {
     let mut builder = Message::builder()
         .from(parse_mailbox(&message.from)?)
@@ -192,6 +275,30 @@ fn parse_mailbox(address: &str) -> Result<Mailbox, GmailOutboundSmtpError> {
     address
         .parse()
         .map_err(|err| GmailOutboundSmtpError::Message(format!("invalid mailbox: {err}")))
+}
+
+fn parse_reverse_path(address: &str) -> Result<Option<Address>, GmailOutboundSmtpError> {
+    let trimmed = address.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    parse_address(trimmed).map(Some)
+}
+
+fn parse_address(address: &str) -> Result<Address, GmailOutboundSmtpError> {
+    address
+        .parse()
+        .map_err(|err| GmailOutboundSmtpError::Message(format!("invalid SMTP address: {err}")))
+}
+
+fn smtp_submission_id(response: &Response) -> String {
+    let code = u16::from(response.code());
+    let message = response.message().collect::<Vec<_>>().join(" | ");
+    if message.is_empty() {
+        code.to_string()
+    } else {
+        format!("{code} {message}")
+    }
 }
 
 fn is_smtp_auth_error(err: &lettre::transport::smtp::Error) -> bool {
@@ -253,6 +360,22 @@ mod tests {
             assert_eq!(access_token.expose_secret(), "token-2");
             Ok(())
         }
+
+        async fn send_raw_message(
+            &self,
+            access_token: SecretString,
+            _message: &GmailRawOutboundMessage,
+        ) -> Result<GmailSmtpSubmission, GmailOutboundSmtpError> {
+            let next = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if next == 1 {
+                assert_eq!(access_token.expose_secret(), "token-1");
+                return Err(GmailOutboundSmtpError::Authentication);
+            }
+            assert_eq!(access_token.expose_secret(), "token-2");
+            Ok(GmailSmtpSubmission {
+                id: "250 2.0.0 accepted".to_string(),
+            })
+        }
     }
 
     struct AlwaysAuthFailSender {
@@ -266,6 +389,15 @@ mod tests {
             _access_token: SecretString,
             _message: &GmailOutboundMessage,
         ) -> Result<(), GmailOutboundSmtpError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(GmailOutboundSmtpError::Authentication)
+        }
+
+        async fn send_raw_message(
+            &self,
+            _access_token: SecretString,
+            _message: &GmailRawOutboundMessage,
+        ) -> Result<GmailSmtpSubmission, GmailOutboundSmtpError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Err(GmailOutboundSmtpError::Authentication)
         }
@@ -298,9 +430,44 @@ mod tests {
                 calls: send_calls.clone(),
             },
         );
-        let err = client.send(&sample_message()).await.unwrap_err();
+        let err = client.send_raw(&sample_raw_message()).await.unwrap_err();
         assert_eq!(err.error_class(), "provider_token");
         assert_eq!(send_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn smtp_envelope_uses_supplied_envelope_not_message_headers() {
+        let message = GmailRawOutboundMessage {
+            mail_from: "bounce@example.org".to_string(),
+            rcpt_to: vec![
+                "actual-to@example.org".to_string(),
+                "actual-bcc@example.org".to_string(),
+            ],
+            rfc822: b"From: Header From <header-from@example.org>\r\nTo: Header To <header-to@example.org>\r\nSubject: Keep bytes\r\n\r\nBody".to_vec(),
+        };
+
+        let envelope = build_lettre_envelope(&message).unwrap();
+        assert_eq!(
+            envelope.from().map(ToString::to_string),
+            Some("bounce@example.org".to_string())
+        );
+        assert_eq!(
+            envelope
+                .to()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec!["actual-to@example.org", "actual-bcc@example.org"]
+        );
+    }
+
+    #[test]
+    fn smtp_envelope_rejects_empty_recipient_list() {
+        let mut message = sample_raw_message();
+        message.rcpt_to.clear();
+
+        let err = build_lettre_envelope(&message).unwrap_err();
+        assert!(matches!(err, GmailOutboundSmtpError::Message(_)));
     }
 
     fn sample_message() -> GmailOutboundMessage {
@@ -312,6 +479,16 @@ mod tests {
             subject: "Hello".to_string(),
             plain_text: "Hello Bob".to_string(),
             html: "<p>Hello Bob</p>".to_string(),
+        }
+    }
+
+    fn sample_raw_message() -> GmailRawOutboundMessage {
+        GmailRawOutboundMessage {
+            mail_from: "alice@example.org".to_string(),
+            rcpt_to: vec!["bob@example.org".to_string()],
+            rfc822:
+                b"From: alice@example.org\r\nTo: bob@example.org\r\nSubject: Hello\r\n\r\nHello Bob"
+                    .to_vec(),
         }
     }
 }
