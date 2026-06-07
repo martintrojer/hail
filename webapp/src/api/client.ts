@@ -258,6 +258,7 @@ export interface LoginRequest {
 
 export interface SetupState {
   wizard_active: boolean;
+  backend: 'gmail' | 'jmap';
   reason?: 'config_admin_set' | 'admin_user_exists';
 }
 
@@ -269,6 +270,17 @@ export interface SetupAdminRequest {
   bootstrap_token: string;
   stalwart_admin_username: string;
   stalwart_admin_password: string;
+}
+
+export interface SetupGmailConnectRequest {
+  email: string;
+  password: string;
+  display_name?: string | null;
+}
+
+export interface SetupGmailConnectResponse {
+  authorization_url: string;
+  scopes: string[];
 }
 
 export type MailClassification = components['schemas']['MailClassification'];
@@ -501,6 +513,19 @@ export class HailApiClient {
         mutating: true,
       }),
       201,
+    );
+  }
+
+  async connectSetupGmail(
+    body: SetupGmailConnectRequest,
+  ): Promise<SetupGmailConnectResponse> {
+    return this.#json<SetupGmailConnectResponse>(
+      await this.#request('/api/setup/gmail/connect', {
+        method: 'POST',
+        body,
+        mutating: true,
+      }),
+      200,
     );
   }
 

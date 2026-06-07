@@ -15,6 +15,7 @@ import {
   useInvite,
   useLoginMutation,
   useSetupAdminMutation,
+  useSetupGmailConnectMutation,
   useSetupState,
 } from './api/query';
 import { AuthProvider } from './auth/AuthProvider';
@@ -322,6 +323,11 @@ function SetupPage() {
       void navigate({ to: '/imbox' });
     },
   });
+  const setupGmailConnect = useSetupGmailConnectMutation(apiClient, {
+    onSuccess: (data) => {
+      window.location.assign(data.authorization_url);
+    },
+  });
 
   useEffect(() => {
     const nextDomain = email.split('@')[1] ?? '';
@@ -332,6 +338,14 @@ function SetupPage() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (setupState.data?.backend === 'gmail') {
+      setupGmailConnect.mutate({
+        email,
+        password,
+        display_name: displayName.trim() || null,
+      });
+      return;
+    }
     setupAdmin.mutate({
       email,
       password,
@@ -396,6 +410,9 @@ function SetupPage() {
     );
   }
 
+  const isGmailSetup = setupState.data.backend === 'gmail';
+  const pendingSetup = isGmailSetup ? setupGmailConnect : setupAdmin;
+
   return (
     <CenteredPage>
       <Card size="sm">
@@ -404,67 +421,83 @@ function SetupPage() {
             First-run setup
           </CardTitle>
           <CardDescription>
-            Create the first admin mailbox for this hail instance. If Stalwart
-            management is configured, hail authenticates to Stalwart
-            v0.16&apos;s management REST API with the Stalwart admin credentials
-            below, creates the domain and mailbox with a short-lived bearer
-            token, and then verifies the mailbox with JMAP. If management is
-            disabled, the domain and account must already exist in Stalwart and
-            the wizard verifies them with a JMAP login. You need the operator
-            bootstrap token from the server environment/config.
+            {isGmailSetup ? (
+              <>
+                Connect Google to create the first local hail admin account.
+                Hail stores the encrypted Google refresh token and seeds a
+                bounded incremental cache policy. There is no bootstrap token,
+                Stalwart admin, or DNS step for the Gmail flavour.
+              </>
+            ) : (
+              <>
+                Create the first admin mailbox for this hail instance. If
+                Stalwart management is configured, hail authenticates to
+                Stalwart v0.16&apos;s management REST API with the Stalwart
+                admin credentials below, creates the domain and mailbox with a
+                short-lived bearer token, and then verifies the mailbox with
+                JMAP. If management is disabled, the domain and account must
+                already exist in Stalwart and the wizard verifies them with a
+                JMAP login. You need the operator bootstrap token from the
+                server environment/config.
+              </>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form id="setup-form" onSubmit={onSubmit}>
             <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="setup-bootstrap-token">
-                  Bootstrap token
-                </FieldLabel>
-                <Input
-                  id="setup-bootstrap-token"
-                  type="password"
-                  value={bootstrapToken}
-                  onChange={(event) => setBootstrapToken(event.target.value)}
-                  autoComplete="off"
-                  placeholder="Paste HAIL_SETUP__BOOTSTRAP_TOKEN"
-                  required
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="stalwart-admin-username">
-                  Stalwart admin user
-                </FieldLabel>
-                <Input
-                  id="stalwart-admin-username"
-                  value={stalwartAdminUsername}
-                  onChange={(event) =>
-                    setStalwartAdminUsername(event.target.value)
-                  }
-                  autoComplete="off"
-                  required
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="stalwart-admin-password">
-                  Stalwart admin password
-                </FieldLabel>
-                <Input
-                  id="stalwart-admin-password"
-                  type="password"
-                  value={stalwartAdminPassword}
-                  onChange={(event) =>
-                    setStalwartAdminPassword(event.target.value)
-                  }
-                  autoComplete="off"
-                  required
-                />
-                <FieldDescription>
-                  Local compose defaults to admin/admin1234 via
-                  STALWART_RECOVERY_ADMIN. Use the recovery admin credentials
-                  for your Stalwart instance.
-                </FieldDescription>
-              </Field>
+              {!isGmailSetup ? (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="setup-bootstrap-token">
+                      Bootstrap token
+                    </FieldLabel>
+                    <Input
+                      id="setup-bootstrap-token"
+                      type="password"
+                      value={bootstrapToken}
+                      onChange={(event) => setBootstrapToken(event.target.value)}
+                      autoComplete="off"
+                      placeholder="Paste HAIL_SETUP__BOOTSTRAP_TOKEN"
+                      required
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="stalwart-admin-username">
+                      Stalwart admin user
+                    </FieldLabel>
+                    <Input
+                      id="stalwart-admin-username"
+                      value={stalwartAdminUsername}
+                      onChange={(event) =>
+                        setStalwartAdminUsername(event.target.value)
+                      }
+                      autoComplete="off"
+                      required
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="stalwart-admin-password">
+                      Stalwart admin password
+                    </FieldLabel>
+                    <Input
+                      id="stalwart-admin-password"
+                      type="password"
+                      value={stalwartAdminPassword}
+                      onChange={(event) =>
+                        setStalwartAdminPassword(event.target.value)
+                      }
+                      autoComplete="off"
+                      required
+                    />
+                    <FieldDescription>
+                      Local compose defaults to admin/admin1234 via
+                      STALWART_RECOVERY_ADMIN. Use the recovery admin credentials
+                      for your Stalwart instance.
+                    </FieldDescription>
+                  </Field>
+                </>
+              ) : null}
               <Field>
                 <FieldLabel htmlFor="setup-email">Admin email</FieldLabel>
                 <Input
@@ -486,17 +519,19 @@ function SetupPage() {
                   autoComplete="name"
                 />
               </Field>
-              <Field>
-                <FieldLabel htmlFor="domain">Mail domain</FieldLabel>
-                <Input
-                  id="domain"
-                  value={domain}
-                  onChange={(event) => setDomain(event.target.value)}
-                  autoComplete="off"
-                  placeholder="example.com"
-                  required
-                />
-              </Field>
+              {!isGmailSetup ? (
+                <Field>
+                  <FieldLabel htmlFor="domain">Mail domain</FieldLabel>
+                  <Input
+                    id="domain"
+                    value={domain}
+                    onChange={(event) => setDomain(event.target.value)}
+                    autoComplete="off"
+                    placeholder="example.com"
+                    required
+                  />
+                </Field>
+              ) : null}
               <Field>
                 <FieldLabel htmlFor="setup-password">Password</FieldLabel>
                 <Input
@@ -509,17 +544,16 @@ function SetupPage() {
                   minLength={12}
                 />
                 <FieldDescription>
-                  Password must be at least 12 characters. The email must belong
-                  to the mail domain. The wizard accepts domains with or without
-                  a trailing dot; the API normalizes to lowercase before
-                  provisioning.
+                  {isGmailSetup
+                    ? 'Password must be at least 12 characters. It protects your local hail admin session; Google remains the mail account source of truth.'
+                    : 'Password must be at least 12 characters. The email must belong to the mail domain. The wizard accepts domains with or without a trailing dot; the API normalizes to lowercase before provisioning.'}
                 </FieldDescription>
               </Field>
               <ErrorMessage
                 message={
-                  setupAdmin.error
+                  pendingSetup.error
                     ? formErrorMessage(
-                        setupAdmin.error,
+                        pendingSetup.error,
                         'Setup failed. Check the values and try again.',
                       )
                     : null
@@ -531,10 +565,12 @@ function SetupPage() {
         <CardFooter>
           <SubmitButton
             form="setup-form"
-            isPending={setupAdmin.isPending}
-            pendingText="Creating admin…"
+            isPending={pendingSetup.isPending}
+            pendingText={
+              isGmailSetup ? 'Redirecting to Google…' : 'Creating admin…'
+            }
           >
-            Create admin
+            {isGmailSetup ? 'Sign in with Google' : 'Create admin'}
           </SubmitButton>
         </CardFooter>
       </Card>

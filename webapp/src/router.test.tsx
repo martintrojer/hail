@@ -71,7 +71,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   api = {
-    setup: { wizard_active: false, reason: 'admin_user_exists' },
+    setup: { wizard_active: false, backend: 'jmap', reason: 'admin_user_exists' },
     user: null,
     loginCalls: [],
     setupAdminCalls: [],
@@ -110,7 +110,7 @@ beforeEach(() => {
         return jsonResponse(api.setupAdminError.body, api.setupAdminError.status);
       }
       api.user = adminUser;
-      api.setup = { wizard_active: false, reason: 'admin_user_exists' };
+      api.setup = { wizard_active: false, backend: 'jmap', reason: 'admin_user_exists' };
       return jsonResponse(adminUser, 201);
     }
 
@@ -229,7 +229,7 @@ async function expectLocation(path: string) {
 
 describe('SPA auth/router flows', () => {
   it('redirects the root route to setup when setup is active', async () => {
-    api.setup = { wizard_active: true };
+    api.setup = { wizard_active: true, backend: 'jmap' };
 
     renderRouterAt('/');
 
@@ -397,7 +397,7 @@ describe('SPA auth/router flows', () => {
   });
 
   it('updates the auth cache and navigates to imbox after first-run setup', async () => {
-    api.setup = { wizard_active: true };
+    api.setup = { wizard_active: true, backend: 'jmap' };
 
     renderRouterAt('/setup');
 
@@ -447,7 +447,7 @@ describe('SPA auth/router flows', () => {
   });
 
   it('renders backend setup error detail in the setup alert', async () => {
-    api.setup = { wizard_active: true };
+    api.setup = { wizard_active: true, backend: 'jmap' };
     api.setupAdminError = {
       status: 400,
       body: {

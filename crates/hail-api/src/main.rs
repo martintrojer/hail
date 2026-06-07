@@ -194,13 +194,24 @@ impl DbGmailTokenSource {
             .map_err(|err| anyhow!(err))?;
         Ok(Self {
             http: reqwest::Client::new(),
-            client_id: config.provider_import.gmail.oauth_client_id.clone(),
-            client_secret: config.provider_import.gmail.oauth_client_secret.clone(),
+            client_id: config
+                .mail
+                .gmail
+                .oauth_client_id
+                .clone()
+                .or_else(|| config.provider_import.gmail.oauth_client_id.clone()),
+            client_secret: config
+                .mail
+                .gmail
+                .oauth_client_secret
+                .clone()
+                .or_else(|| config.provider_import.gmail.oauth_client_secret.clone()),
             token_url: config
-                .provider_import
+                .mail
                 .gmail
                 .oauth_token_url
                 .clone()
+                .or_else(|| config.provider_import.gmail.oauth_token_url.clone())
                 .unwrap_or_else(|| "https://oauth2.googleapis.com/token".to_string()),
             refresh_token: secrecy::SecretString::from(token.expose_secret().to_string()),
         })

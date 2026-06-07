@@ -13,9 +13,12 @@ use axum::response::IntoResponse;
 use chrono::{Duration as ChronoDuration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::middleware::session::SESSION_COOKIE;
+use hail_api::routes::provider_accounts::{
+    GmailAuthorizationRequest, GmailOAuthClient, GmailOAuthError, GmailProfile, GmailTokenExchange,
+};
 use hail_api::routes::setup::{ProvisionError, ProvisionedUser, UserProvisioner};
 use hail_api::state::AppState;
-use hail_core::{AdminConfig, KEY_LEN, SetupConfig};
+use hail_core::{AdminConfig, KEY_LEN, MailBackend, SetupConfig};
 use hail_db::connect;
 use hail_test::fixture_config;
 use http_body_util::BodyExt;
@@ -145,6 +148,59 @@ impl FakeProvisioner {
 
     fn observed_calls(&self) -> Vec<ProvisionCall> {
         self.observed.lock().expect("observed calls").clone()
+    }
+}
+
+#[derive(Default)]
+struct FakeGmailOAuthClient {
+    auth_requests: Mutex<Vec<GmailAuthorizationRequest>>,
+    exchange_codes: Mutex<Vec<String>>,
+}
+
+impl GmailOAuthClient for FakeGmailOAuthClient {
+    fn authorization_url(&self, req: GmailAuthorizationRequest) -> Result<String, GmailOAuthError> {
+        self.auth_requests
+            .lock()
+            .expect("auth requests")
+            .push(req.clone());
+        Ok(format!(
+            "https://accounts.example.test/oauth?state={}",
+            req.state
+        ))
+    }
+
+    fn exchange_code<'a>(
+        &'a self,
+        code: &'a str,
+        _redirect_uri: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<GmailTokenExchange, GmailOAuthError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.exchange_codes
+                .lock()
+                .expect("exchange codes")
+                .push(code.to_owned());
+            Ok(GmailTokenExchange {
+                access_token: SecretString::from("setup-access-token"),
+                refresh_token: Some(SecretString::from("setup-refresh-token")),
+                expires_at: None,
+                granted_scopes: vec![
+                    "https://www.googleapis.com/auth/gmail.readonly".to_owned(),
+                    "https://www.googleapis.com/auth/gmail.send".to_owned(),
+                ],
+                profile: GmailProfile {
+                    email: "alice@example.org".to_owned(),
+                    history_id: Some("h-1".to_owned()),
+                },
+            })
+        })
+    }
+
+    fn revoke_refresh_token<'a>(
+        &'a self,
+        _refresh_token: SecretString,
+    ) -> Pin<Box<dyn Future<Output = Result<(), GmailOAuthError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -484,6 +540,7 @@ async fn wizard_state_active_when_empty_and_no_config_admin() {
     let (status, json) = get_json(app(state), "/api/setup/state").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["wizard_active"], true);
+    assert_eq!(json["backend"], "jmap");
     assert!(json.get("reason").is_none());
 }
 
@@ -504,6 +561,7 @@ async fn wizard_state_inactive_when_admin_user_exists() {
     let (status, json) = get_json(app(state), "/api/setup/state").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["wizard_active"], false);
+    assert_eq!(json["backend"], "jmap");
     assert_eq!(json["reason"], "admin_user_exists");
 }
 
@@ -519,6 +577,7 @@ async fn wizard_state_inactive_when_config_admin_set() {
     let (status, json) = get_json(app(state), "/api/setup/state").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["wizard_active"], false);
+    assert_eq!(json["backend"], "jmap");
     assert_eq!(json["reason"], "config_admin_set");
 }
 
@@ -705,6 +764,29 @@ async fn post_setup_admin_succeeds_and_sets_session_cookie() {
     assert!(expires_at <= created_at + ChronoDuration::days(30) + ChronoDuration::seconds(1));
     assert!(last_used_at >= created_at);
     assert!(last_used_at <= Utc::now() + ChronoDuration::seconds(1));
+}
+
+#[tokio::test]
+async fn openapi_includes_flavour_aware_setup_schema() {
+    let (state, _key) = fixture_state(None).await;
+    let (status, json) = get_json(hail_api::build_router(state, false), "/api/openapi.json").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json.pointer("/components/schemas/SetupStateResponse/required"),
+        Some(&serde_json::json!(["wizard_active", "backend"])),
+    );
+    assert_eq!(
+        json.pointer("/components/schemas/SetupBackend/enum"),
+        Some(&serde_json::json!(["gmail", "jmap"])),
+    );
+    assert!(
+        json.pointer("/paths/~1api~1setup~1gmail~1connect/post")
+            .is_some()
+    );
+    assert!(
+        json.pointer("/paths/~1api~1setup~1gmail~1callback/get")
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -1207,5 +1289,164 @@ async fn stalwart_provisioner_treats_existing_principal_as_success() {
             .iter()
             .any(|call| call.body.pointer("/methodCalls/0/0")
                 == Some(&serde_json::json!("x:Account/set")))
+    );
+}
+
+#[tokio::test]
+async fn wizard_state_reports_gmail_backend() {
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.mail.backend = MailBackend::Gmail;
+    let (status, json) = get_json(app(state), "/api/setup/state").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["wizard_active"], true);
+    assert_eq!(json["backend"], "gmail");
+}
+
+#[tokio::test]
+async fn jmap_setup_admin_is_hidden_for_gmail_backend() {
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.mail.backend = MailBackend::Gmail;
+    let provisioner = Arc::new(FakeProvisioner::default());
+    let resp = post_admin(
+        app_with_provisioner(state, provisioner.clone()),
+        r#"{"email":"alice@example.org","password":"correct horse battery","domain":"example.org","stalwart_admin_username":"admin","stalwart_admin_password":"admin1234"}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(provisioner.call_count(), 0);
+}
+
+#[tokio::test]
+async fn gmail_setup_connect_requires_csrf_and_returns_authorization_url() {
+    let (mut state, _key) = fixture_state(None).await;
+    state.config.mail.backend = MailBackend::Gmail;
+    state.config.mail.gmail.oauth_client_id = Some("gmail-client-id".to_owned());
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let app = hail_api::routes::setup::router_with_deps(
+        Arc::new(FakeProvisioner::default()),
+        client.clone(),
+    )
+    .with_state(state);
+
+    let missing_csrf = Request::builder()
+        .method(Method::POST)
+        .uri("/api/setup/gmail/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"Alice"}"#,
+        ))
+        .unwrap();
+    let missing_csrf = app.clone().oneshot(missing_csrf).await.unwrap();
+    assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/setup/gmail/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(hail_api::middleware::auth::CSRF_HEADER, "1")
+        .body(Body::from(
+            r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"Alice"}"#,
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["authorization_url"]
+            .as_str()
+            .unwrap()
+            .contains("state=")
+    );
+    let auth_requests = client.auth_requests.lock().expect("auth requests");
+    assert_eq!(auth_requests.len(), 1);
+    assert_eq!(auth_requests[0].client_id, "gmail-client-id");
+}
+
+#[tokio::test]
+async fn gmail_setup_callback_creates_local_user_account_policy_and_session() {
+    let (mut state, key) = fixture_state(None).await;
+    state.config.mail.backend = MailBackend::Gmail;
+    state.config.mail.gmail.oauth_client_id = Some("gmail-client-id".to_owned());
+    let client = Arc::new(FakeGmailOAuthClient::default());
+    let app = hail_api::routes::setup::router_with_deps(
+        Arc::new(FakeProvisioner::default()),
+        client.clone(),
+    )
+    .with_state(state.clone());
+
+    let connect = Request::builder()
+        .method(Method::POST)
+        .uri("/api/setup/gmail/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(hail_api::middleware::auth::CSRF_HEADER, "1")
+        .body(Body::from(
+            r#"{"email":"alice@example.org","password":"correct horse battery","display_name":"Alice"}"#,
+        ))
+        .unwrap();
+    let connect = app.clone().oneshot(connect).await.unwrap();
+    assert_eq!(connect.status(), StatusCode::OK);
+    let body = connect.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let auth_url = url::Url::parse(json["authorization_url"].as_str().unwrap()).unwrap();
+    let state_token = auth_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .unwrap();
+
+    let callback = Request::builder()
+        .method(Method::GET)
+        .uri(format!(
+            "/api/setup/gmail/callback?state={state_token}&code=ok"
+        ))
+        .header(header::USER_AGENT, "setup-test")
+        .body(Body::empty())
+        .unwrap();
+    let callback = app.oneshot(callback).await.unwrap();
+    assert_eq!(callback.status(), StatusCode::SEE_OTHER);
+    let cookie = callback
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let session_id = session_cookie_value(&cookie);
+
+    let account: (String, String, String) =
+        sqlx::query_as("SELECT backend_kind, provider_email, sync_status FROM mail_accounts")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        account,
+        (
+            "gmail".to_owned(),
+            "alice@example.org".to_owned(),
+            "active".to_owned()
+        )
+    );
+
+    let policy: (String, String) = sqlx::query_as("SELECT mode, backfill FROM cache_policy")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(policy, ("bounded".to_owned(), "incremental".to_owned()));
+
+    let token_enc: Vec<u8> =
+        sqlx::query_scalar("SELECT jmap_token_enc FROM sessions WHERE id = ?1")
+            .bind(&session_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    let token_plain = hail_core::open(&token_enc, &key).expect("decrypt setup token");
+    assert_eq!(token_plain, b"correct horse battery");
+    assert_eq!(
+        client
+            .exchange_codes
+            .lock()
+            .expect("exchange codes")
+            .as_slice(),
+        ["ok"]
     );
 }
