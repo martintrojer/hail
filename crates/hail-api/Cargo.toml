@@ -27,6 +27,9 @@ hail-db = { path = "../hail-db" }
 hail-backend = { path = "../hail-backend" }
 hail-jmap = { path = "../hail-jmap" }
 hail-worker = { path = "../hail-worker" }
+hail-cache = { path = "../hail-cache" }
+hail-blob-store = { path = "../hail-blob-store" }
+hail-gmail = { path = "../hail-gmail" }
 
 # Runtime + HTTP plumbing. Versions mirror hail-worker so the workspace
 # stays on a single set of tokio/axum/tower-http versions.
@@ -67,6 +70,10 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "h
 pulldown-cmark = "0.13"
 sha2 = "0.10"
 url = "2"
+mail-parser = "0.11"
+bytes = { version = "1", features = ["serde"] }
+futures-util = "0.3"
+futures-core = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -74,6 +81,7 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tokio-tungstenite = "0.29"
 futures-util = "0.3"
+futures-core = "0.3"
 # Pull ourselves back in with the test-stub feature on. This is the
 # standard pattern for unblocking integration tests that need a
 # behind-the-firewall debug endpoint.

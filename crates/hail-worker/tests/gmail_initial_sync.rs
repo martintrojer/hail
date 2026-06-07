@@ -209,6 +209,7 @@ fn profile(email: &str, history_id: Option<&str>) -> GmailProfile {
 
 fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) -> RawGmailMessage {
     RawGmailMessage {
+        payload: None,
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),

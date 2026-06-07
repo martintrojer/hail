@@ -105,10 +105,7 @@ impl CachedMail {
 
     /// Fetch a thread/conversation for rendering.
     pub async fn get_thread(&self, thread_id: &str) -> Result<Thread> {
-        let _ = thread_id;
-        Err(CacheError::NotImplemented {
-            operation: "get_thread",
-        })
+        self.get_thread_readthrough(thread_id).await
     }
 
     /// Fetch the raw RFC822 body for one message.
@@ -144,6 +141,25 @@ impl CachedMail {
     /// Move a message or thread target to a canonical mailbox role.
     pub async fn move_to_role(&self, target: MailTarget<'_>, role: MailboxRole) -> Result<()> {
         writethrough::move_to_role(self, target, role).await
+    }
+
+    /// Permanently delete a message or every cached message in a thread target.
+    pub async fn delete_permanently(&self, target: MailTarget<'_>) -> Result<()> {
+        let ids = match target {
+            MailTarget::Message(id) => vec![id.clone()],
+            MailTarget::Thread(thread_id) => {
+                let thread = self.get_thread(thread_id).await?;
+                thread
+                    .messages
+                    .into_iter()
+                    .map(|message| message.id)
+                    .collect()
+            }
+        };
+        for id in ids {
+            self.backend.delete_permanently(&id).await?;
+        }
+        Ok(())
     }
 
     /// Count queued outbound mutations that have not yet been applied upstream.

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use hail_cache::CachedMail;
 use hail_core::Config;
 use sqlx::SqlitePool;
 
@@ -28,6 +29,8 @@ pub struct AppState {
     /// In-memory rate limiter for sensitive public auth endpoints (5 attempts
     /// / 60s per remote IP). See `middleware::rate_limit`.
     pub auth_rate_limiter: Arc<crate::middleware::rate_limit::IpRateLimiter>,
+    /// Backend-agnostic read-through/write-through mail cache facade.
+    pub mail: Arc<CachedMail>,
     /// Process-local event fan-out for `/api/ws`. Worker-originated events
     /// cross the process boundary through the SQLite `app_events` outbox and
     /// are rebroadcast into this bus by the API bridge task.

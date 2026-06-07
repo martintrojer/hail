@@ -94,10 +94,11 @@ impl ContractRuntime {
         let mut config = fixture_config(&db_url, &server_key);
         config.stalwart.jmap_url = stalwart.jmap_url();
         let state = AppState {
-            db,
+            db: db.clone(),
             config,
             server_key: Arc::new(server_key),
             auth_rate_limiter: Arc::new(IpRateLimiter::new(100, Duration::from_secs(60))),
+            mail: hail_api::test_support::fake_cached_mail(db.clone()),
             events: hail_api::events::AppEventBus::default(),
         };
 

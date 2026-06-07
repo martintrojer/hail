@@ -126,6 +126,218 @@ pub trait ThreadActions: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>>;
 }
 
+pub struct CacheThreadVerifier;
+
+impl ThreadVerifier for CacheThreadVerifier {
+    fn exists<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, ThreadVerifyError>> + Send + 'a>> {
+        Box::pin(async move {
+            state
+                .mail
+                .get_thread(thread_id)
+                .await
+                .map(|thread| !thread.messages.is_empty())
+                .map_err(|err| ThreadVerifyError(err.to_string()))
+        })
+    }
+}
+
+pub struct CacheThreadActions;
+
+impl ThreadActions for CacheThreadActions {
+    fn current_classification<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Classification>, ThreadActionError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let thread = state
+                .mail
+                .get_thread(thread_id)
+                .await
+                .map_err(provider_error)?;
+            Ok(thread.messages.into_iter().find_map(|message| {
+                Classification::ALL.into_iter().find(|candidate| {
+                    message
+                        .keywords
+                        .iter()
+                        .any(|kw| kw.as_str() == candidate.keyword())
+                })
+            }))
+        })
+    }
+
+    fn classify<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+        classification: Classification,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let add = [hail_backend::Keyword::from_classification(classification)];
+            let remove = Classification::ALL
+                .into_iter()
+                .filter(|candidate| *candidate != classification)
+                .map(hail_backend::Keyword::from_classification)
+                .collect::<Vec<_>>();
+            state
+                .mail
+                .mutate_keywords(hail_cache::MailTarget::Thread(thread_id), &add, &remove)
+                .await
+                .map_err(provider_error)?;
+            state
+                .mail
+                .move_to_role(
+                    hail_cache::MailTarget::Thread(thread_id),
+                    hail_backend::MailboxRole::Inbox,
+                )
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn set_keyword<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+        keyword: &'static str,
+        enabled: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let keyword = hail_backend::Keyword::new(keyword);
+            let (add, remove): (Vec<_>, Vec<_>) = if enabled {
+                (vec![keyword], Vec::new())
+            } else {
+                (Vec::new(), vec![keyword])
+            };
+            state
+                .mail
+                .mutate_keywords(hail_cache::MailTarget::Thread(thread_id), &add, &remove)
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn archive<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        cache_move_to_role(state, thread_id, hail_backend::MailboxRole::Archive)
+    }
+
+    fn trash<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        cache_move_to_role(state, thread_id, hail_backend::MailboxRole::Trash)
+    }
+
+    fn spam<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        cache_move_to_role(state, thread_id, hail_backend::MailboxRole::Junk)
+    }
+
+    fn not_spam<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let remove = [hail_backend::Keyword::new("$Junk")];
+            state
+                .mail
+                .mutate_keywords(hail_cache::MailTarget::Thread(thread_id), &[], &remove)
+                .await
+                .map_err(provider_error)?;
+            state
+                .mail
+                .move_to_role(
+                    hail_cache::MailTarget::Thread(thread_id),
+                    hail_backend::MailboxRole::Inbox,
+                )
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn restore<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        cache_move_to_role(state, thread_id, hail_backend::MailboxRole::Inbox)
+    }
+
+    fn destroy<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            state
+                .mail
+                .delete_permanently(hail_cache::MailTarget::Thread(thread_id))
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn mark<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+        read: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+        Box::pin(async move {
+            let keyword = hail_backend::Keyword::new("$seen");
+            let (add, remove): (Vec<_>, Vec<_>) = if read {
+                (vec![keyword], Vec::new())
+            } else {
+                (Vec::new(), vec![keyword])
+            };
+            state
+                .mail
+                .mutate_keywords(hail_cache::MailTarget::Thread(thread_id), &add, &remove)
+                .await
+                .map_err(provider_error)
+        })
+    }
+}
+
+fn cache_move_to_role<'a>(
+    state: &'a AppState,
+    thread_id: &'a str,
+    role: hail_backend::MailboxRole,
+) -> Pin<Box<dyn Future<Output = Result<(), ThreadActionError>> + Send + 'a>> {
+    Box::pin(async move {
+        state
+            .mail
+            .move_to_role(hail_cache::MailTarget::Thread(thread_id), role)
+            .await
+            .map_err(provider_error)
+    })
+}
+
 pub struct JmapThreadVerifier;
 
 impl ThreadVerifier for JmapThreadVerifier {
@@ -390,14 +602,14 @@ impl crate::routes::jmap_helpers::ProviderError for ThreadActionError {
 
 pub fn router() -> Router<AppState> {
     Router::from(openapi_router_with_deps(
-        Arc::new(JmapThreadVerifier),
-        Arc::new(JmapThreadActions),
+        Arc::new(CacheThreadVerifier),
+        Arc::new(CacheThreadActions),
     ))
 }
 
 /// Build the OpenAPI-tracked router for production thread verbs.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
-    openapi_router_with_deps(Arc::new(JmapThreadVerifier), Arc::new(JmapThreadActions))
+    openapi_router_with_deps(Arc::new(CacheThreadVerifier), Arc::new(CacheThreadActions))
 }
 
 pub fn router_with_verifier<V>(verifier: Arc<V>) -> Router<AppState>
@@ -406,7 +618,7 @@ where
 {
     Router::from(openapi_router_with_deps(
         verifier,
-        Arc::new(JmapThreadActions),
+        Arc::new(CacheThreadActions),
     ))
 }
 
@@ -1068,7 +1280,9 @@ async fn destroy_thread(
                 tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread note cleanup failed after destroy");
                 return internal();
             }
-            if let Err(err) = hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id).await {
+            if let Err(err) =
+                hail_db::clear_thread_sidecar_state(&state.db, user.id, &thread_id).await
+            {
                 tracing::error!(user_id = user.id, thread_id = %thread_id, error = %err, "thread sidecar cleanup failed after destroy");
                 return internal();
             }
@@ -1132,13 +1346,11 @@ async fn mark_thread(
             {
                 tracing::warn!(user_id = user.id, thread_id = %thread_id, error = %err, "failed to mark thread seen in sidecar");
             }
-            if let Err(err) = hail_db::provider_outbound_changes::enqueue_thread_read_state_if_bidi_enabled(
-                &state.db,
-                user.id,
-                &thread_id,
-                body.read,
-            )
-            .await
+            if let Err(err) =
+                hail_db::provider_outbound_changes::enqueue_thread_read_state_if_bidi_enabled(
+                    &state.db, user.id, &thread_id, body.read,
+                )
+                .await
             {
                 tracing::warn!(user_id = user.id, thread_id = %thread_id, read = body.read, error = %err, "provider outbound read-state enqueue failed");
             }
@@ -1231,12 +1443,10 @@ async fn email_ids_in_thread(
 }
 
 async fn junk_mailbox_id(session: &hail_jmap::Session) -> Result<String, ThreadActionError> {
-    if let Some(id) = hail_jmap::mailbox_id_by_role(
-        session,
-        hail_jmap::jmap_client::mailbox::Role::Junk,
-    )
-    .await
-    .map_err(provider_error)?
+    if let Some(id) =
+        hail_jmap::mailbox_id_by_role(session, hail_jmap::jmap_client::mailbox::Role::Junk)
+            .await
+            .map_err(provider_error)?
     {
         return Ok(id);
     }

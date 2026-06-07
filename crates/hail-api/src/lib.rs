@@ -15,6 +15,7 @@ pub mod middleware;
 pub mod openapi;
 pub mod routes;
 pub mod state;
+pub mod test_support;
 
 use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::middleware::Next;

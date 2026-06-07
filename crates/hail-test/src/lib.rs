@@ -32,10 +32,11 @@ pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
     let config = fixture_config(url, &key);
 
     let state = AppState {
-        db,
+        db: db.clone(),
         config,
         server_key: Arc::new(key),
         auth_rate_limiter: Arc::new(IpRateLimiter::default()),
+        mail: hail_api::test_support::fake_cached_mail(db.clone()),
         events: hail_api::events::AppEventBus::default(),
     };
     (state, key)

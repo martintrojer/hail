@@ -297,6 +297,7 @@ fn history_page(
 
 fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) -> RawGmailMessage {
     RawGmailMessage {
+        payload: None,
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),
@@ -310,6 +311,7 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
 
 fn raw_fixture_message(fixture: GmailImportFixture) -> RawGmailMessage {
     RawGmailMessage {
+        payload: None,
         id: fixture.gmail_id.to_owned(),
         thread_id: Some(fixture.thread_id.to_owned()),
         history_id: Some(fixture.history_id.to_owned()),
