@@ -65,6 +65,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/compose": {
         parameters: {
             query?: never;
@@ -1193,6 +1209,16 @@ export interface components {
         AssignLabelNameRequest: {
             label_name: string;
         };
+        /** @description User-downloadable JMAP attachment metadata for a message in the thread. */
+        Attachment: {
+            blob_id: string;
+            download_url: string;
+            filename: string;
+            inline: boolean;
+            mime_type: string;
+            /** Format: int64 */
+            size: number;
+        };
         AttachmentContext: {
             email_id: string;
             from: string;
@@ -1253,6 +1279,22 @@ export interface components {
         };
         CancelBubbleUpResponse: {
             status: string;
+        };
+        CapabilitiesResponse: {
+            accounts: components["schemas"]["CapabilityAccount"][];
+            backend: string;
+            cache_mode: string;
+            label_path_separator: string;
+            supports_bulk_archive: boolean;
+            supports_eventsource: boolean;
+            supports_initial_import: boolean;
+            supports_principals_admin: boolean;
+        };
+        CapabilityAccount: {
+            backend: string;
+            email: string;
+            /** Format: int64 */
+            id: number;
         };
         ClassifyRequest: {
             to: components["schemas"]["MailClassification"];
@@ -1671,15 +1713,6 @@ export interface components {
         };
         /** @enum {string} */
         StalwartStatus: "connected" | "unreachable";
-        Attachment: {
-            blob_id: string;
-            download_url: string;
-            filename: string;
-            inline: boolean;
-            mime_type: string;
-            /** Format: int64 */
-            size: number;
-        };
         ThreadMessageResponse: {
             attachments: components["schemas"]["Attachment"][];
             blocked_trackers: components["schemas"]["BlockedTrackerResponse"][];
@@ -1988,6 +2021,40 @@ export interface operations {
                 content?: never;
             };
             /** @description Blob upload failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runtime mail backend and cache capabilities for SPA feature gates. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesResponse"];
+                };
+            };
+            /** @description Missing or invalid session. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Capability lookup failed. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -2757,7 +2824,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Connected Gmail provider account sync statuses. */
+            /** @description Connected Gmail mail account sync statuses. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2827,7 +2894,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Provider account reset for a fresh Gmail initial import. */
+            /** @description Mail account reset for a fresh Gmail initial import. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2849,7 +2916,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Provider account import paused after operator stop. */
+            /** @description Mail account import paused after operator stop. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2858,7 +2925,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProviderSyncTriggerResponse"];
                 };
             };
-            /** @description Provider account import is not currently in-flight. */
+            /** @description Mail account import is not currently in-flight. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2878,7 +2945,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Provider account marked due for safe background sync. */
+            /** @description Mail account marked due for safe background sync. */
             200: {
                 headers: {
                     [name: string]: unknown;

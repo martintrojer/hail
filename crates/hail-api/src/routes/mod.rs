@@ -9,6 +9,7 @@ pub mod admin_users;
 pub mod attachments;
 pub mod auth;
 pub mod blobs;
+pub mod capabilities;
 pub mod compose;
 pub mod contacts;
 pub mod drafts;
