@@ -1,7 +1,7 @@
 //! Worker-side bidirectional provider push loop for Gmail.
 //!
 //! The API layer records durable `provider_outbound_changes` when an operator
-//! changes local read state, labels, or trash state and the provider account is
+//! changes local read state, labels, or trash state and the mail account is
 //! explicitly opted in. This module drains those rows into idempotent Gmail
 //! `messages.batchModify` calls and marks rows applied only after Gmail accepts
 //! the batch.
@@ -110,7 +110,7 @@ pub async fn process_pending_changes(
             mark_failed(
                 db,
                 &group.change_ids,
-                "gmail client not available for provider account",
+                "gmail client not available for mail account",
             )
             .await?;
             summary.failed += group.change_ids.len();
@@ -200,7 +200,7 @@ async fn load_pending_changes(
          INNER JOIN provider_message_mappings pmm \
            ON pmm.provider_account_id = poc.provider_account_id \
           AND pmm.jmap_email_id = poc.jmap_email_id \
-         INNER JOIN provider_accounts pa ON pa.id = poc.provider_account_id \
+         INNER JOIN mail_accounts pa ON pa.id = poc.provider_account_id \
          WHERE poc.applied_at IS NULL \
            AND pa.bidirectional_sync_enabled = 1 \
            AND (poc.attempt_count = 0 OR datetime(poc.created_at, '+' || MIN(?1, (1 << MIN(poc.attempt_count, 10))) || ' seconds') <= datetime(?2)) \

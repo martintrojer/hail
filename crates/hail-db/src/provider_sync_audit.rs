@@ -1,7 +1,7 @@
 //! Provider import/sync audit log helpers.
 //!
 //! The provider audit stream is intentionally UI-safe and operations-focused:
-//! rows identify the hail user, provider account, optional provider message id,
+//! rows identify the hail user, mail account, optional provider message id,
 //! operation/event kind, result, redacted error fields, and timestamps. All
 //! caller-provided error fields and metadata pass through the centralized
 //! provider audit sanitizer before persistence.
@@ -131,7 +131,7 @@ pub struct ProviderSyncAuditLog {
 
 /// Insert a provider sync/import audit row.
 ///
-/// The database enforces that `user_id` matches the owning provider account, so
+/// The database enforces that `user_id` matches the owning mail account, so
 /// callers cannot accidentally create cross-user audit rows.
 pub async fn insert_provider_sync_audit_log(
     db: &SqlitePool,
@@ -178,7 +178,7 @@ fn validate_and_sanitize_metadata_json(metadata_json: &str) -> Result<String, sq
     Ok(safe_provider_metadata_json_value(&value))
 }
 
-/// List provider sync/import audit rows for one user's provider account, newest
+/// List provider sync/import audit rows for one user's mail account, newest
 /// first. The user filter is part of the query so API callers can safely scope
 /// status views by authenticated hail user.
 pub async fn list_provider_sync_audit_logs(

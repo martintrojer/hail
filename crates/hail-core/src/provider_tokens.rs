@@ -1,13 +1,13 @@
 //! Provider OAuth token crypto helpers.
 //!
 //! Gmail/provider refresh tokens are long-lived credentials. Store them only as
-//! AES-256-GCM ciphertext in `provider_accounts.refresh_token_enc`, using the
+//! AES-256-GCM ciphertext in `mail_accounts.refresh_token_enc`, using the
 //! same server-key primitive that wraps JMAP session bearer tokens. Access
 //! tokens are normally short-lived memory values, but this module supports both
 //! token kinds so OAuth code has one secret-safe representation.
 //!
 //! The AEAD additional authenticated data binds ciphertext to non-secret account
-//! metadata. Copying an encrypted token blob to a different provider account or
+//! metadata. Copying an encrypted token blob to a different mail account or
 //! decrypting it as a different token kind fails authentication instead of
 //! returning plaintext.
 
@@ -38,7 +38,7 @@ impl ProviderOAuthTokenKind {
     }
 }
 
-/// Non-secret provider account metadata authenticated with each token blob.
+/// Non-secret mail account metadata authenticated with each token blob.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderTokenContext {
     pub user_id: i64,
@@ -49,7 +49,7 @@ pub struct ProviderTokenContext {
 }
 
 impl ProviderTokenContext {
-    /// Construct context for a token associated with one `provider_accounts` row.
+    /// Construct context for a token associated with one `mail_accounts` row.
     pub fn new(
         user_id: i64,
         provider_account_row_id: i64,

@@ -197,10 +197,10 @@ async fn insert_provider_account(
     jmap_account_id: &str,
 ) -> i64 {
     sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', ?, ?, ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', ?, ?, ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind(jmap_account_id)
@@ -211,13 +211,13 @@ async fn insert_provider_account(
     .bind("2026-01-01T00:00:00Z")
     .execute(pool)
     .await
-    .expect("provider account insert");
+    .expect("mail account insert");
 
-    sqlx::query_scalar("SELECT id FROM provider_accounts WHERE user_id = ?")
+    sqlx::query_scalar("SELECT id FROM mail_accounts WHERE user_id = ?")
         .bind(user_id)
         .fetch_one(pool)
         .await
-        .expect("provider account id")
+        .expect("mail account id")
 }
 
 #[derive(Clone, Debug)]
@@ -1151,7 +1151,7 @@ async fn cancellation_interrupts_blocked_historical_routing() {
 }
 
 async fn account_error_class(pool: &sqlx::SqlitePool, provider_account_id: i64) -> Option<String> {
-    sqlx::query_scalar("SELECT last_error_class FROM provider_accounts WHERE id = ?1")
+    sqlx::query_scalar("SELECT last_error_class FROM mail_accounts WHERE id = ?1")
         .bind(provider_account_id)
         .fetch_one(pool)
         .await
@@ -1766,12 +1766,12 @@ async fn configured_bound_limits_list_fetch_import_and_audits_explicitly() {
 
     let (status, completed_at, cursor_json): (String, Option<String>, String) = sqlx::query_as(
         "SELECT sync_status, initial_sync_completed_at, backfill_cursor_json \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(provider_account_id)
     .fetch_one(&pool)
     .await
-    .expect("provider account state");
+    .expect("mail account state");
     assert_eq!(status, "initial_sync");
     assert!(completed_at.is_none());
     assert!(cursor_json.contains("page-after-bound"));
@@ -1834,7 +1834,7 @@ async fn bounded_import_saves_resume_cursor_and_uses_it_next_run() {
     assert_eq!(first.next_page_token.as_deref(), Some("page-2"));
 
     let stored_cursor: String =
-        sqlx::query_scalar("SELECT backfill_cursor_json FROM provider_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT backfill_cursor_json FROM mail_accounts WHERE id = ?1")
             .bind(provider_account_id)
             .fetch_one(&pool)
             .await
@@ -1929,11 +1929,11 @@ async fn bounded_import_saves_resume_cursor_and_uses_it_next_run() {
 #[tokio::test]
 async fn corrupt_resume_cursor_surfaces_error_and_audit() {
     let (pool, _guard, user_id, provider_account_id) = setup().await;
-    sqlx::query("DROP TRIGGER provider_accounts_json_state_update")
+    sqlx::query("DROP TRIGGER mail_accounts_json_state_update")
         .execute(&pool)
         .await
         .expect("drop json state update trigger for corruption simulation");
-    sqlx::query("UPDATE provider_accounts SET backfill_cursor_json = ?1 WHERE id = ?2")
+    sqlx::query("UPDATE mail_accounts SET backfill_cursor_json = ?1 WHERE id = ?2")
         .bind("{not-json")
         .bind(provider_account_id)
         .execute(&pool)
@@ -1981,7 +1981,7 @@ async fn corrupt_resume_cursor_surfaces_error_and_audit() {
         "import must fail before issuing Gmail list with reset cursor semantics"
     );
     let (sync_status, last_error_class): (String, Option<String>) =
-        sqlx::query_as("SELECT sync_status, last_error_class FROM provider_accounts WHERE id = ?1")
+        sqlx::query_as("SELECT sync_status, last_error_class FROM mail_accounts WHERE id = ?1")
             .bind(provider_account_id)
             .fetch_one(&pool)
             .await
@@ -2272,7 +2272,7 @@ async fn backfill_cursor_json(
     pool: &sqlx::SqlitePool,
     provider_account_id: i64,
 ) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT backfill_cursor_json FROM provider_accounts WHERE id = ?1")
+    sqlx::query_scalar("SELECT backfill_cursor_json FROM mail_accounts WHERE id = ?1")
         .bind(provider_account_id)
         .fetch_one(pool)
         .await

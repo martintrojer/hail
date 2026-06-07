@@ -1,7 +1,7 @@
 //! Sanitizers for provider import/sync audit and account error surfaces.
 //!
 //! Provider integrations may receive error strings from OAuth, Gmail, JMAP, or
-//! MIME/import code. Every string persisted to provider account, provider
+//! MIME/import code. Every string persisted to mail account, provider
 //! mapping, and provider audit error fields should pass through this module so
 //! the safe path is ergonomic: no bearer/access/refresh-token looking values
 //! and no raw RFC822/message body snippets.

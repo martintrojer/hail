@@ -165,10 +165,10 @@ async fn insert_provider(
     next_sync_after: Option<String>,
 ) -> i64 {
     sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, refresh_token_enc, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, refresh_token_enc, \
           last_profile_history_id, initial_sync_completed_at, sync_status, last_sync_attempted_at, next_sync_after, created_at, updated_at) \
-         VALUES (?, 'acct-provider', 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, 'acct-provider', 'gmail', 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(format!("gmail-{status}-{history_id:?}-{next_sync_after:?}"))
@@ -199,7 +199,7 @@ async fn provider_state(
 ) {
     sqlx::query_as(
         "SELECT sync_status, last_sync_succeeded_at, last_error_class, next_sync_after, sync_backoff_secs \
-         FROM provider_accounts WHERE id = ?",
+         FROM mail_accounts WHERE id = ?",
     )
     .bind(id)
     .fetch_one(pool)
@@ -357,7 +357,7 @@ async fn scheduler_redacts_hostile_runner_error_in_account_and_audit_status() {
 
     assert_eq!(summary.failed, 1);
     let account_error: String =
-        sqlx::query_scalar("SELECT last_error_message FROM provider_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT last_error_message FROM mail_accounts WHERE id = ?1")
             .bind(id)
             .fetch_one(&pool)
             .await
@@ -462,7 +462,7 @@ async fn provider_rate_limited_failure_backs_off_as_initial_sync_retry() {
     assert!(state.3.is_some());
 
     runner.set_result(id, Ok(ProviderSyncRunOutcome::completed_active()));
-    sqlx::query("UPDATE provider_accounts SET next_sync_after = NULL WHERE id = ?1")
+    sqlx::query("UPDATE mail_accounts SET next_sync_after = NULL WHERE id = ?1")
         .bind(id)
         .execute(&pool)
         .await
@@ -575,7 +575,7 @@ async fn next_sync_after_prevents_early_retry() {
         Some((now - Duration::seconds(1)).to_rfc3339()),
     )
     .await;
-    sqlx::query("UPDATE provider_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
+    sqlx::query("UPDATE mail_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
         .bind("2026-01-01T00:10:00Z")
         .bind(due)
         .execute(&pool)
@@ -590,7 +590,7 @@ async fn next_sync_after_prevents_early_retry() {
         Some((now + Duration::minutes(10)).to_rfc3339()),
     )
     .await;
-    sqlx::query("UPDATE provider_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
+    sqlx::query("UPDATE mail_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
         .bind("2026-01-01T00:10:00Z")
         .bind(future)
         .execute(&pool)
@@ -618,10 +618,10 @@ async fn tick_ignores_accounts_with_unresolved_external_token_refs() {
     let (pool, _guard, user_id) = setup().await;
     let now = Utc::now();
     let id = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, refresh_token_ref, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, refresh_token_ref, \
           sync_status, created_at, updated_at) \
-         VALUES (?, 'acct-provider', 'gmail', 'gmail-ref-disabled', 'ref-disabled@gmail.example', \
+         VALUES (?, 'acct-provider', 'gmail', 'gmail', 'gmail-ref-disabled', 'ref-disabled@gmail.example', \
                  'kms://hail/provider-token/1', 'disabled', ?, ?)",
     )
     .bind(user_id)
@@ -631,7 +631,7 @@ async fn tick_ignores_accounts_with_unresolved_external_token_refs() {
     .await
     .expect("disabled provider ref insert")
     .last_insert_rowid();
-    sqlx::query("UPDATE provider_accounts SET sync_status = 'active' WHERE id = ?")
+    sqlx::query("UPDATE mail_accounts SET sync_status = 'active' WHERE id = ?")
         .bind(id)
         .execute(&pool)
         .await
@@ -675,7 +675,7 @@ async fn errored_incomplete_initial_with_profile_history_retries_initial() {
         Some((now - Duration::seconds(1)).to_rfc3339()),
     )
     .await;
-    sqlx::query("UPDATE provider_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
+    sqlx::query("UPDATE mail_accounts SET initial_sync_completed_at = ?1 WHERE id = ?2")
         .bind("2026-01-01T00:10:00Z")
         .bind(completed_then_errored)
         .execute(&pool)

@@ -199,7 +199,7 @@ pub async fn process_provider_sync_tick(
     options: ProviderSyncSchedulerOptions,
     cancel: &CancellationToken,
 ) -> Result<ProviderSyncTickSummary> {
-    let accounts = select_due_gmail_provider_accounts(db, now, options.sync_interval).await?;
+    let accounts = select_due_gmail_mail_accounts(db, now, options.sync_interval).await?;
     process_provider_sync_accounts(db, runner, now, accounts, cancel).await
 }
 
@@ -322,7 +322,7 @@ async fn cancel_or_complete<T>(
     }
 }
 
-async fn select_due_gmail_provider_accounts(
+async fn select_due_gmail_mail_accounts(
     db: &SqlitePool,
     now: DateTime<Utc>,
     sync_interval: Duration,
@@ -350,8 +350,8 @@ async fn select_due_gmail_provider_accounts(
     >(
         "SELECT id, user_id, jmap_account_id, provider_account_id, provider_email, sync_status, \
                 last_profile_history_id, initial_sync_completed_at, sync_backoff_secs, granted_scopes_json \
-         FROM provider_accounts \
-         WHERE provider_kind = 'gmail' \
+         FROM mail_accounts \
+         WHERE backend_kind = 'gmail' \
            AND sync_status IN ('initial_sync', 'active', 'error', 'needs_reauth') \
            AND refresh_token_enc IS NOT NULL \
            AND length(refresh_token_enc) >= 29 \
@@ -366,7 +366,7 @@ async fn select_due_gmail_provider_accounts(
     .bind(&due_before)
     .fetch_all(db)
     .await
-    .context("select due Gmail provider accounts")
+    .context("select due Gmail mail accounts")
     .map(|rows| {
         rows.into_iter()
             .map(
@@ -401,7 +401,7 @@ async fn select_due_gmail_provider_accounts(
 async fn mark_scheduler_attempt_started(db: &SqlitePool, provider_account_id: i64) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts SET last_sync_attempted_at = ?1, updated_at = ?1 WHERE id = ?2",
+        "UPDATE mail_accounts SET last_sync_attempted_at = ?1, updated_at = ?1 WHERE id = ?2",
     )
     .bind(now)
     .bind(provider_account_id)
@@ -419,7 +419,7 @@ async fn mark_scheduler_succeeded(
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = ?1, last_sync_succeeded_at = ?2, initial_sync_completed_at = CASE WHEN ?3 THEN COALESCE(initial_sync_completed_at, ?2) ELSE initial_sync_completed_at END, last_error_class = NULL, \
              last_error_message = NULL, next_sync_after = NULL, sync_backoff_secs = NULL, updated_at = ?2 \
          WHERE id = ?4",
@@ -474,7 +474,7 @@ async fn mark_scheduler_failed(
     let updated_at = Utc::now().to_rfc3339();
 
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = ?1, last_error_class = ?2, last_error_message = ?3, \
              next_sync_after = ?4, sync_backoff_secs = ?5, updated_at = ?6 \
          WHERE id = ?7",
@@ -524,7 +524,7 @@ async fn mark_scheduler_paused(
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'paused', last_error_class = 'operator_paused', \
              last_error_message = NULL, next_sync_after = NULL, sync_backoff_secs = NULL, updated_at = ?1 \
          WHERE id = ?2",
@@ -689,7 +689,7 @@ async fn mark_scheduler_initial_sync_aborted(
 ) -> Result<()> {
     let updated_at = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'error', last_error_class = ?1, last_error_message = ?2, \
              next_sync_after = NULL, sync_backoff_secs = NULL, updated_at = ?3 \
          WHERE id = ?4",
@@ -895,7 +895,7 @@ pub mod live {
                     .ok_or_else(|| {
                         ProviderSyncRunError::permanent(
                             "provider_account_missing",
-                            "provider account missing",
+                            "mail account missing",
                         )
                     })?;
             let summary = run_gmail_initial_sync(
@@ -938,7 +938,7 @@ pub mod live {
             .ok_or_else(|| {
                 ProviderSyncRunError::permanent(
                     "provider_account_missing",
-                    "provider account missing",
+                    "mail account missing",
                 )
             })?;
             let summary = run_gmail_incremental_sync(
@@ -979,13 +979,13 @@ pub mod live {
             account: &ProviderSyncAccount,
         ) -> Result<Self> {
             let ciphertext: Vec<u8> = sqlx::query_scalar(
-                "SELECT refresh_token_enc FROM provider_accounts WHERE id = ?1 AND user_id = ?2",
+                "SELECT refresh_token_enc FROM mail_accounts WHERE id = ?1 AND user_id = ?2",
             )
             .bind(account.id)
             .bind(account.user_id)
             .fetch_optional(db)
             .await?
-            .ok_or_else(|| anyhow!("provider account has no encrypted refresh token"))?;
+            .ok_or_else(|| anyhow!("mail account has no encrypted refresh token"))?;
             let context = ProviderTokenContext::new(
                 account.user_id,
                 account.id,
