@@ -278,7 +278,7 @@ fn redirect_location(headers: &HeaderMap) -> &str {
 
 async fn connected_account_id(state: &AppState, user_id: i64) -> i64 {
     sqlx::query_scalar(
-        "SELECT id FROM provider_accounts WHERE user_id = ?1 AND provider_kind = 'gmail'",
+        "SELECT id FROM mail_accounts WHERE user_id = ?1 AND backend_kind = 'gmail'",
     )
     .bind(user_id)
     .fetch_one(&state.db)
@@ -287,7 +287,7 @@ async fn connected_account_id(state: &AppState, user_id: i64) -> i64 {
 }
 
 async fn provider_account_count(state: &AppState, user_id: i64) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM provider_accounts WHERE user_id = ?1")
+    sqlx::query_scalar("SELECT COUNT(*) FROM mail_accounts WHERE user_id = ?1")
         .bind(user_id)
         .fetch_one(&state.db)
         .await
@@ -346,7 +346,7 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
 
     let account_id = connected_account_id(&state, user_id).await;
     let (provider_account_id, encrypted): (String, Vec<u8>) = sqlx::query_as(
-        "SELECT provider_account_id, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+        "SELECT provider_account_id, refresh_token_enc FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -371,7 +371,7 @@ async fn gmail_callback_stores_encrypted_refresh_token_and_consumes_state_once()
     assert_eq!(decrypted.expose_secret(), "1//refresh-token-secret");
 
     let token_len: i64 =
-        sqlx::query_scalar("SELECT length(refresh_token_enc) FROM provider_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT length(refresh_token_enc) FROM mail_accounts WHERE id = ?1")
             .bind(account_id)
             .fetch_one(&state.db)
             .await
@@ -459,7 +459,7 @@ async fn gmail_callback_concurrently_consumes_oauth_state_once() {
     );
 
     let account_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM provider_accounts WHERE user_id = ?1 AND provider_kind = 'gmail'",
+        "SELECT COUNT(*) FROM mail_accounts WHERE user_id = ?1 AND backend_kind = 'gmail'",
     )
     .bind(user_id)
     .fetch_one(&state.db)
@@ -664,12 +664,12 @@ async fn sync_status_lists_only_importable_connected_gmail_accounts_with_canonic
         now: chrono::DateTime<chrono::Utc>,
     ) -> i64 {
         sqlx::query_scalar(
-            "INSERT INTO provider_accounts \
-             (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
+            "INSERT INTO mail_accounts \
+             (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
               granted_scopes_json, refresh_token_enc, last_profile_history_id, profile_synced_at, sync_status, \
               last_sync_attempted_at, last_sync_succeeded_at, next_sync_after, sync_backoff_secs, \
               last_error_class, last_error_message, disconnected_at, revoked_at, created_at, updated_at) \
-             VALUES (?1, 'acct-a', 'gmail', ?2, ?3, ?4, '[]', \
+             VALUES (?1, 'acct-a', 'gmail', 'gmail', ?2, ?3, ?4, '[]', \
                      ?5, 'history-9', ?6, ?7, ?6, ?6, ?8, 120, \
                      'gmail_rate_limit', 'rate limited', \
                      CASE WHEN ?7 = 'disconnected' THEN ?6 ELSE NULL END, \
@@ -877,16 +877,16 @@ async fn provider_account_response_returns_internal_error_for_corrupt_granted_sc
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let account_id: i64 = sqlx::query_scalar("SELECT id FROM provider_accounts LIMIT 1")
+    let account_id: i64 = sqlx::query_scalar("SELECT id FROM mail_accounts LIMIT 1")
         .fetch_one(&state.db)
         .await
         .unwrap();
 
-    sqlx::query("DROP TRIGGER provider_accounts_json_state_update")
+    sqlx::query("DROP TRIGGER mail_accounts_json_state_update")
         .execute(&state.db)
         .await
         .unwrap();
-    sqlx::query("UPDATE provider_accounts SET granted_scopes_json = ?1 WHERE id = ?2")
+    sqlx::query("UPDATE mail_accounts SET granted_scopes_json = ?1 WHERE id = ?2")
         .bind("not-json")
         .bind(account_id)
         .execute(&state.db)
@@ -912,11 +912,11 @@ async fn sync_status_output_redacts_hostile_error_fields() {
     let now = chrono::Utc::now();
 
     let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           granted_scopes_json, refresh_token_enc, sync_status, last_error_class, last_error_message, \
           created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail', 'gmail-alice', 'alice@gmail.example', '[]', \
                  ?2, 'error', 'hostile_error', ?3, ?4, ?4) \
          RETURNING id",
     )
@@ -980,11 +980,11 @@ async fn manual_sync_trigger_marks_only_importable_accounts_due_without_running_
         now: chrono::DateTime<chrono::Utc>,
     ) -> i64 {
         sqlx::query_scalar(
-            "INSERT INTO provider_accounts \
-             (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+            "INSERT INTO mail_accounts \
+             (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
               granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, sync_backoff_secs, \
               last_error_class, last_error_message, disconnected_at, revoked_at, created_at, updated_at) \
-             VALUES (?1, 'acct-a', 'gmail', ?2, ?3, '[]', \
+             VALUES (?1, 'acct-a', 'gmail', 'gmail', ?2, ?3, '[]', \
                      ?4, ?5, ?6, 300, 'network', 'timeout', \
                      CASE WHEN ?5 = 'disconnected' THEN ?7 ELSE NULL END, \
                      CASE WHEN ?5 = 'revoked' THEN ?7 ELSE NULL END, ?7, ?7) \
@@ -1074,7 +1074,7 @@ async fn manual_sync_trigger_marks_only_importable_accounts_due_without_running_
 
     let row: (String, Option<String>, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class, last_error_message \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1105,7 +1105,7 @@ async fn manual_sync_trigger_marks_only_importable_accounts_due_without_running_
 
     let denied_rows: Vec<(i64, Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
         "SELECT id, next_sync_after, sync_backoff_secs, last_error_class \
-         FROM provider_accounts WHERE id IN (?1, ?2, ?3, ?4) ORDER BY id",
+         FROM mail_accounts WHERE id IN (?1, ?2, ?3, ?4) ORDER BY id",
     )
     .bind(other_account_id)
     .bind(revoked_id)
@@ -1180,11 +1180,11 @@ async fn stop_active_provider_import_pauses_and_audits_for_owner_only() {
         now: chrono::DateTime<chrono::Utc>,
     ) -> i64 {
         sqlx::query_scalar(
-            "INSERT INTO provider_accounts \
-             (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+            "INSERT INTO mail_accounts \
+             (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
               granted_scopes_json, refresh_token_enc, sync_status, next_sync_after, sync_backoff_secs, \
               last_error_class, last_error_message, created_at, updated_at) \
-             VALUES (?1, 'acct-a', 'gmail', ?2, ?3, '[]', \
+             VALUES (?1, 'acct-a', 'gmail', 'gmail', ?2, ?3, '[]', \
                      ?4, ?5, ?6, 300, 'network', 'timeout', ?7, ?7) \
              RETURNING id",
         )
@@ -1241,7 +1241,7 @@ async fn stop_active_provider_import_pauses_and_audits_for_owner_only() {
 
     let row: (String, Option<String>, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT sync_status, next_sync_after, sync_backoff_secs, last_error_class, last_error_message \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(active_id)
     .fetch_one(&state.db)
@@ -1289,10 +1289,10 @@ async fn stop_paused_provider_import_conflicts() {
     let client = Arc::new(FakeGmailOAuthClient::default());
     let now = chrono::Utc::now();
     let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-paused-stop', 'paused-stop@gmail.example', \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail', 'gmail-paused-stop', 'paused-stop@gmail.example', \
                  '[]', ?2, 'paused', ?3, ?3) \
          RETURNING id",
     )
@@ -1325,10 +1325,10 @@ async fn reimport_disconnected_account_returns_not_found() {
     let client = Arc::new(FakeGmailOAuthClient::default());
     let now = chrono::Utc::now();
     let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           granted_scopes_json, sync_status, disconnected_at, created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-disconnected-reimport', 'disconnected-reimport@gmail.example', \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail', 'gmail-disconnected-reimport', 'disconnected-reimport@gmail.example', \
                  '[]', 'disconnected', ?2, ?2, ?2) \
          RETURNING id",
     )
@@ -1350,7 +1350,7 @@ async fn reimport_disconnected_account_returns_not_found() {
     assert_eq!(json_body(resp).await["error"], "provider_account_not_found");
 
     let row: (String, Option<String>, Option<Vec<u8>>) = sqlx::query_as(
-        "SELECT sync_status, disconnected_at, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+        "SELECT sync_status, disconnected_at, refresh_token_enc FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1368,13 +1368,13 @@ async fn reimport_active_account_resets_cursors_and_error_state() {
     let client = Arc::new(FakeGmailOAuthClient::default());
     let now = chrono::Utc::now();
     let account_id: i64 = sqlx::query_scalar(
-        r#"INSERT INTO provider_accounts
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email,
+        r#"INSERT INTO mail_accounts
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email,
           granted_scopes_json, refresh_token_enc, last_profile_history_id, profile_synced_at,
           initial_sync_completed_at, backfill_cursor_json, sync_status, last_sync_attempted_at,
           last_sync_succeeded_at, next_sync_after, sync_backoff_secs, last_error_class, last_error_message,
           created_at, updated_at)
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-active-reimport', 'active-reimport@gmail.example',
+         VALUES (?1, 'acct-a', 'gmail', 'gmail', 'gmail-active-reimport', 'active-reimport@gmail.example',
                  'Active Reimport', '[]', ?2, 'history-99', ?3, ?3,
                  '{"kind":"gmail_historical_v1","completed":false}', 'error', ?3, ?3, ?4, 900,
                  'gmail_rate_limit', 'rate limited', ?3, ?3)
@@ -1434,7 +1434,7 @@ async fn reimport_active_account_resets_cursors_and_error_state() {
     ) = sqlx::query_as(
         "SELECT sync_status, last_profile_history_id, profile_synced_at, initial_sync_completed_at, \
                 backfill_cursor_json, last_error_class, sync_backoff_secs \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1456,11 +1456,11 @@ async fn reimport_while_initial_sync_returns_conflict() {
     let client = Arc::new(FakeGmailOAuthClient::default());
     let now = chrono::Utc::now();
     let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           granted_scopes_json, refresh_token_enc, last_profile_history_id, sync_status, \
           created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-initial-reimport', 'initial-reimport@gmail.example', \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail', 'gmail-initial-reimport', 'initial-reimport@gmail.example', \
                  '[]', ?2, 'history-100', 'initial_sync', ?3, ?3) \
          RETURNING id",
     )
@@ -1486,7 +1486,7 @@ async fn reimport_while_initial_sync_returns_conflict() {
     );
 
     let cursor: Option<String> =
-        sqlx::query_scalar("SELECT last_profile_history_id FROM provider_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT last_profile_history_id FROM mail_accounts WHERE id = ?1")
             .bind(account_id)
             .fetch_one(&state.db)
             .await
@@ -1591,7 +1591,7 @@ async fn disconnect_requires_csrf_and_owner_session() {
     );
 
     let (status, token): (String, Option<Vec<u8>>) = sqlx::query_as(
-        "SELECT sync_status, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+        "SELECT sync_status, refresh_token_enc FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1634,7 +1634,7 @@ async fn disconnect_revokes_refresh_token_and_clears_local_secret() {
         ["1//refresh-token-secret"]
     );
     let (status, token): (String, Option<Vec<u8>>) = sqlx::query_as(
-        "SELECT sync_status, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+        "SELECT sync_status, refresh_token_enc FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1691,7 +1691,7 @@ async fn disconnect_succeeds_locally_when_provider_revoke_fails_and_hides_token_
         Option<String>,
     ) = sqlx::query_as(
         "SELECT sync_status, refresh_token_enc, refresh_token_ref, refresh_token_key_id, disconnected_at \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1711,10 +1711,10 @@ async fn disconnect_already_disconnected_account_returns_not_found_without_revok
     let client = Arc::new(FakeGmailOAuthClient::default());
     let now = chrono::Utc::now();
     let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           granted_scopes_json, sync_status, disconnected_at, created_at, updated_at) \
-         VALUES (?1, 'acct-a', 'gmail', 'gmail-disconnected', 'disconnected@gmail.example', \
+         VALUES (?1, 'acct-a', 'gmail', 'gmail', 'gmail-disconnected', 'disconnected@gmail.example', \
                  '[]', 'disconnected', ?2, ?2, ?2) \
          RETURNING id",
     )
@@ -1743,7 +1743,7 @@ async fn disconnect_already_disconnected_account_returns_not_found_without_revok
     );
 
     let row: (String, Option<String>, Option<Vec<u8>>) = sqlx::query_as(
-        "SELECT sync_status, disconnected_at, refresh_token_enc FROM provider_accounts WHERE id = ?1",
+        "SELECT sync_status, disconnected_at, refresh_token_enc FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -1769,7 +1769,7 @@ async fn reconnect_clears_stale_disconnect_error_and_retry_state() {
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     let account_id = connected_account_id(&state, user_id).await;
     let original_token: Vec<u8> =
-        sqlx::query_scalar("SELECT refresh_token_enc FROM provider_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT refresh_token_enc FROM mail_accounts WHERE id = ?1")
             .bind(account_id)
             .fetch_one(&state.db)
             .await
@@ -1777,7 +1777,7 @@ async fn reconnect_clears_stale_disconnect_error_and_retry_state() {
 
     let stale_time = chrono::Utc::now() - chrono::Duration::days(1);
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'disconnected', refresh_token_enc = NULL, refresh_token_key_id = NULL, \
              disconnected_at = ?2, revoked_at = ?2, last_error_class = 'old_error', \
              last_error_message = 'old failure', next_sync_after = ?2, sync_backoff_secs = 900 \
@@ -1815,7 +1815,7 @@ async fn reconnect_clears_stale_disconnect_error_and_retry_state() {
     ) = sqlx::query_as(
         "SELECT sync_status, disconnected_at, revoked_at, last_error_class, last_error_message, \
                 sync_backoff_secs, refresh_token_enc, next_sync_after \
-         FROM provider_accounts WHERE id = ?1",
+         FROM mail_accounts WHERE id = ?1",
     )
     .bind(account_id)
     .fetch_one(&state.db)

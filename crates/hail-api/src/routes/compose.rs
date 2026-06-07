@@ -990,8 +990,8 @@ async fn provider_outbound_account(
 ) -> Result<Option<ProviderOutboundAccount>, ComposeError> {
     let row = sqlx::query_as::<_, (i64, i64, String, String, String)>(
         "SELECT id, user_id, provider_account_id, provider_email, granted_scopes_json \
-         FROM provider_accounts \
-         WHERE provider_kind = 'gmail' AND lower(provider_email) = lower(?1) \
+         FROM mail_accounts \
+         WHERE backend_kind = 'gmail' AND lower(provider_email) = lower(?1) \
            AND sync_status IN ('active', 'error', 'initial_sync', 'needs_reauth', 'paused') \
            AND refresh_token_enc IS NOT NULL \
          ORDER BY CASE WHEN sync_status = 'active' THEN 0 ELSE 1 END, id \
@@ -1021,7 +1021,7 @@ async fn mark_provider_needs_reauth(
 ) -> Result<(), ComposeError> {
     let now = Utc::now();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'needs_reauth', last_error_class = 'provider_scope_missing', \
              last_error_message = 'Re-authenticate Gmail to enable outbound sending', updated_at = ?1 \
          WHERE id = ?2",
@@ -1042,7 +1042,7 @@ async fn mark_provider_send_error(
 ) -> Result<(), ComposeError> {
     let now = Utc::now();
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET sync_status = 'error', last_error_class = ?1, last_error_message = ?2, updated_at = ?3 \
          WHERE id = ?4",
     )
@@ -1063,7 +1063,7 @@ async fn mark_provider_sent(
     message: &GmailOutboundMessage,
 ) -> Result<(), ComposeError> {
     sqlx::query(
-        "UPDATE provider_accounts \
+        "UPDATE mail_accounts \
          SET last_error_class = NULL, last_error_message = NULL, updated_at = ?1 \
          WHERE id = ?2",
     )
@@ -1122,14 +1122,14 @@ impl DbGmailOutboundTokenSource {
         account: &ProviderOutboundAccount,
     ) -> Result<Self, sqlx::Error> {
         let ciphertext: Vec<u8> = sqlx::query_scalar(
-            "SELECT refresh_token_enc FROM provider_accounts WHERE id = ?1 AND user_id = ?2",
+            "SELECT refresh_token_enc FROM mail_accounts WHERE id = ?1 AND user_id = ?2",
         )
         .bind(account.id)
         .bind(account.user_id)
         .fetch_optional(db)
         .await?
         .ok_or_else(|| {
-            sqlx::Error::Protocol("provider account has no refresh token".to_string())
+            sqlx::Error::Protocol("mail account has no refresh token".to_string())
         })?;
         let context = hail_core::ProviderTokenContext::new(
             account.user_id,

@@ -1,7 +1,7 @@
 //! Provider message-to-local-JMAP dedupe mapping helpers.
 //!
 //! `provider_message_mappings` is the durable idempotency table for provider
-//! imports. Provider account id plus provider message id is the primary key used
+//! imports. Mail account id plus provider message id is the primary key used
 //! to survive retries and crashes. RFC822 `Message-ID` is a secondary,
 //! account-scoped dedupe signal for cases where Gmail exposes the same message
 //! under a different provider id.

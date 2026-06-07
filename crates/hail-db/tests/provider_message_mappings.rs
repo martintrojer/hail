@@ -81,10 +81,10 @@ async fn insert_provider_account(
     provider_account_id: &str,
 ) -> i64 {
     sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', ?, ?, ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', ?, ?, ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind(jmap_account_id)
@@ -95,15 +95,15 @@ async fn insert_provider_account(
     .bind("2026-01-01T00:00:00Z")
     .execute(pool)
     .await
-    .expect("provider account insert");
+    .expect("mail account insert");
     sqlx::query_scalar(
-        "SELECT id FROM provider_accounts WHERE user_id = ? AND provider_account_id = ?",
+        "SELECT id FROM mail_accounts WHERE user_id = ? AND provider_account_id = ?",
     )
     .bind(user_id)
     .bind(provider_account_id)
     .fetch_one(pool)
     .await
-    .expect("provider account id")
+    .expect("mail account id")
 }
 
 fn hostile_leak_error() -> &'static str {

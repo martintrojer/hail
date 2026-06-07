@@ -2,7 +2,7 @@
 //!
 //! Labels are local, per-user, thread-level tags stored in the hail sidecar DB.
 //! This module owns label management plus thread assignment/removal. When a
-//! connected provider account has bidirectional sync enabled, assignment/removal
+//! connected mail account has bidirectional sync enabled, assignment/removal
 //! also enqueues provider outbound label mutations for worker-side push.
 
 use axum::extract::rejection::JsonRejection;

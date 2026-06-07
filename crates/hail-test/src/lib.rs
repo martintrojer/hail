@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{Duration, Utc};
 use hail_api::middleware::rate_limit::IpRateLimiter;
 use hail_api::state::AppState;
-use hail_core::{Config, KEY_LEN, SecretsConfig, ServerConfig, SetupConfig, StalwartConfig};
+use hail_core::{
+    Config, KEY_LEN, MailConfig, SecretsConfig, ServerConfig, SetupConfig, StalwartConfig,
+};
 use hail_db::connect;
 use secrecy::SecretString;
 
@@ -44,6 +46,7 @@ pub async fn fixture_state() -> (AppState, [u8; KEY_LEN]) {
 pub fn fixture_config(database_url: impl Into<String>, server_key: &[u8; KEY_LEN]) -> Config {
     Config {
         database_url: database_url.into(),
+        mail: MailConfig::default(),
         stalwart: StalwartConfig {
             jmap_url: "http://127.0.0.1:0".to_owned(),
             management_url: None,

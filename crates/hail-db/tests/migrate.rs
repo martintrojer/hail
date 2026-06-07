@@ -24,7 +24,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "thread_seen",
     "workflow_rules",
     "user_invites",
-    "provider_accounts",
+    "mail_accounts",
     "provider_oauth_states",
     "provider_message_mappings",
     "provider_sync_events",
@@ -58,9 +58,9 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_user_invites_token_hash",
     "idx_user_invites_email",
     "idx_user_invites_pending",
-    "idx_provider_accounts_user",
-    "idx_provider_accounts_status",
-    "idx_provider_accounts_provider_email",
+    "idx_mail_accounts_user",
+    "idx_mail_accounts_status",
+    "idx_mail_accounts_provider_email",
     "idx_provider_oauth_states_user",
     "idx_provider_message_mappings_thread",
     "idx_provider_message_mappings_rfc822",
@@ -413,7 +413,7 @@ async fn thread_notes_cascade_when_user_is_deleted() {
 }
 
 #[tokio::test]
-async fn provider_accounts_capture_oauth_and_sync_state() {
+async fn mail_accounts_capture_oauth_and_sync_state() {
     let (pool, _guard) = setup().await;
 
     sqlx::query("INSERT INTO users (email, jmap_account_id, created_at) VALUES (?, ?, ?)")
@@ -431,13 +431,13 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
         .expect("fetch user id");
 
     sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
           granted_scopes_json, consented_at, refresh_token_enc, refresh_token_key_id, \
           cached_access_token_expires_at, access_token_refreshed_at, last_profile_history_id, \
           profile_synced_at, initial_sync_completed_at, sync_status, backfill_cursor_json, last_sync_attempted_at, \
           last_sync_succeeded_at, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -460,11 +460,11 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .bind("2026-01-01T00:45:00Z")
     .execute(&pool)
     .await
-    .expect("provider account insert");
+    .expect("mail account insert");
 
     let bad_kind = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
          VALUES (?, ?, 'imap', 'imap-1', 'imap@example.com', ?, 'active', ?, ?)",
     )
@@ -478,10 +478,10 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     assert!(bad_kind.is_err(), "provider kind must be constrained");
 
     let missing_token = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', 'gmail-provider-id-2', 'other@gmail.com', 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', 'gmail-provider-id-2', 'other@gmail.com', 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -491,14 +491,14 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .await;
     assert!(
         missing_token.is_err(),
-        "active provider account must have encrypted token material"
+        "active mail account must have encrypted token material"
     );
 
     let short_token = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', 'gmail-provider-short-token', 'short-token@gmail.com', ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', 'gmail-provider-short-token', 'short-token@gmail.com', ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -509,14 +509,14 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .await;
     assert!(
         short_token.is_err(),
-        "active provider account must reject empty/too-short encrypted token material"
+        "active mail account must reject empty/too-short encrypted token material"
     );
 
     let token_ref = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_ref, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', 'gmail-provider-ref-token', 'ref-token@gmail.com', ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', 'gmail-provider-ref-token', 'ref-token@gmail.com', ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -527,14 +527,14 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .await;
     assert!(
         token_ref.is_err(),
-        "active provider account must reject unresolved external token references"
+        "active mail account must reject unresolved external token references"
     );
 
     let bad_granted_scopes = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', 'gmail-provider-bad-scopes', 'bad-scopes@gmail.com', ?, ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', 'gmail-provider-bad-scopes', 'bad-scopes@gmail.com', ?, ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -550,7 +550,7 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     );
 
     let bad_backfill_cursor = sqlx::query(
-        "UPDATE provider_accounts SET backfill_cursor_json = ? WHERE provider_account_id = 'gmail-provider-id-1'",
+        "UPDATE mail_accounts SET backfill_cursor_json = ? WHERE provider_account_id = 'gmail-provider-id-1'",
     )
     .bind("{not-json")
     .execute(&pool)
@@ -561,10 +561,10 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     );
 
     let duplicate = sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', 'gmail-provider-id-1', 'dupe@gmail.com', ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', 'gmail-provider-id-1', 'dupe@gmail.com', ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-gmail-user")
@@ -575,7 +575,7 @@ async fn provider_accounts_capture_oauth_and_sync_state() {
     .await;
     assert!(
         duplicate.is_err(),
-        "provider account identity must be unique per user/provider"
+        "mail account identity must be unique per user/provider"
     );
 }
 
@@ -598,10 +598,10 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
         .expect("fetch user id");
 
     sqlx::query(
-        "INSERT INTO provider_accounts \
-         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, \
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, \
           refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?, ?, 'gmail', 'gmail-provider-id-1', 'mapping@gmail.com', ?, 'active', ?, ?)",
+         VALUES (?, ?, 'gmail', 'gmail', 'gmail-provider-id-1', 'mapping@gmail.com', ?, 'active', ?, ?)",
     )
     .bind(user_id)
     .bind("acct-mapping-user")
@@ -610,13 +610,13 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     .bind("2026-01-01T00:00:00Z")
     .execute(&pool)
     .await
-    .expect("provider account insert");
+    .expect("mail account insert");
 
-    let account_id: i64 = sqlx::query_scalar("SELECT id FROM provider_accounts WHERE user_id = ?")
+    let account_id: i64 = sqlx::query_scalar("SELECT id FROM mail_accounts WHERE user_id = ?")
         .bind(user_id)
         .fetch_one(&pool)
         .await
-        .expect("provider account id");
+        .expect("mail account id");
 
     sqlx::query(
         "INSERT INTO provider_message_mappings \
@@ -746,11 +746,11 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
         "provider audit metadata_json must be valid JSON when present"
     );
 
-    sqlx::query("DELETE FROM provider_accounts WHERE id = ?")
+    sqlx::query("DELETE FROM mail_accounts WHERE id = ?")
         .bind(account_id)
         .execute(&pool)
         .await
-        .expect("provider account delete cascades");
+        .expect("mail account delete cascades");
 
     let mappings: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM provider_message_mappings WHERE provider_account_id = ?",
@@ -766,8 +766,8 @@ async fn provider_message_mappings_are_idempotent_and_audited() {
     .fetch_one(&pool)
     .await
     .expect("event count");
-    assert_eq!(mappings, 0, "mappings must cascade with provider account");
-    assert_eq!(events, 0, "sync events must cascade with provider account");
+    assert_eq!(mappings, 0, "mappings must cascade with mail account");
+    assert_eq!(events, 0, "sync events must cascade with mail account");
 }
 
 #[tokio::test]

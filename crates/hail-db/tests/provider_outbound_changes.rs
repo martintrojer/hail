@@ -14,13 +14,13 @@ async fn seed_mapping(db: &sqlx::SqlitePool, bidi_enabled: bool) {
         .await
         .expect("user");
     sqlx::query(
-        "INSERT INTO provider_accounts (id, user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, refresh_token_enc, refresh_token_key_id, sync_status, bidirectional_sync_enabled, created_at, updated_at) VALUES (10, 1, 'acct', 'gmail', 'u@example.com', 'u@example.com', 'u@example.com', '[]', zeroblob(29), 'server_key:v1', 'active', ?1, ?2, ?2)",
+        "INSERT INTO mail_accounts (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, granted_scopes_json, refresh_token_enc, refresh_token_key_id, sync_status, bidirectional_sync_enabled, created_at, updated_at) VALUES (10, 1, 'acct', 'gmail', 'gmail', 'u@example.com', 'u@example.com', 'u@example.com', '[]', zeroblob(29), 'server_key:v1', 'active', ?1, ?2, ?2)",
     )
     .bind(if bidi_enabled { 1_i64 } else { 0_i64 })
     .bind(&now)
     .execute(db)
     .await
-    .expect("provider account");
+    .expect("mail account");
     sqlx::query(
         "INSERT INTO provider_message_mappings (provider_account_id, provider_message_id, provider_thread_id, jmap_email_id, jmap_thread_id, import_status, created_at, updated_at) VALUES (10, 'gmail-1', 'gthread-1', 'email-1', 'thread-1', 'imported', ?1, ?1)",
     )
