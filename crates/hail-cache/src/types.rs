@@ -1,7 +1,7 @@
 //! Public data shapes returned by the cache facade.
 
 use chrono::{DateTime, Utc};
-use hail_backend::{BackendMsgId, BlobRef, Keyword};
+use hail_backend::{AttachmentMeta, BackendMsgId, BlobRef, Envelope, Keyword, SubmissionId};
 use serde::{Deserialize, Serialize};
 
 /// Mail view selector mirrored from the current API route surface.
@@ -121,6 +121,134 @@ pub struct CachedMessage {
     pub keywords: Vec<Keyword>,
     pub size_bytes: Option<u64>,
     pub blob_refs: Vec<BlobRef>,
+}
+
+
+/// Full cached/backfilled message body plus metadata for rendering surfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedMessageBody {
+    pub message: CachedMessage,
+    pub rfc822: bytes::Bytes,
+}
+
+/// Attachment metadata paired with message context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedAttachment {
+    pub blob_ref: BlobRef,
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub inline: bool,
+    pub content_id: Option<String>,
+    pub context: CachedAttachmentContext,
+}
+
+/// Message context for an attachment list item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedAttachmentContext {
+    pub thread_id: String,
+    pub message_id: BackendMsgId,
+    pub subject: String,
+    pub from: String,
+    pub received_at: Option<DateTime<Utc>>,
+    pub preview: String,
+}
+
+/// Draft body and envelope details used by the API composer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftMessage {
+    pub id: BackendMsgId,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub body_html: String,
+    pub body_markdown: String,
+}
+
+/// Payload for creating or updating a draft through the cache facade.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftPayload {
+    pub from: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub plain_text: String,
+    pub html: String,
+    pub body_markdown: String,
+}
+
+/// Reply metadata extracted from the latest message in a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplyContext {
+    pub to: Vec<String>,
+    pub subject: String,
+    pub in_reply_to: Vec<String>,
+    pub references: Vec<String>,
+}
+
+/// Sent/draft message submission payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboundPayload {
+    pub rfc822: Vec<u8>,
+    pub envelope: Envelope,
+}
+
+/// Result from a cache-mediated compose send.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComposeSubmission {
+    pub message_id: BackendMsgId,
+    pub submission_id: SubmissionId,
+}
+
+/// Screener decision for applying history backfill through CachedMail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenerDecision {
+    Approve,
+    Deny,
+}
+
+/// CachedMail-owned screener preview row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenerMessage {
+    pub email_id: BackendMsgId,
+    pub subject: String,
+    pub preview: String,
+    pub from: String,
+    pub received_at: Option<DateTime<Utc>>,
+}
+
+/// CachedMail-owned screener sender preview aggregate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenerSenderPreview {
+    pub sender: String,
+    pub message_count: usize,
+    pub emails: Vec<ScreenerMessage>,
+}
+
+/// Preserve or restore prior provider mailbox ids when available.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailboxSnapshot {
+    pub message_id: BackendMsgId,
+    pub mailbox_ids: Vec<String>,
+}
+
+/// Attachment metadata from backend RawMessage translated into cache DTOs.
+impl CachedAttachment {
+    #[must_use]
+    pub fn from_meta(meta: AttachmentMeta, context: CachedAttachmentContext) -> Option<Self> {
+        Some(Self {
+            blob_ref: meta.blob_ref?,
+            filename: meta.filename,
+            mime_type: meta.mime_type,
+            size_bytes: meta.size_bytes,
+            inline: meta.inline,
+            content_id: meta.content_id,
+            context,
+        })
+    }
 }
 
 /// A label attached to a cached mail row.

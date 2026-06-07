@@ -10,7 +10,7 @@ use hail_backend::{
     MailboxRole, Page, PageRequest, Principal, Query, RawMessage, SubmissionId, SyncCursor,
 };
 use hail_blob_store::{BlobStore, FilesystemBlobStore};
-use hail_cache::{CacheError, CachePolicy, CachedMail, MailView, MailViewListOpts};
+use hail_cache::{CachePolicy, CachedMail, MailView, MailViewListOpts};
 use hail_core::{BlobId, MailBackfill, MailCacheMode, MailClassification};
 use sqlx::SqlitePool;
 use tempfile::TempDir;
@@ -566,29 +566,25 @@ async fn bodies_full_mode_attachment_blob_writes_blob_file() {
 }
 
 #[tokio::test]
-async fn send_remains_not_implemented() {
+async fn get_thread_and_send_are_implemented() {
     let (cache, _backend, _tempdir) = fixture(Vec::new(), MailCacheMode::Bounded).await;
 
-    // get_thread is now implemented (read-through); an empty cache yields an
-    // empty thread rather than NotImplemented.
+    // get_thread is implemented (read-through); an empty cache yields an empty thread.
     let thread = cache
         .get_thread("thread-1")
         .await
         .expect("get_thread is implemented and returns an empty thread on a cold cache");
     assert!(thread.messages.is_empty());
 
+    // send_enqueue is implemented and dispatches to the backend, returning its
+    // submission id.
     let envelope = Envelope {
         mail_from: "me@example.test".to_owned(),
         rcpt_to: vec!["you@example.test".to_owned()],
     };
-    let send_err = cache
+    let submission = cache
         .send_enqueue(b"Subject: hello\r\n\r\nbody", &envelope)
         .await
-        .expect_err("send task is downstream");
-    assert!(matches!(
-        send_err,
-        CacheError::NotImplemented {
-            operation: "send_enqueue"
-        }
-    ));
+        .expect("send_enqueue dispatches to the backend");
+    assert_eq!(submission, SubmissionId::new("fake-submission"));
 }

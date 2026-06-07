@@ -555,13 +555,25 @@ fn attachment_from_part(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> 
         .unwrap_or("application/octet-stream")
         .to_string();
     Some(Attachment {
-        filename: crate::routes::attachments::attachment_name(part),
+        filename: attachment_name(part),
         size: part.size() as u64,
         mime_type,
         blob_id: blob_id.to_string(),
         download_url: format!("/api/attachments/{}/download", urlencoding(blob_id)),
         inline: is_inline_attachment(part),
     })
+}
+
+fn attachment_name(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> String {
+    part.name()
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            part.part_id()
+                .filter(|part_id| !part_id.trim().is_empty())
+                .map(|part_id| format!("attachment-{part_id}"))
+                .unwrap_or_else(|| "attachment".to_string())
+        })
 }
 
 fn is_inline_attachment(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> bool {

@@ -20,7 +20,6 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::jmap_session;
 use crate::routes::response::{bad_request, internal};
 use crate::state::AppState;
 
@@ -43,29 +42,28 @@ pub trait BlobUploader: Send + Sync + 'static {
 
 /// Production uploader using `jmap-client`'s upload helper. The helper expands
 /// the session `uploadUrl` `{accountId}` template and sends authenticated bytes.
-pub struct JmapBlobUploader;
+pub struct CacheBlobUploader;
 
-impl BlobUploader for JmapBlobUploader {
+pub type JmapBlobUploader = CacheBlobUploader;
+
+impl BlobUploader for CacheBlobUploader {
     fn upload<'a>(
         &'a self,
         state: &'a AppState,
-        token: SecretString,
+        _token: SecretString,
         bytes: Vec<u8>,
         content_type: Option<String>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadedBlob, BlobUploadError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = jmap_session(state, token)
-                .await
-                .map_err(BlobUploadError::new)?;
-            let response = session
-                .client()
-                .upload(Some(session.account_id()), bytes, content_type.as_deref())
+            let blob_id = state
+                .mail
+                .upload_blob(&bytes)
                 .await
                 .map_err(|err| BlobUploadError::new(err.to_string()))?;
             Ok(UploadedBlob {
-                blob_id: response.blob_id().to_owned(),
-                size: response.size(),
-                type_: response.content_type().to_owned(),
+                blob_id: blob_id.to_string(),
+                size: bytes.len(),
+                type_: content_type.unwrap_or_else(|| "application/octet-stream".to_string()),
             })
         })
     }
@@ -83,12 +81,12 @@ impl BlobUploadError {
 
 /// Build protected blob routes.
 pub fn router() -> Router<AppState> {
-    Router::from(openapi_router_with_uploader(Arc::new(JmapBlobUploader)))
+    Router::from(openapi_router_with_uploader(Arc::new(CacheBlobUploader)))
 }
 
 /// Build the OpenAPI-tracked router for production blob uploads.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
-    openapi_router_with_uploader(Arc::new(JmapBlobUploader))
+    openapi_router_with_uploader(Arc::new(CacheBlobUploader))
 }
 
 /// Test/helper router that injects a fake uploader. The 100 MiB total request

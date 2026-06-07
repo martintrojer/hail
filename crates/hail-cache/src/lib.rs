@@ -5,6 +5,7 @@
 //! `readthrough`; downstream body/blob, write-through, sync, and eviction work
 //! should add sibling modules instead of growing this facade.
 
+mod api_facade;
 mod bodies;
 mod error;
 mod eviction;
@@ -28,9 +29,11 @@ pub use policy::{CacheBackfill, CacheMode, CachePolicy};
 pub use sqlx::SqlitePool;
 use std::sync::Arc;
 pub use types::{
-    BlockedTracker, CachedLabel, CachedMessage, FeedRenderMode, MailSearchResult, MailTarget,
-    MailView, MailViewItem, MailViewListOpts, MailViewPage, SearchMailbox, SearchResultSource,
-    Thread,
+    BlockedTracker, CachedAttachment, CachedAttachmentContext, CachedLabel, CachedMessage,
+    CachedMessageBody, ComposeSubmission, DraftMessage, DraftPayload, FeedRenderMode,
+    MailSearchResult, MailTarget, MailView, MailViewItem, MailViewListOpts, MailViewPage,
+    MailboxSnapshot, OutboundPayload, ReplyContext, ScreenerDecision, ScreenerMessage,
+    ScreenerSenderPreview, SearchMailbox, SearchResultSource, Thread,
 };
 
 pub use error::CacheError;
@@ -174,9 +177,94 @@ impl CachedMail {
 
     /// Enqueue or perform an outbound send through the write-through path.
     pub async fn send_enqueue(&self, rfc822: &[u8], envelope: &Envelope) -> Result<SubmissionId> {
-        let _ = (rfc822, envelope);
-        Err(CacheError::NotImplemented {
-            operation: "send_enqueue",
-        })
+        self.backend.send(rfc822, envelope).await.map_err(Into::into)
+    }
+
+    /// Create a backend-visible draft placeholder for scheduling or immediate send.
+    pub async fn create_draft(&self, draft: DraftPayload) -> Result<BackendMsgId> {
+        self.create_draft_cached(draft).await
+    }
+
+    /// Read one draft message for composer resume.
+    pub async fn get_draft(&self, id: &BackendMsgId) -> Result<Option<DraftMessage>> {
+        self.get_draft_cached(id).await
+    }
+
+    /// Update a cached/backend draft by replacing its stored body.
+    pub async fn update_draft(&self, id: &BackendMsgId, draft: DraftPayload) -> Result<()> {
+        self.update_draft_cached(id, draft).await
+    }
+
+    /// Delete a draft by provider id.
+    pub async fn delete_draft(&self, id: &BackendMsgId) -> Result<()> {
+        self.delete_permanently(MailTarget::Message(id)).await
+    }
+
+    /// Submit a composed outbound payload.
+    pub async fn submit_composed(&self, payload: OutboundPayload) -> Result<ComposeSubmission> {
+        self.submit_composed_cached(payload).await
+    }
+
+    /// Build reply metadata from cached/backend thread data.
+    pub async fn reply_context(&self, thread_id: &str) -> Result<Option<ReplyContext>> {
+        self.reply_context_cached(thread_id).await
+    }
+
+    /// List attachment metadata with message context.
+    pub async fn list_attachments(&self, limit: usize) -> Result<Vec<CachedAttachment>> {
+        self.list_attachments_cached(limit).await
+    }
+
+    /// Upload a local blob through the cache blob store.
+    pub async fn upload_blob(&self, bytes: &[u8]) -> Result<hail_core::BlobId> {
+        self.blobs.put(hail_core::BlobKind::Att, bytes).await.map_err(Into::into)
+    }
+
+    /// Fetch message metadata and RFC822 body together.
+    pub async fn get_message_with_body(&self, id: &BackendMsgId) -> Result<CachedMessageBody> {
+        let message = self.get_message(id).await?;
+        let rfc822 = self.get_message_body(id).await?;
+        Ok(CachedMessageBody { message, rfc822 })
+    }
+
+    /// Enrich pending screener senders from backend/cache without exposing provider APIs to routes.
+    pub async fn screener_previews(
+        &self,
+        senders: &[String],
+        limit_per_sender: usize,
+    ) -> Result<Vec<ScreenerSenderPreview>> {
+        self.screener_previews_cached(senders, limit_per_sender).await
+    }
+
+    /// Apply a screener decision to historical messages from the sender.
+    pub async fn apply_screener_backfill(
+        &self,
+        sender: &str,
+        decision: ScreenerDecision,
+        classify_as: Option<Keyword>,
+    ) -> Result<()> {
+        self.apply_screener_backfill_cached(sender, decision, classify_as).await
+    }
+
+    /// Undo a denied screener decision by routing sender history back to inbox/classification.
+    pub async fn undo_screener_deny(&self, sender: &str, classify_as: Keyword) -> Result<()> {
+        self.undo_screener_deny_cached(sender, classify_as).await
+    }
+
+    /// Restore one thread classification through cache keyword mutations.
+    pub async fn restore_thread_classification(
+        &self,
+        thread_id: &str,
+        classification: Keyword,
+        stale: &[Keyword],
+    ) -> Result<()> {
+        self.mutate_keywords(MailTarget::Thread(thread_id), &[classification], stale)
+            .await
+    }
+
+    /// Restore thread mailboxes when only role-level cache semantics are available.
+    pub async fn restore_mailboxes(&self, snapshots: &[MailboxSnapshot]) -> Result<()> {
+        self.restore_mailboxes_cached(snapshots).await
     }
 }
+

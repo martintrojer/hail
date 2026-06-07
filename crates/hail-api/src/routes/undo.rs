@@ -23,7 +23,7 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id};
+use crate::routes::jmap_helpers::looks_like_jmap_id;
 use crate::routes::response::{bad_request, error_response, internal, not_found};
 use crate::state::AppState;
 
@@ -224,13 +224,13 @@ pub trait UndoExecutor: Send + Sync + 'static {
 }
 
 /// Production executor for action-specific v1 undo payloads.
-pub struct ActionUndoExecutor<R = JmapThreadUndoRestorer> {
+pub struct ActionUndoExecutor<R = CacheThreadUndoRestorer> {
     thread_restorer: Arc<R>,
 }
 
-impl Default for ActionUndoExecutor<JmapThreadUndoRestorer> {
+impl Default for ActionUndoExecutor<CacheThreadUndoRestorer> {
     fn default() -> Self {
-        Self::new(Arc::new(JmapThreadUndoRestorer))
+        Self::new(Arc::new(CacheThreadUndoRestorer))
     }
 }
 
@@ -240,7 +240,7 @@ impl<R> ActionUndoExecutor<R> {
     }
 }
 
-pub struct JmapThreadUndoRestorer;
+pub struct CacheThreadUndoRestorer;
 
 #[async_trait]
 pub trait ThreadUndoRestorer: Send + Sync + 'static {
@@ -276,72 +276,56 @@ pub struct EmailMailboxSnapshot {
 }
 
 #[async_trait]
-impl ThreadUndoRestorer for JmapThreadUndoRestorer {
+impl ThreadUndoRestorer for CacheThreadUndoRestorer {
     async fn restore_classification(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         thread_id: &str,
         previous_classification: &str,
     ) -> Result<(), UndoError> {
         let previous = MailClassification::parse(previous_classification)
             .ok_or_else(|| UndoError::bad_request("invalid_previous_classification"))?;
-        let session = jmap_session(state, user.jmap_token.clone())
-            .await
-            .map_err(UndoError::internal)?;
-        for email_id in email_ids_in_thread(&session, thread_id).await? {
-            for candidate in MailClassification::ALL {
-                session
-                    .client()
-                    .email_set_keyword(&email_id, candidate.keyword(), candidate == previous)
-                    .await
-                    .map_err(|err| UndoError::internal(err.to_string()))?;
-            }
-        }
-        Ok(())
+        let stale = MailClassification::ALL
+            .into_iter()
+            .filter(|candidate| *candidate != previous)
+            .map(hail_backend::Keyword::from_classification)
+            .collect::<Vec<_>>();
+        state.mail.restore_thread_classification(
+            thread_id,
+            hail_backend::Keyword::from_classification(previous),
+            &stale,
+        ).await.map_err(|err| UndoError::internal(err.to_string()))
     }
 
     async fn restore_mailboxes(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         snapshots: Vec<EmailMailboxSnapshot>,
     ) -> Result<(), UndoError> {
-        let session = jmap_session(state, user.jmap_token.clone())
-            .await
-            .map_err(UndoError::internal)?;
-        for snapshot in snapshots {
-            if snapshot.email_id.is_empty() || snapshot.mailbox_ids.is_empty() {
-                return Err(UndoError::bad_request("invalid_mailbox_snapshot"));
-            }
-            session
-                .client()
-                .email_set_mailboxes(&snapshot.email_id, snapshot.mailbox_ids)
-                .await
-                .map_err(|err| UndoError::internal(err.to_string()))?;
+        if snapshots.iter().any(|snapshot| snapshot.email_id.is_empty() || snapshot.mailbox_ids.is_empty()) {
+            return Err(UndoError::bad_request("invalid_mailbox_snapshot"));
         }
-        Ok(())
+        let snapshots = snapshots.into_iter().map(|snapshot| hail_cache::MailboxSnapshot {
+            message_id: hail_backend::BackendMsgId::new(snapshot.email_id),
+            mailbox_ids: snapshot.mailbox_ids,
+        }).collect::<Vec<_>>();
+        state.mail.restore_mailboxes(&snapshots).await.map_err(|err| UndoError::internal(err.to_string()))
     }
 
     async fn set_keyword(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         thread_id: &str,
         keyword: &str,
         enabled: bool,
     ) -> Result<(), UndoError> {
-        let session = jmap_session(state, user.jmap_token.clone())
-            .await
-            .map_err(UndoError::internal)?;
-        for email_id in email_ids_in_thread(&session, thread_id).await? {
-            session
-                .client()
-                .email_set_keyword(&email_id, keyword, enabled)
-                .await
-                .map_err(|err| UndoError::internal(err.to_string()))?;
-        }
-        Ok(())
+        let keyword = hail_backend::Keyword::new(keyword.to_owned());
+        let (add, remove): (Vec<_>, Vec<_>) = if enabled { (vec![keyword], Vec::new()) } else { (Vec::new(), vec![keyword]) };
+        state.mail.mutate_keywords(hail_cache::MailTarget::Thread(thread_id), &add, &remove).await
+            .map_err(|err| UndoError::internal(err.to_string()))
     }
 }
 
@@ -593,28 +577,6 @@ fn validate_screener_rule(rule: &ScreenerRuleSnapshot) -> Result<(), UndoError> 
         _ => return Err(UndoError::bad_request("invalid_previous_rule")),
     }
     Ok(())
-}
-
-async fn email_ids_in_thread(
-    session: &hail_jmap::Session,
-    thread_id: &str,
-) -> Result<Vec<String>, UndoError> {
-    use hail_jmap::jmap_client::core::query::Filter;
-    use hail_jmap::jmap_client::email::query as email_query;
-
-    let mut query = session
-        .client()
-        .email_query(
-            Some(Filter::from(email_query::Filter::in_thread(thread_id))),
-            None::<Vec<hail_jmap::jmap_client::core::query::Comparator<email_query::Comparator>>>,
-        )
-        .await
-        .map_err(|err| UndoError::internal(err.to_string()))?;
-    let ids = query.take_ids();
-    if ids.is_empty() {
-        return Err(UndoError::bad_request("thread_not_found"));
-    }
-    Ok(ids)
 }
 
 pub fn router() -> Router<AppState> {

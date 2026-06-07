@@ -24,10 +24,9 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{jmap_session, looks_like_jmap_id, provider_error};
+use crate::routes::jmap_helpers::looks_like_jmap_id;
 use crate::routes::outbound::{
-    MAX_BODY_BYTES, OutboundHeaders, RenderedBody, create_draft_email, html_to_plaintext,
-    render_markdown, rendered_html, set_rendered_body, set_text_body, validate_attachments,
+    RenderedBody, html_to_plaintext, render_markdown, rendered_html, validate_attachments,
     validate_body, validate_recipients, validate_subject,
 };
 use crate::routes::response::{bad_request, internal, not_found};
@@ -68,7 +67,98 @@ pub trait DraftStore: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>>;
 }
 
+pub struct CacheDraftStore;
+
 pub struct JmapDraftStore;
+
+impl DraftStore for CacheDraftStore {
+    fn create<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        from: &'a str,
+        draft: DraftCreate,
+    ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            state.mail.create_draft(draft_payload(from, draft)).await
+                .map(|id| id.as_str().to_owned())
+                .map_err(|err| DraftStoreError::Provider(err.to_string()))
+        })
+    }
+
+    fn get<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            state.mail.get_draft(&hail_backend::BackendMsgId::new(draft_id.to_owned())).await
+                .map(|draft| draft.map(|draft| DraftDetails {
+                    draft_id: draft.id.as_str().to_owned(),
+                    to: draft.to,
+                    cc: draft.cc,
+                    bcc: draft.bcc,
+                    subject: draft.subject,
+                    body_html: sanitize_outgoing_html(&draft.body_html),
+                    body_markdown: draft.body_markdown,
+                }))
+                .map_err(|err| DraftStoreError::Provider(err.to_string()))
+        })
+    }
+
+    fn update<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        draft_id: &'a str,
+        draft: DraftUpdate,
+    ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            let existing = state.mail.get_draft(&hail_backend::BackendMsgId::new(draft_id.to_owned())).await
+                .map_err(|err| DraftStoreError::Provider(err.to_string()))?
+                .ok_or(DraftStoreError::NotFound)?;
+            let body_markdown = draft.body_markdown.unwrap_or(existing.body_markdown);
+            let payload = hail_cache::DraftPayload {
+                from: String::new(),
+                to: draft.to.unwrap_or(existing.to),
+                cc: draft.cc.unwrap_or(existing.cc),
+                bcc: draft.bcc.unwrap_or(existing.bcc),
+                subject: draft.subject.unwrap_or(existing.subject),
+                plain_text: body_markdown.clone(),
+                html: draft.body_html.unwrap_or(existing.body_html),
+                body_markdown,
+            };
+            state.mail.update_draft(&hail_backend::BackendMsgId::new(draft_id.to_owned()), payload).await
+                .map_err(|err| DraftStoreError::Provider(err.to_string()))
+        })
+    }
+
+    fn delete<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
+        Box::pin(async move {
+            state.mail.delete_draft(&hail_backend::BackendMsgId::new(draft_id.to_owned())).await
+                .map_err(|err| DraftStoreError::Provider(err.to_string()))
+        })
+    }
+}
+
+fn draft_payload(from: &str, draft: DraftCreate) -> hail_cache::DraftPayload {
+    hail_cache::DraftPayload {
+        from: from.to_owned(),
+        to: draft.to,
+        cc: draft.cc,
+        bcc: draft.bcc,
+        subject: draft.subject,
+        plain_text: draft.body.plain_text,
+        html: draft.body_html,
+        body_markdown: draft.body_markdown,
+    }
+}
 
 impl DraftStore for JmapDraftStore {
     fn create<'a>(
@@ -78,15 +168,7 @@ impl DraftStore for JmapDraftStore {
         from: &'a str,
         draft: DraftCreate,
     ) -> Pin<Box<dyn Future<Output = Result<String, DraftStoreError>> + Send + 'a>> {
-        Box::pin(async move {
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            create_draft_email::<DraftStoreError, _>(
-                &session,
-                OutboundHeaders::new(from, &draft.to, &draft.cc, &draft.bcc, &draft.subject),
-                |email| set_draft_body(email, &draft.body),
-            )
-            .await
-        })
+        CacheDraftStore.create(state, token, from, draft)
     }
 
     fn get<'a>(
@@ -94,54 +176,8 @@ impl DraftStore for JmapDraftStore {
         state: &'a AppState,
         token: SecretString,
         draft_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            let mut request = session.client().build();
-            let get_email = request.get_email();
-            get_email.ids([draft_id]).properties([
-                hail_jmap::jmap_client::email::Property::Id,
-                hail_jmap::jmap_client::email::Property::Keywords,
-                hail_jmap::jmap_client::email::Property::To,
-                hail_jmap::jmap_client::email::Property::Cc,
-                hail_jmap::jmap_client::email::Property::Bcc,
-                hail_jmap::jmap_client::email::Property::Subject,
-                hail_jmap::jmap_client::email::Property::TextBody,
-                hail_jmap::jmap_client::email::Property::HtmlBody,
-                hail_jmap::jmap_client::email::Property::BodyValues,
-            ]);
-            get_email
-                .arguments()
-                .fetch_text_body_values(true)
-                .fetch_html_body_values(true)
-                .max_body_value_bytes(MAX_BODY_BYTES);
-
-            let mut response = request.send_get_email().await.map_err(provider_error)?;
-            let Some(email) = response.take_list().pop() else {
-                return Ok(None);
-            };
-            if !email
-                .keywords()
-                .into_iter()
-                .any(|keyword| keyword == "$draft")
-            {
-                return Ok(None);
-            }
-
-            let body_markdown = text_body_from_email(&email);
-            let body_html = sanitized_body_html_from_email(&email, &body_markdown);
-
-            Ok(Some(DraftDetails {
-                draft_id: draft_id.to_string(),
-                to: addresses_from_jmap(email.to()),
-                cc: addresses_from_jmap(email.cc()),
-                bcc: addresses_from_jmap(email.bcc()),
-                subject: email.subject().unwrap_or_default().to_string(),
-                body_html,
-                body_markdown,
-            }))
-        })
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DraftDetails>, DraftStoreError>> + Send + 'a>> {
+        CacheDraftStore.get(state, token, draft_id)
     }
 
     fn update<'a>(
@@ -151,33 +187,7 @@ impl DraftStore for JmapDraftStore {
         draft_id: &'a str,
         draft: DraftUpdate,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
-        Box::pin(async move {
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            ensure_draft_email(&session, draft_id).await?;
-
-            let mut request = session.client().build();
-            let email = request.set_email().update(draft_id);
-
-            if let Some(to) = draft.to {
-                email.to(to.iter().map(String::as_str));
-            }
-            if let Some(cc) = draft.cc {
-                email.cc(cc.iter().map(String::as_str));
-            }
-            if let Some(bcc) = draft.bcc {
-                email.bcc(bcc.iter().map(String::as_str));
-            }
-            if let Some(subject) = draft.subject {
-                email.subject(subject);
-            }
-            if let Some(body) = draft.body {
-                set_draft_body(email, &body);
-            }
-
-            let mut response = request.send_set_email().await.map_err(provider_error)?;
-            response.updated(draft_id).map_err(provider_error)?;
-            Ok(())
-        })
+        CacheDraftStore.update(state, token, draft_id, draft)
     }
 
     fn delete<'a>(
@@ -186,15 +196,7 @@ impl DraftStore for JmapDraftStore {
         token: SecretString,
         draft_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), DraftStoreError>> + Send + 'a>> {
-        Box::pin(async move {
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            ensure_draft_email(&session, draft_id).await?;
-            session
-                .client()
-                .email_destroy(draft_id)
-                .await
-                .map_err(provider_error)
-        })
+        CacheDraftStore.delete(state, token, draft_id)
     }
 }
 
@@ -249,12 +251,12 @@ pub struct DraftDetails {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::from(openapi_router_with_store(Arc::new(JmapDraftStore)))
+    Router::from(openapi_router_with_store(Arc::new(CacheDraftStore)))
 }
 
 /// Build the OpenAPI-tracked router for the production draft store.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
-    openapi_router_with_store(Arc::new(JmapDraftStore))
+    openapi_router_with_store(Arc::new(CacheDraftStore))
 }
 
 pub fn router_with_store<S>(store: Arc<S>) -> Router<AppState>
@@ -465,45 +467,6 @@ async fn delete_draft(
     }
 }
 
-fn set_draft_body(
-    email: &mut hail_jmap::jmap_client::email::Email<hail_jmap::jmap_client::Set>,
-    body: &RenderedBody,
-) {
-    if body.html.trim().is_empty() {
-        set_text_body(email, "");
-    } else {
-        set_rendered_body(email, body);
-    }
-}
-
-fn render_draft_body(
-    body_html: Option<&str>,
-    body_markdown: Option<&str>,
-) -> Result<RenderedBody, &'static str> {
-    if let Some(html) = body_html {
-        validate_body(html)?;
-        if !html.trim().is_empty() {
-            let body = rendered_html(html);
-            validate_body(&body.html)?;
-            return Ok(body);
-        }
-    }
-
-    if let Some(markdown) = body_markdown {
-        validate_body(markdown)?;
-        if !markdown.trim().is_empty() {
-            let body = render_markdown(markdown);
-            validate_body(&body.html)?;
-            return Ok(body);
-        }
-    }
-
-    Ok(RenderedBody {
-        plain_text: String::new(),
-        html: String::new(),
-    })
-}
-
 impl DraftPayload {
     fn into_create(self) -> Result<DraftCreate, &'static str> {
         validate_attachments(&self.attachments)?;
@@ -514,136 +477,49 @@ impl DraftPayload {
         let body = render_draft_body(self.body_html.as_deref(), self.body_markdown.as_deref())?;
         let body_markdown = html_to_plaintext(&body.html);
         let body_html = body.html.clone();
-
         validate_recipients("to", &to, false)?;
         validate_recipients("cc", &cc, false)?;
         validate_recipients("bcc", &bcc, false)?;
         validate_subject(&subject)?;
-
-        Ok(DraftCreate {
-            to,
-            cc,
-            bcc,
-            subject,
-            body,
-            body_markdown,
-            body_html,
-        })
+        Ok(DraftCreate { to, cc, bcc, subject, body, body_markdown, body_html })
     }
 
     fn into_update(self) -> Result<DraftUpdate, &'static str> {
         validate_attachments(&self.attachments)?;
-        if let Some(to) = &self.to {
-            validate_recipients("to", to, false)?;
-        }
-        if let Some(cc) = &self.cc {
-            validate_recipients("cc", cc, false)?;
-        }
-        if let Some(bcc) = &self.bcc {
-            validate_recipients("bcc", bcc, false)?;
-        }
-        if let Some(subject) = &self.subject {
-            validate_subject(subject)?;
-        }
+        if let Some(to) = &self.to { validate_recipients("to", to, false)?; }
+        if let Some(cc) = &self.cc { validate_recipients("cc", cc, false)?; }
+        if let Some(bcc) = &self.bcc { validate_recipients("bcc", bcc, false)?; }
+        if let Some(subject) = &self.subject { validate_subject(subject)?; }
         let body = if self.body_html.is_some() || self.body_markdown.is_some() {
-            Some(render_draft_body(
-                self.body_html.as_deref(),
-                self.body_markdown.as_deref(),
-            )?)
-        } else {
-            None
-        };
+            Some(render_draft_body(self.body_html.as_deref(), self.body_markdown.as_deref())?)
+        } else { None };
         let body_markdown = body.as_ref().map(|body| html_to_plaintext(&body.html));
         let body_html = body.as_ref().map(|body| body.html.clone());
-
-        if self.to.is_none()
-            && self.cc.is_none()
-            && self.bcc.is_none()
-            && self.subject.is_none()
-            && body.is_none()
-        {
+        if self.to.is_none() && self.cc.is_none() && self.bcc.is_none() && self.subject.is_none() && body.is_none() {
             return Err("empty_patch");
         }
-
-        Ok(DraftUpdate {
-            to: self.to,
-            cc: self.cc,
-            bcc: self.bcc,
-            subject: self.subject,
-            body,
-            body_markdown,
-            body_html,
-        })
+        Ok(DraftUpdate { to: self.to, cc: self.cc, bcc: self.bcc, subject: self.subject, body, body_markdown, body_html })
     }
 }
 
-async fn ensure_draft_email(
-    session: &hail_jmap::Session,
-    draft_id: &str,
-) -> Result<(), DraftStoreError> {
-    let mut request = session.client().build();
-    request.get_email().ids([draft_id]).properties([
-        hail_jmap::jmap_client::email::Property::Id,
-        hail_jmap::jmap_client::email::Property::Keywords,
-    ]);
-    let mut response = request.send_get_email().await.map_err(provider_error)?;
-    let Some(email) = response.take_list().pop() else {
-        return Err(DraftStoreError::NotFound);
-    };
-    if email
-        .keywords()
-        .into_iter()
-        .any(|keyword| keyword == "$draft")
-    {
-        Ok(())
-    } else {
-        Err(DraftStoreError::NotFound)
+fn render_draft_body(body_html: Option<&str>, body_markdown: Option<&str>) -> Result<RenderedBody, &'static str> {
+    if let Some(html) = body_html {
+        validate_body(html)?;
+        if !html.trim().is_empty() {
+            let body = rendered_html(html);
+            validate_body(&body.html)?;
+            return Ok(body);
+        }
     }
-}
-
-fn addresses_from_jmap(
-    addresses: Option<&[hail_jmap::jmap_client::email::EmailAddress]>,
-) -> Vec<String> {
-    addresses
-        .unwrap_or_default()
-        .iter()
-        .map(|address| address.email().to_string())
-        .filter(|address| !address.is_empty())
-        .collect()
-}
-
-fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
-    body_from_parts(email, email.text_body()).unwrap_or_default()
-}
-
-fn html_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> Option<String> {
-    body_from_parts(email, email.html_body()).filter(|body| !body.trim().is_empty())
-}
-
-fn body_from_parts(
-    email: &hail_jmap::jmap_client::email::Email,
-    parts: Option<&[hail_jmap::jmap_client::email::EmailBodyPart]>,
-) -> Option<String> {
-    let mut body = String::new();
-    for part in parts? {
-        let Some(part_id) = part.part_id() else {
-            continue;
-        };
-        let Some(value) = email.body_value(part_id) else {
-            continue;
-        };
-        body.push_str(value.value());
+    if let Some(markdown) = body_markdown {
+        validate_body(markdown)?;
+        if !markdown.trim().is_empty() {
+            let body = render_markdown(markdown);
+            validate_body(&body.html)?;
+            return Ok(body);
+        }
     }
-    Some(body)
-}
-
-fn sanitized_body_html_from_email(
-    email: &hail_jmap::jmap_client::email::Email,
-    text_body: &str,
-) -> String {
-    html_body_from_email(email)
-        .map(|html| sanitize_outgoing_html(&html))
-        .unwrap_or_else(|| sanitize_outgoing_html(&render_markdown(text_body).html))
+    Ok(RenderedBody { plain_text: String::new(), html: String::new() })
 }
 
 fn provider_failed(user_id: i64, err: String) -> Response {
