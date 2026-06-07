@@ -153,10 +153,7 @@ where
         add: &[Keyword],
         remove: &[Keyword],
     ) -> hail_backend::Result<()> {
-        let request = ModifyMessageRequest {
-            add_label_ids: add.iter().map(gmail_label_for_keyword).collect(),
-            remove_label_ids: remove.iter().map(gmail_label_for_keyword).collect(),
-        };
+        let request = modify_request_for_keyword_delta(add, remove);
         self.gmail
             .modify_message(id.as_str(), &request)
             .await
@@ -237,20 +234,24 @@ where
                             role: MailboxRole::Trash,
                         });
                     } else {
+                        let label_ids = added.label_ids;
                         changes.push(Change::MessageUpdated {
                             id: BackendMsgId::new(added.message.id),
                             keywords: None,
-                            keywords_added: added.label_ids.into_iter().map(Keyword::new).collect(),
-                            keywords_removed: Vec::new(),
+                            keywords_added: keywords_for_added_gmail_labels(&label_ids),
+                            keywords_removed: keywords_for_removed_hail_labels_on_gmail_add(
+                                label_ids,
+                            ),
                         });
                     }
                 }
                 for removed in record.labels_removed {
+                    let label_ids = removed.label_ids;
                     changes.push(Change::MessageUpdated {
                         id: BackendMsgId::new(removed.message.id),
                         keywords: None,
-                        keywords_added: Vec::new(),
-                        keywords_removed: removed.label_ids.into_iter().map(Keyword::new).collect(),
+                        keywords_added: keywords_for_added_hail_labels_on_gmail_remove(&label_ids),
+                        keywords_removed: keywords_for_removed_gmail_labels(label_ids),
                     });
                 }
             }
@@ -361,7 +362,7 @@ fn raw_message_from_gmail(raw: RawGmailMessage) -> RawMessage {
         id: BackendMsgId::new(id),
         thread_id: raw.thread_id,
         rfc822: Bytes::from(raw.rfc822),
-        keywords: raw.label_ids.into_iter().map(Keyword::new).collect(),
+        keywords: keywords_from_gmail_labels(raw.label_ids),
         envelope: None,
         received_at_epoch_secs: None,
         size_bytes: None,
@@ -431,9 +432,82 @@ fn normalize_content_id(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn modify_request_for_keyword_delta(add: &[Keyword], remove: &[Keyword]) -> ModifyMessageRequest {
+    let mut request = ModifyMessageRequest::default();
+    for keyword in add {
+        if keyword.as_str() == "$seen" {
+            push_unique_string(&mut request.remove_label_ids, "UNREAD");
+        } else {
+            push_unique_string(&mut request.add_label_ids, gmail_label_for_keyword(keyword));
+        }
+    }
+    for keyword in remove {
+        if keyword.as_str() == "$seen" {
+            push_unique_string(&mut request.add_label_ids, "UNREAD");
+        } else {
+            push_unique_string(&mut request.remove_label_ids, gmail_label_for_keyword(keyword));
+        }
+    }
+    request
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn keywords_from_gmail_labels(label_ids: Vec<String>) -> Vec<Keyword> {
+    let mut has_unread = false;
+    let mut keywords = Vec::new();
+    for label in label_ids {
+        if label == "UNREAD" {
+            has_unread = true;
+        } else {
+            keywords.push(Keyword::new(label));
+        }
+    }
+    if !has_unread {
+        keywords.push(Keyword::new("$seen"));
+    }
+    keywords
+}
+
+fn keywords_for_added_gmail_labels(label_ids: &[String]) -> Vec<Keyword> {
+    label_ids
+        .iter()
+        .filter(|label| label.as_str() != "UNREAD")
+        .map(|label| Keyword::new(label.clone()))
+        .collect()
+}
+
+fn keywords_for_removed_hail_labels_on_gmail_add(label_ids: Vec<String>) -> Vec<Keyword> {
+    label_ids
+        .into_iter()
+        .filter(|label| label == "UNREAD")
+        .map(|_| Keyword::new("$seen"))
+        .collect()
+}
+
+fn keywords_for_added_hail_labels_on_gmail_remove(label_ids: &[String]) -> Vec<Keyword> {
+    label_ids
+        .iter()
+        .filter(|label| label.as_str() == "UNREAD")
+        .map(|_| Keyword::new("$seen"))
+        .collect()
+}
+
+fn keywords_for_removed_gmail_labels(label_ids: Vec<String>) -> Vec<Keyword> {
+    label_ids
+        .into_iter()
+        .filter(|label| label != "UNREAD")
+        .map(Keyword::new)
+        .collect()
+}
+
 fn gmail_label_for_keyword(keyword: &Keyword) -> String {
     match keyword.as_str() {
-        "$seen" => "UNREAD".to_string(),
         "$draft" => "DRAFT".to_string(),
         "$flagged" => "STARRED".to_string(),
         value => value.to_string(),
@@ -682,6 +756,55 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn raw_message_from_gmail_maps_gmail_unread_inverse_to_seen_keyword() {
+        let read = raw_message_from_gmail(RawGmailMessage {
+            id: "read-msg".to_string(),
+            thread_id: None,
+            history_id: None,
+            label_ids: vec!["INBOX".to_string()],
+            rfc822: b"From: sender@example.org\r\n\r\nbody".to_vec(),
+            payload: None,
+        });
+        assert!(read.keywords.contains(&Keyword::new("$seen")));
+        assert!(read.keywords.contains(&Keyword::new("INBOX")));
+        assert!(!read.keywords.contains(&Keyword::new("UNREAD")));
+
+        let unread = raw_message_from_gmail(RawGmailMessage {
+            id: "unread-msg".to_string(),
+            thread_id: None,
+            history_id: None,
+            label_ids: vec!["INBOX".to_string(), "UNREAD".to_string()],
+            rfc822: b"From: sender@example.org\r\n\r\nbody".to_vec(),
+            payload: None,
+        });
+        assert!(!unread.keywords.contains(&Keyword::new("$seen")));
+        assert!(unread.keywords.contains(&Keyword::new("INBOX")));
+        assert!(!unread.keywords.contains(&Keyword::new("UNREAD")));
+    }
+
+    #[test]
+    fn modify_request_for_keyword_delta_inverts_seen_and_unread_label() {
+        let mark_read = modify_request_for_keyword_delta(&[Keyword::new("$seen")], &[]);
+        assert_eq!(mark_read.add_label_ids, Vec::<String>::new());
+        assert_eq!(mark_read.remove_label_ids, vec!["UNREAD"]);
+
+        let mark_unread = modify_request_for_keyword_delta(&[], &[Keyword::new("$seen")]);
+        assert_eq!(mark_unread.add_label_ids, vec!["UNREAD"]);
+        assert_eq!(mark_unread.remove_label_ids, Vec::<String>::new());
+    }
+
+    #[test]
+    fn modify_request_for_keyword_delta_maps_other_keywords_by_name() {
+        let request = modify_request_for_keyword_delta(
+            &[Keyword::new("$flagged"), Keyword::new("Custom")],
+            &[Keyword::new("$draft"), Keyword::new("Old")],
+        );
+
+        assert_eq!(request.add_label_ids, vec!["STARRED", "Custom"]);
+        assert_eq!(request.remove_label_ids, vec!["DRAFT", "Old"]);
     }
 
     #[test]

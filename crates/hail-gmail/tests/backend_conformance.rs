@@ -7,7 +7,7 @@ use hail_backend::conformance::{
 };
 use hail_backend::{
     BackendMsgId, BlobRef, Capabilities, Change, Envelope, Keyword, Mailbox, MailboxRole,
-    RawMessage, SubmissionId, SyncCursor,
+    RawMessage, SubmissionId, SyncCursor, MailBackend,
 };
 use hail_gmail::GmailBackend;
 use hail_gmail::gmail_client::{GmailClient, GmailRetryConfig, StaticGmailTokenSource};
@@ -37,6 +37,7 @@ const GMAIL_CAPABILITIES: Capabilities = Capabilities {
 struct RequestRecord {
     method: String,
     path: String,
+    body: String,
 }
 
 #[derive(Debug, Default)]
@@ -96,6 +97,31 @@ async fn gmail_backend_satisfies_shared_mail_backend_conformance() {
     assert_recorded_requests_cover_every_gmail_rest_endpoint(&state).await;
 }
 
+#[tokio::test]
+async fn gmail_backend_sets_unread_by_adding_gmail_unread_label() {
+    let (base_url, state) = fake_gmail_server().await;
+    let token_source = StaticGmailTokenSource::new(SecretString::from("test-token"));
+    let gmail = GmailClient::with_base_url(reqwest::Client::new(), token_source.clone(), &base_url)
+        .expect("gmail client")
+        .with_retry_config(no_retries());
+    let smtp = GmailOutboundSmtpClient::new(token_source, CapturingSmtpSender::default());
+    let backend = GmailBackend::from_parts(gmail, smtp);
+
+    backend
+        .set_keywords(
+            &BackendMsgId::new("msg-mark-unread"),
+            &[],
+            &[Keyword::new("$seen")],
+        )
+        .await
+        .expect("mark unread");
+
+    assert_eq!(
+        last_modify_body(&state).await,
+        json!({"addLabelIds":["UNREAD"],"removeLabelIds":[]})
+    );
+}
+
 fn gmail_fixture() -> MailBackendConformance {
     let message_id = BackendMsgId::new("msg-1");
     let blob_ref = BlobRef::new("msg-1:att-1");
@@ -111,7 +137,7 @@ fn gmail_fixture() -> MailBackendConformance {
             id: message_id.clone(),
             thread_id: Some("thread-1".to_string()),
             rfc822,
-            keywords: vec![Keyword::new("INBOX"), Keyword::new("UNREAD")],
+            keywords: vec![Keyword::new("INBOX")],
             envelope: None,
             received_at_epoch_secs: None,
             size_bytes: None,
@@ -121,8 +147,8 @@ fn gmail_fixture() -> MailBackendConformance {
         },
         blob_ref,
         expected_blob: Bytes::from_static(b"attachment bytes"),
-        keyword_additions: vec![Keyword::new("$flagged")],
-        keyword_removals: vec![Keyword::new("$seen")],
+        keyword_additions: vec![Keyword::new("$flagged"), Keyword::new("$seen")],
+        keyword_removals: vec![Keyword::new("$draft")],
         move_role: MailboxRole::Trash,
         send_rfc822: b"From: sender@example.org\r\nTo: user@example.org\r\nSubject: conformance send\r\n\r\nBody".to_vec(),
         send_envelope: Envelope {
@@ -141,10 +167,16 @@ fn gmail_fixture() -> MailBackendConformance {
                 role: MailboxRole::Trash,
             },
             Change::MessageUpdated {
-                id: BackendMsgId::new("msg-1"),
+                id: BackendMsgId::new("msg-3"),
                 keywords: None,
                 keywords_added: Vec::new(),
-                keywords_removed: vec![Keyword::new("UNREAD")],
+                keywords_removed: vec![Keyword::new("$seen")],
+            },
+            Change::MessageUpdated {
+                id: BackendMsgId::new("msg-1"),
+                keywords: None,
+                keywords_added: vec![Keyword::new("$seen")],
+                keywords_removed: Vec::new(),
             },
         ],
         expected_next_cursor: SyncCursor::new("hist-2"),
@@ -217,6 +249,7 @@ async fn handle_connection(mut stream: TcpStream, state: Arc<FakeGmailState>) {
     state.requests.lock().await.push(RequestRecord {
         method: method.clone(),
         path: path.clone(),
+        body: body.to_string(),
     });
 
     let response = route(&method, &path, query.as_deref(), body);
@@ -281,9 +314,16 @@ fn route(method: &str, path: &str, query: Option<&str>, body: &str) -> FakeRespo
         ("POST", "/gmail/v1/users/me/messages/msg-1/modify") => {
             assert_json_body(
                 body,
-                json!({"addLabelIds":["STARRED"],"removeLabelIds":["UNREAD"]}),
+                json!({"addLabelIds":["STARRED"],"removeLabelIds":["UNREAD","DRAFT"]}),
             );
             ok(json!({"id":"msg-1","labelIds":["INBOX","STARRED"]}))
+        }
+        ("POST", "/gmail/v1/users/me/messages/msg-mark-unread/modify") => {
+            assert_json_body(
+                body,
+                json!({"addLabelIds":["UNREAD"],"removeLabelIds":[]}),
+            );
+            ok(json!({"id":"msg-mark-unread","labelIds":["INBOX","UNREAD"]}))
         }
         ("POST", "/gmail/v1/users/me/messages/batchModify") => {
             assert_json_body(
@@ -300,7 +340,10 @@ fn route(method: &str, path: &str, query: Option<&str>, body: &str) -> FakeRespo
                 "history": [{
                     "id": "hist-2",
                     "messagesAdded": [{"message": {"id":"msg-2", "threadId":"thread-2"}}],
-                    "labelsAdded": [{"message": {"id":"msg-1", "threadId":"thread-1"}, "labelIds":["TRASH"]}],
+                    "labelsAdded": [
+                        {"message": {"id":"msg-1", "threadId":"thread-1"}, "labelIds":["TRASH"]},
+                        {"message": {"id":"msg-3", "threadId":"thread-3"}, "labelIds":["UNREAD"]}
+                    ],
                     "labelsRemoved": [{"message": {"id":"msg-1", "threadId":"thread-1"}, "labelIds":["UNREAD"]}]
                 }]
             }))
@@ -330,6 +373,16 @@ fn ok(body: serde_json::Value) -> FakeResponse {
 fn assert_json_body(actual: &str, expected: serde_json::Value) {
     let actual: serde_json::Value = serde_json::from_str(actual).expect("json request body");
     assert_eq!(actual, expected);
+}
+
+async fn last_modify_body(state: &FakeGmailState) -> serde_json::Value {
+    let requests = state.requests.lock().await;
+    let request = requests
+        .iter()
+        .rev()
+        .find(|request| request.path.ends_with("/modify"))
+        .expect("modify request recorded");
+    serde_json::from_str(&request.body).expect("json modify body")
 }
 
 async fn assert_recorded_requests_cover_every_gmail_rest_endpoint(state: &FakeGmailState) {
