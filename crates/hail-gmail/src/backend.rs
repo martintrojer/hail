@@ -7,15 +7,15 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use hail_backend::{
-    BackendMsgId, BlobRef, Capabilities, Change, Envelope, Error as BackendError, Keyword,
-    MailBackend, Mailbox, MailboxRole, Page, PageRequest, Principal, Query, RawMessage,
+    AttachmentMeta, BackendMsgId, BlobRef, Capabilities, Change, Envelope, Error as BackendError,
+    Keyword, MailBackend, Mailbox, MailboxRole, Page, PageRequest, Principal, Query, RawMessage,
     SubmissionId, SyncCursor,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::gmail_client::{
-    BatchModifyMessagesRequest, GmailApiErrorKind, GmailClient, GmailClientError, GmailTokenSource,
-    ListHistoryParams, ListMessagesParams, ModifyMessageRequest, RawGmailMessage,
+    BatchModifyMessagesRequest, GmailApiErrorKind, GmailClient, GmailClientError, GmailMessagePart,
+    GmailTokenSource, ListHistoryParams, ListMessagesParams, ModifyMessageRequest, RawGmailMessage,
 };
 use crate::gmail_outbound_smtp::{
     GmailOutboundSmtpClient, GmailOutboundSmtpError, GmailRawOutboundMessage, LettreGmailSmtpSender,
@@ -351,8 +351,14 @@ fn raw_message_from_gmail(raw: RawGmailMessage) -> RawMessage {
     if let Some(history_id) = raw.history_id {
         metadata.insert("gmail_history_id".to_string(), history_id);
     }
+    let id = raw.id;
+    let attachments = raw
+        .payload
+        .as_ref()
+        .map(|payload| attachments_from_gmail_payload(&id, payload))
+        .unwrap_or_default();
     RawMessage {
-        id: BackendMsgId::new(raw.id),
+        id: BackendMsgId::new(id),
         thread_id: raw.thread_id,
         rfc822: Bytes::from(raw.rfc822),
         keywords: raw.label_ids.into_iter().map(Keyword::new).collect(),
@@ -360,12 +366,69 @@ fn raw_message_from_gmail(raw: RawGmailMessage) -> RawMessage {
         received_at_epoch_secs: None,
         size_bytes: None,
         blob_refs: Vec::new(),
-        // TODO(gmail attachments): populate structured AttachmentMeta from the
-        // Gmail payload parts; the cache currently sees no attachment rows for
-        // Gmail-backed messages until this is wired.
-        attachments: Vec::new(),
+        attachments,
         metadata,
     }
+}
+
+fn attachments_from_gmail_payload(
+    message_id: &str,
+    payload: &GmailMessagePart,
+) -> Vec<AttachmentMeta> {
+    let mut attachments = Vec::new();
+    collect_gmail_attachments(message_id, payload, &mut attachments);
+    attachments
+}
+
+fn collect_gmail_attachments(
+    message_id: &str,
+    part: &GmailMessagePart,
+    attachments: &mut Vec<AttachmentMeta>,
+) {
+    let filename = part.filename.clone().unwrap_or_default();
+    let attachment_id = part.body.attachment_id.as_deref();
+    if !filename.is_empty() || attachment_id.is_some() {
+        let content_id = header_value(part, "Content-ID").and_then(normalize_content_id);
+        let content_disposition = header_value(part, "Content-Disposition");
+        attachments.push(AttachmentMeta {
+            filename,
+            mime_type: part
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+            size_bytes: part.body.size.unwrap_or_default(),
+            blob_ref: attachment_id
+                .map(|attachment_id| BlobRef::new(format!("{message_id}:{attachment_id}"))),
+            inline: is_inline_disposition(content_disposition) || content_id.is_some(),
+            content_id,
+        });
+    }
+
+    for sub_part in &part.parts {
+        collect_gmail_attachments(message_id, sub_part, attachments);
+    }
+}
+
+fn header_value<'a>(part: &'a GmailMessagePart, name: &str) -> Option<&'a str> {
+    part.headers
+        .iter()
+        .find(|header| header.name.eq_ignore_ascii_case(name))
+        .map(|header| header.value.as_str())
+}
+
+fn is_inline_disposition(value: Option<&str>) -> bool {
+    value
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("inline"))
+}
+
+fn normalize_content_id(value: &str) -> Option<String> {
+    let trimmed = value
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn gmail_label_for_keyword(keyword: &Keyword) -> String {
@@ -461,7 +524,9 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
-    use crate::gmail_client::StaticGmailTokenSource;
+    use crate::gmail_client::{
+        GmailMessagePart, GmailMessagePartBody, GmailMessagePartHeader, StaticGmailTokenSource,
+    };
     use crate::gmail_outbound_smtp::{
         GmailOutboundMessage, GmailRawOutboundMessage, GmailSmtpSender, GmailSmtpSubmission,
     };
@@ -521,6 +586,102 @@ mod tests {
         assert_eq!(captured[0].mail_from, envelope.mail_from);
         assert_eq!(captured[0].rcpt_to, envelope.rcpt_to);
         assert_eq!(captured[0].rfc822, rfc822);
+    }
+
+    #[test]
+    fn raw_message_from_gmail_extracts_nested_attachment_metadata() {
+        let raw = RawGmailMessage {
+            id: "msg-attachments".to_string(),
+            thread_id: Some("thread-attachments".to_string()),
+            history_id: Some("hist-attachments".to_string()),
+            label_ids: vec!["INBOX".to_string()],
+            rfc822: b"From: sender@example.org\r\n\r\nbody".to_vec(),
+            payload: Some(GmailMessagePart {
+                part_id: Some("0".to_string()),
+                mime_type: Some("multipart/mixed".to_string()),
+                filename: Some(String::new()),
+                headers: Vec::new(),
+                body: GmailMessagePartBody::default(),
+                parts: vec![
+                    GmailMessagePart {
+                        part_id: Some("1".to_string()),
+                        mime_type: Some("text/plain".to_string()),
+                        filename: Some(String::new()),
+                        headers: Vec::new(),
+                        body: GmailMessagePartBody {
+                            attachment_id: None,
+                            size: Some(12),
+                        },
+                        parts: Vec::new(),
+                    },
+                    GmailMessagePart {
+                        part_id: Some("2".to_string()),
+                        mime_type: Some("application/pdf".to_string()),
+                        filename: Some("invoice.pdf".to_string()),
+                        headers: vec![GmailMessagePartHeader {
+                            name: "Content-Disposition".to_string(),
+                            value: "attachment; filename=\"invoice.pdf\"".to_string(),
+                        }],
+                        body: GmailMessagePartBody {
+                            attachment_id: Some("att-pdf".to_string()),
+                            size: Some(42_000),
+                        },
+                        parts: Vec::new(),
+                    },
+                    GmailMessagePart {
+                        part_id: Some("3".to_string()),
+                        mime_type: Some("multipart/related".to_string()),
+                        filename: Some(String::new()),
+                        headers: Vec::new(),
+                        body: GmailMessagePartBody::default(),
+                        parts: vec![GmailMessagePart {
+                            part_id: Some("3.1".to_string()),
+                            mime_type: Some("image/png".to_string()),
+                            filename: Some(String::new()),
+                            headers: vec![
+                                GmailMessagePartHeader {
+                                    name: "Content-ID".to_string(),
+                                    value: "<logo@example.org>".to_string(),
+                                },
+                                GmailMessagePartHeader {
+                                    name: "Content-Disposition".to_string(),
+                                    value: "inline; filename=logo.png".to_string(),
+                                },
+                            ],
+                            body: GmailMessagePartBody {
+                                attachment_id: Some("att-logo".to_string()),
+                                size: Some(1_337),
+                            },
+                            parts: Vec::new(),
+                        }],
+                    },
+                ],
+            }),
+        };
+
+        let message = raw_message_from_gmail(raw);
+
+        assert_eq!(
+            message.attachments,
+            vec![
+                AttachmentMeta {
+                    filename: "invoice.pdf".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                    size_bytes: 42_000,
+                    blob_ref: Some(BlobRef::new("msg-attachments:att-pdf")),
+                    inline: false,
+                    content_id: None,
+                },
+                AttachmentMeta {
+                    filename: String::new(),
+                    mime_type: "image/png".to_string(),
+                    size_bytes: 1_337,
+                    blob_ref: Some(BlobRef::new("msg-attachments:att-logo")),
+                    inline: true,
+                    content_id: Some("logo@example.org".to_string()),
+                },
+            ]
+        );
     }
 
     #[test]

@@ -460,21 +460,25 @@ where
         self.get_json("users/me/history", &query).await
     }
 
-    /// `GET /gmail/v1/users/me/messages/{id}?format=raw`
+    /// `GET /gmail/v1/users/me/messages/{id}?format=raw` plus `format=full` for payload metadata.
     pub async fn get_raw_message(
         &self,
         message_id: &str,
     ) -> Result<RawGmailMessage, GmailClientError> {
         let path = format!("users/me/messages/{message_id}");
-        let response: GetMessageResponse = self.get_json(&path, &[("format", "raw")]).await?;
-        let raw = response.raw.ok_or(GmailClientError::MissingRawMessage)?;
+        let raw_response: GetMessageResponse = self.get_json(&path, &[("format", "raw")]).await?;
+        let raw = raw_response
+            .raw
+            .ok_or(GmailClientError::MissingRawMessage)?;
         let rfc822 = decode_raw_rfc822(&raw)?;
+        let full_response: GetMessageResponse = self.get_json(&path, &[("format", "full")]).await?;
         Ok(RawGmailMessage {
-            id: response.id,
-            thread_id: response.thread_id,
-            history_id: response.history_id,
-            label_ids: response.label_ids,
+            id: raw_response.id,
+            thread_id: raw_response.thread_id,
+            history_id: raw_response.history_id,
+            label_ids: raw_response.label_ids,
             rfc822,
+            payload: full_response.payload,
         })
     }
 
@@ -872,6 +876,34 @@ pub struct RawGmailMessage {
     pub history_id: Option<String>,
     pub label_ids: Vec<String>,
     pub rfc822: Vec<u8>,
+    pub payload: Option<GmailMessagePart>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailMessagePart {
+    pub part_id: Option<String>,
+    pub mime_type: Option<String>,
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub headers: Vec<GmailMessagePartHeader>,
+    #[serde(default)]
+    pub body: GmailMessagePartBody,
+    #[serde(default)]
+    pub parts: Vec<GmailMessagePart>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct GmailMessagePartHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GmailMessagePartBody {
+    pub attachment_id: Option<String>,
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -883,6 +915,7 @@ struct GetMessageResponse {
     #[serde(default)]
     label_ids: Vec<String>,
     raw: Option<String>,
+    payload: Option<GmailMessagePart>,
 }
 
 #[derive(Debug, Deserialize)]

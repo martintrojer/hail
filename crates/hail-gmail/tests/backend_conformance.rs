@@ -252,9 +252,8 @@ fn route(method: &str, path: &str, query: Option<&str>, body: &str) -> FakeRespo
                 "resultSizeEstimate": 1
             }))
         }
-        ("GET", "/gmail/v1/users/me/messages/msg-1") => {
-            assert_eq!(query, Some("format=raw"));
-            ok(json!({
+        ("GET", "/gmail/v1/users/me/messages/msg-1") => match query {
+            Some("format=raw") => ok(json!({
                 "id": "msg-1",
                 "threadId": "thread-1",
                 "historyId": "hist-msg-1",
@@ -262,8 +261,20 @@ fn route(method: &str, path: &str, query: Option<&str>, body: &str) -> FakeRespo
                 "raw": BASE64_URL_SAFE_NO_PAD.encode(
                     b"From: sender@example.org\r\nTo: user@example.org\r\nSubject: Gmail fixture\r\n\r\nHello from Gmail"
                 )
-            }))
-        }
+            })),
+            Some("format=full") => ok(json!({
+                "id": "msg-1",
+                "threadId": "thread-1",
+                "historyId": "hist-msg-1",
+                "labelIds": ["INBOX", "UNREAD"],
+                "payload": {
+                    "mimeType": "text/plain",
+                    "filename": "",
+                    "body": {"size": 16}
+                }
+            })),
+            other => panic!("unexpected get message query {other:?}"),
+        },
         ("GET", "/gmail/v1/users/me/messages/msg-1/attachments/att-1") => ok(json!({
             "data": BASE64_URL_SAFE_NO_PAD.encode(b"attachment bytes")
         })),
