@@ -26,6 +26,31 @@ async fn setup_db(
     (pool, guard, tempdir, store)
 }
 
+fn blob_path(root: &std::path::Path, blob_id: &str) -> std::path::PathBuf {
+    let parsed = hail_core::BlobId::parse(blob_id).expect("parse blob id");
+    root.join(&parsed.hex()[0..2])
+        .join(&parsed.hex()[2..4])
+        .join(parsed.file_name())
+}
+
+fn assert_blob_file_exists(root: &std::path::Path, blob_id: &str) {
+    let path = blob_path(root, blob_id);
+    assert!(
+        path.is_file(),
+        "expected blob file {} to exist on disk",
+        path.display()
+    );
+}
+
+fn assert_blob_file_missing(root: &std::path::Path, blob_id: &str) {
+    let path = blob_path(root, blob_id);
+    assert!(
+        !path.exists(),
+        "expected evicted blob file {} to be removed from disk",
+        path.display()
+    );
+}
+
 async fn ensure_account(pool: &SqlitePool) {
     sqlx::query(
         "INSERT INTO users (id, email, jmap_account_id, display_name, is_admin, created_at) \
@@ -111,7 +136,7 @@ async fn metadata_count(pool: &SqlitePool) -> i64 {
 
 #[tokio::test]
 async fn age_eviction_clears_body_but_keeps_metadata() {
-    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-age-eviction").await;
+    let (pool, _guard, tempdir, store) = setup_db("hail-cache-age-eviction").await;
     let old_blob = insert_message(&pool, store.as_ref(), "old", 1, 10, 10, false).await;
     let recent_blob = insert_message(&pool, store.as_ref(), "recent", 1, 1, 10, false).await;
 
@@ -131,18 +156,15 @@ async fn age_eviction_clears_body_but_keeps_metadata() {
         Some(recent_blob.as_str())
     );
     assert_eq!(metadata_count(&pool).await, 2);
-    assert!(
-        !store
-            .exists(&hail_core::BlobId::parse(&old_blob).expect("old blob id"))
-            .await
-            .expect("old exists")
-    );
+    assert_blob_file_missing(tempdir.path(), &old_blob);
+    assert_blob_file_exists(tempdir.path(), &recent_blob);
 }
 
 #[tokio::test]
 async fn count_eviction_uses_lru_and_keeps_metadata() {
-    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-count-eviction").await;
-    insert_message(&pool, store.as_ref(), "least-recent", 10, 1, 10, false).await;
+    let (pool, _guard, tempdir, store) = setup_db("hail-cache-count-eviction").await;
+    let least_recent_blob =
+        insert_message(&pool, store.as_ref(), "least-recent", 10, 1, 10, false).await;
     let newest_blob = insert_message(&pool, store.as_ref(), "newest", 1, 1, 10, false).await;
 
     let stats = evict_account_bodies(
@@ -161,13 +183,15 @@ async fn count_eviction_uses_lru_and_keeps_metadata() {
         Some(newest_blob.as_str())
     );
     assert_eq!(metadata_count(&pool).await, 2);
+    assert_blob_file_missing(tempdir.path(), &least_recent_blob);
+    assert_blob_file_exists(tempdir.path(), &newest_blob);
 }
 
 #[tokio::test]
 async fn size_eviction_keeps_newest_accessed_rows_within_budget() {
-    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-size-eviction").await;
-    insert_message(&pool, store.as_ref(), "oldest", 3, 1, 60, false).await;
-    insert_message(&pool, store.as_ref(), "middle", 2, 1, 60, false).await;
+    let (pool, _guard, tempdir, store) = setup_db("hail-cache-size-eviction").await;
+    let oldest_blob = insert_message(&pool, store.as_ref(), "oldest", 3, 1, 60, false).await;
+    let middle_blob = insert_message(&pool, store.as_ref(), "middle", 2, 1, 60, false).await;
     let newest_blob = insert_message(&pool, store.as_ref(), "newest", 1, 1, 60, false).await;
 
     let stats = evict_account_bodies(
@@ -187,13 +211,16 @@ async fn size_eviction_keeps_newest_accessed_rows_within_budget() {
         Some(newest_blob.as_str())
     );
     assert_eq!(metadata_count(&pool).await, 3);
+    assert_blob_file_missing(tempdir.path(), &oldest_blob);
+    assert_blob_file_missing(tempdir.path(), &middle_blob);
+    assert_blob_file_exists(tempdir.path(), &newest_blob);
 }
 
 #[tokio::test]
 async fn pinned_messages_are_never_evicted() {
-    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-pinned-eviction").await;
+    let (pool, _guard, tempdir, store) = setup_db("hail-cache-pinned-eviction").await;
     let pinned_blob = insert_message(&pool, store.as_ref(), "pinned", 99, 99, 1_000, true).await;
-    insert_message(&pool, store.as_ref(), "unpinned", 99, 99, 1_000, false).await;
+    let unpinned_blob = insert_message(&pool, store.as_ref(), "unpinned", 99, 99, 1_000, false).await;
 
     let stats = evict_account_bodies(
         &pool,
@@ -210,13 +237,15 @@ async fn pinned_messages_are_never_evicted() {
         Some(pinned_blob.as_str())
     );
     assert_eq!(body_blob(&pool, "unpinned").await, None);
+    assert_blob_file_exists(tempdir.path(), &pinned_blob);
+    assert_blob_file_missing(tempdir.path(), &unpinned_blob);
 }
 
 #[tokio::test]
 async fn screener_pending_messages_are_pinned_and_survive_eviction_until_decided() {
-    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-screener-pending-pin").await;
+    let (pool, _guard, tempdir, store) = setup_db("hail-cache-screener-pending-pin").await;
     let pending_blob = insert_message(&pool, store.as_ref(), "pending", 99, 99, 1_000, false).await;
-    insert_message(&pool, store.as_ref(), "other", 99, 99, 1_000, false).await;
+    let other_blob = insert_message(&pool, store.as_ref(), "other", 99, 99, 1_000, false).await;
     sqlx::query(
         "UPDATE messages SET from_addr = 'pending@example.test' WHERE backend_msg_id = 'pending'",
     )
@@ -257,6 +286,8 @@ async fn screener_pending_messages_are_pinned_and_survive_eviction_until_decided
         Some(pending_blob.as_str())
     );
     assert_eq!(body_blob(&pool, "other").await, None);
+    assert_blob_file_exists(tempdir.path(), &pending_blob);
+    assert_blob_file_missing(tempdir.path(), &other_blob);
 
     sqlx::query(
         "UPDATE screener_rules SET decision = 'allow', classify_as = 'imbox', decided_at = '2026-01-02T00:00:00Z' \
@@ -279,7 +310,7 @@ async fn screener_pending_messages_are_pinned_and_survive_eviction_until_decided
 
 #[tokio::test]
 async fn full_and_off_modes_are_noops() {
-    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-mode-noop-eviction").await;
+    let (pool, _guard, tempdir, store) = setup_db("hail-cache-mode-noop-eviction").await;
     let blob = insert_message(&pool, store.as_ref(), "old", 99, 99, 1_000, false).await;
 
     let off = evict_account_bodies(
@@ -305,4 +336,5 @@ async fn full_and_off_modes_are_noops() {
         body_blob(&pool, "old").await.as_deref(),
         Some(blob.as_str())
     );
+    assert_blob_file_exists(tempdir.path(), &blob);
 }
