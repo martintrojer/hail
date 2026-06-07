@@ -1,0 +1,20 @@
+[package]
+name = "hail-backend"
+description = "Backend-agnostic mail provider trait and shared types for hail."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+bytes = { version = "1", features = ["serde"] }
+futures-core = "0.3"
+hail-core = { path = "../hail-core" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio = { version = "1", features = ["macros", "rt"] }
