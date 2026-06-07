@@ -6,6 +6,7 @@ pub use hail_gmail::gmail_outbound_smtp;
 pub mod provider_import_routing;
 pub use hail_gmail::rfc822_import;
 pub mod cache_eviction_sweeper;
+pub mod cache_sync;
 
 #[allow(dead_code)]
 pub mod app_events;
@@ -17,6 +18,8 @@ pub mod screener;
 pub mod screener_rfc822_router;
 pub mod workflows;
 
+#[allow(dead_code)]
+pub(crate) mod backend_factory;
 #[allow(dead_code)]
 pub(crate) mod crypto;
 #[allow(dead_code)]

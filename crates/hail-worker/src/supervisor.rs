@@ -27,8 +27,11 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::backend_factory::WorkerBackendFactory;
 use crate::cache_eviction_sweeper::{CacheEvictionSweeperOptions, run_cache_eviction_sweeper};
-use hail_blob_store::FilesystemBlobStore;
+use crate::cache_sync::{CacheSyncOptions, run_cache_sync_poll_loop};
+use crate::outbox_drain::{OutboxDrainOptions, run_outbox_drain_loop};
+use hail_blob_store::{BlobStore, FilesystemBlobStore};
 
 use crate::provider_sync_scheduler::live::LiveProviderSyncRunner;
 use crate::provider_sync_scheduler::{ProviderSyncSchedulerOptions, process_provider_sync_tick};
@@ -92,18 +95,79 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     let mut tasks: JoinSet<UserTaskExit> = JoinSet::new();
     let cache_eviction_cancel = cancel.child_token();
     let cache_eviction_db = state.db.clone();
-    let cache_eviction_blob_store =
-        FilesystemBlobStore::new(state.config.mail.cache.blob_root.clone());
+    let blob_store = FilesystemBlobStore::new(state.config.mail.cache.blob_root.clone());
+    tokio::spawn({
+        let blob_store = blob_store.clone();
+        async move {
+            if let Err(err) = run_cache_eviction_sweeper(
+                cache_eviction_db,
+                blob_store,
+                CacheEvictionSweeperOptions::default(),
+                cache_eviction_cancel,
+            )
+            .await
+            {
+                warn!(error = %err, "cache eviction sweeper exited with error");
+            }
+        }
+    });
+
+    let backend_factory = WorkerBackendFactory::new(
+        Arc::new(state.config.clone()),
+        state.db.clone(),
+        state.token_decryptor.clone(),
+    )?;
+    let sync_cancel = cancel.child_token();
+    let sync_db = state.db.clone();
+    let sync_blob_store: Arc<dyn BlobStore> = Arc::new(blob_store.clone());
+    let sync_backend_factory = backend_factory.clone();
+    let sync_loop_cancel = sync_cancel.clone();
     tokio::spawn(async move {
-        if let Err(err) = run_cache_eviction_sweeper(
-            cache_eviction_db,
-            cache_eviction_blob_store,
-            CacheEvictionSweeperOptions::default(),
-            cache_eviction_cancel,
+        if let Err(err) = run_cache_sync_poll_loop(
+            sync_db,
+            sync_blob_store,
+            |account_id| {
+                let factory = sync_backend_factory.clone();
+                let child_cancel = sync_cancel.child_token();
+                async move {
+                    factory
+                        .backend_for_account(account_id, child_cancel)
+                        .await
+                        .ok()
+                }
+            },
+            CacheSyncOptions::default(),
+            sync_loop_cancel,
         )
         .await
         {
-            warn!(error = %err, "cache eviction sweeper exited with error");
+            warn!(error = %err, "cache sync poll loop exited with error");
+        }
+    });
+
+    let outbox_cancel = cancel.child_token();
+    let outbox_db = state.db.clone();
+    let outbox_backend_factory = backend_factory.clone();
+    let outbox_loop_cancel = outbox_cancel.clone();
+    tokio::spawn(async move {
+        if let Err(err) = run_outbox_drain_loop(
+            outbox_db,
+            |account_id| {
+                let factory = outbox_backend_factory.clone();
+                let child_cancel = outbox_cancel.child_token();
+                async move {
+                    factory
+                        .backend_for_account(account_id, child_cancel)
+                        .await
+                        .ok()
+                }
+            },
+            OutboxDrainOptions::default(),
+            outbox_loop_cancel,
+        )
+        .await
+        {
+            warn!(error = %err, "outbox drain loop exited with error");
         }
     });
     let mut next_run_id = 0;
