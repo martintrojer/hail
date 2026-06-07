@@ -139,6 +139,8 @@ async fn setup_db() -> (SqliteConnection, TempDb, i64, i64) {
 
     let alice_id = user_id(&pool, "alice@example.com").await;
     let bob_id = user_id(&pool, "bob@example.com").await;
+    insert_mail_account(&pool, alice_id, "alice@example.com").await;
+    insert_mail_account(&pool, bob_id, "bob@example.com").await;
     pool.close().await;
     let conn = SqliteConnection::connect(&url).await.expect("connect conn");
     (conn, guard, alice_id, bob_id)
@@ -150,6 +152,21 @@ async fn user_id(pool: &sqlx::SqlitePool, email: &str) -> i64 {
         .fetch_one(pool)
         .await
         .expect("fetch user id")
+}
+
+async fn insert_mail_account(pool: &sqlx::SqlitePool, user_id: i64, email: &str) {
+    sqlx::query(
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?1, ?2, 'gmail', 'gmail', ?2, ?3, ?4, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(user_id)
+    .bind(format!("provider-{user_id}"))
+    .bind(email)
+    .bind(vec![7_u8; 32])
+    .execute(pool)
+    .await
+    .expect("insert mail account");
 }
 
 fn envelope(from: &str) -> EmailEnvelope {
@@ -221,6 +238,39 @@ async fn insert_speakeasy_with_rotation(
     .expect("insert speakeasy");
 }
 
+async fn insert_cached_message(
+    conn: &mut SqliteConnection,
+    account_user_id: i64,
+    backend_id: &str,
+    from: &str,
+) {
+    let account_id: i64 = sqlx::query_scalar("SELECT id FROM mail_accounts WHERE user_id = ?1")
+        .bind(account_user_id)
+        .fetch_one(&mut *conn)
+        .await
+        .expect("mail account id");
+    sqlx::query(
+        "INSERT INTO messages \
+         (account_id, backend_msg_id, thread_id, internal_date, from_addr, subject, preview, size_bytes, body_blob_id, body_text, inserted_at, accessed_at, pinned) \
+         VALUES (?1, ?2, ?3, 1, ?4, 'subject', 'preview', 10, 'blob-id', 'body', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0)",
+    )
+    .bind(account_id)
+    .bind(backend_id)
+    .bind(format!("thread-{backend_id}"))
+    .bind(from)
+    .execute(conn)
+    .await
+    .expect("insert cached message");
+}
+
+async fn cached_pin(conn: &mut SqliteConnection, backend_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT pinned FROM messages WHERE backend_msg_id = ?1")
+        .bind(backend_id)
+        .fetch_one(conn)
+        .await
+        .expect("cached pin")
+}
+
 #[test]
 fn normalize_sender_cases() {
     let cases = [
@@ -279,6 +329,55 @@ async fn stalwart_spam_flag_moves_to_junk_and_bypasses_screener() {
     .await
     .expect("pending count");
     assert_eq!(pending_count, 0, "spam must not create a pending rule");
+}
+
+#[tokio::test]
+async fn new_unknown_sender_pins_matching_cached_message() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_cached_message(&mut conn, alice_id, "email-1", "new@example.com").await;
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope("new@example.com"),
+    )
+    .await
+    .expect("route pending");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "new@example.com".to_owned()
+        }
+    );
+    assert_eq!(cached_pin(&mut conn, "email-1").await, 1);
+}
+
+#[tokio::test]
+async fn existing_pending_sender_pins_matching_cached_message() {
+    let (mut conn, _guard, alice_id, _) = setup_db().await;
+    insert_rule(&mut conn, alice_id, "known@example.com", "pending", None).await;
+    insert_cached_message(&mut conn, alice_id, "email-1", "known@example.com").await;
+    let jmap = Arc::new(FakeJmapOps::new());
+
+    let outcome = route_email(
+        &mut conn,
+        jmap.as_ref(),
+        alice_id,
+        &envelope("known@example.com"),
+    )
+    .await
+    .expect("route pending");
+
+    assert_eq!(
+        outcome,
+        RouteOutcome::ScreenerPending {
+            sender: "known@example.com".to_owned()
+        }
+    );
+    assert_eq!(cached_pin(&mut conn, "email-1").await, 1);
 }
 
 #[tokio::test]

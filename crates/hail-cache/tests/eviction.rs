@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use hail_blob_store::{BlobStore, FilesystemBlobStore};
-use hail_cache::{CachePolicy, evict_account_bodies};
+use hail_cache::{CachePolicy, evict_account_bodies, refresh_pinned_messages};
 use hail_core::{BlobKind, MailBackfill, MailCacheMode};
 use hail_test::{TempDb, fresh_db_url};
 use sqlx::SqlitePool;
@@ -210,6 +210,71 @@ async fn pinned_messages_are_never_evicted() {
         Some(pinned_blob.as_str())
     );
     assert_eq!(body_blob(&pool, "unpinned").await, None);
+}
+
+#[tokio::test]
+async fn screener_pending_messages_are_pinned_and_survive_eviction_until_decided() {
+    let (pool, _guard, _tempdir, store) = setup_db("hail-cache-screener-pending-pin").await;
+    let pending_blob = insert_message(&pool, store.as_ref(), "pending", 99, 99, 1_000, false).await;
+    insert_message(&pool, store.as_ref(), "other", 99, 99, 1_000, false).await;
+    sqlx::query(
+        "UPDATE messages SET from_addr = 'pending@example.test' WHERE backend_msg_id = 'pending'",
+    )
+    .execute(&pool)
+    .await
+    .expect("set pending sender");
+    sqlx::query(
+        "INSERT INTO screener_rules (user_id, sender_address, decision, first_seen_at) \
+         VALUES (1, 'pending@example.test', 'pending', '2026-01-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert pending rule");
+
+    assert_eq!(
+        refresh_pinned_messages(&pool).await.expect("refresh pins"),
+        1
+    );
+    let pinned: i64 =
+        sqlx::query_scalar("SELECT pinned FROM messages WHERE backend_msg_id = 'pending'")
+            .fetch_one(&pool)
+            .await
+            .expect("pending pinned");
+    assert_eq!(pinned, 1);
+
+    let stats = evict_account_bodies(
+        &pool,
+        store.as_ref(),
+        1,
+        &policy(MailCacheMode::Bounded, 1, 1, 1),
+    )
+    .await
+    .expect("evict");
+
+    assert_eq!(stats.evicted_bodies, 1);
+    assert_eq!(
+        body_blob(&pool, "pending").await.as_deref(),
+        Some(pending_blob.as_str())
+    );
+    assert_eq!(body_blob(&pool, "other").await, None);
+
+    sqlx::query(
+        "UPDATE screener_rules SET decision = 'allow', classify_as = 'imbox', decided_at = '2026-01-02T00:00:00Z' \
+         WHERE user_id = 1 AND sender_address = 'pending@example.test'",
+    )
+    .execute(&pool)
+    .await
+    .expect("approve sender");
+    assert_eq!(
+        refresh_pinned_messages(&pool).await.expect("refresh pins"),
+        1
+    );
+    let pinned: i64 =
+        sqlx::query_scalar("SELECT pinned FROM messages WHERE backend_msg_id = 'pending'")
+            .fetch_one(&pool)
+            .await
+            .expect("pending unpinned");
+    assert_eq!(pinned, 0);
 }
 
 #[tokio::test]
