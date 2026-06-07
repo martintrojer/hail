@@ -1,21 +1,25 @@
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::{
     Router,
-    body::{Body, Bytes},
+    body::Body,
     http::{Method, Request, StatusCode, header},
-    response::IntoResponse,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use bytes::Bytes;
 use chrono::{Duration, Utc};
 use hail_api::{
     middleware::auth::{CSRF_HEADER, require_auth},
     routes::screener::{Classification, ScreenerBackfill, ScreenerBackfillError, ScreenerDecision},
     state::AppState,
 };
+use hail_backend::{BackendMsgId, Envelope, Keyword, RawMessage};
+use hail_blob_store::{BlobStore, FilesystemBlobStore};
+use hail_cache::{CachePolicy, CachedMail};
+use hail_core::{MailBackfill, MailCacheMode};
 use hail_test::{fixture_state, json_body, seed_session};
-use serde_json::Value;
 use tower::ServiceExt;
 
 async fn seed_rule(
@@ -129,6 +133,202 @@ fn app(state: AppState, backfill: Arc<FakeBackfill>) -> Router {
     Router::new().merge(protected).with_state(state)
 }
 
+async fn state_with_cache_mail(
+    state: &AppState,
+    user_id: i64,
+    messages: Vec<RawMessage>,
+) -> (AppState, TestMailBackend) {
+    sqlx::query(
+        "INSERT OR IGNORE INTO mail_accounts \
+         (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (1, ?1, 'acct', 'gmail', 'gmail', 'provider-acct', 'cache@example.test', ?2, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(user_id)
+    .bind(vec![7_u8; 32])
+    .execute(&state.db)
+    .await
+    .expect("insert cache mail account");
+    let tempdir = tempfile::tempdir().expect("create temp blob dir");
+    let blob_root = tempdir.keep();
+    let blobs = Arc::new(FilesystemBlobStore::new(blob_root)) as Arc<dyn BlobStore>;
+    let backend = TestMailBackend::with_messages(messages);
+    let state = AppState {
+        db: state.db.clone(),
+        config: state.config.clone(),
+        server_key: state.server_key.clone(),
+        auth_rate_limiter: state.auth_rate_limiter.clone(),
+        mail: Arc::new(CachedMail::new(
+            state.db.clone(),
+            blobs,
+            Box::new(backend.clone()),
+            CachePolicy::new(
+                MailCacheMode::Bounded,
+                90,
+                50_000,
+                5 * 1024 * 1024,
+                MailBackfill::Off,
+            ),
+        )),
+        events: state.events.clone(),
+    };
+    (state, backend)
+}
+
+#[derive(Clone, Default)]
+struct TestMailBackend {
+    messages: Arc<HashMap<BackendMsgId, RawMessage>>,
+    order: Arc<Vec<BackendMsgId>>,
+    get_calls: Arc<Mutex<Vec<BackendMsgId>>>,
+}
+
+impl TestMailBackend {
+    fn with_messages(messages: Vec<RawMessage>) -> Self {
+        let order = messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<Vec<_>>();
+        let messages = messages
+            .into_iter()
+            .map(|message| (message.id.clone(), message))
+            .collect::<HashMap<_, _>>();
+        Self {
+            messages: Arc::new(messages),
+            order: Arc::new(order),
+            get_calls: Arc::default(),
+        }
+    }
+
+    fn get_calls(&self) -> Vec<String> {
+        self.get_calls
+            .lock()
+            .expect("get calls lock")
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect()
+    }
+}
+
+#[async_trait]
+impl hail_backend::MailBackend for TestMailBackend {
+    fn capabilities(&self) -> &'static hail_backend::Capabilities {
+        hail_api::test_support::FakeMailBackend::empty().capabilities()
+    }
+
+    async fn list_message_ids(
+        &self,
+        _query: &hail_backend::Query,
+        page: &hail_backend::PageRequest,
+    ) -> hail_backend::Result<hail_backend::Page<BackendMsgId>> {
+        let limit = usize::try_from(page.limit).unwrap_or(usize::MAX);
+        Ok(hail_backend::Page {
+            items: self.order.iter().take(limit).cloned().collect(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_message(&self, id: &BackendMsgId) -> hail_backend::Result<RawMessage> {
+        self.get_calls
+            .lock()
+            .expect("get calls lock")
+            .push(id.clone());
+        self.messages
+            .get(id)
+            .cloned()
+            .ok_or_else(|| hail_backend::Error::NotFound {
+                kind: "message",
+                id: id.as_str().to_owned(),
+            })
+    }
+
+    async fn fetch_blob(&self, id: &hail_backend::BlobRef) -> hail_backend::Result<Bytes> {
+        Err(hail_backend::Error::NotFound {
+            kind: "blob",
+            id: id.as_str().to_owned(),
+        })
+    }
+
+    async fn set_keywords(
+        &self,
+        _id: &BackendMsgId,
+        _add: &[Keyword],
+        _remove: &[Keyword],
+    ) -> hail_backend::Result<()> {
+        Ok(())
+    }
+
+    async fn move_to_role(
+        &self,
+        _id: &BackendMsgId,
+        _role: hail_backend::MailboxRole,
+    ) -> hail_backend::Result<()> {
+        Ok(())
+    }
+
+    async fn delete_permanently(&self, _id: &BackendMsgId) -> hail_backend::Result<()> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        _rfc822: &[u8],
+        _envelope: &Envelope,
+    ) -> hail_backend::Result<hail_backend::SubmissionId> {
+        Ok(hail_backend::SubmissionId::new("fake-submission"))
+    }
+
+    async fn poll_changes(
+        &self,
+        cursor: &hail_backend::SyncCursor,
+    ) -> hail_backend::Result<(Vec<hail_backend::Change>, hail_backend::SyncCursor)> {
+        Ok((Vec::new(), cursor.clone()))
+    }
+
+    async fn watch_changes(
+        &self,
+    ) -> futures_util::stream::BoxStream<'static, hail_backend::Change> {
+        Box::pin(futures_util::stream::empty())
+    }
+
+    async fn list_mailboxes(&self) -> hail_backend::Result<Vec<hail_backend::Mailbox>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_principals(&self) -> hail_backend::Result<Vec<hail_backend::Principal>> {
+        Ok(Vec::new())
+    }
+}
+
+fn raw_screener_message(
+    id: &str,
+    sender: &str,
+    subject: &str,
+    preview: &str,
+    body: &str,
+    content_type: &str,
+    received_at_epoch_secs: i64,
+) -> RawMessage {
+    let mut metadata = BTreeMap::new();
+    metadata.insert("subject".to_owned(), subject.to_owned());
+    metadata.insert("preview".to_owned(), preview.to_owned());
+    RawMessage {
+        id: BackendMsgId::new(id),
+        thread_id: Some(format!("thread-{id}")),
+        rfc822: Bytes::from(format!(
+            "From: {sender}\r\nTo: me@example.org\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: {content_type}; charset=utf-8\r\n\r\n{body}"
+        )),
+        keywords: vec![Keyword::new("$hail_screener")],
+        envelope: Some(Envelope {
+            mail_from: sender.to_owned(),
+            rcpt_to: vec!["me@example.org".to_owned()],
+        }),
+        received_at_epoch_secs: Some(received_at_epoch_secs),
+        size_bytes: Some(u64::try_from(body.len()).expect("body length fits u64")),
+        blob_refs: Vec::new(),
+        attachments: Vec::new(),
+        metadata,
+    }
+}
+
 async fn request(
     state: AppState,
     method: Method,
@@ -178,266 +378,11 @@ async fn request_with_backfill(
         .unwrap()
 }
 
-#[derive(Clone)]
-struct JmapEmailFixture {
-    id: &'static str,
-    sender: &'static str,
-    subject: &'static str,
-    preview: &'static str,
-    text_body: Option<&'static str>,
-    html_body: Option<&'static str>,
-}
-
-#[derive(Clone)]
-struct OwnedJmapEmailFixture {
-    id: String,
-    sender: String,
-    subject: String,
-    preview: String,
-    text_body: Option<String>,
-    html_body: Option<String>,
-}
-
-impl From<JmapEmailFixture> for OwnedJmapEmailFixture {
-    fn from(email: JmapEmailFixture) -> Self {
-        Self {
-            id: email.id.to_owned(),
-            sender: email.sender.to_owned(),
-            subject: email.subject.to_owned(),
-            preview: email.preview.to_owned(),
-            text_body: email.text_body.map(ToOwned::to_owned),
-            html_body: email.html_body.map(ToOwned::to_owned),
-        }
-    }
-}
-
-async fn start_fake_screener_jmap(
-    emails: Vec<JmapEmailFixture>,
-) -> (String, tokio::task::JoinHandle<()>) {
-    start_fake_screener_jmap_with_recorder(emails, Arc::new(Mutex::new(Vec::new()))).await
-}
-
-async fn start_fake_screener_jmap_with_recorder(
-    emails: Vec<JmapEmailFixture>,
-    requests: Arc<Mutex<Vec<Value>>>,
-) -> (String, tokio::task::JoinHandle<()>) {
-    start_fake_screener_jmap_owned_with_recorder(
-        emails.into_iter().map(Into::into).collect(),
-        requests,
-    )
-    .await
-}
-
-async fn start_fake_screener_jmap_owned_with_recorder(
-    emails: Vec<OwnedJmapEmailFixture>,
-    requests: Arc<Mutex<Vec<Value>>>,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let state = Arc::new(FakeJmapState { emails, requests });
-    let app = Router::new()
-        .route("/.well-known/jmap", axum::routing::get(fake_jmap_session))
-        .route("/jmap/", axum::routing::post(fake_jmap_api))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fake jmap");
-    let addr = listener.local_addr().expect("fake jmap addr");
-    let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service())
-            .await
-            .expect("fake jmap server");
-    });
-    (format!("http://{addr}"), handle)
-}
-
-#[derive(Default)]
-struct FakeJmapState {
-    emails: Vec<OwnedJmapEmailFixture>,
-    requests: Arc<Mutex<Vec<Value>>>,
-}
-
-async fn fake_jmap_session(headers: axum::http::HeaderMap) -> impl IntoResponse {
-    let base_url = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .map(|host| format!("http://{host}"))
-        .unwrap_or_else(|| "http://127.0.0.1:0".to_owned());
-    axum::Json(serde_json::json!({
-        "capabilities": {
-            "urn:ietf:params:jmap:core": {
-                "maxSizeUpload": 50_000_000,
-                "maxConcurrentUpload": 4,
-                "maxSizeRequest": 10_000_000,
-                "maxConcurrentRequests": 4,
-                "maxCallsInRequest": 16,
-                "maxObjectsInGet": 500,
-                "maxObjectsInSet": 500,
-                "collationAlgorithms": ["i;unicode-casemap"]
-            },
-            "urn:ietf:params:jmap:mail": {
-                "maxMailboxesPerEmail": 16,
-                "maxMailboxDepth": 10,
-                "maxSizeMailboxName": 255,
-                "maxSizeAttachmentsPerEmail": 50_000_000,
-                "emailQuerySortOptions": ["receivedAt"],
-                "mayCreateTopLevelMailbox": true
-            }
-        },
-        "accounts": {
-            "account-test": {
-                "name": "Test Account",
-                "isPersonal": true,
-                "isReadOnly": false,
-                "accountCapabilities": {
-                    "urn:ietf:params:jmap:mail": {}
-                }
-            }
-        },
-        "primaryAccounts": {
-            "urn:ietf:params:jmap:mail": "account-test"
-        },
-        "username": "screener@example.org",
-        "apiUrl": format!("{base_url}/jmap/"),
-        "downloadUrl": format!("{base_url}/download/{{accountId}}/{{blobId}}/{{name}}?accept={{type}}"),
-        "uploadUrl": format!("{base_url}/upload/{{accountId}}/"),
-        "eventSourceUrl": format!("{base_url}/eventsource/?types={{types}}&closeafter={{closeafter}}&ping={{ping}}"),
-        "state": "fake-state"
-    }))
-}
-
-async fn fake_jmap_api(
-    axum::extract::State(state): axum::extract::State<Arc<FakeJmapState>>,
-    body: Bytes,
-) -> impl IntoResponse {
-    let request: Value = serde_json::from_slice(&body).expect("jmap request json");
-    state.requests.lock().unwrap().push(request.clone());
-    let call = request["methodCalls"]
-        .as_array()
-        .and_then(|calls| calls.first())
-        .expect("single jmap method call");
-    let method = call[0].as_str().expect("jmap method name");
-    let tag = call[2].as_str().unwrap_or("s0");
-    let response = match method {
-        "Mailbox/query" => serde_json::json!({
-            "accountId": "account-test",
-            "queryState": "fake-mailbox-query-state",
-            "canCalculateChanges": false,
-            "position": 0,
-            "total": 1,
-            "ids": ["mailbox-screener"]
-        }),
-        "Email/query" => {
-            let sender = requested_sender(&call[1]);
-            let ids = state
-                .emails
-                .iter()
-                .filter(|email| Some(email.sender.as_str()) == sender.as_deref())
-                .map(|email| email.id.as_str())
-                .collect::<Vec<_>>();
-            serde_json::json!({
-                "accountId": "account-test",
-                "queryState": "fake-email-query-state",
-                "canCalculateChanges": false,
-                "position": 0,
-                "total": ids.len(),
-                "ids": ids
-            })
-        }
-        "Email/get" => {
-            let ids = call[1]["ids"]
-                .as_array()
-                .expect("Email/get ids")
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>();
-            let list = ids
-                .iter()
-                .filter_map(|id| state.emails.iter().find(|email| email.id == *id))
-                .map(email_json)
-                .collect::<Vec<_>>();
-            serde_json::json!({
-                "accountId": "account-test",
-                "state": "fake-get-state",
-                "list": list,
-                "notFound": []
-            })
-        }
-        other => panic!("unexpected JMAP method {other}"),
-    };
-    axum::Json(serde_json::json!({
-        "sessionState": "fake-state",
-        "methodResponses": [[method, response, tag]]
-    }))
-}
-
-fn requested_sender(arguments: &Value) -> Option<String> {
-    fn walk(value: &Value) -> Option<String> {
-        match value {
-            Value::Object(map) => {
-                if let Some(sender) = map.get("from").and_then(Value::as_str) {
-                    return Some(sender.to_owned());
-                }
-                map.values().find_map(walk)
-            }
-            Value::Array(values) => values.iter().find_map(walk),
-            _ => None,
-        }
-    }
-
-    walk(arguments.get("filter").unwrap_or(arguments))
-}
-
-fn email_json(email: &OwnedJmapEmailFixture) -> Value {
-    let mut body_values = serde_json::Map::new();
-    let mut text_body = Vec::new();
-    let mut html_body = Vec::new();
-
-    if let Some(text) = email.text_body.as_deref() {
-        body_values.insert(
-            "text-1".to_owned(),
-            serde_json::json!({ "value": text, "isTruncated": false }),
-        );
-        text_body.push(serde_json::json!({
-            "partId": "text-1",
-            "type": "text/plain"
-        }));
-    }
-
-    if let Some(html) = email.html_body.as_deref() {
-        body_values.insert(
-            "html-1".to_owned(),
-            serde_json::json!({ "value": html, "isTruncated": false }),
-        );
-        html_body.push(serde_json::json!({
-            "partId": "html-1",
-            "type": "text/html"
-        }));
-    }
-
-    serde_json::json!({
-        "id": email.id,
-        "threadId": format!("thread-{}", email.id),
-        "from": [{
-            "name": "Pending Sender",
-            "email": email.sender
-        }],
-        "subject": email.subject,
-        "preview": email.preview,
-        "receivedAt": "2026-05-23T12:15:00Z",
-        "textBody": text_body,
-        "htmlBody": html_body,
-        "bodyValues": body_values
-    })
-}
-
-fn sender<'a>(senders: &'a [Value], address: &str) -> &'a Value {
+fn sender<'a>(senders: &'a [serde_json::Value], address: &str) -> &'a serde_json::Value {
     senders
         .iter()
         .find(|sender| sender["sender"] == address)
         .unwrap_or_else(|| panic!("sender {address} present"))
-}
-
-fn collapse_for_expected_preview(input: &str) -> String {
-    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -513,11 +458,35 @@ async fn screener_view_requires_auth() {
 }
 
 #[tokio::test]
-#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
 async fn screener_view_returns_only_current_user_pending_rows() {
     let (state, key) = fixture_state().await;
     let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
     let (bob_id, _) = seed_session(&state, &key, "bob@example.org").await;
+    let (state, _backend) = state_with_cache_mail(
+        &state,
+        alice_id,
+        vec![
+            raw_screener_message(
+                "alice-email",
+                "alice-pending@example.org",
+                "Alice pending",
+                "Alice private preview",
+                "Alice private body",
+                "text/plain",
+                1_700_000_010,
+            ),
+            raw_screener_message(
+                "bob-email",
+                "bob-pending@example.org",
+                "Bob pending",
+                "Bob private preview",
+                "Bob private body",
+                "text/plain",
+                1_700_000_020,
+            ),
+        ],
+    )
+    .await;
     let now = Utc::now();
     seed_rule(
         &state,
@@ -552,8 +521,16 @@ async fn screener_view_returns_only_current_user_pending_rows() {
     assert_eq!(senders.len(), 1);
     assert_eq!(senders[0]["sender"], "alice-pending@example.org");
     assert_eq!(senders[0]["message_count"], 1);
-    assert!(senders[0]["latest_preview"].is_null());
-    assert!(senders[0]["emails"].as_array().unwrap().is_empty());
+    assert_eq!(
+        senders[0]["latest_preview"]["preview"],
+        "Alice private preview"
+    );
+    assert_eq!(senders[0]["emails"].as_array().unwrap().len(), 1);
+    assert_eq!(senders[0]["emails"][0]["email_id"], "alice-email");
+    let rendered = serde_json::to_string(&json).expect("screener json serializes");
+    assert!(!rendered.contains("bob-pending@example.org"));
+    assert!(!rendered.contains("Bob private preview"));
+    assert!(!rendered.contains("bob-email"));
     assert!(json["next_cursor"].is_null());
 }
 
@@ -877,42 +854,45 @@ async fn screener_view_rejects_invalid_cursor() {
 }
 
 #[tokio::test]
-#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
-async fn screener_view_derives_previews_from_body_when_jmap_preview_is_empty() {
+async fn screener_view_derives_previews_from_body_when_cached_provider_preview_is_empty() {
     const LONG_TEXT_BODY: &str = "   First line from text body.\n\nSecond line with extra spacing before a deliberately long suffix: 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789";
 
-    let (mut state, key) = fixture_state().await;
-    let (jmap_url, fake_jmap) = start_fake_screener_jmap(vec![
-        JmapEmailFixture {
-            id: "email-text",
-            sender: "text@example.org",
-            subject: "Text body fallback",
-            preview: "",
-            text_body: Some(LONG_TEXT_BODY),
-            html_body: None,
-        },
-        JmapEmailFixture {
-            id: "email-html",
-            sender: "html@example.org",
-            subject: "HTML body fallback",
-            preview: "",
-            text_body: None,
-            html_body: Some(
-                r#"<div><p>Order <strong>Ready</strong></p><table><tr><td>Total</td><td>$55.08</td></tr></table><img src="https://tracker.example/open.gif" width="1" height="1"><p>Thanks for reading.</p></div>"#,
-            ),
-        },
-        JmapEmailFixture {
-            id: "email-empty",
-            sender: "empty@example.org",
-            subject: "Empty body stays empty",
-            preview: "",
-            text_body: Some(" \n\t "),
-            html_body: Some("<div> \n </div>"),
-        },
-    ])
-    .await;
-    state.config.stalwart.jmap_url = jmap_url;
+    let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "screener-preview@example.org").await;
+    let (state, _backend) = state_with_cache_mail(
+        &state,
+        user_id,
+        vec![
+            raw_screener_message(
+                "email-text",
+                "text@example.org",
+                "Text body fallback",
+                "",
+                LONG_TEXT_BODY,
+                "text/plain",
+                1_700_000_010,
+            ),
+            raw_screener_message(
+                "email-html",
+                "html@example.org",
+                "HTML body fallback",
+                "",
+                r#"<div><p>Order <strong>Ready</strong></p><table><tr><td>Total</td><td>$55.08</td></tr></table><img src="https://tracker.example/open.gif" width="1" height="1"><p>Thanks for reading.</p></div>"#,
+                "text/html",
+                1_700_000_020,
+            ),
+            raw_screener_message(
+                "email-empty",
+                "empty@example.org",
+                "Empty body stays empty",
+                "",
+                " \n\t ",
+                "text/plain",
+                1_700_000_030,
+            ),
+        ],
+    )
+    .await;
     let now = Utc::now();
     for sender in ["text@example.org", "html@example.org", "empty@example.org"] {
         seed_rule(&state, user_id, sender, "pending", None, now).await;
@@ -933,18 +913,13 @@ async fn screener_view_derives_previews_from_body_when_jmap_preview_is_empty() {
     let senders = json["senders"].as_array().expect("screener senders");
 
     let text_sender = sender(senders, "text@example.org");
-    let collapsed_text = collapse_for_expected_preview(LONG_TEXT_BODY);
+    let collapsed_text = LONG_TEXT_BODY
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let expected_text = collapsed_text.chars().take(200).collect::<String>();
     assert_eq!(text_sender["latest_preview"]["preview"], expected_text);
     assert_eq!(text_sender["emails"][0]["preview"], expected_text);
-    assert_eq!(
-        text_sender["latest_preview"]["preview"]
-            .as_str()
-            .unwrap()
-            .chars()
-            .count(),
-        200
-    );
     assert!(
         !text_sender["latest_preview"]["preview"]
             .as_str()
@@ -953,40 +928,34 @@ async fn screener_view_derives_previews_from_body_when_jmap_preview_is_empty() {
     );
 
     let html_sender = sender(senders, "html@example.org");
-    let expected_html = "Order Ready Total $55.08 Thanks for reading.";
+    let expected_html = "Order Ready Total$55.08Thanks for reading.";
     assert_eq!(html_sender["latest_preview"]["preview"], expected_html);
     assert_eq!(html_sender["emails"][0]["preview"], expected_html);
 
     let empty_sender = sender(senders, "empty@example.org");
     assert_eq!(empty_sender["latest_preview"]["preview"], "");
     assert_eq!(empty_sender["emails"][0]["preview"], "");
-
-    fake_jmap.abort();
 }
 
 #[tokio::test]
-#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
-async fn screener_view_fetches_body_values_only_for_newest_email_per_sender() {
-    let mut emails = Vec::new();
-    for index in 0..12 {
-        emails.push(OwnedJmapEmailFixture {
-            id: format!("bulk-email-{index:02}"),
-            sender: "bulk@example.org".to_owned(),
-            subject: format!("Bulk message {index:02}"),
-            preview: String::new(),
-            text_body: Some(format!(
-                "Newest body preview {index:02} with enough words to prove body fallback hydration is used."
-            )),
-            html_body: None,
-        });
-    }
+async fn screener_view_fetches_messages_only_once_per_sender_in_cache_path() {
+    let messages = (0..12)
+        .map(|index| {
+            raw_screener_message(
+                &format!("bulk-email-{index:02}"),
+                "bulk@example.org",
+                &format!("Bulk message {index:02}"),
+                &format!("Cached preview {index:02}"),
+                "body already imported by cache",
+                "text/plain",
+                1_700_000_100 - i64::from(index),
+            )
+        })
+        .collect::<Vec<_>>();
 
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let (mut state, key) = fixture_state().await;
-    let (jmap_url, fake_jmap) =
-        start_fake_screener_jmap_owned_with_recorder(emails, requests.clone()).await;
-    state.config.stalwart.jmap_url = jmap_url;
+    let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "screener-bulk@example.org").await;
+    let (state, backend) = state_with_cache_mail(&state, user_id, messages).await;
     seed_rule(
         &state,
         user_id,
@@ -1016,62 +985,39 @@ async fn screener_view_fetches_body_values_only_for_newest_email_per_sender() {
     assert_eq!(bulk_sender["emails"][0]["email_id"], "bulk-email-00");
     assert_eq!(
         bulk_sender["latest_preview"]["preview"],
-        "Newest body preview 00 with enough words to prove body fallback hydration is used."
+        "Cached preview 00"
     );
-    assert_eq!(
-        bulk_sender["emails"][0]["preview"],
-        "Newest body preview 00 with enough words to prove body fallback hydration is used."
-    );
+    assert_eq!(bulk_sender["emails"][0]["preview"], "Cached preview 00");
     assert_eq!(bulk_sender["emails"][1]["email_id"], "bulk-email-01");
-    assert_eq!(bulk_sender["emails"][1]["preview"], "");
+    assert_eq!(bulk_sender["emails"][1]["preview"], "Cached preview 01");
 
-    let requests = requests.lock().unwrap();
-    let email_gets = requests
-        .iter()
-        .filter_map(|request| {
-            let call = request["methodCalls"].as_array()?.first()?;
-            (call[0].as_str()? == "Email/get").then_some(&call[1])
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        email_gets.len(),
-        2,
-        "expected rich and light Email/get calls"
+        backend.get_calls(),
+        (0..12)
+            .map(|index| format!("bulk-email-{index:02}"))
+            .collect::<Vec<_>>(),
+        "cache-backed screener enrichment should hydrate each listed backend id once"
     );
-
-    let rich_get = email_gets
-        .iter()
-        .find(|arguments| arguments["fetchTextBodyValues"] == true)
-        .expect("rich Email/get fetches body values");
-    assert_eq!(rich_get["fetchHTMLBodyValues"], true);
-    assert_eq!(rich_get["ids"], serde_json::json!(["bulk-email-00"]));
-
-    let light_get = email_gets
-        .iter()
-        .find(|arguments| arguments["fetchTextBodyValues"].is_null())
-        .expect("light Email/get omits body value flags");
-    let light_ids = light_get["ids"].as_array().expect("light ids");
-    assert_eq!(light_ids.len(), 11);
-    assert!(!light_ids.iter().any(|id| id == "bulk-email-00"));
-
-    fake_jmap.abort();
 }
 
 #[tokio::test]
-#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
-async fn screener_view_prefers_existing_jmap_preview_over_body_fallback() {
-    let (mut state, key) = fixture_state().await;
-    let (jmap_url, fake_jmap) = start_fake_screener_jmap(vec![JmapEmailFixture {
-        id: "email-jmap-preview",
-        sender: "jmap@example.org",
-        subject: "Existing preview",
-        preview: "  Provider preview wins.  ",
-        text_body: Some("Body fallback should not replace the JMAP preview."),
-        html_body: None,
-    }])
-    .await;
-    state.config.stalwart.jmap_url = jmap_url;
+async fn screener_view_prefers_existing_cached_provider_preview_over_body_fallback() {
+    let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "screener-jmap@example.org").await;
+    let (state, _backend) = state_with_cache_mail(
+        &state,
+        user_id,
+        vec![raw_screener_message(
+            "email-provider-preview",
+            "jmap@example.org",
+            "Existing preview",
+            "Provider preview wins.",
+            "Body fallback should not replace the provider preview.",
+            "text/plain",
+            1_700_000_010,
+        )],
+    )
+    .await;
     seed_rule(
         &state,
         user_id,
@@ -1104,8 +1050,6 @@ async fn screener_view_prefers_existing_jmap_preview_over_body_fallback() {
         jmap_sender["emails"][0]["preview"],
         "Provider preview wins."
     );
-
-    fake_jmap.abort();
 }
 
 #[tokio::test]

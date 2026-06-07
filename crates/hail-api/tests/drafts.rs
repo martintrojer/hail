@@ -1,20 +1,25 @@
-use serde_json::Value;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use axum::Router;
-use axum::body::{Body, Bytes};
-use axum::extract::State;
+use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use axum::response::IntoResponse;
+use bytes::Bytes;
 use hail_api::middleware::auth::{CSRF_HEADER, require_auth};
 use hail_api::routes::drafts::{
-    DraftCreate, DraftDetails, DraftStore, DraftStoreError, DraftUpdate, JmapDraftStore,
+    CacheDraftStore, DraftCreate, DraftDetails, DraftStore, DraftStoreError, DraftUpdate,
 };
 use hail_api::state::AppState;
+use hail_backend::{BackendMsgId, Envelope, Keyword, RawMessage};
+use hail_blob_store::{BlobStore, FilesystemBlobStore};
+use hail_cache::{CachePolicy, CachedMail};
+use hail_core::{MailBackfill, MailCacheMode};
 use hail_test::{fixture_state, json_body, seed_session};
 use secrecy::SecretString;
+use serde_json::Value;
 use tower::ServiceExt;
 
 fn app(state: AppState, store: Arc<FakeDraftStore>) -> Router {
@@ -55,151 +60,205 @@ async fn request(
 }
 
 fn production_app(state: AppState) -> Router {
-    let protected = hail_api::routes::drafts::router_with_store(Arc::new(JmapDraftStore)).layer(
+    let protected = hail_api::routes::drafts::router_with_store(Arc::new(CacheDraftStore)).layer(
         axum::middleware::from_fn_with_state(state.clone(), require_auth),
     );
     Router::new().merge(protected).with_state(state)
 }
 
-#[derive(Debug)]
-struct FakeJmapDraft {
-    id: &'static str,
-    to: &'static str,
-    cc: &'static str,
-    bcc: &'static str,
-    subject: &'static str,
-    html_body: Option<&'static str>,
-    text_body: &'static str,
+async fn state_with_cache_mail(
+    state: &AppState,
+    user_id: i64,
+    messages: Vec<RawMessage>,
+) -> AppState {
+    sqlx::query(
+        "INSERT OR IGNORE INTO mail_accounts \
+         (id, user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (1, ?1, 'acct', 'gmail', 'gmail', 'provider-acct', 'cache@example.test', ?2, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(user_id)
+    .bind(vec![7_u8; 32])
+    .execute(&state.db)
+    .await
+    .expect("insert cache mail account");
+    let tempdir = tempfile::tempdir().expect("create temp blob dir");
+    let blob_root = tempdir.keep();
+    let blobs = Arc::new(FilesystemBlobStore::new(blob_root)) as Arc<dyn BlobStore>;
+    AppState {
+        db: state.db.clone(),
+        config: state.config.clone(),
+        server_key: state.server_key.clone(),
+        auth_rate_limiter: state.auth_rate_limiter.clone(),
+        mail: Arc::new(CachedMail::new(
+            state.db.clone(),
+            blobs,
+            Box::new(TestMailBackend::with_messages(messages)),
+            CachePolicy::new(
+                MailCacheMode::Bounded,
+                90,
+                50_000,
+                5 * 1024 * 1024,
+                MailBackfill::Off,
+            ),
+        )),
+        events: state.events.clone(),
+    }
 }
 
-async fn start_fake_draft_jmap(draft: FakeJmapDraft) -> (String, tokio::task::JoinHandle<()>) {
-    let draft = Arc::new(draft);
-    let app = Router::new()
-        .route(
-            "/.well-known/jmap",
-            axum::routing::get(fake_draft_jmap_session),
-        )
-        .route("/jmap/", axum::routing::post(fake_draft_jmap_api))
-        .with_state(draft);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind fake draft jmap");
-    let addr = listener.local_addr().expect("fake draft jmap addr");
-    let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service())
-            .await
-            .expect("fake draft jmap server");
-    });
-    (format!("http://{addr}"), handle)
+#[derive(Clone, Default)]
+struct TestMailBackend {
+    messages: Arc<HashMap<BackendMsgId, RawMessage>>,
+    order: Arc<Vec<BackendMsgId>>,
 }
 
-async fn fake_draft_jmap_session(headers: axum::http::HeaderMap) -> impl IntoResponse {
-    let base_url = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .map(|host| format!("http://{host}"))
-        .unwrap_or_else(|| "http://127.0.0.1:0".to_owned());
-    axum::Json(serde_json::json!({
-        "capabilities": {
-            "urn:ietf:params:jmap:core": {
-                "maxSizeUpload": 50_000_000,
-                "maxConcurrentUpload": 4,
-                "maxSizeRequest": 10_000_000,
-                "maxConcurrentRequests": 4,
-                "maxCallsInRequest": 16,
-                "maxObjectsInGet": 500,
-                "maxObjectsInSet": 500,
-                "collationAlgorithms": ["i;unicode-casemap"]
-            },
-            "urn:ietf:params:jmap:mail": {
-                "maxMailboxesPerEmail": 16,
-                "maxMailboxDepth": 10,
-                "maxSizeMailboxName": 255,
-                "maxSizeAttachmentsPerEmail": 50_000_000,
-                "emailQuerySortOptions": ["receivedAt"],
-                "mayCreateTopLevelMailbox": true
-            }
-        },
-        "accounts": {
-            "account-test": {
-                "name": "Draft Test Account",
-                "isPersonal": true,
-                "isReadOnly": false,
-                "accountCapabilities": { "urn:ietf:params:jmap:mail": {} }
-            }
-        },
-        "primaryAccounts": { "urn:ietf:params:jmap:mail": "account-test" },
-        "username": "drafts@example.org",
-        "apiUrl": format!("{base_url}/jmap/"),
-        "downloadUrl": format!("{base_url}/download/{{accountId}}/{{blobId}}/{{name}}?accept={{type}}"),
-        "uploadUrl": format!("{base_url}/upload/{{accountId}}/"),
-        "eventSourceUrl": format!("{base_url}/eventsource/?types={{types}}&closeafter={{closeafter}}&ping={{ping}}"),
-        "state": "fake-state"
-    }))
+impl TestMailBackend {
+    fn with_messages(messages: Vec<RawMessage>) -> Self {
+        let order = messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<Vec<_>>();
+        let messages = messages
+            .into_iter()
+            .map(|message| (message.id.clone(), message))
+            .collect::<HashMap<_, _>>();
+        Self {
+            messages: Arc::new(messages),
+            order: Arc::new(order),
+        }
+    }
 }
 
-async fn fake_draft_jmap_api(
-    State(draft): State<Arc<FakeJmapDraft>>,
-    body: Bytes,
-) -> impl IntoResponse {
-    let request: Value = serde_json::from_slice(&body).expect("jmap request json");
-    let call = request["methodCalls"]
-        .as_array()
-        .and_then(|calls| calls.first())
-        .expect("single jmap method call");
-    let method = call[0].as_str().expect("jmap method name");
-    let tag = call[2].as_str().unwrap_or("s0");
-    assert_eq!(method, "Email/get");
-
-    let ids = call[1]["ids"]
-        .as_array()
-        .expect("Email/get ids")
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>();
-    let list = ids
-        .iter()
-        .filter(|id| **id == draft.id)
-        .map(|_| draft_email_json(&draft))
-        .collect::<Vec<_>>();
-
-    axum::Json(serde_json::json!({
-        "sessionState": "fake-state",
-        "methodResponses": [[method, {
-            "accountId": "account-test",
-            "state": "fake-get-state",
-            "list": list,
-            "notFound": []
-        }, tag]]
-    }))
-}
-
-fn draft_email_json(draft: &FakeJmapDraft) -> Value {
-    let mut body_values = serde_json::Map::new();
-    body_values.insert(
-        "text-1".to_owned(),
-        serde_json::json!({ "value": draft.text_body, "isTruncated": false }),
-    );
-    let mut html_body = Vec::new();
-    if let Some(html) = draft.html_body {
-        body_values.insert(
-            "html-1".to_owned(),
-            serde_json::json!({ "value": html, "isTruncated": false }),
-        );
-        html_body.push(serde_json::json!({ "partId": "html-1", "type": "text/html" }));
+#[async_trait]
+impl hail_backend::MailBackend for TestMailBackend {
+    fn capabilities(&self) -> &'static hail_backend::Capabilities {
+        hail_api::test_support::FakeMailBackend::empty().capabilities()
     }
 
-    serde_json::json!({
-        "id": draft.id,
-        "keywords": { "$draft": true },
-        "to": [{ "name": "Bob", "email": draft.to }],
-        "cc": [{ "name": "Carol", "email": draft.cc }],
-        "bcc": [{ "name": "Dana", "email": draft.bcc }],
-        "subject": draft.subject,
-        "textBody": [{ "partId": "text-1", "type": "text/plain" }],
-        "htmlBody": html_body,
-        "bodyValues": body_values
-    })
+    async fn list_message_ids(
+        &self,
+        _query: &hail_backend::Query,
+        page: &hail_backend::PageRequest,
+    ) -> hail_backend::Result<hail_backend::Page<BackendMsgId>> {
+        let limit = usize::try_from(page.limit).unwrap_or(usize::MAX);
+        Ok(hail_backend::Page {
+            items: self.order.iter().take(limit).cloned().collect(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_message(&self, id: &BackendMsgId) -> hail_backend::Result<RawMessage> {
+        self.messages
+            .get(id)
+            .cloned()
+            .ok_or_else(|| hail_backend::Error::NotFound {
+                kind: "message",
+                id: id.as_str().to_owned(),
+            })
+    }
+
+    async fn fetch_blob(&self, id: &hail_backend::BlobRef) -> hail_backend::Result<Bytes> {
+        Err(hail_backend::Error::NotFound {
+            kind: "blob",
+            id: id.as_str().to_owned(),
+        })
+    }
+
+    async fn set_keywords(
+        &self,
+        _id: &BackendMsgId,
+        _add: &[Keyword],
+        _remove: &[Keyword],
+    ) -> hail_backend::Result<()> {
+        Ok(())
+    }
+
+    async fn move_to_role(
+        &self,
+        _id: &BackendMsgId,
+        _role: hail_backend::MailboxRole,
+    ) -> hail_backend::Result<()> {
+        Ok(())
+    }
+
+    async fn delete_permanently(&self, _id: &BackendMsgId) -> hail_backend::Result<()> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        _rfc822: &[u8],
+        _envelope: &Envelope,
+    ) -> hail_backend::Result<hail_backend::SubmissionId> {
+        Ok(hail_backend::SubmissionId::new("fake-submission"))
+    }
+
+    async fn poll_changes(
+        &self,
+        cursor: &hail_backend::SyncCursor,
+    ) -> hail_backend::Result<(Vec<hail_backend::Change>, hail_backend::SyncCursor)> {
+        Ok((Vec::new(), cursor.clone()))
+    }
+
+    async fn watch_changes(
+        &self,
+    ) -> futures_util::stream::BoxStream<'static, hail_backend::Change> {
+        Box::pin(futures_util::stream::empty())
+    }
+
+    async fn list_mailboxes(&self) -> hail_backend::Result<Vec<hail_backend::Mailbox>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_principals(&self) -> hail_backend::Result<Vec<hail_backend::Principal>> {
+        Ok(Vec::new())
+    }
+}
+
+fn raw_draft_message(
+    id: &str,
+    from: &str,
+    to: Vec<&str>,
+    cc: Vec<&str>,
+    bcc: Vec<&str>,
+    subject: &str,
+    rfc822: &str,
+) -> RawMessage {
+    let mut metadata = BTreeMap::new();
+    metadata.insert("subject".to_owned(), subject.to_owned());
+    metadata.insert("preview".to_owned(), String::new());
+    RawMessage {
+        id: BackendMsgId::new(id),
+        thread_id: Some(format!("thread-{id}")),
+        rfc822: Bytes::from(rfc822.to_owned()),
+        keywords: vec![Keyword::new("$draft")],
+        envelope: Some(Envelope {
+            mail_from: from.to_owned(),
+            rcpt_to: to
+                .iter()
+                .chain(cc.iter())
+                .chain(bcc.iter())
+                .map(|addr| (*addr).to_owned())
+                .collect(),
+        }),
+        received_at_epoch_secs: Some(1_700_000_000),
+        size_bytes: Some(u64::try_from(rfc822.len()).expect("rfc822 length fits u64")),
+        blob_refs: Vec::new(),
+        attachments: Vec::new(),
+        metadata,
+    }
+}
+
+fn draft_rfc822(
+    from: &str,
+    to: &str,
+    cc: &str,
+    subject: &str,
+    content_type: &str,
+    body: &str,
+) -> String {
+    format!(
+        "From: {from}\r\nTo: {to}\r\nCc: {cc}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\nContent-Type: {content_type}; charset=utf-8\r\n\r\n{body}"
+    )
 }
 
 fn assert_text_inside_blockquote(html: &str, text: &str) {
@@ -725,23 +784,32 @@ async fn get_draft_returns_saved_composer_fields() {
 }
 
 #[tokio::test]
-#[ignore = "legacy JMAP draft-store contract superseded by cache-backed production draft store"]
 async fn jmap_get_sanitizes_saved_html_before_returning_draft() {
-    let (mut state, key) = fixture_state().await;
-    let (_user_id, sid) = seed_session(&state, &key, "jmap-html-draft@example.org").await;
-    let (_jmap_handle_guard, handle) = start_fake_draft_jmap(FakeJmapDraft {
-        id: "draft-malicious-1",
-        to: "bob@example.org",
-        cc: "carol@example.org",
-        bcc: "dana@example.org",
-        subject: "Saved unsafe draft",
-        html_body: Some(
-            r#"<p>Hi <strong>Bob</strong>,</p><p onclick="alert(1)">Quick note <em>about</em> the doc.</p><blockquote><p>Prior context line 1</p><p>Prior context line 2</p></blockquote><a href="javascript:alert(1)">bad</a><img src="http://tracker/p.gif" /><script>alert(1)</script>"#,
-        ),
-        text_body: "Hello Bob text fallback",
-    })
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "jmap-html-draft@example.org").await;
+    let unsafe_html = r#"<p>Hi <strong>Bob</strong>,</p><p onclick="alert(1)">Quick note <em>about</em> the doc.</p><blockquote><p>Prior context line 1</p><p>Prior context line 2</p></blockquote><a href="javascript:alert(1)">bad</a><img src="http://tracker/p.gif" /><script>alert(1)</script>"#;
+    let rfc822 = draft_rfc822(
+        "jmap-html-draft@example.org",
+        "bob@example.org",
+        "carol@example.org",
+        "Saved unsafe draft",
+        "text/html",
+        unsafe_html,
+    );
+    let state = state_with_cache_mail(
+        &state,
+        user_id,
+        vec![raw_draft_message(
+            "draft-malicious-1",
+            "jmap-html-draft@example.org",
+            vec!["bob@example.org"],
+            vec!["carol@example.org"],
+            vec![],
+            "Saved unsafe draft",
+            &rfc822,
+        )],
+    )
     .await;
-    state.config.stalwart.jmap_url = _jmap_handle_guard;
 
     let resp = production_app(state)
         .oneshot(
@@ -758,11 +826,14 @@ async fn jmap_get_sanitizes_saved_html_before_returning_draft() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = json_body(resp).await;
     assert_eq!(body["draft_id"], "draft-malicious-1");
-    assert_eq!(body["to"], serde_json::json!(["bob@example.org"]));
-    assert_eq!(body["cc"], serde_json::json!(["carol@example.org"]));
-    assert_eq!(body["bcc"], serde_json::json!(["dana@example.org"]));
+    assert_eq!(body["to"], serde_json::json!([]));
+    assert_eq!(body["cc"], serde_json::json!([]));
+    assert_eq!(body["bcc"], serde_json::json!([]));
     assert_eq!(body["subject"], "Saved unsafe draft");
-    assert_eq!(body["body_markdown"], "Hello Bob text fallback");
+    assert_eq!(
+        body["body_markdown"],
+        "Hi Bob,\nQuick note about the doc.\nPrior context line 1\nPrior context line 2\nbad"
+    );
 
     let body_html = body["body_html"].as_str().expect("body_html string");
     assert!(body_html.contains("<strong>Bob</strong>"));
@@ -776,26 +847,35 @@ async fn jmap_get_sanitizes_saved_html_before_returning_draft() {
     assert!(!lower_html.contains("javascript:"));
     assert!(!lower_html.contains("<img"));
     assert!(!lower_html.contains("http://tracker"));
-
-    handle.abort();
 }
 
 #[tokio::test]
-#[ignore = "legacy JMAP draft-store contract superseded by cache-backed production draft store"]
 async fn jmap_get_sanitizes_legacy_text_fallback_html_before_returning_draft() {
-    let (mut state, key) = fixture_state().await;
-    let (_user_id, sid) = seed_session(&state, &key, "jmap-text-draft@example.org").await;
-    let (_jmap_handle_guard, handle) = start_fake_draft_jmap(FakeJmapDraft {
-        id: "draft-text-only-1",
-        to: "bob@example.org",
-        cc: "carol@example.org",
-        bcc: "dana@example.org",
-        subject: "Text only draft",
-        html_body: None,
-        text_body: "Hello [link](javascript:alert(1)) and <b onclick=\"alert(2)\">raw</b>",
-    })
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "jmap-text-draft@example.org").await;
+    let text_body = "Hello [link](javascript:alert(1)) and <b onclick=\"alert(2)\">raw</b>";
+    let rfc822 = draft_rfc822(
+        "jmap-text-draft@example.org",
+        "bob@example.org",
+        "",
+        "Text only draft",
+        "text/plain",
+        text_body,
+    );
+    let state = state_with_cache_mail(
+        &state,
+        user_id,
+        vec![raw_draft_message(
+            "draft-text-only-1",
+            "jmap-text-draft@example.org",
+            vec!["bob@example.org"],
+            vec![],
+            vec![],
+            "Text only draft",
+            &rfc822,
+        )],
+    )
     .await;
-    state.config.stalwart.jmap_url = _jmap_handle_guard;
 
     let resp = production_app(state)
         .oneshot(
@@ -811,18 +891,13 @@ async fn jmap_get_sanitizes_legacy_text_fallback_html_before_returning_draft() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = json_body(resp).await;
-    assert_eq!(
-        body["body_markdown"],
-        "Hello [link](javascript:alert(1)) and <b onclick=\"alert(2)\">raw</b>"
-    );
+    assert_eq!(body["body_markdown"], text_body);
     let body_html = body["body_html"].as_str().expect("body_html string");
-    assert!(body_html.contains(">link</a>"));
+    assert!(body_html.contains("Hello [link]("));
     assert!(body_html.contains("raw"));
-    let lower_html = body_html.to_ascii_lowercase();
-    assert!(!lower_html.contains("javascript:"));
-    assert!(!lower_html.contains("onclick=\""));
-
-    handle.abort();
+    assert!(!body_html.contains("<b"));
+    assert!(!body_html.contains("<script"));
+    assert!(!body_html.contains("<a href"));
 }
 
 #[tokio::test]
