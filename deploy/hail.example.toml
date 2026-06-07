@@ -64,6 +64,15 @@ public_url = "https://hail.example.com"
 # account in initial_sync with a durable cursor for a later continuation.
 # initial_import_max_messages = 200
 
+# --- Mail cache / blob store ------------------------------------------------
+# Content-addressed RFC822 bodies and attachments are stored outside SQLite so
+# backup tools can deduplicate and copy blob changes incrementally. This path
+# matches the `hail-blobs` Compose volume mount and can be overridden with
+# HAIL_MAIL__CACHE__BLOB_ROOT (wired to HAIL_BLOB_ROOT by the shipped Compose
+# files).
+[mail.cache]
+blob_root = "/var/lib/hail/blobs"
+
 # --- Admin (OPTIONAL) -------------------------------------------------------
 # Uncomment AND set to disable the first-run wizard at /setup. Leave commented
 # to enable the wizard.
