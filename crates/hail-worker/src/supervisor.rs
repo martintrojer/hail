@@ -27,6 +27,9 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::cache_eviction_sweeper::{CacheEvictionSweeperOptions, run_cache_eviction_sweeper};
+use hail_blob_store::FilesystemBlobStore;
+
 use crate::provider_sync_scheduler::live::LiveProviderSyncRunner;
 use crate::provider_sync_scheduler::{ProviderSyncSchedulerOptions, process_provider_sync_tick};
 use crate::reconcile::{LiveThreadVerifier, process_reconciliation};
@@ -87,6 +90,22 @@ pub async fn run(state: Arc<AppState>, cancel: CancellationToken) -> Result<()> 
     let mut running: HashMap<i64, RunningUserTask> = HashMap::new();
     let mut terminal_users = TerminalUsers::default();
     let mut tasks: JoinSet<UserTaskExit> = JoinSet::new();
+    let cache_eviction_cancel = cancel.child_token();
+    let cache_eviction_db = state.db.clone();
+    let cache_eviction_blob_store =
+        FilesystemBlobStore::new(state.config.mail.cache.blob_root.clone());
+    tokio::spawn(async move {
+        if let Err(err) = run_cache_eviction_sweeper(
+            cache_eviction_db,
+            cache_eviction_blob_store,
+            CacheEvictionSweeperOptions::default(),
+            cache_eviction_cancel,
+        )
+        .await
+        {
+            warn!(error = %err, "cache eviction sweeper exited with error");
+        }
+    });
     let mut next_run_id = 0;
     let bubble_jmap = LiveBubbleJmapOps::new(
         state.db.clone(),

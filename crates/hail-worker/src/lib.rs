@@ -5,6 +5,7 @@ pub use hail_gmail::gmail_initial_sync;
 pub use hail_gmail::gmail_outbound_smtp;
 pub mod provider_import_routing;
 pub use hail_gmail::rfc822_import;
+pub mod cache_eviction_sweeper;
 
 #[allow(dead_code)]
 pub mod app_events;
