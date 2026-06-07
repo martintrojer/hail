@@ -18,8 +18,7 @@ use crate::gmail_client::{
     ListHistoryParams, ListMessagesParams, ModifyMessageRequest, RawGmailMessage,
 };
 use crate::gmail_outbound_smtp::{
-    GmailOutboundMessage, GmailOutboundSmtp, GmailOutboundSmtpClient, GmailOutboundSmtpError,
-    LettreGmailSmtpSender,
+    GmailOutboundSmtpClient, GmailOutboundSmtpError, GmailRawOutboundMessage, LettreGmailSmtpSender,
 };
 
 const GMAIL_CAPABILITIES: Capabilities = Capabilities {
@@ -190,20 +189,13 @@ where
     }
 
     async fn send(&self, rfc822: &[u8], envelope: &Envelope) -> hail_backend::Result<SubmissionId> {
-        let message = GmailOutboundMessage {
-            from: envelope.mail_from.clone(),
-            to: envelope.rcpt_to.clone(),
-            cc: Vec::new(),
-            bcc: Vec::new(),
-            subject: String::new(),
-            plain_text: String::from_utf8_lossy(rfc822).into_owned(),
-            html: String::from_utf8_lossy(rfc822).into_owned(),
+        let message = GmailRawOutboundMessage {
+            mail_from: envelope.mail_from.clone(),
+            rcpt_to: envelope.rcpt_to.clone(),
+            rfc822: rfc822.to_vec(),
         };
-        self.smtp
-            .send_gmail(&message)
-            .await
-            .map_err(map_smtp_error)?;
-        Ok(SubmissionId::new("gmail-smtp"))
+        let submission = self.smtp.send_raw(&message).await.map_err(map_smtp_error)?;
+        Ok(SubmissionId::new(submission.id))
     }
 
     async fn poll_changes(
@@ -457,5 +449,80 @@ fn map_smtp_error(error: GmailOutboundSmtpError) -> BackendError {
         }
         GmailOutboundSmtpError::Timeout => BackendError::TemporarilyUnavailable,
         other => BackendError::Other(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use secrecy::SecretString;
+
+    use super::*;
+    use crate::gmail_client::StaticGmailTokenSource;
+    use crate::gmail_outbound_smtp::{
+        GmailOutboundMessage, GmailRawOutboundMessage, GmailSmtpSender, GmailSmtpSubmission,
+    };
+
+    #[derive(Clone, Default)]
+    struct CapturingSmtpSender {
+        captured: Arc<Mutex<Vec<GmailRawOutboundMessage>>>,
+    }
+
+    #[async_trait]
+    impl GmailSmtpSender for CapturingSmtpSender {
+        async fn send_message(
+            &self,
+            _access_token: SecretString,
+            _message: &GmailOutboundMessage,
+        ) -> Result<(), GmailOutboundSmtpError> {
+            unreachable!("GmailBackend::send must use raw RFC822 SMTP passthrough")
+        }
+
+        async fn send_raw_message(
+            &self,
+            _access_token: SecretString,
+            message: &GmailRawOutboundMessage,
+        ) -> Result<GmailSmtpSubmission, GmailOutboundSmtpError> {
+            self.captured
+                .lock()
+                .expect("capture mutex")
+                .push(message.clone());
+            Ok(GmailSmtpSubmission {
+                id: "250 2.0.0 queued-as-abc123".to_string(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_send_passthroughs_rfc822_and_envelope() {
+        let token_source = StaticGmailTokenSource::new(SecretString::from("test-token"));
+        let gmail = GmailClient::new(reqwest::Client::new(), token_source.clone()).unwrap();
+        let sender = CapturingSmtpSender::default();
+        let captured = Arc::clone(&sender.captured);
+        let smtp = GmailOutboundSmtpClient::new(token_source, sender);
+        let backend = GmailBackend::from_parts(gmail, smtp);
+        let rfc822 = b"From: Header From <header-from@example.org>\r\nTo: Header To <header-to@example.org>\r\nSubject: Exact bytes\r\n\r\nBody with \0 bytes and UTF-8 \xF0\x9F\x93\xA7";
+        let envelope = Envelope {
+            mail_from: "smtp-from@example.org".to_string(),
+            rcpt_to: vec![
+                "smtp-to@example.org".to_string(),
+                "smtp-bcc@example.org".to_string(),
+            ],
+        };
+
+        let submission = backend.send(rfc822, &envelope).await.unwrap();
+
+        assert_eq!(submission.as_str(), "250 2.0.0 queued-as-abc123");
+        let captured = captured.lock().expect("capture mutex");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].mail_from, envelope.mail_from);
+        assert_eq!(captured[0].rcpt_to, envelope.rcpt_to);
+        assert_eq!(captured[0].rfc822, rfc822);
+    }
+
+    #[test]
+    fn gmail_backend_advertises_send_capability() {
+        assert!(GMAIL_CAPABILITIES.supports_send);
     }
 }
