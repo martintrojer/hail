@@ -3,10 +3,16 @@
 use crate::{CachedMail, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use hail_backend::{BackendMsgId, BlobRef, Envelope, PageRequest, Query, RawMessage};
-use hail_core::{MailCacheMode, MailClassification, SPAM_KEYWORD};
+use hail_core::{
+    MailCacheMode, MailClassification, SPAM_KEYWORD,
+    mail_render::{FeedRenderOpts, plaintext_body_to_html, render_feed_html, strip_quoted_history},
+};
 use sqlx::{Row, Sqlite, Transaction};
 
-use crate::{CachedMessage, MailView, MailViewItem, MailViewListOpts, MailViewPage};
+use crate::{
+    BlockedTracker, CachedMessage, FeedRenderMode, MailView, MailViewItem, MailViewListOpts,
+    MailViewPage,
+};
 
 const SEEN_KEYWORD: &str = "$seen";
 const TRASH_KEYWORD: &str = "$trash";
@@ -23,7 +29,6 @@ impl CachedMail {
         limit: usize,
         opts: MailViewListOpts,
     ) -> Result<MailViewPage> {
-        let _ = opts;
         if self.policy.mode == MailCacheMode::Off {
             let page = self
                 .backend
@@ -40,7 +45,11 @@ impl CachedMail {
                 let message = self.backend.get_message(&id).await?;
                 let cached = cached_message_from_raw(message);
                 if message_matches_view(&cached, view) {
-                    items.push(view_item_from_message(cached, view));
+                    let mut item = view_item_from_message(cached, view);
+                    if view == MailView::Feed {
+                        render_feed_item(self, &mut item, opts.feed_render).await;
+                    }
+                    items.push(item);
                 }
             }
             return Ok(MailViewPage {
@@ -52,7 +61,12 @@ impl CachedMail {
         if !has_cached_metadata(self.db(), self.account_id).await? {
             self.populate_metadata_page(limit).await?;
         }
-        let items = select_view_items(self.db(), self.account_id, view, limit).await?;
+        let mut items = select_view_items(self.db(), self.account_id, view, limit).await?;
+        if view == MailView::Feed {
+            for item in &mut items {
+                render_feed_item(self, item, opts.feed_render).await;
+            }
+        }
         Ok(MailViewPage {
             items,
             next_cursor: None,
@@ -490,6 +504,61 @@ fn message_matches_view(message: &CachedMessage, view: MailView) -> bool {
         MailView::Spam => has(SPAM_KEYWORD) || has(SPAM_ALIAS_KEYWORD),
         MailView::Archive => has(ARCHIVE_KEYWORD),
     }
+}
+
+async fn render_feed_item(cache: &CachedMail, item: &mut MailViewItem, mode: FeedRenderMode) {
+    let id = BackendMsgId::new(item.email_id.clone());
+    let Ok(rfc822) = cache.get_message_body_readthrough(&id).await else {
+        return;
+    };
+    let Some(body_html) = feed_body_html_from_rfc822(&rfc822) else {
+        return;
+    };
+
+    let stripped = strip_quoted_history(&body_html);
+    let rendered = render_feed_html(
+        &stripped.html,
+        FeedRenderOpts {
+            allow_remote_images: mode == FeedRenderMode::WithRemoteImages,
+        },
+    );
+
+    item.feed_html = Some(rendered.html);
+    item.feed_html_with_images = Some(rendered.html_with_remote_images);
+    item.feed_blocked_trackers = Some(
+        rendered
+            .blocked_trackers
+            .into_iter()
+            .map(|tracker| BlockedTracker {
+                src: tracker.src,
+                reason: tracker.reason,
+            })
+            .collect(),
+    );
+    item.feed_blocked_images = Some(rendered.blocked_images);
+}
+
+fn feed_body_html_from_rfc822(rfc822: &[u8]) -> Option<String> {
+    let Some(message) = mail_parser::MessageParser::default().parse(rfc822) else {
+        let text = String::from_utf8_lossy(rfc822);
+        return (!text.trim().is_empty()).then(|| plaintext_body_to_html(&text));
+    };
+
+    let html = (0..message.html_body_count())
+        .filter_map(|index| message.body_html(index).map(|body| body.into_owned()))
+        .filter(|body| !body.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if !html.trim().is_empty() {
+        return Some(html);
+    }
+
+    let text = (0..message.text_body_count())
+        .filter_map(|index| message.body_text(index).map(|body| body.into_owned()))
+        .filter(|body| !body.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.trim().is_empty()).then(|| plaintext_body_to_html(&text))
 }
 
 fn view_item_from_message(message: CachedMessage, view: MailView) -> MailViewItem {

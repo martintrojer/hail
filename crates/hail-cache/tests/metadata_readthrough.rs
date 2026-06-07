@@ -10,7 +10,7 @@ use hail_backend::{
     MailboxRole, Page, PageRequest, Principal, Query, RawMessage, SubmissionId, SyncCursor,
 };
 use hail_blob_store::{BlobStore, FilesystemBlobStore};
-use hail_cache::{CachePolicy, CachedMail, MailView, MailViewListOpts};
+use hail_cache::{CachePolicy, CachedMail, FeedRenderMode, MailView, MailViewListOpts};
 use hail_core::{BlobId, MailBackfill, MailCacheMode, MailClassification};
 use sqlx::SqlitePool;
 use tempfile::TempDir;
@@ -199,6 +199,20 @@ async fn ensure_default_account(pool: &SqlitePool) {
 }
 
 fn raw_message(id: &str, subject: &str, keywords: Vec<&str>) -> RawMessage {
+    raw_message_with_body(
+        id,
+        subject,
+        keywords,
+        Bytes::from_static(b"Subject: ignored\r\n\r\nbody intentionally not cached"),
+    )
+}
+
+fn raw_message_with_body(
+    id: &str,
+    subject: &str,
+    keywords: Vec<&str>,
+    rfc822: Bytes,
+) -> RawMessage {
     let mut metadata = BTreeMap::new();
     metadata.insert("subject".to_owned(), subject.to_owned());
     metadata.insert("preview".to_owned(), format!("preview {subject}"));
@@ -206,7 +220,7 @@ fn raw_message(id: &str, subject: &str, keywords: Vec<&str>) -> RawMessage {
     RawMessage {
         id: BackendMsgId::new(id),
         thread_id: Some(format!("thread-{id}")),
-        rfc822: Bytes::from_static(b"Subject: ignored\r\n\r\nbody intentionally not cached"),
+        rfc822,
         keywords: keywords.into_iter().map(Keyword::new).collect(),
         envelope: Some(Envelope {
             mail_from: format!("{id}@example.test"),
@@ -271,6 +285,169 @@ async fn constructs_cached_mail_with_sqlite_blob_store_and_backend() {
     assert_eq!(cache.backend().capabilities(), &CAPABILITIES);
     let _: &SqlitePool = cache.db();
     let _: &dyn BlobStore = cache.blobs();
+}
+
+#[tokio::test]
+async fn feed_view_renders_sanitized_inline_html_from_cached_body() {
+    let feed_body = Bytes::from_static(
+        br#"From: News <feed@example.test>
+To: Me <me@example.test>
+Subject: Feed HTML
+Content-Type: text/html; charset=utf-8
+
+<article><p>Feed body</p><script>alert(1)</script><img src="https://cdn.example/hero.png"><img src="https://track.mailgun.net/open.gif" width="1" height="1"></article>"#,
+    );
+    let feed = raw_message_with_body(
+        "feed-html-1",
+        "Feed HTML",
+        vec![MailClassification::Feed.keyword()],
+        feed_body,
+    );
+    let imbox = raw_message_with_body(
+        "imbox-html-1",
+        "Imbox HTML",
+        vec![MailClassification::Imbox.keyword()],
+        Bytes::from_static(
+            br#"Subject: Imbox HTML
+Content-Type: text/html; charset=utf-8
+
+<p>Imbox body</p>"#,
+        ),
+    );
+    let (cache, backend, _tempdir) = fixture(vec![feed, imbox], MailCacheMode::Bounded).await;
+
+    let feed_page = cache
+        .list_view(MailView::Feed, None, 10, MailViewListOpts::default())
+        .await
+        .expect("feed list renders inline html");
+    assert_eq!(feed_page.items.len(), 1);
+    let item = &feed_page.items[0];
+    let feed_html = item.feed_html.as_deref().expect("feed_html populated");
+    assert!(feed_html.contains("Feed body"));
+    assert!(!feed_html.contains("script"));
+    assert!(!feed_html.contains("alert"));
+    assert!(!feed_html.contains("cdn.example/hero.png"));
+    assert!(!feed_html.contains("track.mailgun.net"));
+    let feed_html_with_images = item
+        .feed_html_with_images
+        .as_deref()
+        .expect("feed_html_with_images populated");
+    assert!(feed_html_with_images.contains("cdn.example/hero.png"));
+    assert!(!feed_html_with_images.contains("track.mailgun.net"));
+    assert_eq!(item.feed_blocked_images, Some(1));
+    let trackers = item
+        .feed_blocked_trackers
+        .as_ref()
+        .expect("feed blocked trackers populated");
+    assert_eq!(trackers.len(), 1);
+    assert!(trackers[0].src.contains("track.mailgun.net/open.gif"));
+
+    let imbox_page = cache
+        .list_view(MailView::Imbox, None, 10, MailViewListOpts::default())
+        .await
+        .expect("imbox still lists compact preview only");
+    assert_eq!(imbox_page.items.len(), 1);
+    assert!(imbox_page.items[0].feed_html.is_none());
+    assert!(imbox_page.items[0].feed_html_with_images.is_none());
+    assert_eq!(backend.stats().get_calls, 3);
+}
+
+#[tokio::test]
+async fn feed_view_remote_image_pref_selects_with_images_variant() {
+    let feed_body = Bytes::from_static(
+        br#"Subject: Feed Images
+Content-Type: text/html; charset=utf-8
+
+<p>Feed body</p><img src="https://cdn.example/hero.png"><img src="https://track.mailgun.net/open.gif" width="1" height="1">"#,
+    );
+    let feed = raw_message_with_body(
+        "feed-images-1",
+        "Feed Images",
+        vec![MailClassification::Feed.keyword()],
+        feed_body,
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![feed], MailCacheMode::Bounded).await;
+
+    let page = cache
+        .list_view(
+            MailView::Feed,
+            None,
+            10,
+            MailViewListOpts {
+                feed_render: FeedRenderMode::WithRemoteImages,
+            },
+        )
+        .await
+        .expect("feed list renders with remote image pref");
+
+    let item = &page.items[0];
+    assert!(
+        item.feed_html
+            .as_deref()
+            .expect("feed_html populated")
+            .contains("cdn.example/hero.png")
+    );
+    assert!(
+        !item
+            .feed_html
+            .as_deref()
+            .expect("feed_html populated")
+            .contains("track.mailgun.net")
+    );
+    assert_eq!(item.feed_blocked_images, Some(1));
+}
+
+#[tokio::test]
+async fn feed_view_plaintext_body_falls_back_to_safe_html() {
+    let feed = raw_message_with_body(
+        "feed-text-1",
+        "Feed Text",
+        vec![MailClassification::Feed.keyword()],
+        Bytes::from_static(b"Subject: Feed Text\r\n\r\nPlain <body>\nsecond line"),
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![feed], MailCacheMode::Bounded).await;
+
+    let page = cache
+        .list_view(MailView::Feed, None, 10, MailViewListOpts::default())
+        .await
+        .expect("feed list renders text fallback");
+
+    assert_eq!(page.items.len(), 1);
+    let html = page.items[0]
+        .feed_html
+        .as_deref()
+        .expect("feed_html populated");
+    assert!(html.contains("Plain &lt;body&gt;<br>second line"));
+}
+
+#[tokio::test]
+async fn feed_view_degrades_to_preview_when_body_readthrough_fails() {
+    let feed = raw_message(
+        "feed-missing-body",
+        "Feed Missing Body",
+        vec![MailClassification::Feed.keyword()],
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![feed], MailCacheMode::Bounded).await;
+    cache
+        .get_message(&BackendMsgId::new("feed-missing-body"))
+        .await
+        .expect("seed metadata row");
+    let missing_blob_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.eml";
+    sqlx::query("UPDATE messages SET body_blob_id = ?1 WHERE backend_msg_id = ?2")
+        .bind(missing_blob_id)
+        .bind("feed-missing-body")
+        .execute(cache.db())
+        .await
+        .expect("poison body cache ref");
+
+    let page = cache
+        .list_view(MailView::Feed, None, 10, MailViewListOpts::default())
+        .await
+        .expect("feed list tolerates body cache failure");
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].preview, "preview Feed Missing Body");
+    assert!(page.items[0].feed_html.is_none());
 }
 
 #[tokio::test]
