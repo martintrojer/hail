@@ -28,13 +28,13 @@ use crate::{
 };
 
 pub const TAG: &str = "provider-accounts";
-const GMAIL_PROVIDER_KIND: &str = "gmail";
-const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
-const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
-const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
+pub(crate) const GMAIL_PROVIDER_KIND: &str = "gmail";
+pub(crate) const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+pub(crate) const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
+pub(crate) const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 const GMAIL_FULL_MAIL_SCOPE: &str = "https://mail.google.com/";
 const OAUTH_STATE_TTL_MINUTES: i64 = 10;
-const PROVIDER_REFRESH_TOKEN_KEY_ID: &str = "server_key:v1";
+pub(crate) const PROVIDER_REFRESH_TOKEN_KEY_ID: &str = "server_key:v1";
 
 #[derive(Debug, Clone)]
 pub struct GmailAuthorizationRequest {
@@ -113,24 +113,34 @@ pub struct LiveGmailOAuthClient {
 impl LiveGmailOAuthClient {
     #[must_use]
     pub fn from_config(config: &hail_core::Config) -> Self {
-        let gmail = &config.provider_import.gmail;
+        let mail_gmail = &config.mail.gmail;
+        let provider_gmail = &config.provider_import.gmail;
         Self {
             http: reqwest::Client::new(),
-            client_id: gmail.oauth_client_id.clone(),
-            client_secret: gmail.oauth_client_secret.clone(),
-            auth_url: gmail
+            client_id: mail_gmail
+                .oauth_client_id
+                .clone()
+                .or_else(|| provider_gmail.oauth_client_id.clone()),
+            client_secret: mail_gmail
+                .oauth_client_secret
+                .clone()
+                .or_else(|| provider_gmail.oauth_client_secret.clone()),
+            auth_url: mail_gmail
                 .oauth_auth_url
                 .clone()
+                .or_else(|| provider_gmail.oauth_auth_url.clone())
                 .unwrap_or_else(|| "https://accounts.google.com/o/oauth2/v2/auth".to_string()),
-            token_url: gmail
+            token_url: mail_gmail
                 .oauth_token_url
                 .clone()
+                .or_else(|| provider_gmail.oauth_token_url.clone())
                 .unwrap_or_else(|| "https://oauth2.googleapis.com/token".to_string()),
-            revoke_url: gmail
+            revoke_url: mail_gmail
                 .oauth_revoke_url
                 .clone()
+                .or_else(|| provider_gmail.oauth_revoke_url.clone())
                 .unwrap_or_else(|| "https://oauth2.googleapis.com/revoke".to_string()),
-            gmail_api_url: gmail
+            gmail_api_url: provider_gmail
                 .api_base_url
                 .clone()
                 .unwrap_or_else(|| "https://gmail.googleapis.com".to_string()),
@@ -295,7 +305,7 @@ pub fn openapi_router() -> OpenApiRouter<AppState> {
 }
 
 impl LiveGmailOAuthClient {
-    fn from_config_default() -> LiveGmailOAuthClient {
+    pub(crate) fn from_config_default() -> LiveGmailOAuthClient {
         LiveGmailOAuthClient {
             http: reqwest::Client::new(),
             client_id: None,
@@ -382,8 +392,13 @@ struct ProviderBidiSyncRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum ProviderBidiSyncResponse {
-    Updated { account: ProviderAccountResponse },
-    ScopeMissing { authorization_url: String, scopes: Vec<String> },
+    Updated {
+        account: ProviderAccountResponse,
+    },
+    ScopeMissing {
+        authorization_url: String,
+        scopes: Vec<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -549,7 +564,9 @@ async fn set_provider_bidirectional_sync(
     if !body.enabled {
         return match set_bidirectional_sync_enabled(&state.db, user.id, id, false).await {
             Ok(account) => Json(ProviderBidiSyncResponse::Updated { account }).into_response(),
-            Err(sqlx::Error::RowNotFound) => error_response(StatusCode::NOT_FOUND, "provider_account_not_found"),
+            Err(sqlx::Error::RowNotFound) => {
+                error_response(StatusCode::NOT_FOUND, "provider_account_not_found")
+            }
             Err(err) => {
                 tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: disabling bidi sync failed");
                 internal()
@@ -559,7 +576,9 @@ async fn set_provider_bidirectional_sync(
 
     let scopes = match provider_account_scopes(&state.db, user.id, id).await {
         Ok(scopes) => scopes,
-        Err(sqlx::Error::RowNotFound) => return error_response(StatusCode::NOT_FOUND, "provider_account_not_found"),
+        Err(sqlx::Error::RowNotFound) => {
+            return error_response(StatusCode::NOT_FOUND, "provider_account_not_found");
+        }
         Err(err) => {
             tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: scope lookup failed");
             return internal();
@@ -568,7 +587,9 @@ async fn set_provider_bidirectional_sync(
     if gmail_scope_allows_modify(&scopes) {
         return match set_bidirectional_sync_enabled(&state.db, user.id, id, true).await {
             Ok(account) => Json(ProviderBidiSyncResponse::Updated { account }).into_response(),
-            Err(sqlx::Error::RowNotFound) => error_response(StatusCode::NOT_FOUND, "provider_account_not_found"),
+            Err(sqlx::Error::RowNotFound) => {
+                error_response(StatusCode::NOT_FOUND, "provider_account_not_found")
+            }
             Err(err) => {
                 tracing::error!(error = %err, user_id = user.id, provider_account_id = id, "gmail oauth: enabling bidi sync failed");
                 internal()
@@ -581,11 +602,25 @@ async fn set_provider_bidirectional_sync(
         return internal();
     }
     let Some(client_id) = state.config.provider_import.gmail.oauth_client_id.clone() else {
-        return error_response(StatusCode::SERVICE_UNAVAILABLE, "gmail_oauth_not_configured");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "gmail_oauth_not_configured",
+        );
     };
     let redirect_uri = gmail_redirect_uri(&state);
-    let scopes = vec![GMAIL_READONLY_SCOPE.to_owned(), GMAIL_MODIFY_SCOPE.to_owned()];
-    let state_token = match create_oauth_state(&state.db, user.id, &session.id, &redirect_uri, &scopes).await {
+    let scopes = vec![
+        GMAIL_READONLY_SCOPE.to_owned(),
+        GMAIL_MODIFY_SCOPE.to_owned(),
+    ];
+    let state_token = match create_oauth_state(
+        &state.db,
+        user.id,
+        &session.id,
+        &redirect_uri,
+        &scopes,
+    )
+    .await
+    {
         Ok(token) => token,
         Err(err) => {
             tracing::error!(error = %err, user_id = user.id, "gmail oauth: bidi state creation failed");
@@ -601,10 +636,17 @@ async fn set_provider_bidirectional_sync(
         Ok(url) => url,
         Err(err) => {
             tracing::warn!(error = %err, user_id = user.id, "gmail oauth: bidi authorization URL failed");
-            return error_response(StatusCode::SERVICE_UNAVAILABLE, "gmail_oauth_not_configured");
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "gmail_oauth_not_configured",
+            );
         }
     };
-    Json(ProviderBidiSyncResponse::ScopeMissing { authorization_url, scopes }).into_response()
+    Json(ProviderBidiSyncResponse::ScopeMissing {
+        authorization_url,
+        scopes,
+    })
+    .into_response()
 }
 
 #[derive(Debug)]
@@ -823,12 +865,14 @@ async fn row_to_response(
 ) -> Result<ProviderAccountResponse, sqlx::Error> {
     let id: i64 = row.get("id");
     let granted_scopes_json: String = row.get("granted_scopes_json");
-    let granted_scopes: Vec<String> = serde_json::from_str(&granted_scopes_json).map_err(|err| {
-        sqlx::Error::Protocol(format!(
-            "provider account {id} granted_scopes_json must be valid JSON: {err}"
-        ))
-    })?;
-    let pending_outbound_changes = hail_db::provider_outbound_changes::pending_outbound_change_count(db, id).await?;
+    let granted_scopes: Vec<String> =
+        serde_json::from_str(&granted_scopes_json).map_err(|err| {
+            sqlx::Error::Protocol(format!(
+                "provider account {id} granted_scopes_json must be valid JSON: {err}"
+            ))
+        })?;
+    let pending_outbound_changes =
+        hail_db::provider_outbound_changes::pending_outbound_change_count(db, id).await?;
     Ok(ProviderAccountResponse {
         id,
         provider_kind: row.get("provider_kind"),

@@ -58,6 +58,8 @@ import {
   type SearchParams,
   type SearchResponse,
   type SetupAdminRequest,
+  type SetupGmailConnectRequest,
+  type SetupGmailConnectResponse,
   type SetupState,
   type AcceptInviteRequest,
   type InviteAcceptResponse,
@@ -198,6 +200,22 @@ export function useSetupAdminMutation(
     ...options,
     onSuccess: (data, variables, onMutateResult, mutationContext) => {
       queryClient.setQueryData(queryKeys.me(), data);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.setup() });
+      options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
+    },
+  });
+}
+
+export function useSetupGmailConnectMutation(
+  client = defaultApiClient,
+  options?: MutationConfig<SetupGmailConnectRequest, SetupGmailConnectResponse>,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body) => client.connectSetupGmail(body),
+    ...options,
+    onSuccess: (data, variables, onMutateResult, mutationContext) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.setup() });
       options?.onSuccess?.(data, variables, onMutateResult, mutationContext);
     },
