@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Editor } from '@tiptap/react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { RichTextEditor } from './RichTextEditor';
 
 beforeAll(() => {
@@ -29,10 +29,6 @@ beforeAll(() => {
     } as DOMRectList;
   };
   Range.prototype.getBoundingClientRect = () => document.body.getBoundingClientRect();
-});
-
-afterEach(() => {
-  cleanup();
 });
 
 function renderControlledEditor() {

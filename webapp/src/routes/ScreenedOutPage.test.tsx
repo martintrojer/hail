@@ -66,7 +66,6 @@ afterEach(() => {
   currentTestBody = null;
   restoreRoute();
   window.history.pushState({}, '', '/');
-  cleanup();
 });
 
 function TestBody() {
@@ -138,7 +137,7 @@ describe('ScreenedOutPage', () => {
     // Default tab is Screened Emails
     expect(await screen.findByRole('tab', { name: /Screened Emails/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('blocked@example.com')).toBeInTheDocument();
-    expect(screen.getByText('Denied May 22, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Denied 22 May 2026')).toBeInTheDocument();
 
     // Switch to Blocked Senders tab
     fireEvent.click(screen.getByRole('tab', { name: /Blocked Senders/ }));
