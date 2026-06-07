@@ -1,0 +1,43 @@
+# Gmail flavour overlay.
+#
+# Use with the shared base:
+#   docker compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
+#
+# This overlay intentionally does not run Stalwart, stalwart-init, or expose any
+# SMTP/IMAP ports. Gmail remains the mail edge; hail stores its SQLite sidecar
+# and content-addressed blobs in the shared hail-data/hail-blobs volumes.
+
+services:
+  hail-api:
+    environment:
+      HAIL_MAIL__BACKEND: gmail
+      HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID in .env}"
+      HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET in .env}"
+      HAIL_MAIL__GMAIL__OAUTH_AUTH_URL: "${HAIL_MAIL__GMAIL__OAUTH_AUTH_URL:-https://accounts.google.com/o/oauth2/v2/auth}"
+      HAIL_MAIL__GMAIL__OAUTH_TOKEN_URL: "${HAIL_MAIL__GMAIL__OAUTH_TOKEN_URL:-https://oauth2.googleapis.com/token}"
+      HAIL_MAIL__GMAIL__OAUTH_REVOKE_URL: "${HAIL_MAIL__GMAIL__OAUTH_REVOKE_URL:-https://oauth2.googleapis.com/revoke}"
+      # Compatibility for provider-account routes/importer while Gmail-backend
+      # OAuth config is being unified under HAIL_MAIL__GMAIL__*.
+      HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID in .env}"
+      HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET in .env}"
+      HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_TOKEN_URL: "${HAIL_MAIL__GMAIL__OAUTH_TOKEN_URL:-https://oauth2.googleapis.com/token}"
+      HAIL_PROVIDER_IMPORT__GMAIL__API_BASE_URL: "${HAIL_PROVIDER_IMPORT__GMAIL__API_BASE_URL:-https://gmail.googleapis.com}"
+      HAIL_MAIL__CACHE__MODE: "${HAIL_MAIL__CACHE__MODE:-bounded}"
+      HAIL_MAIL__CACHE__BACKFILL: "${HAIL_MAIL__CACHE__BACKFILL:-incremental}"
+
+  hail-worker:
+    environment:
+      HAIL_MAIL__BACKEND: gmail
+      HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID in .env}"
+      HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET in .env}"
+      HAIL_MAIL__GMAIL__OAUTH_AUTH_URL: "${HAIL_MAIL__GMAIL__OAUTH_AUTH_URL:-https://accounts.google.com/o/oauth2/v2/auth}"
+      HAIL_MAIL__GMAIL__OAUTH_TOKEN_URL: "${HAIL_MAIL__GMAIL__OAUTH_TOKEN_URL:-https://oauth2.googleapis.com/token}"
+      HAIL_MAIL__GMAIL__OAUTH_REVOKE_URL: "${HAIL_MAIL__GMAIL__OAUTH_REVOKE_URL:-https://oauth2.googleapis.com/revoke}"
+      # Compatibility for provider-account routes/importer while Gmail-backend
+      # OAuth config is being unified under HAIL_MAIL__GMAIL__*.
+      HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID in .env}"
+      HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET: "${HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET:?set HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET in .env}"
+      HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_TOKEN_URL: "${HAIL_MAIL__GMAIL__OAUTH_TOKEN_URL:-https://oauth2.googleapis.com/token}"
+      HAIL_PROVIDER_IMPORT__GMAIL__API_BASE_URL: "${HAIL_PROVIDER_IMPORT__GMAIL__API_BASE_URL:-https://gmail.googleapis.com}"
+      HAIL_MAIL__CACHE__MODE: "${HAIL_MAIL__CACHE__MODE:-bounded}"
+      HAIL_MAIL__CACHE__BACKFILL: "${HAIL_MAIL__CACHE__BACKFILL:-incremental}"

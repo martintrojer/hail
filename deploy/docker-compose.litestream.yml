@@ -1,11 +1,15 @@
 # Litestream backup overlay for hail.db.
 #
-# This file is optional and OFF by default. Apply it only when you want
-# continuous SQLite replication for hail.db:
+# This file is optional and OFF by default. Apply it after the shared base and
+# chosen mail-backend flavour when you want continuous SQLite replication for
+# hail.db:
 #
 #   cp deploy/litestream.example.yml deploy/litestream.yml
-#   podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml up -d
-#   docker compose  -f deploy/docker-compose.yml -f deploy/docker-compose.litestream.yml up -d
+#   podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml -f deploy/docker-compose.litestream.yml up -d
+#   docker compose  -f deploy/docker-compose.yml -f deploy/docker-compose.selfhost.yml -f deploy/docker-compose.litestream.yml up -d
+#
+# For Gmail flavour, replace docker-compose.selfhost.yml with
+# docker-compose.gmail.yml.
 #
 # The example config writes to ./backups/litestream by default and does not
 # require cloud credentials. Edit deploy/litestream.yml for S3 or R2 before

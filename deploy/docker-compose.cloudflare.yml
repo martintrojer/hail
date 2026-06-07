@@ -1,12 +1,10 @@
-# Cloudflare Tunnel overlay for the canonical hail Compose stack.
+# Cloudflare Tunnel overlay for the hail Compose stack.
 #
-# This file is an OVERLAY. Apply it on top of deploy/docker-compose.yml:
-#   podman compose -f docker-compose.yml -f docker-compose.cloudflare.yml up -d
-#   docker compose  -f docker-compose.yml -f docker-compose.cloudflare.yml up -d
-#
-# To use only the canonical stack:
-#   podman compose -f docker-compose.yml up -d
-#   docker compose  -f docker-compose.yml up -d
+# This file is an OVERLAY. Apply it on top of deploy/docker-compose.yml plus a
+# mail-backend flavour overlay:
+#   podman compose -f docker-compose.yml -f docker-compose.gmail.yml -f docker-compose.cloudflare.yml up -d
+#   podman compose -f docker-compose.yml -f docker-compose.selfhost.yml -f docker-compose.cloudflare.yml up -d
+#   docker compose  -f docker-compose.yml -f docker-compose.selfhost.yml -f docker-compose.cloudflare.yml up -d
 #
 # This overlay adds a cloudflared service that exposes hail-api through a
 # Cloudflare Tunnel without opening any inbound HTTP ports on the host.

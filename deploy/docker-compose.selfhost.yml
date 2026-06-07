@@ -1,0 +1,75 @@
+# Self-hosted flavour overlay.
+#
+# Use with the shared base:
+#   docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
+#
+# Adds Stalwart plus the one-shot settings sidecar, switches hail to the JMAP
+# backend, and wires hail-api/hail-worker to wait for Stalwart initialization.
+
+services:
+  stalwart:
+    image: docker.io/stalwartlabs/stalwart:v0.16
+    environment:
+      STALWART_PUBLIC_URL: "${STALWART_PUBLIC_URL:-http://stalwart:8080/}"
+      STALWART_RECOVERY_ADMIN: "${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN in .env}"
+    ports:
+      - "25:25"       # SMTP
+      - "465:465"     # submission SSL
+      - "587:587"     # submission STARTTLS
+      - "143:143"     # IMAP STARTTLS (optional but exposed for other clients)
+      - "993:993"     # IMAP SSL
+    volumes:
+      - stalwart-data:/opt/stalwart
+      # Copy+edit deploy/stalwart.example.toml before first boot; docs/quickstart explains the flow.
+      - ./stalwart.example.toml:/opt/stalwart/etc/config.toml:ro
+    restart: unless-stopped
+    healthcheck:
+      # Validate Stalwart's built-in liveness endpoint before the init sidecar runs.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/healthz/live >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  stalwart-init:
+    build:
+      context: ./stalwart-init
+    image: hail-stalwart-init:local
+    depends_on:
+      stalwart:
+        condition: service_healthy
+    environment:
+      STALWART_URL: http://stalwart:8080
+      STALWART_RECOVERY_ADMIN: "${STALWART_RECOVERY_ADMIN:?set STALWART_RECOVERY_ADMIN in .env}"
+    restart: "no"
+
+  hail-api:
+    depends_on:
+      stalwart-init:
+        condition: service_completed_successfully
+    environment:
+      HAIL_MAIL__BACKEND: jmap
+      HAIL_MAIL__JMAP__JMAP_URL: http://stalwart:8080
+      HAIL_MAIL__JMAP__MANAGEMENT_URL: http://stalwart:8080
+      HAIL_STALWART__JMAP_URL: http://stalwart:8080
+      HAIL_STALWART__MANAGEMENT_URL: http://stalwart:8080
+      HAIL_MAIL__CACHE__MODE: "${HAIL_MAIL__CACHE__MODE:-bounded}"
+      HAIL_MAIL__CACHE__BACKFILL: "${HAIL_MAIL__CACHE__BACKFILL:-off}"
+
+  hail-worker:
+    depends_on:
+      stalwart-init:
+        condition: service_completed_successfully
+      hail-api:
+        condition: service_started
+    environment:
+      HAIL_MAIL__BACKEND: jmap
+      HAIL_MAIL__JMAP__JMAP_URL: http://stalwart:8080
+      HAIL_MAIL__JMAP__MANAGEMENT_URL: http://stalwart:8080
+      HAIL_STALWART__JMAP_URL: http://stalwart:8080
+      HAIL_STALWART__MANAGEMENT_URL: http://stalwart:8080
+      HAIL_MAIL__CACHE__MODE: "${HAIL_MAIL__CACHE__MODE:-bounded}"
+      HAIL_MAIL__CACHE__BACKFILL: "${HAIL_MAIL__CACHE__BACKFILL:-off}"
+
+volumes:
+  stalwart-data: {}

@@ -15,26 +15,53 @@ tbx openssl rand -hex 32   # HAIL_SETUP_BOOTSTRAP_TOKEN
 Set `HAIL_SERVER_KEY`, `HAIL_SETUP_BOOTSTRAP_TOKEN`, and `HAIL_PUBLIC_URL` in
 `.env`.
 
+Choose a Compose flavour:
+
+- **Gmail flavour**: no Stalwart, no `stalwart-init`, no public DNS/MX setup.
+  Set `HAIL_MAIL__GMAIL__OAUTH_CLIENT_ID` and
+  `HAIL_MAIL__GMAIL__OAUTH_CLIENT_SECRET` in `.env`.
+- **Self-host flavour**: adds Stalwart and `stalwart-init`. Set
+  `STALWART_RECOVERY_ADMIN` in `.env`.
+
 ## 2. Start the stack
 
-Local smoke:
+Local smoke (unchanged, Stalwart-backed development stack):
 
 ```bash
 podman compose -f deploy/docker-compose.local.yml up -d --build
 ```
 
-Canonical compose:
+Production/shared Compose uses `deploy/docker-compose.yml` as the base and a
+single flavour overlay selected with `-f` flags.
+
+Gmail flavour:
 
 ```bash
 cd deploy
-podman compose up -d --build
+podman compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
+# or: docker compose -f docker-compose.yml -f docker-compose.gmail.yml up -d --build
 ```
 
-The compose files pin Stalwart to `docker.io/stalwartlabs/stalwart:v0.16` and
-run a one-shot `stalwart-init` sidecar after Stalwart becomes healthy. The
-sidecar reads `STALWART_RECOVERY_ADMIN` from the compose environment, applies
-hail-friendly Stalwart settings idempotently through JMAP, verifies them, and
-then exits before `hail-api` and `hail-worker` start. The automatic settings are:
+Self-host flavour:
+
+```bash
+cd deploy
+podman compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
+# or: docker compose -f docker-compose.yml -f docker-compose.selfhost.yml up -d --build
+```
+
+The shared base starts only `hail-api` and `hail-worker`, with `hail-data` for
+`hail.db` and `hail-blobs` for the content-addressed blob store. The Gmail
+overlay sets `HAIL_MAIL__BACKEND=gmail` plus Gmail OAuth environment and does
+not start Stalwart or expose SMTP/IMAP ports. The self-host overlay adds
+Stalwart, the one-shot `stalwart-init` sidecar, and sets
+`HAIL_MAIL__BACKEND=jmap`.
+
+The self-host overlay pins Stalwart to `docker.io/stalwartlabs/stalwart:v0.16`
+and runs `stalwart-init` after Stalwart becomes healthy. The sidecar reads
+`STALWART_RECOVERY_ADMIN` from the compose environment, applies hail-friendly
+Stalwart settings idempotently through JMAP, verifies them, and then exits
+before `hail-api` and `hail-worker` start. The automatic settings are:
 
 - JMAP upload window: `maxUploadCount = 100000000`,
   `uploadQuota = 1099511627776` bytes, `maxUploadSize = 104857600` bytes, and
@@ -48,9 +75,9 @@ then exits before `hail-api` and `hail-worker` start. The automatic settings are
   mailbox store, so messages sent from a local user to the same local user can
   be verified without a Gmail round-trip or SPF/DKIM for `hail.test`.
 
-`deploy/docker-compose.yml` **must not** set `HAIL_LOCAL_SINK=1`. Production
-uses real SMTP/MX delivery (or a deliberately configured relay) and must not
-install the local-only loopback routing rule.
+`deploy/docker-compose.selfhost.yml` **must not** set `HAIL_LOCAL_SINK=1`.
+Production self-host uses real SMTP/MX delivery (or a deliberately configured
+relay) and must not install the local-only loopback routing rule.
 
 This replaces the old manual "open Stalwart admin and adjust quota/rate-limit
 fields" step. The operator still finishes hail's setup wizard and then connects
@@ -75,9 +102,14 @@ read-only and continues to work while the account is in `needs_reauth`.
 Open hail in a browser:
 
 - local compose: <http://127.0.0.1:8080>
-- production compose: your `HAIL_PUBLIC_URL`
+- Gmail flavour: your `HAIL_PUBLIC_URL`
+- self-host flavour: your `HAIL_PUBLIC_URL`
 
-Fill in:
+For Gmail flavour, choose **Sign in with Google** and complete OAuth. The wizard
+creates the local hail user and seeds the default bounded/incremental cache
+policy; there are no Stalwart admin credentials or DNS questions.
+
+For self-host flavour, fill in:
 
 - **Bootstrap token**: `HAIL_SETUP_BOOTSTRAP_TOKEN` from `.env`.
 - **Stalwart admin user**: `admin` by default.
