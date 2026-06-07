@@ -17,6 +17,8 @@ use jmap_client::email::{Email, Property};
 use tokio_util::sync::CancellationToken;
 
 use crate::Session;
+use crate::management::{ManagementError, ManagementPrincipal, ManagementSession};
+use secrecy::SecretString;
 
 const MAX_CHANGES_PER_POLL: usize = 256;
 const EVENTSOURCE_PING_SECS: u32 = 30;
@@ -35,6 +37,7 @@ pub const JMAP_BACKEND_CAPABILITIES: Capabilities = Capabilities {
 /// MailBackend implementation over an authenticated JMAP session.
 pub struct JmapBackend {
     session: Arc<Session>,
+    management: Option<Arc<ManagementSession>>,
     cancel: CancellationToken,
 }
 
@@ -48,13 +51,149 @@ impl JmapBackend {
     pub fn with_cancel(session: Session, cancel: CancellationToken) -> Self {
         Self {
             session: Arc::new(session),
+            management: None,
             cancel,
         }
     }
 
     #[must_use]
+    pub fn with_management(session: Session, management: ManagementSession) -> Self {
+        Self::with_management_and_cancel(session, management, CancellationToken::new())
+    }
+
+    pub async fn with_management_bearer(
+        session: Session,
+        management_url: &str,
+        bearer: SecretString,
+    ) -> hail_backend::Result<Self> {
+        let management = ManagementSession::connect(management_url, bearer)
+            .await
+            .map_err(map_management_error)?;
+        Ok(Self::with_management(session, management))
+    }
+
+    #[must_use]
+    pub fn with_management_and_cancel(
+        session: Session,
+        management: ManagementSession,
+        cancel: CancellationToken,
+    ) -> Self {
+        Self {
+            session: Arc::new(session),
+            management: Some(Arc::new(management)),
+            cancel,
+        }
+    }
+
+    #[must_use]
+    pub fn attach_management(mut self, management: ManagementSession) -> Self {
+        self.management = Some(Arc::new(management));
+        self
+    }
+
+    #[must_use]
     pub fn session(&self) -> &Session {
         self.session.as_ref()
+    }
+
+    #[must_use]
+    pub fn management(&self) -> Option<&ManagementSession> {
+        self.management.as_deref()
+    }
+
+    pub async fn create_domain(&self, domain: &str) -> hail_backend::Result<()> {
+        self.management_session()?
+            .create_domain(domain)
+            .await
+            .map_err(map_management_error)
+    }
+
+    pub async fn create_individual(
+        &self,
+        email: &str,
+        password: &SecretString,
+        display_name: Option<&str>,
+    ) -> hail_backend::Result<Principal> {
+        let management = self.management_session()?;
+        let created_id = management
+            .create_individual(email, password, display_name)
+            .await
+            .map_err(map_management_error)?;
+        if let Some(id) = created_id {
+            return Ok(Principal {
+                id,
+                email: email.to_string(),
+                display_name: display_name.map(str::to_owned),
+            });
+        }
+        let principal = management
+            .list_individuals()
+            .await
+            .map_err(map_management_error)?
+            .into_iter()
+            .find(|principal| principal.name.eq_ignore_ascii_case(email))
+            .map(management_principal_to_backend)
+            .unwrap_or_else(|| Principal {
+                id: email.to_string(),
+                email: email.to_string(),
+                display_name: display_name.map(str::to_owned),
+            });
+        Ok(principal)
+    }
+
+    pub async fn provision_principal(
+        &self,
+        domain: &str,
+        email: &str,
+        password: &SecretString,
+        display_name: Option<&str>,
+    ) -> hail_backend::Result<Principal> {
+        self.create_domain(domain).await?;
+        self.create_individual(email, password, display_name).await
+    }
+
+    pub async fn destroy_individual(&self, email: &str) -> hail_backend::Result<()> {
+        self.management_session()?
+            .destroy_individual(email)
+            .await
+            .map_err(map_management_error)
+    }
+
+    pub async fn reset_individual_secret(
+        &self,
+        email: &str,
+        password: &SecretString,
+    ) -> hail_backend::Result<Option<Principal>> {
+        let management = self.management_session()?;
+        let reset_id = management
+            .reset_individual_secret(email, password)
+            .await
+            .map_err(map_management_error)?;
+        let Some(id) = reset_id else {
+            return Ok(None);
+        };
+        Ok(Some(
+            management
+                .list_individuals()
+                .await
+                .map_err(map_management_error)?
+                .into_iter()
+                .find(|principal| principal.id == id)
+                .map(management_principal_to_backend)
+                .unwrap_or_else(|| Principal {
+                    id,
+                    email: email.to_string(),
+                    display_name: None,
+                }),
+        ))
+    }
+
+    fn management_session(&self) -> hail_backend::Result<&ManagementSession> {
+        self.management
+            .as_deref()
+            .ok_or(hail_backend::Error::UnsupportedCapability {
+                capability: "stalwart principals admin requires a management session",
+            })
     }
 
     #[must_use]
@@ -338,30 +477,13 @@ impl MailBackend for JmapBackend {
     }
 
     async fn list_principals(&self) -> hail_backend::Result<Vec<Principal>> {
-        let mut query = self
-            .session
-            .client()
-            .principal_query(
-                None::<jmap_client::core::query::Filter<jmap_client::principal::query::Filter>>,
-                None::<Vec<_>>,
-            )
+        Ok(self
+            .management_session()?
+            .list_individuals()
             .await
-            .map_err(map_jmap_error)?;
-        let ids = query.take_ids();
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut request = self.session.client().build();
-        request.get_principal().ids(ids).properties([
-            jmap_client::principal::Property::Id,
-            jmap_client::principal::Property::Name,
-            jmap_client::principal::Property::Email,
-        ]);
-        let mut response = request.send_get_principal().await.map_err(map_jmap_error)?;
-        Ok(response
-            .take_list()
+            .map_err(map_management_error)?
             .into_iter()
-            .filter_map(principal_from_jmap)
+            .map(management_principal_to_backend)
             .collect())
     }
 }
@@ -420,7 +542,11 @@ async fn next_watch_change(mut state: WatchState) -> Option<(Change, WatchState)
                         Some(Ok(jmap_client::event_source::PushNotification::StateChange(changes))) => {
                             if let Some(next_cursor) = email_state_for_account(&changes, state.session.account_id()) {
                                 let since = state.cursor.clone().unwrap_or_else(|| SyncCursor::new(next_cursor.clone()));
-                                let backend = JmapBackend { session: Arc::clone(&state.session), cancel: state.cancel.clone() };
+                                let backend = JmapBackend {
+                                    session: Arc::clone(&state.session),
+                                    management: None,
+                                    cancel: state.cancel.clone(),
+                                };
                                 match backend.poll_changes(&since).await {
                                     Ok((changes, cursor)) => {
                                         state.cursor = Some(cursor);
@@ -539,8 +665,7 @@ fn raw_message_from_email(email: Email, rfc822: Bytes) -> RawMessage {
                     .to_string(),
                 size_bytes: part.size() as u64,
                 blob_ref: part.blob_id().map(BlobRef::new),
-                inline: part.content_disposition() == Some("inline")
-                    || part.content_id().is_some(),
+                inline: part.content_disposition() == Some("inline") || part.content_id().is_some(),
                 content_id: part.content_id().map(str::to_owned),
             });
         }
@@ -605,14 +730,18 @@ fn mailbox_from_jmap(mailbox: jmap_client::mailbox::Mailbox) -> Option<Mailbox> 
     })
 }
 
-fn principal_from_jmap(principal: jmap_client::principal::Principal) -> Option<Principal> {
-    let id = principal.id()?.to_owned();
-    let email = principal.email().unwrap_or_default().to_owned();
-    Some(Principal {
-        id,
+fn management_principal_to_backend(principal: ManagementPrincipal) -> Principal {
+    let email = principal
+        .emails
+        .iter()
+        .find(|email| email.contains('@'))
+        .cloned()
+        .unwrap_or_else(|| principal.name.clone());
+    Principal {
+        id: principal.id,
         email,
-        display_name: principal.name().map(str::to_owned),
-    })
+        display_name: principal.description,
+    }
 }
 
 fn mailbox_role_to_jmap(role: MailboxRole) -> Option<jmap_client::mailbox::Role> {
@@ -643,6 +772,28 @@ fn mailbox_role_from_jmap(role: jmap_client::mailbox::Role) -> MailboxRole {
     }
 }
 
+fn map_management_error(error: ManagementError) -> hail_backend::Error {
+    match error {
+        ManagementError::Api { status, .. } if matches!(status.as_u16(), 401 | 403) => {
+            hail_backend::Error::Authentication
+        }
+        ManagementError::Api { status, .. } if status.as_u16() == 404 => {
+            hail_backend::Error::NotFound {
+                kind: "stalwart_management",
+                id: "management endpoint".to_string(),
+            }
+        }
+        ManagementError::Api { status, .. } if status.as_u16() == 429 => {
+            hail_backend::Error::RateLimited
+        }
+        ManagementError::Api { status, .. } if status.is_server_error() => {
+            hail_backend::Error::TemporarilyUnavailable
+        }
+        ManagementError::Http(_) => hail_backend::Error::TemporarilyUnavailable,
+        other => hail_backend::Error::Other(other.to_string()),
+    }
+}
+
 fn map_jmap_error(error: jmap_client::Error) -> hail_backend::Error {
     match &error {
         jmap_client::Error::Problem(problem) => match problem.status {
@@ -667,5 +818,41 @@ fn map_jmap_error(error: jmap_client::Error) -> hail_backend::Error {
             hail_backend::Error::TemporarilyUnavailable
         }
         _ => hail_backend::Error::Other(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jmap_capabilities_advertise_principals_admin() {
+        assert!(JMAP_BACKEND_CAPABILITIES.supports_principals_admin);
+    }
+
+    #[test]
+    fn management_principal_prefers_email_address() {
+        let principal = management_principal_to_backend(ManagementPrincipal {
+            id: "user-id".to_string(),
+            name: "alice".to_string(),
+            description: Some("Alice".to_string()),
+            emails: vec!["alice@example.org".to_string()],
+        });
+
+        assert_eq!(principal.id, "user-id");
+        assert_eq!(principal.email, "alice@example.org");
+        assert_eq!(principal.display_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn management_principal_falls_back_to_name() {
+        let principal = management_principal_to_backend(ManagementPrincipal {
+            id: "domain-id".to_string(),
+            name: "example.org".to_string(),
+            description: None,
+            emails: Vec::new(),
+        });
+
+        assert_eq!(principal.email, "example.org");
     }
 }
