@@ -136,7 +136,7 @@ fn limit_as_u32(limit: usize) -> u32 {
     u32::try_from(limit).unwrap_or(u32::MAX).max(1)
 }
 
-async fn upsert_raw_metadata(
+pub(crate) async fn upsert_raw_metadata(
     db: &sqlx::SqlitePool,
     account_id: i64,
     raw: RawMessage,
