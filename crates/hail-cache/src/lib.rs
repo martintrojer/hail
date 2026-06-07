@@ -18,6 +18,7 @@ mod writethrough;
 use bytes::Bytes;
 pub use eviction::{
     EvictionStats, evict_account_bodies, load_account_policies, refresh_pinned_messages,
+    refresh_pinned_messages_conn,
 };
 use hail_backend::{
     BackendMsgId, BlobRef, Envelope, Keyword, MailBackend, MailboxRole, SubmissionId,

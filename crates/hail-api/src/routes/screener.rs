@@ -597,6 +597,11 @@ async fn post_undo_deny(
         return internal();
     }
 
+    if let Err(err) = hail_cache::refresh_pinned_messages(&state.db).await {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener undo deny pin refresh failed");
+        return internal();
+    }
+
     if let Err(err) = audit::record(
         &state.db,
         user.id,
@@ -1094,6 +1099,11 @@ async fn post_decision(
     .await
     {
         tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener decision upsert failed");
+        return internal();
+    }
+
+    if let Err(err) = hail_cache::refresh_pinned_messages(&state.db).await {
+        tracing::error!(user_id = user.id, sender = %sender, error = %err, "screener decision pin refresh failed");
         return internal();
     }
 

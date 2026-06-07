@@ -77,6 +77,51 @@ async fn set_latest_pending_received_at(
     .unwrap();
 }
 
+async fn seed_mail_account(state: &AppState, user_id: i64, email: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO mail_accounts \
+         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, refresh_token_enc, sync_status, created_at, updated_at) \
+         VALUES (?1, ?2, 'gmail', 'gmail', ?2, ?3, ?4, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z') RETURNING id",
+    )
+    .bind(user_id)
+    .bind(format!("provider-{user_id}"))
+    .bind(email)
+    .bind(vec![7_u8; 32])
+    .fetch_one(&state.db)
+    .await
+    .expect("insert mail account")
+}
+
+async fn seed_cached_message(
+    state: &AppState,
+    account_id: i64,
+    backend_id: &str,
+    from: &str,
+    pinned: bool,
+) {
+    sqlx::query(
+        "INSERT INTO messages \
+         (account_id, backend_msg_id, thread_id, internal_date, from_addr, subject, preview, size_bytes, body_blob_id, body_text, inserted_at, accessed_at, pinned) \
+         VALUES (?1, ?2, ?3, 1, ?4, 'subject', 'preview', 10, 'blob-id', 'body', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?5)",
+    )
+    .bind(account_id)
+    .bind(backend_id)
+    .bind(format!("thread-{backend_id}"))
+    .bind(from)
+    .bind(i64::from(pinned))
+    .execute(&state.db)
+    .await
+    .expect("insert cached message");
+}
+
+async fn cached_pin(state: &AppState, backend_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT pinned FROM messages WHERE backend_msg_id = ?1")
+        .bind(backend_id)
+        .fetch_one(&state.db)
+        .await
+        .expect("cached pin")
+}
+
 fn app(state: AppState, backfill: Arc<FakeBackfill>) -> Router {
     let protected = hail_api::routes::screener::router_with_backfill(backfill).layer(
         axum::middleware::from_fn_with_state(state.clone(), require_auth),
@@ -1411,6 +1456,58 @@ async fn approve_creates_or_updates_row_and_classify_as() {
             "apply_to_history": false,
         })
     );
+}
+
+#[tokio::test]
+async fn approve_clears_pin_for_sender_without_other_pin_sources() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let account_id = seed_mail_account(&state, user_id, "alice@example.org").await;
+    seed_rule(
+        &state,
+        user_id,
+        "news@example.org",
+        "pending",
+        None,
+        Utc::now(),
+    )
+    .await;
+    seed_cached_message(&state, account_id, "news-1", "news@example.org", true).await;
+
+    let resp = request(state.clone(), Method::POST, "/api/screener/decisions", Some(&sid), true, Some(r#"{"sender":"news@example.org","decision":"approve","classify_as":"feed","apply_to_history":false}"#)).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cached_pin(&state, "news-1").await, 0);
+}
+
+#[tokio::test]
+async fn deny_clears_pin_for_sender_without_other_pin_sources() {
+    let (state, key) = fixture_state().await;
+    let (user_id, sid) = seed_session(&state, &key, "alice@example.org").await;
+    let account_id = seed_mail_account(&state, user_id, "alice@example.org").await;
+    seed_rule(
+        &state,
+        user_id,
+        "spam@example.org",
+        "pending",
+        None,
+        Utc::now(),
+    )
+    .await;
+    seed_cached_message(&state, account_id, "spam-1", "spam@example.org", true).await;
+
+    let resp = request(
+        state.clone(),
+        Method::POST,
+        "/api/screener/decisions",
+        Some(&sid),
+        true,
+        Some(r#"{"sender":"spam@example.org","decision":"deny","apply_to_history":false}"#),
+    )
+    .await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(cached_pin(&state, "spam-1").await, 0);
 }
 
 #[tokio::test]

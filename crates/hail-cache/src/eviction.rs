@@ -152,27 +152,44 @@ pub async fn load_account_policies(db: &SqlitePool) -> Result<Vec<(i64, CachePol
 /// in SQLite sidecar tables.
 ///
 /// The helper covers scheduled sends, set-aside/reply-later stacks, bubble-ups,
-/// and thread notes. Draft pinning is represented by the `$draft` keyword in
-/// cached message keywords. It only promotes rows to `pinned=1`; it does not
-/// clear existing pins because screener-pending messages can be pinned by the
-/// sync/routing path when it knows the concrete message id.
+/// thread notes, and screener-pending senders. Draft pinning is represented by
+/// the `$draft` keyword in cached message keywords. Pins are recomputed from
+/// these sources so rows are also unpinned when a message leaves the final pin
+/// source (for example when a pending Screener sender is approved or denied).
 pub async fn refresh_pinned_messages(db: &SqlitePool) -> Result<u64> {
-    let updated = sqlx::query(
-        "UPDATE messages \
-         SET pinned = 1 \
-         WHERE pinned = 0 AND (\
-           EXISTS (SELECT 1 FROM message_keywords mk WHERE mk.message_id = messages.id AND mk.keyword = '$draft') \
-           OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN scheduled_sends ss ON ss.user_id = ma.user_id WHERE ma.id = messages.account_id AND ss.draft_email_id = messages.backend_msg_id AND ss.status IN ('pending', 'processing')) \
-           OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN stack_positions sp ON sp.user_id = ma.user_id WHERE ma.id = messages.account_id AND sp.thread_id = messages.thread_id) \
-           OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN bubble_ups bu ON bu.user_id = ma.user_id WHERE ma.id = messages.account_id AND bu.thread_id = messages.thread_id AND bu.fired_at IS NULL) \
-           OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN thread_notes tn ON tn.user_id = ma.user_id WHERE ma.id = messages.account_id AND (tn.thread_id = messages.thread_id OR tn.email_id = messages.backend_msg_id))\
-         )",
-    )
-    .execute(db)
-    .await?
-    .rows_affected();
+    let updated = sqlx::query(REFRESH_PINNED_MESSAGES_SQL)
+        .execute(db)
+        .await?
+        .rows_affected();
     Ok(updated)
 }
+
+/// Refresh `messages.pinned` using an existing SQLite connection.
+pub async fn refresh_pinned_messages_conn(conn: &mut sqlx::SqliteConnection) -> Result<u64> {
+    let updated = sqlx::query(REFRESH_PINNED_MESSAGES_SQL)
+        .execute(conn)
+        .await?
+        .rows_affected();
+    Ok(updated)
+}
+
+const REFRESH_PINNED_MESSAGES_SQL: &str = "UPDATE messages \
+     SET pinned = CASE WHEN (\
+       EXISTS (SELECT 1 FROM message_keywords mk WHERE mk.message_id = messages.id AND mk.keyword = '$draft') \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN scheduled_sends ss ON ss.user_id = ma.user_id WHERE ma.id = messages.account_id AND ss.draft_email_id = messages.backend_msg_id AND ss.status IN ('pending', 'processing')) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN stack_positions sp ON sp.user_id = ma.user_id WHERE ma.id = messages.account_id AND sp.thread_id = messages.thread_id) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN bubble_ups bu ON bu.user_id = ma.user_id WHERE ma.id = messages.account_id AND bu.thread_id = messages.thread_id AND bu.fired_at IS NULL) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN thread_notes tn ON tn.user_id = ma.user_id WHERE ma.id = messages.account_id AND (tn.thread_id = messages.thread_id OR tn.email_id = messages.backend_msg_id)) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN screener_rules sr ON sr.user_id = ma.user_id WHERE ma.id = messages.account_id AND sr.decision = 'pending' AND lower(trim(sr.sender_address)) = lower(trim(messages.from_addr)))\
+     ) THEN 1 ELSE 0 END \
+     WHERE pinned != CASE WHEN (\
+       EXISTS (SELECT 1 FROM message_keywords mk WHERE mk.message_id = messages.id AND mk.keyword = '$draft') \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN scheduled_sends ss ON ss.user_id = ma.user_id WHERE ma.id = messages.account_id AND ss.draft_email_id = messages.backend_msg_id AND ss.status IN ('pending', 'processing')) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN stack_positions sp ON sp.user_id = ma.user_id WHERE ma.id = messages.account_id AND sp.thread_id = messages.thread_id) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN bubble_ups bu ON bu.user_id = ma.user_id WHERE ma.id = messages.account_id AND bu.thread_id = messages.thread_id AND bu.fired_at IS NULL) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN thread_notes tn ON tn.user_id = ma.user_id WHERE ma.id = messages.account_id AND (tn.thread_id = messages.thread_id OR tn.email_id = messages.backend_msg_id)) \
+       OR EXISTS (SELECT 1 FROM mail_accounts ma JOIN screener_rules sr ON sr.user_id = ma.user_id WHERE ma.id = messages.account_id AND sr.decision = 'pending' AND lower(trim(sr.sender_address)) = lower(trim(messages.from_addr)))\
+     ) THEN 1 ELSE 0 END";
 
 async fn load_candidates(db: &SqlitePool, account_id: i64) -> Result<Vec<Candidate>> {
     let rows = sqlx::query(

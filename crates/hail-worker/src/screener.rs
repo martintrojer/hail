@@ -255,6 +255,7 @@ pub async fn route_email(
         Some(ScreenerDecision::Pending) => {
             move_to_screener_if_needed(jmap, env).await?;
             update_pending_latest_received_at(conn, user_id, &sender, env).await?;
+            refresh_message_pins(conn).await?;
             Ok(RouteOutcome::ScreenerPending {
                 sender: sender.clone(),
             })
@@ -276,9 +277,20 @@ pub async fn route_email(
             .bind(&received_at)
             .execute(&mut *conn)
             .await?;
+            refresh_message_pins(conn).await?;
             Ok(RouteOutcome::ScreenerPending { sender })
         }
     }
+}
+
+async fn refresh_message_pins(conn: &mut SqliteConnection) -> Result<(), RouteError> {
+    hail_cache::refresh_pinned_messages_conn(conn)
+        .await
+        .map_err(|err| match err {
+            hail_cache::CacheError::Db(err) => RouteError::Db(err),
+            other => RouteError::Jmap(other.to_string()),
+        })?;
+    Ok(())
 }
 
 async fn update_pending_latest_received_at(
