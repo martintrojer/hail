@@ -26,7 +26,7 @@ use crate::gmail_incremental_sync::{
 use crate::gmail_initial_sync::{
     GmailInitialSyncError, GmailInitialSyncOptions, run_gmail_initial_sync,
 };
-use crate::provider_import_routing::{RoutingRfc822Importer, ScreenerRfc822ImportRouter};
+use crate::provider_import_routing::RoutingRfc822Importer;
 use crate::rfc822_import::StalwartJmapRfc822Importer;
 
 const DEFAULT_SYNC_INTERVAL_SECS: i64 = 5 * 60;
@@ -872,7 +872,8 @@ pub mod live {
             ensure_gmail_send_scope(&account)?;
             let gmail = self.gmail_client(&account).await?;
             let (importer, route_jmap) = self.importer(&account).await?;
-            let router = ScreenerRfc822ImportRouter::new(&route_jmap);
+            let router =
+                crate::screener_rfc822_router::ScreenerRfc822ImportRouter::new(&route_jmap);
             let routing_importer = RoutingRfc822Importer::new(&importer, &router);
             let inbox_id = importer
                 .inbox_id()
@@ -923,7 +924,8 @@ pub mod live {
             ensure_gmail_send_scope(&account)?;
             let gmail = self.gmail_client(&account).await?;
             let (importer, route_jmap) = self.importer(&account).await?;
-            let router = ScreenerRfc822ImportRouter::new(&route_jmap);
+            let router =
+                crate::screener_rfc822_router::ScreenerRfc822ImportRouter::new(&route_jmap);
             let routing_importer = RoutingRfc822Importer::new(&importer, &router);
             let inbox_id = importer
                 .inbox_id()
@@ -936,10 +938,7 @@ pub mod live {
             .await
             .map_err(|err| ProviderSyncRunError::retryable("database", err))?
             .ok_or_else(|| {
-                ProviderSyncRunError::permanent(
-                    "provider_account_missing",
-                    "mail account missing",
-                )
+                ProviderSyncRunError::permanent("provider_account_missing", "mail account missing")
             })?;
             let summary = run_gmail_incremental_sync(
                 &self.db,

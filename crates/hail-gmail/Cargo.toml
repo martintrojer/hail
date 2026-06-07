@@ -1,0 +1,38 @@
+[package]
+name = "hail-gmail"
+description = "Gmail MailBackend implementation and provider import primitives."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hail-backend = { path = "../hail-backend" }
+hail-core = { path = "../hail-core" }
+hail-db = { path = "../hail-db" }
+hail-jmap = { path = "../hail-jmap" }
+mail-parser = "0.11"
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures-util = "0.3"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
+rand = "0.9"
+sha2 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json"] }
+base64 = "0.22"
+url = "2"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
+
+[dev-dependencies]
+hail-test = { path = "../hail-test" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
+tempfile = "3"

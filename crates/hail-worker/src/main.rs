@@ -10,20 +10,15 @@ mod backoff;
 mod catchup;
 mod changes;
 mod crypto;
-mod gmail_client;
-mod gmail_historical_import;
-mod gmail_incremental_sync;
-mod gmail_initial_sync;
 mod jmap_helpers;
 #[allow(dead_code)]
 mod provider_bidi_sync;
 mod provider_import_routing;
 mod provider_sync_scheduler;
 mod reconcile;
-#[allow(dead_code)]
-mod rfc822_import;
 mod scheduler;
 mod screener;
+mod screener_rfc822_router;
 mod state;
 mod supervisor;
 mod user;
@@ -40,6 +35,10 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
+use hail_gmail::{
+    gmail_client, gmail_historical_import, gmail_incremental_sync, gmail_initial_sync,
+    rfc822_import,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
