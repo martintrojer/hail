@@ -9,6 +9,7 @@ mod bodies;
 mod error;
 mod policy;
 mod readthrough;
+mod sync;
 mod types;
 mod writethrough;
 
