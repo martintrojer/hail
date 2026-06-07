@@ -1,100 +1,34 @@
 //! Cache facade for backend-agnostic mail reads, mutations, and sends.
 //!
-//! This crate owns the seam that `hail-api` and `hail-worker` will use once the
-//! read-through/write-through cache lands.  The current implementation is only
-//! the compile-time skeleton: it wires together SQLite, a blob store, a selected
-//! [`MailBackend`], and a cache policy, but intentionally performs no caching or
-//! backend I/O yet.
+//! This crate owns the seam that `hail-api` and `hail-worker` use for
+//! read-through/write-through mail access.  Metadata read-through lives in
+//! `readthrough`; downstream body/blob, write-through, sync, and eviction work
+//! should add sibling modules instead of growing this facade.
+
+mod error;
+mod policy;
+mod readthrough;
+mod types;
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use hail_backend::{
     BackendMsgId, BlobRef, Envelope, Keyword, MailBackend, MailboxRole, SubmissionId,
 };
 use hail_blob_store::BlobStore;
-use hail_core::{MailBackfill, MailCacheConfig, MailCacheMode};
-use serde::{Deserialize, Serialize};
+pub use policy::{CacheBackfill, CacheMode, CachePolicy};
 pub use sqlx::SqlitePool;
 use std::sync::Arc;
+pub use types::{
+    BlockedTracker, CachedLabel, CachedMessage, FeedRenderMode, MailSearchResult, MailTarget,
+    MailView, MailViewItem, MailViewListOpts, MailViewPage, SearchMailbox, Thread,
+};
+
+pub use error::CacheError;
+
+const DEFAULT_ACCOUNT_ID: i64 = 1;
 
 /// Crate-local result type for cache operations.
 pub type Result<T> = std::result::Result<T, CacheError>;
-
-/// Errors surfaced by [`CachedMail`].
-#[derive(Debug, thiserror::Error)]
-pub enum CacheError {
-    /// The facade method is reserved for a downstream cache implementation task.
-    #[error("cache operation is not implemented yet: {operation}")]
-    NotImplemented { operation: &'static str },
-
-    /// SQLite access failed.
-    #[error(transparent)]
-    Db(#[from] sqlx::Error),
-
-    /// Blob store access failed.
-    #[error(transparent)]
-    Blob(#[from] hail_blob_store::BlobStoreError),
-
-    /// The selected upstream backend failed.
-    #[error(transparent)]
-    Backend(#[from] hail_backend::Error),
-}
-
-/// Cache mode reused from hail-core configuration.
-pub type CacheMode = MailCacheMode;
-
-/// Cache backfill policy reused from hail-core configuration.
-pub type CacheBackfill = MailBackfill;
-
-/// Cache policy used by [`CachedMail`].
-///
-/// This mirrors the `[mail.cache]` config block but avoids coupling callers to
-/// blob-store path configuration after construction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CachePolicy {
-    pub mode: MailCacheMode,
-    pub keep_days: u32,
-    pub keep_max_msgs: u64,
-    pub keep_max_bytes: u64,
-    pub backfill: MailBackfill,
-}
-
-impl CachePolicy {
-    #[must_use]
-    pub const fn new(
-        mode: MailCacheMode,
-        keep_days: u32,
-        keep_max_msgs: u64,
-        keep_max_bytes: u64,
-        backfill: MailBackfill,
-    ) -> Self {
-        Self {
-            mode,
-            keep_days,
-            keep_max_msgs,
-            keep_max_bytes,
-            backfill,
-        }
-    }
-}
-
-impl From<&MailCacheConfig> for CachePolicy {
-    fn from(value: &MailCacheConfig) -> Self {
-        Self {
-            mode: value.mode,
-            keep_days: value.keep_days,
-            keep_max_msgs: value.keep_max_msgs,
-            keep_max_bytes: value.keep_max_bytes,
-            backfill: value.backfill,
-        }
-    }
-}
-
-impl From<MailCacheConfig> for CachePolicy {
-    fn from(value: MailCacheConfig) -> Self {
-        Self::from(&value)
-    }
-}
 
 /// Read-through/write-through mail facade.
 pub struct CachedMail {
@@ -102,6 +36,7 @@ pub struct CachedMail {
     blobs: Arc<dyn BlobStore>,
     backend: Box<dyn MailBackend>,
     policy: CachePolicy,
+    account_id: i64,
 }
 
 impl CachedMail {
@@ -113,11 +48,23 @@ impl CachedMail {
         backend: Box<dyn MailBackend>,
         policy: impl Into<CachePolicy>,
     ) -> Self {
+        Self::with_account_id(db, blobs, backend, policy, DEFAULT_ACCOUNT_ID)
+    }
+
+    /// Construct a cache facade for a specific mail account row.
+    pub fn with_account_id(
+        db: SqlitePool,
+        blobs: Arc<dyn BlobStore>,
+        backend: Box<dyn MailBackend>,
+        policy: impl Into<CachePolicy>,
+        account_id: i64,
+    ) -> Self {
         Self {
             db,
             blobs,
             backend,
             policy: policy.into(),
+            account_id,
         }
     }
 
@@ -145,26 +92,10 @@ impl CachedMail {
         &self.policy
     }
 
-    /// List a collapsed mail view, shaped like today's `MailViewProvider::list`.
-    pub async fn list_view(
-        &self,
-        view: MailView,
-        cursor: Option<String>,
-        limit: usize,
-        opts: MailViewListOpts,
-    ) -> Result<MailViewPage> {
-        let _ = (view, cursor, limit, opts);
-        Err(CacheError::NotImplemented {
-            operation: "list_view",
-        })
-    }
-
-    /// Count a collapsed mail view, shaped like today's `MailViewProvider::count`.
-    pub async fn count_view(&self, view: MailView, unread_only: bool) -> Result<usize> {
-        let _ = (view, unread_only);
-        Err(CacheError::NotImplemented {
-            operation: "count_view",
-        })
+    /// Mail account id used in cache table keys.
+    #[must_use]
+    pub const fn account_id(&self) -> i64 {
+        self.account_id
     }
 
     /// Fetch a thread/conversation for rendering.
@@ -172,14 +103,6 @@ impl CachedMail {
         let _ = thread_id;
         Err(CacheError::NotImplemented {
             operation: "get_thread",
-        })
-    }
-
-    /// Fetch cached or backend metadata for one message.
-    pub async fn get_message(&self, id: &BackendMsgId) -> Result<CachedMessage> {
-        let _ = id;
-        Err(CacheError::NotImplemented {
-            operation: "get_message",
         })
     }
 
@@ -239,276 +162,5 @@ impl CachedMail {
         Err(CacheError::NotImplemented {
             operation: "send_enqueue",
         })
-    }
-}
-
-/// Mail view selector mirrored from the current API route surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MailView {
-    Imbox,
-    Feed,
-    Papertrail,
-    Drafts,
-    Trash,
-    Spam,
-    Archive,
-}
-
-/// Lightweight list options mirrored from the current view provider.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MailViewListOpts {
-    pub feed_render: FeedRenderMode,
-}
-
-/// Feed render option placeholder for cache-owned view assembly.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FeedRenderMode {
-    #[default]
-    WithoutRemoteImages,
-    WithRemoteImages,
-}
-
-/// Page returned by [`CachedMail::list_view`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MailViewPage {
-    pub items: Vec<MailViewItem>,
-    pub next_cursor: Option<String>,
-}
-
-/// One collapsed row in a mail view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MailViewItem {
-    pub thread_id: String,
-    pub email_id: String,
-    pub from: String,
-    pub to: Vec<String>,
-    pub cc: Vec<String>,
-    pub bcc: Vec<String>,
-    pub subject: String,
-    pub preview: String,
-    pub received_at: Option<DateTime<Utc>>,
-    pub unread: bool,
-    pub message_count: usize,
-    pub unread_count: usize,
-    pub classification: MailView,
-    pub labels: Vec<CachedLabel>,
-    pub feed_html: Option<String>,
-    pub feed_html_with_images: Option<String>,
-    pub feed_blocked_trackers: Option<Vec<BlockedTracker>>,
-    pub feed_blocked_images: Option<usize>,
-}
-
-/// Search mailbox selector mirrored from the current API route surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SearchMailbox {
-    Imbox,
-    Feed,
-    Papertrail,
-    Archive,
-    Trash,
-    Drafts,
-}
-
-/// One mail search result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MailSearchResult {
-    pub thread_id: String,
-    pub email_id: String,
-    pub from: String,
-    pub subject: String,
-    pub preview: String,
-    pub message_count: usize,
-    pub unread_count: usize,
-    pub unread: bool,
-    pub received_at: Option<DateTime<Utc>>,
-    pub labels: Vec<CachedLabel>,
-}
-
-/// Render-ready thread placeholder returned by [`CachedMail::get_thread`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Thread {
-    pub thread_id: String,
-    pub messages: Vec<CachedMessage>,
-}
-
-/// Cache-shaped message metadata placeholder.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CachedMessage {
-    pub id: BackendMsgId,
-    pub thread_id: Option<String>,
-    pub from: String,
-    pub to: Vec<String>,
-    pub cc: Vec<String>,
-    pub bcc: Vec<String>,
-    pub subject: String,
-    pub preview: String,
-    pub received_at: Option<DateTime<Utc>>,
-    pub unread: bool,
-    pub keywords: Vec<Keyword>,
-    pub size_bytes: Option<u64>,
-    pub blob_refs: Vec<BlobRef>,
-}
-
-/// A label attached to a cached mail row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CachedLabel {
-    pub id: i64,
-    pub name: String,
-    pub color: Option<String>,
-}
-
-/// Tracker removal metadata for rendered feed cards.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BlockedTracker {
-    pub src: String,
-    pub reason: String,
-}
-
-/// Mutation target for message- or thread-scoped operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MailTarget<'a> {
-    Message(&'a BackendMsgId),
-    Thread(&'a str),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures_util::stream;
-    use hail_backend::{
-        BlobRef, Capabilities, Change, Mailbox, Page, PageRequest, Principal, Query, RawMessage,
-        SyncCursor,
-    };
-    use hail_blob_store::FilesystemBlobStore;
-
-    static CAPABILITIES: Capabilities = Capabilities {
-        supports_initial_import: false,
-        supports_eventsource: false,
-        supports_principals_admin: false,
-        supports_send: true,
-        native_threading: false,
-        max_attachment_size: 0,
-        label_path_separator: '/',
-    };
-
-    struct StubBackend;
-
-    #[async_trait::async_trait]
-    impl MailBackend for StubBackend {
-        fn capabilities(&self) -> &'static Capabilities {
-            &CAPABILITIES
-        }
-
-        async fn list_message_ids(
-            &self,
-            _query: &Query,
-            _page: &PageRequest,
-        ) -> hail_backend::Result<Page<BackendMsgId>> {
-            Ok(Page::empty())
-        }
-
-        async fn get_message(&self, id: &BackendMsgId) -> hail_backend::Result<RawMessage> {
-            Ok(RawMessage {
-                id: id.clone(),
-                thread_id: None,
-                rfc822: Bytes::new(),
-                keywords: Vec::new(),
-                envelope: None,
-                received_at_epoch_secs: None,
-                size_bytes: None,
-                blob_refs: Vec::new(),
-                metadata: Default::default(),
-            })
-        }
-
-        async fn fetch_blob(&self, _id: &BlobRef) -> hail_backend::Result<Bytes> {
-            Ok(Bytes::new())
-        }
-
-        async fn set_keywords(
-            &self,
-            _id: &BackendMsgId,
-            _add: &[Keyword],
-            _remove: &[Keyword],
-        ) -> hail_backend::Result<()> {
-            Ok(())
-        }
-
-        async fn move_to_role(
-            &self,
-            _id: &BackendMsgId,
-            _role: MailboxRole,
-        ) -> hail_backend::Result<()> {
-            Ok(())
-        }
-
-        async fn delete_permanently(&self, _id: &BackendMsgId) -> hail_backend::Result<()> {
-            Ok(())
-        }
-
-        async fn send(
-            &self,
-            _rfc822: &[u8],
-            _envelope: &Envelope,
-        ) -> hail_backend::Result<SubmissionId> {
-            Ok(SubmissionId::new("stub-submission"))
-        }
-
-        async fn poll_changes(
-            &self,
-            cursor: &SyncCursor,
-        ) -> hail_backend::Result<(Vec<Change>, SyncCursor)> {
-            Ok((Vec::new(), cursor.clone()))
-        }
-
-        async fn watch_changes(&self) -> futures_util::stream::BoxStream<'static, Change> {
-            Box::pin(stream::empty())
-        }
-
-        async fn list_mailboxes(&self) -> hail_backend::Result<Vec<Mailbox>> {
-            Ok(Vec::new())
-        }
-
-        async fn list_principals(&self) -> hail_backend::Result<Vec<Principal>> {
-            Ok(Vec::new())
-        }
-    }
-
-    #[tokio::test]
-    async fn constructs_cached_mail_with_sqlite_blob_store_and_backend() {
-        let pool = hail_db::connect("sqlite::memory:")
-            .await
-            .expect("connect in-memory sqlite");
-        hail_db::migrate(&pool).await.expect("run migrations");
-        let tempdir = tempfile::tempdir().expect("create temp blob dir");
-        let blobs = Arc::new(FilesystemBlobStore::new(tempdir.path()));
-        let backend = Box::new(StubBackend);
-        let policy = CachePolicy::new(
-            MailCacheMode::Bounded,
-            90,
-            50_000,
-            5 * 1024 * 1024,
-            MailBackfill::Off,
-        );
-
-        let cache = CachedMail::new(pool.clone(), blobs, backend, policy.clone());
-
-        assert_eq!(cache.policy(), &policy);
-        assert_eq!(cache.backend().capabilities(), &CAPABILITIES);
-        let _: &SqlitePool = cache.db();
-        let _: &dyn BlobStore = cache.blobs();
-        let err = cache
-            .list_view(MailView::Imbox, None, 50, MailViewListOpts::default())
-            .await
-            .expect_err("skeleton should not implement list_view yet");
-        assert!(matches!(
-            err,
-            CacheError::NotImplemented {
-                operation: "list_view"
-            }
-        ));
     }
 }
