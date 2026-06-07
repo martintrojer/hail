@@ -19,11 +19,13 @@
 //! # }
 //! ```
 
+mod backend;
 mod error;
 mod mailbox;
 pub mod management;
 mod session;
 
+pub use backend::{JMAP_BACKEND_CAPABILITIES, JmapBackend};
 pub use error::Error;
 pub use jmap_client;
 pub use mailbox::{SCREENER_MAILBOX_NAME, mailbox_id_by_name, mailbox_id_by_role};
