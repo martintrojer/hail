@@ -98,7 +98,6 @@ afterEach(() => {
   currentTestBody = null;
   restoreRoute();
   window.history.pushState({}, '', '/');
-  cleanup();
 });
 
 function TestBody() {
@@ -310,7 +309,7 @@ describe('ScreenerPage', () => {
     ).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Earlier dispatch')).toBeInTheDocument();
     expect(screen.getByText('Earlier newsletter issue.')).toBeInTheDocument();
-    expect(screen.getByText('May 22, 2026')).toBeInTheDocument();
+    expect(screen.getByText('22 May 2026')).toBeInTheDocument();
     expect(screen.getByText('No subject')).toBeInTheDocument();
     expect(screen.queryByText('Preview unavailable.')).not.toBeInTheDocument();
     expect(screen.getByText('Date unavailable')).toBeInTheDocument();

@@ -318,6 +318,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       if (typeof window === 'undefined') return;
       const updates = window.__HAIL_TEST_EDITOR_UPDATES__ ?? new WeakMap<HTMLElement, (html: string) => void>();
       updates.set(currentEditor.view.dom, (html: string) => {
+        if (currentEditor.isDestroyed) return;
         currentEditor.commands.setContent(normalizedHtml(html));
       });
       window.__HAIL_TEST_EDITOR_UPDATES__ = updates;

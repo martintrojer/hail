@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
+import { afterEach, vi } from 'vitest';
 
 Object.defineProperty(window, 'scrollTo', {
   value: vi.fn(),
@@ -62,4 +63,11 @@ Object.defineProperty(window, 'ResizeObserver', {
 Object.defineProperty(globalThis, 'ResizeObserver', {
   value: TestResizeObserver,
   writable: true,
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  document.body.innerHTML = '';
 });
