@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use hail_backend::{
-    BackendMsgId, BlobRef, Capabilities, Change, Envelope, MailBackend, Mailbox, Page,
-    PageRequest, Principal, Query, RawMessage, Result, SubmissionId, SyncCursor,
+    BackendMsgId, BlobRef, Capabilities, Change, Envelope, MailBackend, Mailbox, Page, PageRequest,
+    Principal, Query, RawMessage, Result, SubmissionId, SyncCursor,
 };
 
 static CAPABILITIES: Capabilities = Capabilities {

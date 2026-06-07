@@ -90,6 +90,17 @@ impl BlobRef {
     }
 }
 
+/// Structured metadata for a message attachment or inline related part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub blob_ref: Option<BlobRef>,
+    pub inline: bool,
+    pub content_id: Option<String>,
+}
+
 /// Provider-native submission identifier returned by send operations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SubmissionId(pub String);
@@ -261,6 +272,7 @@ pub struct RawMessage {
     pub received_at_epoch_secs: Option<i64>,
     pub size_bytes: Option<u64>,
     pub blob_refs: Vec<BlobRef>,
+    pub attachments: Vec<AttachmentMeta>,
     pub metadata: BTreeMap<String, String>,
 }
 
