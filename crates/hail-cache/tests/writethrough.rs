@@ -444,6 +444,7 @@ async fn sync_message_updated_mutates_keywords() {
     cache
         .apply_change(Change::MessageUpdated {
             id: BackendMsgId::new("msg-update"),
+            keywords: None,
             keywords_added: vec![Keyword::new("$new")],
             keywords_removed: vec![Keyword::new("$seen"), Keyword::new("$old")],
         })
@@ -502,6 +503,7 @@ async fn sync_lww_keeps_newer_pending_local_change() {
     cache
         .apply_change(Change::MessageUpdated {
             id: BackendMsgId::new("msg-lww"),
+            keywords: None,
             keywords_added: vec![Keyword::new("$seen")],
             keywords_removed: Vec::new(),
         })
@@ -535,6 +537,7 @@ async fn sync_ignores_recent_self_applied_change_within_sixty_seconds() {
     cache
         .apply_change(Change::MessageUpdated {
             id: BackendMsgId::new("msg-loop"),
+            keywords: None,
             keywords_added: vec![Keyword::new("$seen")],
             keywords_removed: Vec::new(),
         })

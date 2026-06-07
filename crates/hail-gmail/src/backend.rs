@@ -239,6 +239,7 @@ where
                     } else {
                         changes.push(Change::MessageUpdated {
                             id: BackendMsgId::new(added.message.id),
+                            keywords: None,
                             keywords_added: added.label_ids.into_iter().map(Keyword::new).collect(),
                             keywords_removed: Vec::new(),
                         });
@@ -247,6 +248,7 @@ where
                 for removed in record.labels_removed {
                     changes.push(Change::MessageUpdated {
                         id: BackendMsgId::new(removed.message.id),
+                        keywords: None,
                         keywords_added: Vec::new(),
                         keywords_removed: removed.label_ids.into_iter().map(Keyword::new).collect(),
                     });

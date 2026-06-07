@@ -228,6 +228,38 @@ impl JmapBackend {
                 )
             })
     }
+
+    async fn keyword_state_changes(&self, ids: &[String]) -> hail_backend::Result<Vec<Change>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut request = self.session.client().build();
+        request
+            .get_email()
+            .ids(ids.iter().cloned())
+            .properties([Property::Id, Property::Keywords]);
+        let mut response = request.send_get_email().await.map_err(map_jmap_error)?;
+        let mut keywords_by_id = response
+            .take_list()
+            .into_iter()
+            .filter_map(|email| {
+                let id = email.id()?.to_owned();
+                let keywords = email.keywords().into_iter().map(Keyword::new).collect();
+                Some((id, keywords))
+            })
+            .collect::<BTreeMap<_, _>>();
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                keywords_by_id.remove(id).map(|keywords| Change::MessageUpdated {
+                    id: BackendMsgId::new(id.clone()),
+                    keywords: Some(keywords),
+                    keywords_added: Vec::new(),
+                    keywords_removed: Vec::new(),
+                })
+            })
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -428,17 +460,7 @@ impl MailBackend for JmapBackend {
                     raw_ref: None,
                 }),
         );
-        changes.extend(
-            response
-                .updated()
-                .iter()
-                .cloned()
-                .map(|id| Change::MessageUpdated {
-                    id: BackendMsgId::new(id),
-                    keywords_added: Vec::new(),
-                    keywords_removed: Vec::new(),
-                }),
-        );
+        changes.extend(self.keyword_state_changes(response.updated()).await?);
         changes.extend(
             response
                 .destroyed()
