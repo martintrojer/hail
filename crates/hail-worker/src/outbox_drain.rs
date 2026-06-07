@@ -566,6 +566,7 @@ fn classify_backend_error(error: &BackendError) -> ErrorClass {
         BackendError::UnsupportedCapability { .. } => ErrorClass::ProviderScopeMissing,
         BackendError::NotFound { .. } => ErrorClass::ProviderNotFound,
         BackendError::InvalidRequest(_) => ErrorClass::ProviderRejected,
+        BackendError::NotConnected => ErrorClass::ProviderUnavailable,
         BackendError::Other(message) => classify_other_error(message),
     }
 }
@@ -840,6 +841,7 @@ mod tests {
                     BackendError::InvalidRequest(message) => {
                         BackendError::InvalidRequest(message.clone())
                     }
+                    BackendError::NotConnected => BackendError::NotConnected,
                     BackendError::Other(message) => BackendError::Other(message.clone()),
                 });
             }
