@@ -9,6 +9,7 @@ mod error;
 mod policy;
 mod readthrough;
 mod types;
+mod writethrough;
 
 use bytes::Bytes;
 use hail_backend::{
@@ -142,18 +143,17 @@ impl CachedMail {
         add: &[Keyword],
         remove: &[Keyword],
     ) -> Result<()> {
-        let _ = (target, add, remove);
-        Err(CacheError::NotImplemented {
-            operation: "mutate_keywords",
-        })
+        writethrough::mutate_keywords(self, target, add, remove).await
     }
 
     /// Move a message or thread target to a canonical mailbox role.
     pub async fn move_to_role(&self, target: MailTarget<'_>, role: MailboxRole) -> Result<()> {
-        let _ = (target, role);
-        Err(CacheError::NotImplemented {
-            operation: "move_to_role",
-        })
+        writethrough::move_to_role(self, target, role).await
+    }
+
+    /// Count queued outbound mutations that have not yet been applied upstream.
+    pub async fn pending_sync_count(&self) -> Result<i64> {
+        writethrough::pending_sync_count(self).await
     }
 
     /// Enqueue or perform an outbound send through the write-through path.
