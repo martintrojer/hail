@@ -36,6 +36,7 @@ use crate::routes::health;
         (name = crate::routes::admin_stats::TAG, description = "Administrator-only user, domain, and system status endpoints."),
         (name = crate::routes::attachments::TAG, description = "Attachment listing and download endpoints."),
         (name = crate::routes::blobs::TAG, description = "JMAP blob upload endpoints."),
+        (name = crate::routes::capabilities::TAG, description = "Runtime mail backend and cache feature flags."),
         (name = crate::routes::compose::TAG, description = "Compose, reply, and scheduled-send creation."),
         (name = crate::routes::contacts::TAG, description = "Contact notes and contact detail views."),
         (name = crate::routes::drafts::TAG, description = "Draft autosave create/update endpoints."),

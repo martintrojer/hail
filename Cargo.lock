@@ -944,6 +944,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hail-api",
+ "hail-backend",
  "hail-core",
  "hail-db",
  "hail-jmap",

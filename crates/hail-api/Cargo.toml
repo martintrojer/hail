@@ -24,6 +24,7 @@ __test-stubs = []
 [dependencies]
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
+hail-backend = { path = "../hail-backend" }
 hail-jmap = { path = "../hail-jmap" }
 hail-worker = { path = "../hail-worker" }
 
