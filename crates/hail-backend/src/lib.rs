@@ -9,6 +9,8 @@ use futures_core::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub mod conformance;
+
 pub use hail_core::MailClassification;
 
 /// Crate-local result type for backend operations.
