@@ -66,23 +66,7 @@ where
         .get_message(&fixture.message_id)
         .await
         .expect("get_message should succeed");
-    let expected_keywords = fixture
-        .expected_message
-        .keywords
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    let actual_keywords = message
-        .keywords
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut expected_message = fixture.expected_message.clone();
-    let mut actual_message = message;
-    expected_message.keywords.clear();
-    actual_message.keywords.clear();
-    assert_eq!(actual_message, expected_message);
-    assert_eq!(actual_keywords, expected_keywords);
+    assert_eq!(message, fixture.expected_message);
 
     let blob = backend
         .fetch_blob(&fixture.blob_ref)
@@ -122,10 +106,7 @@ where
         .poll_changes(&fixture.poll_cursor)
         .await
         .expect("poll_changes should succeed");
-    assert_eq!(
-        normalized_changes(changes),
-        normalized_changes(fixture.expected_changes.clone())
-    );
+    assert_eq!(changes, fixture.expected_changes);
     assert_eq!(next_cursor, fixture.expected_next_cursor);
 
     let mailboxes = backend
@@ -160,31 +141,4 @@ where
         .delete_permanently(&fixture.message_id)
         .await
         .expect("delete_permanently should succeed");
-}
-
-fn normalized_changes(changes: Vec<Change>) -> Vec<Change> {
-    changes
-        .into_iter()
-        .map(|change| match change {
-            Change::MessageUpdated {
-                id,
-                mut keywords,
-                mut keywords_added,
-                mut keywords_removed,
-            } => {
-                if let Some(keywords) = keywords.as_mut() {
-                    keywords.sort();
-                }
-                keywords_added.sort();
-                keywords_removed.sort();
-                Change::MessageUpdated {
-                    id,
-                    keywords,
-                    keywords_added,
-                    keywords_removed,
-                }
-            }
-            other => other,
-        })
-        .collect()
 }
