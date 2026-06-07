@@ -1150,7 +1150,6 @@ mod tests {
     }
 
     mod fixture_corpus {
-        use hail_test::mail_fixture;
         use mail_parser::MessageParser;
 
         use super::{plaintext_body_to_html, sanitize_and_strip_trackers, strip_quoted_history};
@@ -1161,10 +1160,33 @@ mod tests {
             blocked_tracker_srcs: Vec<String>,
         }
 
+        fn fixture_bytes(name: &str) -> &'static [u8] {
+            match name {
+                "malicious-html.eml" => {
+                    include_bytes!("../../../../tests/fixtures/mail/malicious-html.eml")
+                }
+                "newsletter-tracking-pixel.eml" => {
+                    include_bytes!("../../../../tests/fixtures/mail/newsletter-tracking-pixel.eml")
+                }
+                "personal-simple.eml" => {
+                    include_bytes!("../../../../tests/fixtures/mail/personal-simple.eml")
+                }
+                "quoted-gmail.eml" => {
+                    include_bytes!("../../../../tests/fixtures/mail/quoted-gmail.eml")
+                }
+                "quoted-outlook.eml" => {
+                    include_bytes!("../../../../tests/fixtures/mail/quoted-outlook.eml")
+                }
+                "receipt-papertrail.eml" => {
+                    include_bytes!("../../../../tests/fixtures/mail/receipt-papertrail.eml")
+                }
+                _ => panic!("{name} fixture exists"),
+            }
+        }
+
         fn render_fixture(name: &str) -> RenderedFixture {
-            let fixture = mail_fixture(name).unwrap_or_else(|| panic!("{name} fixture exists"));
             let message = MessageParser::default()
-                .parse(fixture.bytes())
+                .parse(fixture_bytes(name))
                 .unwrap_or_else(|| panic!("{name} parses as RFC822"));
             let body_html = if message.html_body_count() > 0 {
                 message
