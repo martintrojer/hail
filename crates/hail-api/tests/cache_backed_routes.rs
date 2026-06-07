@@ -331,7 +331,12 @@ fn backend_data() -> (Vec<RawMessage>, HashMap<BlobRef, Bytes>) {
         b"From: Alice <alice@example.test>\r\nTo: Me <me@example.test>\r\nSubject: Cache Route Subject\r\n\r\nHello from cached body.",
     );
     let feed_body = Bytes::from_static(
-        b"From: News <news@example.test>\r\nTo: Me <me@example.test>\r\nSubject: Daily Cache News\r\n\r\nFeed body.",
+        br#"From: News <news@example.test>
+To: Me <me@example.test>
+Subject: Daily Cache News
+Content-Type: text/html; charset=utf-8
+
+<article><p>Feed body</p><img src="https://cdn.example/hero.png"><img src="https://track.mailgun.net/open.gif" width="1" height="1"></article>"#,
     );
     let mut blobs = HashMap::new();
     blobs.insert(
@@ -547,6 +552,12 @@ async fn list_open_body_attachment_and_search_use_real_cache_layers() {
         fixture.blob_root.path(),
         &stored_attachment_ref
     ));
+
+    let feed = get_json(fixture.state.clone(), &sid, "/api/views/feed?limit=10").await;
+    assert_eq!(feed["items"].as_array().expect("feed items").len(), 1);
+    assert_eq!(feed["items"][0]["email_id"], "msg-feed");
+    assert_eq!(feed["items"][0]["feed_html"], serde_json::Value::Null);
+    assert_eq!(feed["items"][0]["feed_html_with_images"], serde_json::Value::Null);
 
     let search = get_json(
         fixture.state.clone(),

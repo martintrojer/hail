@@ -192,20 +192,6 @@ pub async fn trash_mailbox_id(session: &hail_jmap::Session) -> Result<Option<Str
         .map_err(|err| err.to_string())
 }
 
-pub async fn move_thread_to_role(
-    state: &AppState,
-    token: SecretString,
-    thread_id: &str,
-    role: crate::routes::threads::MailboxRole,
-) -> Result<(), String> {
-    let session = jmap_session(state, token).await?;
-    let mailbox_id = hail_jmap::mailbox_id_by_role(&session, role.jmap())
-        .await
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("{} mailbox not found", role.name()))?;
-    set_thread_mailboxes(&session, thread_id, [mailbox_id]).await
-}
-
 pub async fn hydrate_thread_previews(
     state: &AppState,
     user_id: i64,

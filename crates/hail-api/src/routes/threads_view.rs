@@ -1,6 +1,6 @@
 //! Thread-as-document view endpoint.
 //!
-//! `GET /api/threads/:thread_id` assembles a JMAP thread into a UI-ready
+//! `GET /api/threads/:thread_id` assembles a cached thread into a UI-ready
 //! document for the SPA. Rendering happens server-side: quoted history is
 //! stripped before untrusted HTML is sanitized and likely tracking pixels are
 //! removed/counted. Never log message bodies from this module.
@@ -26,13 +26,13 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{jmap_session, validate_thread_id};
+use crate::routes::jmap_helpers::validate_thread_id;
 use crate::routes::labels::LabelResponse;
 use crate::routes::notes::ThreadNoteResponse;
 use crate::routes::response::{internal, not_found};
 use crate::state::AppState;
 
-/// Dependency-injection seam for assembling a thread. Production uses JMAP;
+/// Dependency-injection seam for assembling a thread. Production uses CachedMail;
 /// tests attach a fake assembler so route behavior does not need Stalwart.
 pub trait ThreadAssembler: Send + Sync + 'static {
     fn assemble<'a>(
@@ -49,7 +49,7 @@ pub trait ThreadAssembler: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct ThreadAssembleError(pub String);
 
-/// Production assembler backed by JMAP `Email/query` + `Email/get`.
+/// Production assembler backed by CachedMail.
 pub struct CacheThreadAssembler;
 
 impl ThreadAssembler for CacheThreadAssembler {
@@ -153,107 +153,6 @@ fn participants_from_strings(addresses: &[String]) -> Vec<Participant> {
             email: address.clone(),
         })
         .collect()
-}
-
-pub struct JmapThreadAssembler;
-
-impl ThreadAssembler for JmapThreadAssembler {
-    fn assemble<'a>(
-        &'a self,
-        state: &'a AppState,
-        token: SecretString,
-        thread_id: &'a str,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<Option<AssembledThread>, ThreadAssembleError>> + Send + 'a>,
-    > {
-        Box::pin(async move {
-            let session = jmap_session(state, token)
-                .await
-                .map_err(ThreadAssembleError)?;
-
-            let mut query_request = session.client().build();
-            query_request
-                .query_email()
-                .filter(hail_jmap::jmap_client::email::query::Filter::in_thread(
-                    thread_id,
-                ))
-                .sort([
-                    hail_jmap::jmap_client::email::query::Comparator::received_at().ascending(),
-                ]);
-            let mut query_response = query_request
-                .send_query_email()
-                .await
-                .map_err(|err| ThreadAssembleError(err.to_string()))?;
-            let email_ids = query_response.take_ids();
-            if email_ids.is_empty() {
-                return Ok(None);
-            }
-
-            let mut email_request = session.client().build();
-            let get_email = email_request.get_email();
-            get_email.ids(email_ids.clone()).properties([
-                hail_jmap::jmap_client::email::Property::Id,
-                hail_jmap::jmap_client::email::Property::ThreadId,
-                hail_jmap::jmap_client::email::Property::Subject,
-                hail_jmap::jmap_client::email::Property::From,
-                hail_jmap::jmap_client::email::Property::To,
-                hail_jmap::jmap_client::email::Property::ReceivedAt,
-                hail_jmap::jmap_client::email::Property::HtmlBody,
-                hail_jmap::jmap_client::email::Property::TextBody,
-                hail_jmap::jmap_client::email::Property::BodyValues,
-                hail_jmap::jmap_client::email::Property::BodyStructure,
-                hail_jmap::jmap_client::email::Property::Attachments,
-                hail_jmap::jmap_client::email::Property::Preview,
-            ]);
-            get_email.arguments().fetch_html_body_values(true);
-            get_email.arguments().fetch_text_body_values(true);
-            let mut email_response = email_request
-                .send_get_email()
-                .await
-                .map_err(|err| ThreadAssembleError(err.to_string()))?;
-
-            let mut emails_by_id = email_response
-                .take_list()
-                .into_iter()
-                .map(|email| (email.id().unwrap_or_default().to_string(), email))
-                .collect::<std::collections::HashMap<_, _>>();
-
-            let mut messages = Vec::with_capacity(email_ids.len());
-            for email_id in email_ids {
-                let Some(email) = emails_by_id.remove(&email_id) else {
-                    continue;
-                };
-                if email.thread_id() != Some(thread_id) {
-                    continue;
-                }
-                messages.push(AssembledMessage {
-                    email_id,
-                    from: addresses_from_jmap(email.from()),
-                    to: addresses_from_jmap(email.to()),
-                    received_at: email
-                        .received_at()
-                        .and_then(|ts| DateTime::<Utc>::from_timestamp(ts, 0)),
-                    subject: email.subject().unwrap_or_default().to_string(),
-                    html: html_body_from_email(&email),
-                    text: text_body_from_email(&email),
-                    preview: email.preview().unwrap_or_default().to_string(),
-                    inline_images: inline_images_from_email(&email),
-                    attachments: attachments_from_email(&email),
-                });
-            }
-
-            let subject = messages
-                .iter()
-                .find_map(|message| (!message.subject.is_empty()).then(|| message.subject.clone()))
-                .unwrap_or_default();
-
-            Ok(Some(AssembledThread {
-                thread_id: thread_id.to_string(),
-                subject,
-                messages,
-            }))
-        })
-    }
 }
 
 /// Raw assembled thread before render hygiene is applied by the handler.
@@ -502,147 +401,6 @@ fn participants_for(messages: &[AssembledMessage]) -> Vec<Participant> {
     participants
 }
 
-fn addresses_from_jmap(
-    addresses: Option<&[hail_jmap::jmap_client::email::EmailAddress]>,
-) -> Vec<Participant> {
-    addresses
-        .unwrap_or_default()
-        .iter()
-        .map(|address| Participant {
-            name: address
-                .name()
-                .filter(|name| !name.is_empty())
-                .map(str::to_string),
-            email: address.email().to_string(),
-        })
-        .collect()
-}
-
-fn html_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
-    body_from_parts(email, email.html_body())
-}
-
-fn text_body_from_email(email: &hail_jmap::jmap_client::email::Email) -> String {
-    body_from_parts(email, email.text_body())
-}
-
-fn inline_images_from_email(email: &hail_jmap::jmap_client::email::Email) -> Vec<InlineImage> {
-    let mut images = Vec::new();
-    collect_inline_images(email.body_structure(), &mut images);
-    if let Some(attachments) = email.attachments() {
-        for part in attachments {
-            collect_inline_image_part(part, &mut images);
-        }
-    }
-    images.sort_by(|a, b| a.cid.cmp(&b.cid).then(a.blob_id.cmp(&b.blob_id)));
-    images.dedup_by(|a, b| a.cid == b.cid);
-    images
-}
-
-fn attachments_from_email(email: &hail_jmap::jmap_client::email::Email) -> Vec<Attachment> {
-    email
-        .attachments()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(attachment_from_part)
-        .collect()
-}
-
-fn attachment_from_part(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> Option<Attachment> {
-    let blob_id = part.blob_id().filter(|value| !value.trim().is_empty())?;
-    let mime_type = part
-        .content_type()
-        .unwrap_or("application/octet-stream")
-        .to_string();
-    Some(Attachment {
-        filename: attachment_name(part),
-        size: part.size() as u64,
-        mime_type,
-        blob_id: blob_id.to_string(),
-        download_url: format!("/api/attachments/{}/download", urlencoding(blob_id)),
-        inline: is_inline_attachment(part),
-    })
-}
-
-fn attachment_name(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> String {
-    part.name()
-        .filter(|name| !name.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            part.part_id()
-                .filter(|part_id| !part_id.trim().is_empty())
-                .map(|part_id| format!("attachment-{part_id}"))
-                .unwrap_or_else(|| "attachment".to_string())
-        })
-}
-
-fn is_inline_attachment(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> bool {
-    part.content_id()
-        .and_then(normalize_cid)
-        .is_some_and(|cid| !cid.is_empty())
-        || part
-            .content_disposition()
-            .is_some_and(|value| value.eq_ignore_ascii_case("inline"))
-}
-
-fn collect_inline_images(
-    part: Option<&hail_jmap::jmap_client::email::EmailBodyPart>,
-    images: &mut Vec<InlineImage>,
-) {
-    let Some(part) = part else {
-        return;
-    };
-    collect_inline_image_part(part, images);
-    if let Some(sub_parts) = part.sub_parts() {
-        for sub_part in sub_parts {
-            collect_inline_images(Some(sub_part), images);
-        }
-    }
-}
-
-fn collect_inline_image_part(
-    part: &hail_jmap::jmap_client::email::EmailBodyPart,
-    images: &mut Vec<InlineImage>,
-) {
-    let Some(cid) = part.content_id().and_then(normalize_cid) else {
-        return;
-    };
-    let Some(blob_id) = part.blob_id().filter(|value| !value.trim().is_empty()) else {
-        return;
-    };
-    let content_type = part.content_type().unwrap_or("application/octet-stream");
-    if !is_safe_inline_image_type(content_type) {
-        return;
-    }
-    images.push(InlineImage {
-        cid,
-        blob_id: blob_id.to_string(),
-        type_: content_type.to_string(),
-    });
-}
-
-fn normalize_cid(cid: &str) -> Option<String> {
-    let trimmed = cid
-        .trim()
-        .trim_start_matches('<')
-        .trim_end_matches('>')
-        .trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_ascii_lowercase())
-}
-
-fn is_safe_inline_image_type(content_type: &str) -> bool {
-    let content_type = content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    matches!(
-        content_type.as_str(),
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
-    )
-}
-
 fn inline_image_url(image: &InlineImage) -> String {
     format!(
         "/api/attachments/{}/download?disposition=inline&type={}",
@@ -766,7 +524,16 @@ fn cid_from_src(src: &str) -> Option<String> {
         .filter(|prefix| prefix.eq_ignore_ascii_case("cid:"))?;
     let cid = &trimmed[rest.len()..];
     let cid = cid.split(['?', '#']).next().unwrap_or(cid);
-    percent_decode_cid(cid).and_then(|value| normalize_cid(&value))
+    percent_decode_cid(cid).and_then(|value| normalize_inline_cid(&value))
+}
+
+fn normalize_inline_cid(cid: &str) -> Option<String> {
+    let trimmed = cid
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_ascii_lowercase())
 }
 
 fn percent_decode_cid(input: &str) -> Option<String> {
@@ -779,101 +546,4 @@ fn percent_decode_cid(input: &str) -> Option<String> {
 
 fn urlencoding(input: &str) -> String {
     url::form_urlencoded::byte_serialize(input.as_bytes()).collect()
-}
-
-fn body_from_parts(
-    email: &hail_jmap::jmap_client::email::Email,
-    parts: Option<&[hail_jmap::jmap_client::email::EmailBodyPart]>,
-) -> String {
-    let Some(parts) = parts else {
-        return String::new();
-    };
-
-    let mut body = String::new();
-    for part in parts {
-        let Some(part_id) = part.part_id() else {
-            continue;
-        };
-        let Some(value) = email.body_value(part_id) else {
-            continue;
-        };
-        body.push_str(value.value());
-    }
-    body
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn attachments_from_email_uses_jmap_attachments_and_skips_body_parts() {
-        let email: hail_jmap::jmap_client::email::Email =
-            serde_json::from_value(serde_json::json!({
-                "id": "email-1",
-                "threadId": "thread-1",
-                "textBody": [
-                    {
-                        "partId": "text-body",
-                        "blobId": "blob-text-body",
-                        "type": "text/plain",
-                        "size": 42
-                    }
-                ],
-                "htmlBody": [
-                    {
-                        "partId": "html-body",
-                        "blobId": "blob-html-body",
-                        "type": "text/html",
-                        "size": 84
-                    }
-                ],
-                "attachments": [
-                    {
-                        "partId": "2",
-                        "blobId": "blob/report 1",
-                        "name": "report.pdf",
-                        "type": "application/pdf",
-                        "size": 1500000
-                    },
-                    {
-                        "partId": "3",
-                        "blobId": "blob-logo",
-                        "name": "logo.png",
-                        "type": "image/png",
-                        "size": 512,
-                        "cid": "logo@example.org",
-                        "disposition": "inline"
-                    },
-                    {
-                        "partId": "4",
-                        "name": "missing-blob.bin",
-                        "type": "application/octet-stream",
-                        "size": 10
-                    }
-                ]
-            }))
-            .expect("email fixture should parse");
-
-        let attachments = attachments_from_email(&email);
-
-        assert_eq!(attachments.len(), 2);
-        assert_eq!(attachments[0].filename, "report.pdf");
-        assert_eq!(attachments[0].size, 1_500_000);
-        assert_eq!(attachments[0].mime_type, "application/pdf");
-        assert_eq!(attachments[0].blob_id, "blob/report 1");
-        assert_eq!(
-            attachments[0].download_url,
-            "/api/attachments/blob%2Freport+1/download"
-        );
-        assert!(!attachments[0].inline);
-        assert_eq!(attachments[1].filename, "logo.png");
-        assert_eq!(attachments[1].blob_id, "blob-logo");
-        assert!(attachments[1].inline);
-        assert!(
-            attachments
-                .iter()
-                .all(|attachment| !attachment.blob_id.contains("body"))
-        );
-    }
 }
