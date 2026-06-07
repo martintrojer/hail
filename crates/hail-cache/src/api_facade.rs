@@ -186,11 +186,12 @@ impl CachedMail {
             if !wanted.contains(&sender) {
                 continue;
             }
+            let preview = screener_preview(&cached.preview, &raw.rfc822);
             crate::readthrough::upsert_raw_metadata(self.db(), self.account_id(), raw).await?;
             by_sender.entry(sender).or_default().push(ScreenerMessage {
                 email_id: cached.id,
                 subject: cached.subject,
-                preview: cached.preview,
+                preview,
                 from: cached.from,
                 received_at: cached.received_at,
             });
@@ -333,6 +334,31 @@ fn parse_body_fields(rfc822: &[u8]) -> (String, String) {
         .join("\n\n");
     let markdown = if text.is_empty() { html_fragment_to_text(&html) } else { text };
     (html, markdown)
+}
+
+fn screener_preview(provider_preview: &str, rfc822: &[u8]) -> String {
+    let collapsed_provider_preview = collapse_preview(provider_preview);
+    if !collapsed_provider_preview.is_empty() {
+        return collapsed_provider_preview;
+    }
+    let Some(message) = mail_parser::MessageParser::default().parse(rfc822) else {
+        return String::new();
+    };
+    let text = (0..message.text_body_count())
+        .filter_map(|index| message.body_text(index).map(|body| body.into_owned()))
+        .find(|body| !body.trim().is_empty())
+        .or_else(|| {
+            (0..message.html_body_count())
+                .filter_map(|index| message.body_html(index).map(|body| body.into_owned()))
+                .find(|body| !body.trim().is_empty())
+                .map(|html| html_fragment_to_text(&html))
+        })
+        .unwrap_or_default();
+    collapse_preview(&text).chars().take(200).collect()
+}
+
+fn collapse_preview(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn reply_subject(subject: &str) -> String {
