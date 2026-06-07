@@ -556,8 +556,26 @@ async fn list_open_body_attachment_and_search_use_real_cache_layers() {
     let feed = get_json(fixture.state.clone(), &sid, "/api/views/feed?limit=10").await;
     assert_eq!(feed["items"].as_array().expect("feed items").len(), 1);
     assert_eq!(feed["items"][0]["email_id"], "msg-feed");
-    assert_eq!(feed["items"][0]["feed_html"], serde_json::Value::Null);
-    assert_eq!(feed["items"][0]["feed_html_with_images"], serde_json::Value::Null);
+    assert!(feed["items"][0]["feed_html"].as_str().is_some_and(|html| {
+        html.contains("Feed body")
+            && !html.contains("cdn.example/hero.png")
+            && !html.contains("track.mailgun.net")
+    }));
+    assert!(
+        feed["items"][0]["feed_html_with_images"]
+            .as_str()
+            .is_some_and(
+                |html| html.contains("cdn.example/hero.png") && !html.contains("track.mailgun.net")
+            )
+    );
+    assert_eq!(feed["items"][0]["feed_blocked_images"], 1);
+    assert_eq!(
+        feed["items"][0]["feed_blocked_trackers"]
+            .as_array()
+            .expect("blocked trackers")
+            .len(),
+        1
+    );
 
     let search = get_json(
         fixture.state.clone(),
