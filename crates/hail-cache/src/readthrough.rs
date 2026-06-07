@@ -6,9 +6,7 @@ use hail_backend::{BackendMsgId, BlobRef, Envelope, PageRequest, Query, RawMessa
 use hail_core::{MailCacheMode, MailClassification, SPAM_KEYWORD};
 use sqlx::{Row, Sqlite, Transaction};
 
-use crate::{
-    CachedMessage, MailView, MailViewItem, MailViewListOpts, MailViewPage,
-};
+use crate::{CachedMessage, MailView, MailViewItem, MailViewListOpts, MailViewPage};
 
 const SEEN_KEYWORD: &str = "$seen";
 const TRASH_KEYWORD: &str = "$trash";
@@ -176,7 +174,6 @@ impl CachedMail {
         })
     }
 
-
     async fn populate_metadata_page(&self, limit: usize) -> Result<()> {
         let page = self
             .backend
@@ -270,16 +267,16 @@ async fn upsert_raw_metadata_tx(
         .await?;
     for attachment in &attachments {
         let size_bytes = i64::try_from(attachment.size_bytes).unwrap_or(i64::MAX);
-        let blob_id = attachment.blob_ref.as_ref().map(BlobRef::as_str);
+        let backend_blob_ref = attachment.blob_ref.as_ref().map(BlobRef::as_str);
         sqlx::query(
-            "INSERT INTO attachments (message_id, filename, mime_type, size_bytes, blob_id, inline) \
+            "INSERT INTO attachments (message_id, filename, mime_type, size_bytes, backend_blob_ref, inline) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(message_id)
         .bind(&attachment.filename)
         .bind(&attachment.mime_type)
         .bind(size_bytes)
-        .bind(blob_id)
+        .bind(backend_blob_ref)
         .bind(i64::from(attachment.inline))
         .execute(&mut **tx)
         .await?;
@@ -341,7 +338,7 @@ async fn message_from_row(
     .map(hail_backend::Keyword::new)
     .collect::<Vec<_>>();
     let blob_refs = sqlx::query_scalar::<_, String>(
-        "SELECT blob_id FROM attachments WHERE message_id = ?1 AND blob_id IS NOT NULL ORDER BY id",
+        "SELECT backend_blob_ref FROM attachments WHERE message_id = ?1 AND backend_blob_ref IS NOT NULL ORDER BY id",
     )
     .bind(message_id)
     .fetch_all(db)
