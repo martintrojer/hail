@@ -4,6 +4,7 @@
 //! tasks will park shared API types and error enums here as the binaries
 //! grow.
 
+pub mod blob;
 pub mod config;
 pub mod crypto;
 pub mod mail_classification;
@@ -11,6 +12,7 @@ pub mod mail_render;
 pub mod provider_tokens;
 pub mod screener;
 
+pub use blob::{BlobId, BlobIdParseError, BlobKind};
 pub use config::{
     AdminConfig, Config, ConfigError, GmailProviderConfig, ProviderImportConfig, SecretsConfig,
     ServerConfig, SetupConfig, StalwartConfig,

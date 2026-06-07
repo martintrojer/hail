@@ -1,0 +1,19 @@
+[package]
+name = "hail-blob-store"
+description = "Content-addressed filesystem blob store for hail cache bodies and attachments."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hail-core = { path = "../hail-core" }
+blake3 = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt"] }
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
