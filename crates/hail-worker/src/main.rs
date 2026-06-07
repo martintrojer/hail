@@ -6,12 +6,16 @@
 //! arrive in follow-up tasks (`jmap-eventsource`, `screener-routing`).
 
 mod app_events;
+mod backend_factory;
 mod backoff;
 mod cache_eviction_sweeper;
+mod cache_sync;
 mod catchup;
 mod changes;
 mod crypto;
 mod jmap_helpers;
+#[allow(dead_code)]
+mod outbox_drain;
 #[allow(dead_code)]
 mod provider_bidi_sync;
 mod provider_import_routing;

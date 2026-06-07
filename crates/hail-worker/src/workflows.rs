@@ -1,4 +1,9 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use chrono::Utc;
+use hail_backend::{BackendMsgId, Keyword, MailBackend};
+use hail_cache::{CachedMail, MailTarget};
 use hail_core::MailClassification;
 use hail_db::labels::normalize_label_path;
 use serde::Deserialize;
@@ -61,12 +66,15 @@ struct WorkflowRule {
     action: WorkflowAction,
 }
 
-pub async fn evaluate_workflows(
+pub async fn evaluate_workflows<O>(
     conn: &mut SqliteConnection,
-    jmap: &dyn JmapOps,
+    ops: &O,
     user_id: i64,
     ctx: &WorkflowMessageContext,
-) -> Result<WorkflowEvaluation, RouteError> {
+) -> Result<WorkflowEvaluation, RouteError>
+where
+    O: WorkflowOps + ?Sized,
+{
     let rules = load_enabled_rules(conn, user_id).await?;
     for rule in rules {
         if !rule_matches(&rule, ctx) {
@@ -88,7 +96,7 @@ pub async fn evaluate_workflows(
 
         let mut classification = None;
         if let Some(classify_as) = rule.action.classify_as {
-            apply_classification(jmap, &ctx.email_id, classify_as).await?;
+            ops.apply_classification(&ctx.email_id, classify_as).await?;
             classification = Some(classify_as);
         }
 
@@ -191,15 +199,95 @@ fn value_matches(value: &str, needle: &str, op: WorkflowConditionOp) -> bool {
     }
 }
 
-async fn apply_classification(
-    jmap: &dyn JmapOps,
-    email_id: &str,
-    classification: MailClassification,
-) -> Result<(), RouteError> {
-    for candidate in MailClassification::ALL {
-        jmap.remove_keyword(email_id, candidate.keyword()).await?;
+#[async_trait]
+pub trait WorkflowOps: Send + Sync {
+    async fn apply_classification(
+        &self,
+        email_id: &str,
+        classification: MailClassification,
+    ) -> Result<(), RouteError>;
+}
+
+#[async_trait]
+impl<T> WorkflowOps for T
+where
+    T: JmapOps + Send + Sync + ?Sized,
+{
+    async fn apply_classification(
+        &self,
+        email_id: &str,
+        classification: MailClassification,
+    ) -> Result<(), RouteError> {
+        for candidate in MailClassification::ALL {
+            self.remove_keyword(email_id, candidate.keyword()).await?;
+        }
+        self.apply_keyword(email_id, classification.keyword()).await
     }
-    jmap.apply_keyword(email_id, classification.keyword()).await
+}
+
+#[allow(dead_code)]
+pub struct CacheWorkflowOps {
+    cache: Arc<CachedMail>,
+}
+
+#[allow(dead_code)]
+impl CacheWorkflowOps {
+    #[must_use]
+    pub fn new(cache: Arc<CachedMail>) -> Self {
+        Self { cache }
+    }
+}
+
+#[async_trait]
+impl WorkflowOps for CacheWorkflowOps {
+    async fn apply_classification(
+        &self,
+        email_id: &str,
+        classification: MailClassification,
+    ) -> Result<(), RouteError> {
+        let remove = MailClassification::ALL
+            .iter()
+            .map(|classification| Keyword::from_classification(*classification))
+            .collect::<Vec<_>>();
+        let add = [Keyword::from_classification(classification)];
+        let id = BackendMsgId::new(email_id.to_owned());
+        self.cache
+            .mutate_keywords(MailTarget::Message(&id), &add, &remove)
+            .await
+            .map_err(|err| RouteError::Jmap(err.to_string()))
+    }
+}
+
+#[allow(dead_code)]
+pub struct BackendWorkflowOps<'a> {
+    backend: &'a dyn MailBackend,
+}
+
+#[allow(dead_code)]
+impl<'a> BackendWorkflowOps<'a> {
+    #[must_use]
+    pub fn new(backend: &'a dyn MailBackend) -> Self {
+        Self { backend }
+    }
+}
+
+#[async_trait]
+impl WorkflowOps for BackendWorkflowOps<'_> {
+    async fn apply_classification(
+        &self,
+        email_id: &str,
+        classification: MailClassification,
+    ) -> Result<(), RouteError> {
+        let remove = MailClassification::ALL
+            .iter()
+            .map(|classification| Keyword::from_classification(*classification))
+            .collect::<Vec<_>>();
+        let add = [Keyword::from_classification(classification)];
+        self.backend
+            .set_keywords(&BackendMsgId::new(email_id.to_owned()), &add, &remove)
+            .await
+            .map_err(|err| RouteError::Jmap(err.to_string()))
+    }
 }
 
 async fn assign_label_name_to_thread(
