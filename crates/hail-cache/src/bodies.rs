@@ -34,18 +34,21 @@ impl CachedMail {
             return self.backend().fetch_blob(id).await.map_err(Into::into);
         }
 
-        if let Some((message_row_id, stored_ref)) =
+        if let Some((message_row_id, cached_blob_id)) =
             cached_attachment_ref(self.db(), self.account_id(), id).await?
         {
             touch_message(self.db(), message_row_id).await?;
-            if let Ok(blob_id) = BlobId::parse(&stored_ref) {
-                return Ok(Bytes::from(self.blobs().get(&blob_id).await?));
+            if let Some(cached_blob_id) = cached_blob_id {
+                if let Ok(blob_id) = BlobId::parse(&cached_blob_id) {
+                    return Ok(Bytes::from(self.blobs().get(&blob_id).await?));
+                }
             }
         }
 
         let bytes = self.backend().fetch_blob(id).await?;
         let blob_id = self.blobs().put(BlobKind::Att, &bytes).await?;
-        update_attachment_blob_ref(self.db(), self.account_id(), id, &blob_id.to_string()).await?;
+        update_attachment_cached_blob_id(self.db(), self.account_id(), id, &blob_id.to_string())
+            .await?;
         Ok(bytes)
     }
 }
@@ -71,12 +74,12 @@ async fn cached_attachment_ref(
     db: &sqlx::SqlitePool,
     account_id: i64,
     id: &BlobRef,
-) -> Result<Option<(i64, String)>> {
+) -> Result<Option<(i64, Option<String>)>> {
     let row = sqlx::query(
-        "SELECT messages.id AS message_id, attachments.blob_id AS blob_id \
+        "SELECT messages.id AS message_id, attachments.cached_blob_id AS cached_blob_id \
          FROM attachments \
          JOIN messages ON messages.id = attachments.message_id \
-         WHERE messages.account_id = ?1 AND attachments.blob_id = ?2 \
+         WHERE messages.account_id = ?1 AND attachments.backend_blob_ref = ?2 \
          LIMIT 1",
     )
     .bind(account_id)
@@ -84,7 +87,7 @@ async fn cached_attachment_ref(
     .fetch_optional(db)
     .await?;
 
-    Ok(row.map(|row| (row.get("message_id"), row.get("blob_id"))))
+    Ok(row.map(|row| (row.get("message_id"), row.get("cached_blob_id"))))
 }
 
 async fn store_message_body(cache: &CachedMail, raw: RawMessage) -> Result<()> {
@@ -105,18 +108,18 @@ async fn store_message_body(cache: &CachedMail, raw: RawMessage) -> Result<()> {
     Ok(())
 }
 
-async fn update_attachment_blob_ref(
+async fn update_attachment_cached_blob_id(
     db: &sqlx::SqlitePool,
     account_id: i64,
     backend_ref: &BlobRef,
     blob_id: &str,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE attachments SET blob_id = ?1 \
+        "UPDATE attachments SET cached_blob_id = ?1 \
          WHERE id IN ( \
            SELECT attachments.id FROM attachments \
            JOIN messages ON messages.id = attachments.message_id \
-           WHERE messages.account_id = ?2 AND attachments.blob_id = ?3 \
+           WHERE messages.account_id = ?2 AND attachments.backend_blob_ref = ?3 \
          )",
     )
     .bind(blob_id)
@@ -128,7 +131,7 @@ async fn update_attachment_blob_ref(
     sqlx::query(
         "UPDATE messages SET accessed_at = ?1 \
          WHERE account_id = ?2 AND id IN ( \
-           SELECT message_id FROM attachments WHERE blob_id = ?3 \
+           SELECT message_id FROM attachments WHERE cached_blob_id = ?3 \
          )",
     )
     .bind(Utc::now().to_rfc3339())

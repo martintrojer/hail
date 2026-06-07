@@ -244,7 +244,10 @@ async fn assert_blob_file_round_trips(
         path.display()
     );
 
-    let round_tripped = store.get(&blob_id).await.expect("read blob file through store");
+    let round_tripped = store
+        .get(&blob_id)
+        .await
+        .expect("read blob file through store");
     assert_eq!(round_tripped, expected.as_ref());
 }
 
@@ -297,16 +300,18 @@ async fn metadata_miss_populates_sqlite_rows_and_second_get_hits_cache() {
     assert_eq!(keyword_rows, 1);
     assert_eq!(attachment_rows, 1);
 
-    let attachment: (String, String, i64, Option<String>, i64) =
-        sqlx::query_as("SELECT filename, mime_type, size_bytes, blob_id, inline FROM attachments")
-            .fetch_one(cache.db())
-            .await
-            .expect("read attachment row");
+    let attachment: (String, String, i64, Option<String>, Option<String>, i64) = sqlx::query_as(
+        "SELECT filename, mime_type, size_bytes, backend_blob_ref, cached_blob_id, inline FROM attachments",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("read attachment row");
     assert_eq!(attachment.0, "msg-1.txt");
     assert_eq!(attachment.1, "text/plain");
     assert_eq!(attachment.2, 42);
     assert_eq!(attachment.3.as_deref(), Some("blob-msg-1"));
-    assert_eq!(attachment.4, 0);
+    assert!(attachment.4.is_none());
+    assert_eq!(attachment.5, 0);
 
     let body_blob: Option<String> = sqlx::query_scalar("SELECT body_blob_id FROM messages")
         .fetch_one(cache.db())
@@ -508,22 +513,81 @@ async fn bodies_attachment_blob_round_trips_through_blob_store() {
     assert_eq!(first, expected);
     assert_eq!(backend.stats().fetch_blob_calls, 1);
 
-    let stored_blob_id: String = sqlx::query_scalar(
-        "SELECT attachments.blob_id FROM attachments \
+    let (preserved_backend_ref, stored_blob_id): (String, String) = sqlx::query_as(
+        "SELECT attachments.backend_blob_ref, attachments.cached_blob_id FROM attachments \
          JOIN messages ON messages.id = attachments.message_id \
          WHERE messages.backend_msg_id = 'att-1'",
     )
     .fetch_one(cache.db())
     .await
-    .expect("read stored attachment blob id");
+    .expect("read stored attachment refs");
+    assert_eq!(preserved_backend_ref, backend_blob_ref.as_str());
     assert!(stored_blob_id.ends_with(".att"));
     assert_blob_file_round_trips(tempdir.path(), cache.blobs(), &stored_blob_id, &expected).await;
 
     let second = cache
-        .get_blob(&BlobRef::new(stored_blob_id))
+        .get_blob(&backend_blob_ref)
         .await
-        .expect("second attachment read hits blob store");
+        .expect("second attachment read by backend ref hits blob store");
     assert_eq!(second, expected);
+    assert_eq!(backend.stats().fetch_blob_calls, 1);
+}
+
+#[tokio::test]
+async fn attachment_cache_separates_backend_ref_from_local_blob_id_collision() {
+    let backend_blob_ref =
+        BlobRef::new("1242a0f78c81455c13652c0f76f8910a6787b1b2eda990992736d294cc3a4206.att");
+    let mut message = raw_message(
+        "collision-att-1",
+        "Attachment collision",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    message.blob_refs = vec![backend_blob_ref.clone()];
+    message.attachments[0].blob_ref = Some(backend_blob_ref.clone());
+
+    let backend_expected = Bytes::from_static(b"backend attachment bytes");
+    let wrong_local = Bytes::from_static(b"evil local bytes");
+    let mut backend_blobs = HashMap::new();
+    backend_blobs.insert(backend_blob_ref.clone(), backend_expected.clone());
+    let (cache, backend, _tempdir) =
+        fixture_with_blobs(vec![message], backend_blobs, MailCacheMode::Bounded).await;
+
+    let wrong_local_id = cache
+        .blobs()
+        .put(hail_core::BlobKind::Att, &wrong_local)
+        .await
+        .expect("seed colliding local blob id");
+    assert_eq!(wrong_local_id.to_string(), backend_blob_ref.as_str());
+
+    cache
+        .get_message(&BackendMsgId::new("collision-att-1"))
+        .await
+        .expect("populate metadata with backend blob ref that parses as local id");
+
+    let first = cache
+        .get_blob(&backend_blob_ref)
+        .await
+        .expect("first attachment read fetches backend blob despite local-id collision");
+    assert_eq!(first, backend_expected);
+    assert_ne!(first, wrong_local);
+    assert_eq!(backend.stats().fetch_blob_calls, 1);
+
+    let (preserved_backend_ref, cached_blob_id): (String, String) = sqlx::query_as(
+        "SELECT attachments.backend_blob_ref, attachments.cached_blob_id FROM attachments \
+         JOIN messages ON messages.id = attachments.message_id \
+         WHERE messages.backend_msg_id = 'collision-att-1'",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("read collision attachment refs");
+    assert_eq!(preserved_backend_ref, backend_blob_ref.as_str());
+    assert_ne!(cached_blob_id, backend_blob_ref.as_str());
+
+    let second = cache
+        .get_blob(&backend_blob_ref)
+        .await
+        .expect("second attachment read still looks up by backend ref");
+    assert_eq!(second, backend_expected);
     assert_eq!(backend.stats().fetch_blob_calls, 1);
 }
 
@@ -553,14 +617,15 @@ async fn bodies_full_mode_attachment_blob_writes_blob_file() {
     assert_eq!(got, expected);
     assert_eq!(backend.stats().fetch_blob_calls, 1);
 
-    let stored_blob_id: String = sqlx::query_scalar(
-        "SELECT attachments.blob_id FROM attachments \
+    let (preserved_backend_ref, stored_blob_id): (String, String) = sqlx::query_as(
+        "SELECT attachments.backend_blob_ref, attachments.cached_blob_id FROM attachments \
          JOIN messages ON messages.id = attachments.message_id \
          WHERE messages.backend_msg_id = 'full-att-1'",
     )
     .fetch_one(cache.db())
     .await
-    .expect("read full mode stored attachment blob id");
+    .expect("read full mode stored attachment refs");
+    assert_eq!(preserved_backend_ref, backend_blob_ref.as_str());
     assert!(stored_blob_id.ends_with(".att"));
     assert_blob_file_round_trips(tempdir.path(), cache.blobs(), &stored_blob_id, &expected).await;
 }

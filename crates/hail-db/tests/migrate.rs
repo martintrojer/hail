@@ -83,6 +83,8 @@ const EXPECTED_INDICES: &[&str] = &[
     "idx_messages_lru",
     "idx_message_keywords_keyword",
     "idx_attachments_message",
+    "idx_attachments_backend_blob_ref",
+    "idx_attachments_cached_blob_id",
     "idx_outbound_pending",
 ];
 

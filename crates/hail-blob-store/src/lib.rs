@@ -361,11 +361,12 @@ async fn load_referenced_blob_ids(db: &SqlitePool) -> Result<HashSet<String>> {
         }
     }
     if table_exists(db, "attachments").await? {
-        let rows = sqlx::query("SELECT blob_id FROM attachments WHERE blob_id IS NOT NULL")
-            .fetch_all(db)
-            .await?;
+        let rows =
+            sqlx::query("SELECT cached_blob_id FROM attachments WHERE cached_blob_id IS NOT NULL")
+                .fetch_all(db)
+                .await?;
         for row in rows {
-            let id: String = row.try_get("blob_id")?;
+            let id: String = row.try_get("cached_blob_id")?;
             refs.insert(id);
         }
     }
@@ -472,7 +473,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE attachments (blob_id TEXT)")
+        sqlx::query("CREATE TABLE attachments (cached_blob_id TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -481,7 +482,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO attachments (blob_id) VALUES (?1)")
+        sqlx::query("INSERT INTO attachments (cached_blob_id) VALUES (?1)")
             .bind(keep_att.to_string())
             .execute(&pool)
             .await
