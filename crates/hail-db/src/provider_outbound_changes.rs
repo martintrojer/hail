@@ -44,9 +44,9 @@ pub async fn enqueue_if_bidi_enabled(
         "INSERT INTO provider_outbound_changes \
          (provider_account_id, jmap_email_id, change_type, payload_json, created_at) \
          SELECT pa.id, ?1, ?2, ?3, ?4 \
-         FROM mail_accounts pa \
+         FROM provider_accounts pa \
          INNER JOIN provider_message_mappings pmm ON pmm.provider_account_id = pa.id \
-         WHERE pa.user_id = ?5 AND pa.backend_kind = 'gmail' \
+         WHERE pa.user_id = ?5 AND pa.provider_kind = 'gmail' \
            AND pa.sync_status != 'disconnected' \
            AND pa.bidirectional_sync_enabled = 1 \
            AND pmm.jmap_email_id = ?1 \
@@ -74,9 +74,9 @@ pub async fn enqueue_thread_if_bidi_enabled(
         "INSERT INTO provider_outbound_changes \
          (provider_account_id, jmap_email_id, change_type, payload_json, created_at) \
          SELECT pa.id, pmm.jmap_email_id, ?1, ?2, ?3 \
-         FROM mail_accounts pa \
+         FROM provider_accounts pa \
          INNER JOIN provider_message_mappings pmm ON pmm.provider_account_id = pa.id \
-         WHERE pa.user_id = ?4 AND pa.backend_kind = 'gmail' \
+         WHERE pa.user_id = ?4 AND pa.provider_kind = 'gmail' \
            AND pa.sync_status != 'disconnected' \
            AND pa.bidirectional_sync_enabled = 1 \
            AND pmm.jmap_thread_id = ?5 \

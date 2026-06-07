@@ -609,10 +609,10 @@ async fn compose_routes_connected_provider_from_address_via_gmail_smtp() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "alice@gmail.example").await;
     sqlx::query(
-        "INSERT INTO mail_accounts \
-         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
           granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+         VALUES (?1, 'account-test', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
                  ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
     )
     .bind(user_id)
@@ -658,10 +658,10 @@ async fn compose_provider_from_without_send_scope_marks_reauth() {
     let (state, key) = fixture_state().await;
     let (user_id, sid) = seed_session(&state, &key, "alice@gmail.example").await;
     sqlx::query(
-        "INSERT INTO mail_accounts \
-         (user_id, jmap_account_id, backend_kind, provider_kind, provider_account_id, provider_email, display_email, \
+        "INSERT INTO provider_accounts \
+         (user_id, jmap_account_id, provider_kind, provider_account_id, provider_email, display_email, \
           granted_scopes_json, refresh_token_enc, sync_status, created_at, updated_at) \
-         VALUES (?1, 'account-test', 'gmail', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
+         VALUES (?1, 'account-test', 'gmail', 'alice@gmail.example', 'alice@gmail.example', 'alice@gmail.example', \
                  ?2, X'0102030405060708091011121314151617181920212223242526272829', 'active', ?3, ?3)",
     )
     .bind(user_id)
@@ -684,7 +684,7 @@ async fn compose_provider_from_without_send_scope_marks_reauth() {
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert!(smtp.calls().is_empty());
-    let status: String = sqlx::query_scalar("SELECT sync_status FROM mail_accounts LIMIT 1")
+    let status: String = sqlx::query_scalar("SELECT sync_status FROM provider_accounts LIMIT 1")
         .fetch_one(&state.db)
         .await
         .unwrap();

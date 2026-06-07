@@ -200,7 +200,7 @@ async fn load_pending_changes(
          INNER JOIN provider_message_mappings pmm \
            ON pmm.provider_account_id = poc.provider_account_id \
           AND pmm.jmap_email_id = poc.jmap_email_id \
-         INNER JOIN mail_accounts pa ON pa.id = poc.provider_account_id \
+         INNER JOIN provider_accounts pa ON pa.id = poc.provider_account_id \
          WHERE poc.applied_at IS NULL \
            AND pa.bidirectional_sync_enabled = 1 \
            AND (poc.attempt_count = 0 OR datetime(poc.created_at, '+' || MIN(?1, (1 << MIN(poc.attempt_count, 10))) || ' seconds') <= datetime(?2)) \

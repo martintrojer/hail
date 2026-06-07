@@ -153,8 +153,8 @@ pub(crate) async fn load_gmail_incremental_sync_account_by_id(
 ) -> Result<Option<GmailIncrementalSyncAccount>, sqlx::Error> {
     sqlx::query_as::<_, (i64, i64, Option<String>)>(
         "SELECT id, user_id, last_profile_history_id \
-         FROM mail_accounts \
-         WHERE id = ?1 AND backend_kind = 'gmail' AND sync_status != 'disconnected'",
+         FROM provider_accounts \
+         WHERE id = ?1 AND provider_kind = 'gmail' AND sync_status != 'disconnected'",
     )
     .bind(provider_account_row_id)
     .fetch_optional(db)
@@ -617,7 +617,7 @@ async fn persist_history_cursor(
 ) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE mail_accounts SET last_profile_history_id = COALESCE(?1, last_profile_history_id), profile_synced_at = ?2, updated_at = ?2 WHERE id = ?3",
+        "UPDATE provider_accounts SET last_profile_history_id = COALESCE(?1, last_profile_history_id), profile_synced_at = ?2, updated_at = ?2 WHERE id = ?3",
     )
     .bind(history_id)
     .bind(now)
@@ -644,7 +644,7 @@ async fn mark_sync_attempt_started(
     provider_account_id: i64,
 ) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("UPDATE mail_accounts SET sync_status = 'active', last_sync_attempted_at = ?1, last_error_class = NULL, last_error_message = NULL, updated_at = ?1 WHERE id = ?2")
+    sqlx::query("UPDATE provider_accounts SET sync_status = 'active', last_sync_attempted_at = ?1, last_error_class = NULL, last_error_message = NULL, updated_at = ?1 WHERE id = ?2")
         .bind(now)
         .bind(provider_account_id)
         .execute(db)
@@ -659,7 +659,7 @@ async fn mark_sync_succeeded(
 ) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now().to_rfc3339();
     let status = if completed { "active" } else { "initial_sync" };
-    sqlx::query("UPDATE mail_accounts SET sync_status = ?1, last_sync_succeeded_at = ?2, last_error_class = NULL, last_error_message = NULL, updated_at = ?2 WHERE id = ?3")
+    sqlx::query("UPDATE provider_accounts SET sync_status = ?1, last_sync_succeeded_at = ?2, last_error_class = NULL, last_error_message = NULL, updated_at = ?2 WHERE id = ?3")
         .bind(status)
         .bind(now)
         .bind(provider_account_id)
@@ -680,7 +680,7 @@ async fn mark_sync_error(
     } else {
         "error"
     };
-    sqlx::query("UPDATE mail_accounts SET sync_status = ?1, last_error_class = ?2, last_error_message = ?3, updated_at = ?4 WHERE id = ?5")
+    sqlx::query("UPDATE provider_accounts SET sync_status = ?1, last_error_class = ?2, last_error_message = ?3, updated_at = ?4 WHERE id = ?5")
         .bind(status)
         .bind(class)
         .bind(message)
