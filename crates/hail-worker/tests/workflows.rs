@@ -409,17 +409,11 @@ async fn provider_import_routing_runs_workflows_after_dedupe_import() {
         "inbox-id",
     );
 
-    let outcome = router
+    router
         .route_imported_rfc822(conn.as_mut(), alice_id, &imported, &request)
         .await
         .expect("route import");
 
-    assert_eq!(
-        outcome,
-        RouteOutcome::Classified {
-            classification: MailClassification::Feed
-        }
-    );
     assert!(jmap.keywords_for("email-imported").contains("$hail_feed"));
     let assignment_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM thread_labels WHERE user_id = ?1 AND thread_id = 'thread-imported'",

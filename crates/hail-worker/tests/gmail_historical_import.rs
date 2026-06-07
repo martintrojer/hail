@@ -381,7 +381,7 @@ impl hail_worker::provider_import_routing::Rfc822ImportRouter for BlockingRouter
         _user_id: i64,
         _imported: &ImportedRfc822Message,
         _request: &Rfc822ImportRequest,
-    ) -> Result<hail_worker::screener::RouteOutcome, RouteError> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.entered.wait().await;
         std::future::pending().await
     }

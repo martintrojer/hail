@@ -1055,6 +1055,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "hail-gmail"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures-util",
+ "hail-backend",
+ "hail-core",
+ "hail-db",
+ "hail-jmap",
+ "hail-test",
+ "lettre",
+ "mail-parser",
+ "rand 0.9.4",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "hail-jmap"
 version = "0.1.0"
 dependencies = [
@@ -1112,6 +1142,7 @@ dependencies = [
  "futures-util",
  "hail-core",
  "hail-db",
+ "hail-gmail",
  "hail-jmap",
  "hail-test",
  "lettre",

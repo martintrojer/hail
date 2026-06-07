@@ -1,6 +1,6 @@
 [package]
-name = "hail-worker"
-description = "Tokio worker: JMAP push consumer and scheduler."
+name = "hail-gmail"
+description = "Gmail MailBackend implementation and provider import primitives."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,29 +8,24 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+hail-backend = { path = "../hail-backend" }
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
-hail-gmail = { path = "../hail-gmail" }
-# hail-jmap is currently an empty crate; wired in now so future tasks (jmap-eventsource)
-# don't need to touch Cargo.toml. Verified to compile via `cargo check -p hail-jmap`.
 hail-jmap = { path = "../hail-jmap" }
 mail-parser = "0.11"
 
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-anyhow = "1"
-thiserror = "2"
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
-futures-util = "0.3"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-rand = "0.9"
-secrecy = "0.10"
 async-trait = "0.1"
-ahash = "0.8"
+futures-util = "0.3"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
+rand = "0.9"
 sha2 = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json"] }
 base64 = "0.22"

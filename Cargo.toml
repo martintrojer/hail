@@ -5,6 +5,7 @@ members = [
     "crates/hail-cache",
     "crates/hail-core",
     "crates/hail-db",
+    "crates/hail-gmail",
     "crates/hail-blob-store",
     "crates/hail-jmap",
     "crates/hail-api",
