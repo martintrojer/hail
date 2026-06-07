@@ -87,6 +87,15 @@ pub struct MailSearchResult {
     pub unread: bool,
     pub received_at: Option<DateTime<Utc>>,
     pub labels: Vec<CachedLabel>,
+    pub source: SearchResultSource,
+}
+
+/// Where a search result was served from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchResultSource {
+    Local,
+    Backend,
 }
 
 /// Render-ready thread placeholder returned by `CachedMail::get_thread`.

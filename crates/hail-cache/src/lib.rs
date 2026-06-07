@@ -9,6 +9,7 @@ mod bodies;
 mod error;
 mod policy;
 mod readthrough;
+mod search;
 mod sync;
 mod types;
 mod writethrough;
@@ -23,7 +24,8 @@ pub use sqlx::SqlitePool;
 use std::sync::Arc;
 pub use types::{
     BlockedTracker, CachedLabel, CachedMessage, FeedRenderMode, MailSearchResult, MailTarget,
-    MailView, MailViewItem, MailViewListOpts, MailViewPage, SearchMailbox, Thread,
+    MailView, MailViewItem, MailViewListOpts, MailViewPage, SearchMailbox, SearchResultSource,
+    Thread,
 };
 
 pub use error::CacheError;
@@ -126,10 +128,7 @@ impl CachedMail {
         mailbox: Option<SearchMailbox>,
         limit: usize,
     ) -> Result<Vec<MailSearchResult>> {
-        let _ = (q, mailbox, limit);
-        Err(CacheError::NotImplemented {
-            operation: "search",
-        })
+        self.search_cached_mail(q, mailbox, limit).await
     }
 
     /// Mutate backend/cache keywords on a message or thread target.
