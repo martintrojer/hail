@@ -11,6 +11,8 @@ authors.workspace = true
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
 hail-gmail = { path = "../hail-gmail" }
+hail-cache = { path = "../hail-cache" }
+hail-blob-store = { path = "../hail-blob-store" }
 hail-backend = { path = "../hail-backend" }
 # hail-jmap is currently an empty crate; wired in now so future tasks (jmap-eventsource)
 # don't need to touch Cargo.toml. Verified to compile via `cargo check -p hail-jmap`.

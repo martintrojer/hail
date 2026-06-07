@@ -7,6 +7,7 @@
 
 mod app_events;
 mod backoff;
+mod cache_eviction_sweeper;
 mod catchup;
 mod changes;
 mod crypto;
