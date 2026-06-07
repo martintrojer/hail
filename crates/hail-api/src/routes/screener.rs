@@ -1,31 +1,26 @@
 //! Screener view + decision endpoints.
 //!
 //! `GET /api/views/screener` starts from the sidecar `screener_rules`
-//! table, then best-effort enriches each pending sender from JMAP messages
-//! currently in the hail-owned `Screener` mailbox. If JMAP is unavailable
-//! (expired token, Stalwart down, missing mailbox), the endpoint keeps the
+//! table, then best-effort enriches each pending sender from CachedMail. If mail enrichment is unavailable
+//! (expired token, backend down, sparse cache), the endpoint keeps the
 //! sidecar-only fallback shape so the Screener UI remains usable.
 //!
 //! `POST /api/screener/decisions` writes the user's sender decision to the
 //! same table. Applying that decision to historical messages is injected via
-//! [`ScreenerBackfill`] so tests can assert calls without a live JMAP server;
-//! production uses [`JmapScreenerBackfill`] to move/keyword existing Screener
+//! [`ScreenerBackfill`] so tests can assert calls without a live mail backend;
+//! production uses [`CacheScreenerBackfill`] to move/keyword existing Screener
 //! messages as soon as the sender is approved or denied.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::extract::{Extension, Path, Query, State, rejection::JsonRejection};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 pub use hail_core::screener::Classification;
 use hail_core::screener::normalize_sender;
-use hail_jmap::{SCREENER_MAILBOX_NAME, mailbox_id_by_name};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -34,9 +29,6 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::{
-    MAIL_VIEW_PROPERTIES, collapse_preview_whitespace, jmap_session, preview_from_email,
-};
 use crate::routes::response::{bad_request, internal};
 use crate::routes::undo::{NewUndoAction, UndoToken, create_undo_action};
 use crate::state::AppState;
@@ -45,20 +37,19 @@ use crate::state::AppState;
 pub const TAG: &str = "screener";
 
 const DEFAULT_APPROVAL_CLASSIFICATION: Classification = Classification::Imbox;
-const SCREENER_RICH_EMAIL_GET_CHUNK_SIZE: usize = 20;
 const SCREENER_LIGHT_EMAIL_GET_CHUNK_SIZE: usize = 200;
 const DEFAULT_SCREENER_LIMIT: usize = 50;
 const MAX_SCREENER_LIMIT: usize = 100;
 
 /// Dependency-injection seam for applying a screener decision to existing
-/// mail from the sender. Production uses [`JmapScreenerBackfill`]; tests can
+/// mail from the sender. Production uses [`CacheScreenerBackfill`]; tests can
 /// inject fakes with [`router_with_backfill`].
 #[async_trait]
 pub trait ScreenerBackfill: Send + Sync + 'static {
     async fn apply(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         sender: &str,
         decision: ScreenerDecision,
         classify_as: Option<Classification>,
@@ -67,13 +58,13 @@ pub trait ScreenerBackfill: Send + Sync + 'static {
     async fn apply_undo_deny(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         sender: &str,
         classify_as: Classification,
     ) -> Result<(), ScreenerBackfillError> {
         self.apply(
             state,
-            user,
+            _user,
             sender,
             ScreenerDecision::Approve,
             Some(classify_as),
@@ -85,29 +76,31 @@ pub trait ScreenerBackfill: Send + Sync + 'static {
 /// Production backfill implementation that applies a screener decision to
 /// existing messages from the sender currently parked in the hail-owned
 /// `Screener` mailbox.
-pub struct JmapScreenerBackfill;
+pub struct CacheScreenerBackfill;
+
+pub type JmapScreenerBackfill = CacheScreenerBackfill;
 
 #[async_trait]
-impl ScreenerBackfill for JmapScreenerBackfill {
+impl ScreenerBackfill for CacheScreenerBackfill {
     async fn apply(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         sender: &str,
         decision: ScreenerDecision,
         classify_as: Option<Classification>,
     ) -> Result<(), ScreenerBackfillError> {
-        apply_jmap_backfill(state, user, sender, decision, classify_as).await
+        apply_cache_backfill(state, sender, decision, classify_as).await
     }
 
     async fn apply_undo_deny(
         &self,
         state: &AppState,
-        user: &AuthUser,
+        _user: &AuthUser,
         sender: &str,
         classify_as: Classification,
     ) -> Result<(), ScreenerBackfillError> {
-        apply_jmap_undo_deny_backfill(state, user, sender, classify_as).await
+        apply_cache_undo_deny_backfill(state, sender, classify_as).await
     }
 }
 
@@ -117,12 +110,12 @@ pub struct ScreenerBackfillError(pub String);
 
 /// Build protected screener routes.
 pub fn router() -> Router<AppState> {
-    Router::from(openapi_router_with_backfill(Arc::new(JmapScreenerBackfill)))
+    Router::from(openapi_router_with_backfill(Arc::new(CacheScreenerBackfill)))
 }
 
 /// Build the OpenAPI-tracked router for production screener endpoints.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
-    openapi_router_with_backfill(Arc::new(JmapScreenerBackfill))
+    openapi_router_with_backfill(Arc::new(CacheScreenerBackfill))
 }
 
 /// Test/helper router that injects a fake backfill implementation.
@@ -380,7 +373,7 @@ async fn get_screener(
         tracing::warn!(
             user_id = user.id,
             error = %err,
-            "screener JMAP preview enrichment failed; using sidecar fallback"
+            "screener mail preview enrichment failed; using sidecar fallback"
         );
     }
 
@@ -622,379 +615,64 @@ async fn post_undo_deny(
 
 async fn enrich_screener_senders(
     state: &AppState,
-    user: &AuthUser,
+    _user: &AuthUser,
     senders: &mut [ScreenerSender],
 ) -> Result<(), String> {
     if senders.is_empty() {
         return Ok(());
     }
-
-    let session = jmap_session(state, user.jmap_token.clone()).await?;
-
-    let screener_mailbox_id = mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
+    let sender_keys = senders.iter().map(|sender| sender.sender.clone()).collect::<Vec<_>>();
+    let previews = state
+        .mail
+        .screener_previews(&sender_keys, SCREENER_LIGHT_EMAIL_GET_CHUNK_SIZE)
         .await
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("{SCREENER_MAILBOX_NAME} mailbox not found"))?;
-
-    let mut sender_email_ids = Vec::with_capacity(senders.len());
-    let mut email_ids = Vec::new();
-
-    for sender in senders.iter_mut() {
-        let ids =
-            jmap_email_ids_from_sender_in_mailbox(&session, &sender.sender, &screener_mailbox_id)
-                .await
-                .map_err(|err| err.0)?;
-
-        sender.message_count = i64::try_from(ids.len())
+        .map_err(|err| err.to_string())?;
+    for (sender, preview) in senders.iter_mut().zip(previews) {
+        sender.message_count = i64::try_from(preview.message_count)
             .map_err(|_| "too many matching screener messages to render in the view".to_string())?;
-        if ids.is_empty() {
-            sender.latest_preview = None;
-            sender.emails.clear();
-        } else {
-            email_ids.extend(ids.iter().cloned());
-        }
-        sender_email_ids.push(ids);
-    }
-
-    if email_ids.is_empty() {
-        return Ok(());
-    }
-
-    email_ids.sort();
-    email_ids.dedup();
-
-    let mut rich_ids: Vec<String> = sender_email_ids
-        .iter()
-        .filter_map(|ids| ids.first().cloned())
-        .collect();
-    rich_ids.sort();
-    rich_ids.dedup();
-    let rich_id_set: HashSet<&str> = rich_ids.iter().map(String::as_str).collect();
-    let light_ids: Vec<String> = email_ids
-        .into_iter()
-        .filter(|id| !rich_id_set.contains(id.as_str()))
-        .collect();
-
-    let mut emails_by_id = HashMap::new();
-    hydrate_screener_emails(
-        &session,
-        &rich_ids,
-        SCREENER_RICH_EMAIL_GET_CHUNK_SIZE,
-        true,
-        &mut emails_by_id,
-    )
-    .await?;
-    hydrate_screener_emails(
-        &session,
-        &light_ids,
-        SCREENER_LIGHT_EMAIL_GET_CHUNK_SIZE,
-        false,
-        &mut emails_by_id,
-    )
-    .await?;
-
-    for (sender, ids) in senders.iter_mut().zip(sender_email_ids) {
-        let emails: Vec<_> = ids
-            .into_iter()
-            .filter_map(|id| emails_by_id.get(&id).cloned())
-            .collect();
-
+        let emails = preview.emails.into_iter().map(|email| {
+            let summary = ScreenerEmail {
+                email_id: email.email_id.as_str().to_owned(),
+                subject: email.subject.clone(),
+                preview: email.preview.clone(),
+                received_at: email.received_at,
+            };
+            let latest = ScreenerLatestPreview {
+                subject: email.subject,
+                preview: email.preview,
+                from: email.from,
+                received_at: email.received_at,
+            };
+            (summary, latest)
+        }).collect::<Vec<_>>();
         sender.latest_preview = emails.first().map(|(_, preview)| preview.clone());
         sender.emails = emails.into_iter().map(|(summary, _)| summary).collect();
     }
-
     Ok(())
 }
 
-async fn hydrate_screener_emails(
-    session: &hail_jmap::Session,
-    email_ids: &[String],
-    chunk_size: usize,
-    fetch_body_values: bool,
-    emails_by_id: &mut HashMap<String, (ScreenerEmail, ScreenerLatestPreview)>,
-) -> Result<(), String> {
-    if email_ids.is_empty() {
-        return Ok(());
-    }
-
-    for chunk in email_ids.chunks(chunk_size) {
-        let mut request = session.client().build();
-        let get_email = request.get_email();
-        get_email
-            .ids(chunk.to_vec())
-            .properties(MAIL_VIEW_PROPERTIES.iter().cloned());
-        if fetch_body_values {
-            get_email.arguments().fetch_text_body_values(true);
-            get_email.arguments().fetch_html_body_values(true);
-        }
-        let mut response = request
-            .send_get_email()
-            .await
-            .map_err(|err| err.to_string())?;
-
-        for email in response.take_list() {
-            let Some(email_id) = email.id().map(ToOwned::to_owned) else {
-                continue;
-            };
-            let received_at = email
-                .received_at()
-                .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
-            let preview_text = if fetch_body_values {
-                preview_from_email(&email)
-            } else {
-                collapse_preview_whitespace(email.preview().unwrap_or_default())
-            };
-            let summary = ScreenerEmail {
-                email_id: email_id.clone(),
-                subject: email.subject().unwrap_or_default().to_string(),
-                preview: preview_text.clone(),
-                received_at,
-            };
-            let preview = ScreenerLatestPreview {
-                subject: summary.subject.clone(),
-                preview: preview_text,
-                from: format_from(email.from()),
-                received_at,
-            };
-            emails_by_id.insert(email_id, (summary, preview));
-        }
-    }
-
-    Ok(())
-}
-
-fn format_from(from: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {
-    from.and_then(|addresses| addresses.first())
-        .map(|address| match address.name() {
-            Some(name) if !name.is_empty() => format!("{} <{}>", name, address.email()),
-            _ => address.email().to_string(),
-        })
-        .unwrap_or_default()
-}
-
-async fn apply_jmap_backfill(
+async fn apply_cache_backfill(
     state: &AppState,
-    user: &AuthUser,
     sender: &str,
     decision: ScreenerDecision,
     classify_as: Option<Classification>,
 ) -> Result<(), ScreenerBackfillError> {
-    use hail_jmap::jmap_client::mailbox::Role;
-
-    let session = jmap_session(state, user.jmap_token.clone())
-        .await
-        .map_err(backfill_error)?;
-
-    let screener_mailbox_id = mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
-        .await
-        .map_err(backfill_error)?
-        .ok_or_else(|| {
-            ScreenerBackfillError(format!("{SCREENER_MAILBOX_NAME} mailbox not found"))
-        })?;
-    let target_mailbox_id = match decision {
-        ScreenerDecision::Approve => jmap_mailbox_id_by_role(&session, Role::Inbox)
-            .await?
-            .ok_or_else(|| ScreenerBackfillError("inbox mailbox not found".to_string()))?,
-        ScreenerDecision::Deny => jmap_mailbox_id_by_role(&session, Role::Trash)
-            .await?
-            .ok_or_else(|| ScreenerBackfillError("trash mailbox not found".to_string()))?,
+    let decision = match decision {
+        ScreenerDecision::Approve => hail_cache::ScreenerDecision::Approve,
+        ScreenerDecision::Deny => hail_cache::ScreenerDecision::Deny,
     };
-
-    let email_ids =
-        jmap_email_ids_from_sender_in_mailbox(&session, sender, &screener_mailbox_id).await?;
-    if email_ids.is_empty() {
-        tracing::debug!(
-            user_id = user.id,
-            sender = %sender,
-            decision = %decision.response_value(),
-            "screener history backfill found no matching messages"
-        );
-        return Ok(());
-    }
-
-    let classification_keyword = match decision {
-        ScreenerDecision::Approve => Some(
-            classify_as
-                .ok_or_else(|| {
-                    ScreenerBackfillError(
-                        "approve screener backfill missing classification".to_string(),
-                    )
-                })?
-                .keyword(),
-        ),
-        ScreenerDecision::Deny => None,
-    };
-
-    let mut request = session.client().build();
-    {
-        let set = request.set_email();
-        for email_id in &email_ids {
-            let update = set.update(email_id.clone());
-            update
-                .mailbox_id(&screener_mailbox_id, false)
-                .mailbox_id(&target_mailbox_id, true)
-                .keyword("$hail_screened", true);
-            if let Some(keyword) = classification_keyword {
-                update.keyword(keyword, true);
-            }
-        }
-    }
-
-    let mut response = request.send_set_email().await.map_err(backfill_error)?;
-    for email_id in &email_ids {
-        response.updated(email_id).map_err(backfill_error)?;
-    }
-
-    tracing::info!(
-        user_id = user.id,
-        sender = %sender,
-        decision = %decision.response_value(),
-        moved = email_ids.len(),
-        "screener history backfill applied"
-    );
-    Ok(())
+    let classify_as = classify_as.map(|classification| hail_backend::Keyword::new(classification.keyword()));
+    state.mail.apply_screener_backfill(sender, decision, classify_as).await.map_err(backfill_error)
 }
 
-async fn apply_jmap_undo_deny_backfill(
+async fn apply_cache_undo_deny_backfill(
     state: &AppState,
-    user: &AuthUser,
     sender: &str,
     classify_as: Classification,
 ) -> Result<(), ScreenerBackfillError> {
-    use hail_jmap::jmap_client::mailbox::Role;
-
-    let session = jmap_session(state, user.jmap_token.clone())
+    state.mail.undo_screener_deny(sender, hail_backend::Keyword::new(classify_as.keyword()))
         .await
-        .map_err(backfill_error)?;
-
-    let inbox_mailbox_id = jmap_mailbox_id_by_role(&session, Role::Inbox)
-        .await?
-        .ok_or_else(|| ScreenerBackfillError("inbox mailbox not found".to_string()))?;
-    let trash_mailbox_id = jmap_mailbox_id_by_role(&session, Role::Trash)
-        .await?
-        .ok_or_else(|| ScreenerBackfillError("trash mailbox not found".to_string()))?;
-    let screener_mailbox_id = mailbox_id_by_name(&session, SCREENER_MAILBOX_NAME)
-        .await
-        .map_err(backfill_error)?;
-
-    let mut email_ids =
-        jmap_email_ids_from_sender_in_mailbox(&session, sender, &trash_mailbox_id).await?;
-    if let Some(screener_mailbox_id) = &screener_mailbox_id {
-        let mut screener_ids =
-            jmap_email_ids_from_sender_in_mailbox(&session, sender, screener_mailbox_id).await?;
-        email_ids.append(&mut screener_ids);
-    }
-    email_ids.sort();
-    email_ids.dedup();
-
-    if email_ids.is_empty() {
-        tracing::debug!(
-            user_id = user.id,
-            sender = %sender,
-            "screener undo deny found no matching messages"
-        );
-        return Ok(());
-    }
-
-    let mut request = session.client().build();
-    {
-        let set = request.set_email();
-        for email_id in &email_ids {
-            let update = set.update(email_id.clone());
-            update
-                .mailbox_id(&trash_mailbox_id, false)
-                .mailbox_id(&inbox_mailbox_id, true)
-                .keyword("$hail_screened", true)
-                .keyword(classify_as.keyword(), true);
-            if let Some(screener_mailbox_id) = &screener_mailbox_id {
-                update.mailbox_id(screener_mailbox_id, false);
-            }
-            for stale_keyword in stale_classification_keywords(classify_as) {
-                update.keyword(stale_keyword, false);
-            }
-        }
-    }
-
-    let mut response = request.send_set_email().await.map_err(backfill_error)?;
-    for email_id in &email_ids {
-        response.updated(email_id).map_err(backfill_error)?;
-    }
-
-    tracing::info!(
-        user_id = user.id,
-        sender = %sender,
-        classify_as = classify_as.db_value(),
-        moved = email_ids.len(),
-        "screener undo deny backfill applied"
-    );
-    Ok(())
-}
-
-fn stale_classification_keywords(
-    classify_as: Classification,
-) -> impl Iterator<Item = &'static str> {
-    [
-        Classification::Imbox,
-        Classification::Feed,
-        Classification::Papertrail,
-    ]
-    .into_iter()
-    .filter(move |candidate| *candidate != classify_as)
-    .map(Classification::keyword)
-}
-
-async fn jmap_mailbox_id_by_role(
-    session: &hail_jmap::Session,
-    role: hail_jmap::jmap_client::mailbox::Role,
-) -> Result<Option<String>, ScreenerBackfillError> {
-    use hail_jmap::jmap_client::mailbox::query as mailbox_query;
-
-    let mut query = session
-        .client()
-        .mailbox_query(Some(mailbox_query::Filter::role(role)), None::<Vec<_>>)
-        .await
-        .map_err(backfill_error)?;
-    Ok(query.take_ids().into_iter().next())
-}
-
-async fn jmap_email_ids_from_sender_in_mailbox(
-    session: &hail_jmap::Session,
-    sender: &str,
-    mailbox_id: &str,
-) -> Result<Vec<String>, ScreenerBackfillError> {
-    use hail_jmap::jmap_client::core::query::Filter;
-    use hail_jmap::jmap_client::email::query as email_query;
-
-    const PAGE_LIMIT: usize = 256;
-    let mut ids = Vec::new();
-
-    loop {
-        let position = i32::try_from(ids.len()).map_err(|_| {
-            ScreenerBackfillError("too many matching screener messages to backfill".to_string())
-        })?;
-        let filter = Filter::and([
-            email_query::Filter::in_mailbox(mailbox_id.to_string()),
-            email_query::Filter::from(sender.to_string()),
-        ]);
-
-        let mut request = session.client().build();
-        request
-            .query_email()
-            .filter(filter)
-            .sort([email_query::Comparator::received_at().descending()])
-            .position(position)
-            .limit(PAGE_LIMIT);
-        let mut query = request.send_query_email().await.map_err(backfill_error)?;
-        let mut page = query.take_ids();
-        let page_len = page.len();
-        ids.append(&mut page);
-
-        if page_len < PAGE_LIMIT {
-            break;
-        }
-    }
-
-    Ok(ids)
+        .map_err(backfill_error)
 }
 
 fn backfill_error(err: impl std::fmt::Display) -> ScreenerBackfillError {

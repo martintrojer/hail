@@ -1,6 +1,6 @@
 //! Attachment listing endpoint for the All Files SPA view.
 //!
-//! `GET /api/attachments` asks JMAP for recent messages with attachments and
+//! `GET /api/attachments` asks CachedMail for recent messages with attachments and
 //! returns a flat, UI-ready list of file metadata with thread/message context.
 //! Blob download URLs are scoped through hail-api so the browser never talks to
 //! Stalwart/JMAP directly.
@@ -13,7 +13,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -21,7 +21,6 @@ use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouterExt};
 use utoipa_axum::routes;
 
 use crate::middleware::auth::AuthUser;
-use crate::routes::jmap_helpers::jmap_session;
 use crate::routes::response::{bad_request, internal, not_found};
 use crate::state::AppState;
 
@@ -47,119 +46,6 @@ pub trait AttachmentProvider: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, AttachmentError>> + Send + 'a>>;
 }
 
-pub struct JmapAttachmentProvider;
-
-impl AttachmentProvider for JmapAttachmentProvider {
-    fn list<'a>(
-        &'a self,
-        state: &'a AppState,
-        token: SecretString,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<AttachmentItem>, AttachmentError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            use hail_jmap::jmap_client::email::{Property, query as email_query};
-
-            let session = jmap_session(state, token)
-                .await
-                .map_err(AttachmentError::provider)?;
-
-            let mut request = session.client().build();
-            request
-                .query_email()
-                .filter(email_query::Filter::has_attachment(true))
-                .sort([email_query::Comparator::received_at().descending()])
-                .limit(limit);
-            let mut query = request
-                .send_query_email()
-                .await
-                .map_err(|err| AttachmentError::provider(err.to_string()))?;
-            let ids = query.take_ids();
-            if ids.is_empty() {
-                return Ok(Vec::new());
-            }
-
-            let mut request = session.client().build();
-            request.get_email().ids(ids).properties([
-                Property::Id,
-                Property::ThreadId,
-                Property::Subject,
-                Property::From,
-                Property::ReceivedAt,
-                Property::Preview,
-                Property::Attachments,
-            ]);
-            let mut response = request
-                .send_get_email()
-                .await
-                .map_err(|err| AttachmentError::provider(err.to_string()))?;
-
-            let mut items = Vec::new();
-            for email in response.take_list() {
-                let email_id = email.id().unwrap_or_default().to_string();
-                let thread_id = email.thread_id().unwrap_or_default().to_string();
-                if email_id.is_empty() || thread_id.is_empty() {
-                    continue;
-                }
-
-                let context = AttachmentContext {
-                    thread_id,
-                    email_id,
-                    subject: email.subject().unwrap_or_default().to_string(),
-                    from: format_from(email.from()),
-                    received_at: email
-                        .received_at()
-                        .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
-                    preview: email.preview().unwrap_or_default().to_string(),
-                };
-
-                for part in email.attachments().unwrap_or_default() {
-                    let Some(blob_id) = part.blob_id().filter(|value| !value.is_empty()) else {
-                        continue;
-                    };
-                    items.push(AttachmentItem {
-                        blob_id: blob_id.to_string(),
-                        name: attachment_name(part),
-                        type_: part
-                            .content_type()
-                            .unwrap_or("application/octet-stream")
-                            .to_string(),
-                        size: part.size(),
-                        download_url: format!("/api/attachments/{}/download", urlencoding(blob_id)),
-                        context: context.clone(),
-                    });
-                }
-            }
-
-            Ok(items)
-        })
-    }
-
-    fn download<'a>(
-        &'a self,
-        state: &'a AppState,
-        token: SecretString,
-        blob_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, AttachmentError>> + Send + 'a>> {
-        Box::pin(async move {
-            let session = jmap_session(state, token)
-                .await
-                .map_err(AttachmentError::provider)?;
-            match session.client().download(blob_id).await {
-                Ok(bytes) => Ok(Some(bytes)),
-                Err(err) => {
-                    let message = err.to_string();
-                    if message.contains("not found") || message.contains("notFound") {
-                        Ok(None)
-                    } else {
-                        Err(AttachmentError::provider(message))
-                    }
-                }
-            }
-        })
-    }
-}
-
 pub struct CacheAttachmentProvider;
 
 impl AttachmentProvider for CacheAttachmentProvider {
@@ -171,22 +57,12 @@ impl AttachmentProvider for CacheAttachmentProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<AttachmentItem>, AttachmentError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let page = state
+            state
                 .mail
-                .list_view(
-                    hail_cache::MailView::Imbox,
-                    None,
-                    limit,
-                    hail_cache::MailViewListOpts::default(),
-                )
+                .list_attachments(limit)
                 .await
-                .map_err(|err| AttachmentError::provider(err.to_string()))?;
-            Ok(page
-                .items
-                .into_iter()
-                .flat_map(attachment_items_from_view_item)
-                .take(limit)
-                .collect())
+                .map(|items| items.into_iter().map(attachment_item_from_cached).collect())
+                .map_err(|err| AttachmentError::provider(err.to_string()))
         })
     }
 
@@ -207,8 +83,23 @@ impl AttachmentProvider for CacheAttachmentProvider {
     }
 }
 
-fn attachment_items_from_view_item(_item: hail_cache::MailViewItem) -> Vec<AttachmentItem> {
-    Vec::new()
+fn attachment_item_from_cached(item: hail_cache::CachedAttachment) -> AttachmentItem {
+    let blob_id = item.blob_ref.as_str().to_owned();
+    AttachmentItem {
+        blob_id: blob_id.clone(),
+        name: item.filename,
+        type_: item.mime_type,
+        size: usize::try_from(item.size_bytes).unwrap_or(usize::MAX),
+        download_url: format!("/api/attachments/{}/download", urlencoding(&blob_id)),
+        context: AttachmentContext {
+            thread_id: item.context.thread_id,
+            email_id: item.context.message_id.as_str().to_owned(),
+            subject: item.context.subject,
+            from: item.context.from,
+            received_at: item.context.received_at,
+            preview: item.context.preview,
+        },
+    }
 }
 
 #[derive(Debug)]
@@ -380,31 +271,6 @@ fn is_safe_inline_image_type(content_type: &str) -> bool {
         content_type.as_str(),
         "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/avif"
     )
-}
-
-pub(crate) fn attachment_name(part: &hail_jmap::jmap_client::email::EmailBodyPart) -> String {
-    part.name()
-        .filter(|name| !name.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            part.part_id()
-                .filter(|part_id| !part_id.trim().is_empty())
-                .map(|part_id| format!("attachment-{part_id}"))
-                .unwrap_or_else(|| "attachment".to_string())
-        })
-}
-
-fn format_from(addresses: Option<&[hail_jmap::jmap_client::email::EmailAddress]>) -> String {
-    addresses
-        .and_then(|addresses| addresses.first())
-        .map(|address| {
-            let email = address.email();
-            match address.name().filter(|name| !name.trim().is_empty()) {
-                Some(name) => format!("{name} <{email}>"),
-                None => email.to_string(),
-            }
-        })
-        .unwrap_or_default()
 }
 
 fn urlencoding(input: &str) -> String {

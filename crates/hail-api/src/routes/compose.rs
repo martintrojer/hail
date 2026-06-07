@@ -19,10 +19,8 @@ use utoipa_axum::routes;
 
 use crate::audit;
 use crate::middleware::auth::{AuthSession, AuthUser};
-use crate::routes::jmap_helpers::{jmap_session, provider_error};
 use crate::routes::outbound::{
-    OutboundHeaders, create_draft_email, looks_like_email, render_compose_body, reply_subject,
-    set_rendered_body, submit_email, validate_attachments, validate_recipients, validate_subject,
+    render_compose_body, validate_attachments, validate_recipients, validate_subject,
 };
 pub use crate::routes::outbound::{OutboundMessage, ReplyHeaders};
 use crate::routes::response::{bad_request, error_response, internal, not_found};
@@ -80,128 +78,153 @@ pub trait Composer: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReplyContext>, ComposeError>> + Send + 'a>>;
 }
 
-pub struct JmapComposer;
+pub struct CacheComposer;
 
-impl Composer for JmapComposer {
+pub type JmapComposer = CacheComposer;
+
+impl Composer for CacheComposer {
     fn create_draft<'a>(
         &'a self,
         state: &'a AppState,
-        token: SecretString,
+        _token: SecretString,
         from: &'a str,
         message: OutboundMessage,
     ) -> Pin<Box<dyn Future<Output = Result<String, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
-            let effective_from = message.from.as_deref().unwrap_or(from);
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            create_draft_email::<ComposeError, _>(
-                &session,
-                OutboundHeaders::new(
-                    effective_from,
-                    &message.to,
-                    &message.cc,
-                    &message.bcc,
-                    &message.subject,
-                )
-                .with_reply(message.reply.as_ref()),
-                |email| set_rendered_body(email, &message.body),
-            )
-            .await
+            state
+                .mail
+                .create_draft(draft_payload(from, &message))
+                .await
+                .map(|id| id.as_str().to_owned())
+                .map_err(|err| ComposeError::Provider(err.to_string()))
         })
     }
 
     fn submit<'a>(
         &'a self,
         state: &'a AppState,
-        token: SecretString,
+        _token: SecretString,
         from: &'a str,
         email_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            submit_email::<ComposeError>(&session, from, email_id).await
+            let draft = state
+                .mail
+                .get_draft(&hail_backend::BackendMsgId::new(email_id.to_owned()))
+                .await
+                .map_err(|err| ComposeError::Provider(err.to_string()))?
+                .ok_or_else(|| ComposeError::Provider("draft not found".to_string()))?;
+            let payload = hail_cache::OutboundPayload {
+                rfc822: rfc822_bytes(
+                    from,
+                    &draft.to,
+                    &draft.cc,
+                    &draft.bcc,
+                    &draft.subject,
+                    &draft.body_html,
+                    None,
+                ),
+                envelope: hail_backend::Envelope { mail_from: from.to_owned(), rcpt_to: draft.to },
+            };
+            state
+                .mail
+                .submit_composed(payload)
+                .await
+                .map(|submission| Some(submission.submission_id.as_str().to_owned()))
+                .map_err(|err| ComposeError::Provider(err.to_string()))
+        })
+    }
+
+    fn submit_message<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        _user_id: i64,
+        from: &'a str,
+        _email_id: &'a str,
+        message: &'a OutboundMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<String>, ComposeError>> + Send + 'a>> {
+        Box::pin(async move {
+            let effective_from = message.from.as_deref().unwrap_or(from);
+            let payload = hail_cache::OutboundPayload {
+                rfc822: rfc822_bytes(
+                    effective_from,
+                    &message.to,
+                    &message.cc,
+                    &message.bcc,
+                    &message.subject,
+                    &message.body.html,
+                    message.reply.as_ref(),
+                ),
+                envelope: hail_backend::Envelope { mail_from: effective_from.to_owned(), rcpt_to: message.to.clone() },
+            };
+            state
+                .mail
+                .submit_composed(payload)
+                .await
+                .map(|submission| Some(submission.submission_id.as_str().to_owned()))
+                .map_err(|err| ComposeError::Provider(err.to_string()))
         })
     }
 
     fn thread_context<'a>(
         &'a self,
         state: &'a AppState,
-        token: SecretString,
+        _token: SecretString,
         thread_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ReplyContext>, ComposeError>> + Send + 'a>> {
         Box::pin(async move {
-            let session = jmap_session(state, token).await.map_err(provider_error)?;
-            use hail_jmap::jmap_client::core::query::Filter;
-            use hail_jmap::jmap_client::email::query as email_query;
-
-            let mut query = session
-                .client()
-                .email_query(
-                    Some(Filter::from(email_query::Filter::in_thread(thread_id))),
-                    Some([email_query::Comparator::received_at().ascending()]),
-                )
+            state
+                .mail
+                .reply_context(thread_id)
                 .await
-                .map_err(provider_error)?;
-            let email_ids = query.take_ids();
-            if email_ids.is_empty() {
-                return Ok(None);
-            }
-            let mut email_request = session.client().build();
-            email_request
-                .get_email()
-                .ids(email_ids.clone())
-                .properties([
-                    hail_jmap::jmap_client::email::Property::Id,
-                    hail_jmap::jmap_client::email::Property::Subject,
-                    hail_jmap::jmap_client::email::Property::From,
-                    hail_jmap::jmap_client::email::Property::MessageId,
-                    hail_jmap::jmap_client::email::Property::References,
-                ]);
-            let mut email_response = email_request
-                .send_get_email()
-                .await
-                .map_err(provider_error)?;
-            let mut emails_by_id = email_response
-                .take_list()
-                .into_iter()
-                .map(|email| (email.id().unwrap_or_default().to_string(), email))
-                .collect::<std::collections::HashMap<_, _>>();
-            let Some(last_email) = email_ids
-                .into_iter()
-                .rev()
-                .find_map(|id| emails_by_id.remove(&id))
-            else {
-                return Ok(None);
-            };
-            let mut references = last_email
-                .references()
-                .map(<[String]>::to_vec)
-                .unwrap_or_default();
-            let in_reply_to = last_email
-                .message_id()
-                .map(<[String]>::to_vec)
-                .unwrap_or_default();
-            for id in &in_reply_to {
-                if !references.iter().any(|existing| existing == id) {
-                    references.push(id.clone());
-                }
-            }
-            let subject = reply_subject(last_email.subject().unwrap_or_default());
-            let to = last_email
-                .from()
-                .unwrap_or_default()
-                .iter()
-                .map(|addr| addr.email().to_string())
-                .filter(|addr| looks_like_email(addr))
-                .collect();
-            Ok(Some(ReplyContext {
-                to,
-                subject,
-                in_reply_to,
-                references,
-            }))
+                .map(|context| context.map(|context| ReplyContext { to: context.to, subject: context.subject, in_reply_to: context.in_reply_to, references: context.references }))
+                .map_err(|err| ComposeError::Provider(err.to_string()))
         })
     }
 }
+
+fn draft_payload(from: &str, message: &OutboundMessage) -> hail_cache::DraftPayload {
+    hail_cache::DraftPayload {
+        from: message.from.clone().unwrap_or_else(|| from.to_owned()),
+        to: message.to.clone(),
+        cc: message.cc.clone(),
+        bcc: message.bcc.clone(),
+        subject: message.subject.clone(),
+        plain_text: message.body.plain_text.clone(),
+        html: message.body.html.clone(),
+        body_markdown: message.body.plain_text.clone(),
+    }
+}
+
+fn rfc822_bytes(
+    from: &str,
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
+    subject: &str,
+    html: &str,
+    reply: Option<&ReplyHeaders>,
+) -> Vec<u8> {
+    let mut headers = vec![
+        format!("From: {}", sanitize_header(from)),
+        format!("To: {}", sanitize_header(&to.join(", "))),
+        format!("Subject: {}", sanitize_header(subject)),
+        "MIME-Version: 1.0".to_string(),
+    ];
+    if !cc.is_empty() { headers.push(format!("Cc: {}", sanitize_header(&cc.join(", ")))); }
+    if !bcc.is_empty() { headers.push(format!("Bcc: {}", sanitize_header(&bcc.join(", ")))); }
+    if let Some(reply) = reply {
+        if let Some(id) = reply.in_reply_to.first() { headers.push(format!("In-Reply-To: {}", sanitize_header(id))); }
+        if !reply.references.is_empty() { headers.push(format!("References: {}", sanitize_header(&reply.references.join(" ")))); }
+    }
+    headers.push("Content-Type: text/html; charset=utf-8".to_string());
+    headers.push(String::new());
+    headers.push(html.to_owned());
+    headers.join("\r\n").into_bytes()
+}
+
+fn sanitize_header(value: &str) -> String { value.replace(['\r', '\n'], " ") }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplyContext {
@@ -228,7 +251,7 @@ impl crate::routes::jmap_helpers::ProviderError for ComposeError {
 
 pub fn router() -> Router<AppState> {
     router_with_composer(Arc::new(ProviderRoutingComposer::new(
-        JmapComposer,
+        CacheComposer,
         LiveGmailOutboundSmtpFactory,
     )))
 }
@@ -236,12 +259,12 @@ pub fn router() -> Router<AppState> {
 /// Build the OpenAPI-tracked router for the production composer.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
     openapi_router_with_composer(Arc::new(ProviderRoutingComposer::new(
-        JmapComposer,
+        CacheComposer,
         LiveGmailOutboundSmtpFactory,
     )))
 }
 
-pub struct ProviderRoutingComposer<C = JmapComposer, S = LiveGmailOutboundSmtpFactory> {
+pub struct ProviderRoutingComposer<C = CacheComposer, S = LiveGmailOutboundSmtpFactory> {
     inner: C,
     smtp_factory: S,
 }

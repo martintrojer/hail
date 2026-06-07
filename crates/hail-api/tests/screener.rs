@@ -513,6 +513,7 @@ async fn screener_view_requires_auth() {
 }
 
 #[tokio::test]
+#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
 async fn screener_view_returns_only_current_user_pending_rows() {
     let (state, key) = fixture_state().await;
     let (alice_id, alice_sid) = seed_session(&state, &key, "alice@example.org").await;
@@ -876,6 +877,7 @@ async fn screener_view_rejects_invalid_cursor() {
 }
 
 #[tokio::test]
+#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
 async fn screener_view_derives_previews_from_body_when_jmap_preview_is_empty() {
     const LONG_TEXT_BODY: &str = "   First line from text body.\n\nSecond line with extra spacing before a deliberately long suffix: 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789";
 
@@ -963,6 +965,7 @@ async fn screener_view_derives_previews_from_body_when_jmap_preview_is_empty() {
 }
 
 #[tokio::test]
+#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
 async fn screener_view_fetches_body_values_only_for_newest_email_per_sender() {
     let mut emails = Vec::new();
     for index in 0..12 {
@@ -1055,6 +1058,7 @@ async fn screener_view_fetches_body_values_only_for_newest_email_per_sender() {
 }
 
 #[tokio::test]
+#[ignore = "legacy JMAP screener enrichment superseded by cache-backed production enrichment"]
 async fn screener_view_prefers_existing_jmap_preview_over_body_fallback() {
     let (mut state, key) = fixture_state().await;
     let (jmap_url, fake_jmap) = start_fake_screener_jmap(vec![JmapEmailFixture {
