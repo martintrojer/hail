@@ -1014,6 +1014,7 @@ dependencies = [
  "hail-blob-store",
  "hail-core",
  "hail-db",
+ "mail-parser",
  "serde",
  "sqlx",
  "tempfile",

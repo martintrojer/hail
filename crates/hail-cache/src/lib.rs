@@ -5,6 +5,7 @@
 //! `readthrough`; downstream body/blob, write-through, sync, and eviction work
 //! should add sibling modules instead of growing this facade.
 
+mod bodies;
 mod error;
 mod policy;
 mod readthrough;
@@ -109,18 +110,12 @@ impl CachedMail {
 
     /// Fetch the raw RFC822 body for one message.
     pub async fn get_message_body(&self, id: &BackendMsgId) -> Result<Bytes> {
-        let _ = id;
-        Err(CacheError::NotImplemented {
-            operation: "get_message_body",
-        })
+        self.get_message_body_readthrough(id).await
     }
 
     /// Fetch an attachment/body blob by backend blob reference.
     pub async fn get_blob(&self, id: &BlobRef) -> Result<Bytes> {
-        let _ = id;
-        Err(CacheError::NotImplemented {
-            operation: "get_blob",
-        })
+        self.get_blob_readthrough(id).await
     }
 
     /// Search mail, shaped like today's `SearchProvider::search`.

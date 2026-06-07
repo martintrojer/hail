@@ -14,6 +14,7 @@ hail-backend = { path = "../hail-backend" }
 hail-blob-store = { path = "../hail-blob-store" }
 hail-core = { path = "../hail-core" }
 hail-db = { path = "../hail-db" }
+mail-parser = "0.11"
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 thiserror = "2"

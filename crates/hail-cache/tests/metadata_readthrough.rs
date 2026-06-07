@@ -28,17 +28,19 @@ static CAPABILITIES: Capabilities = Capabilities {
 struct BackendStats {
     list_calls: usize,
     get_calls: usize,
+    fetch_blob_calls: usize,
 }
 
 #[derive(Clone)]
 struct FakeBackend {
     messages: Arc<HashMap<BackendMsgId, RawMessage>>,
+    blobs: Arc<HashMap<BlobRef, Bytes>>,
     order: Arc<Vec<BackendMsgId>>,
     stats: Arc<Mutex<BackendStats>>,
 }
 
 impl FakeBackend {
-    fn new(messages: Vec<RawMessage>) -> Self {
+    fn with_blobs(messages: Vec<RawMessage>, blobs: HashMap<BlobRef, Bytes>) -> Self {
         let order = messages
             .iter()
             .map(|message| message.id.clone())
@@ -49,6 +51,7 @@ impl FakeBackend {
             .collect::<HashMap<_, _>>();
         Self {
             messages: Arc::new(messages),
+            blobs: Arc::new(blobs),
             order: Arc::new(order),
             stats: Arc::new(Mutex::new(BackendStats::default())),
         }
@@ -89,8 +92,15 @@ impl MailBackend for FakeBackend {
             })
     }
 
-    async fn fetch_blob(&self, _id: &BlobRef) -> hail_backend::Result<Bytes> {
-        Ok(Bytes::new())
+    async fn fetch_blob(&self, id: &BlobRef) -> hail_backend::Result<Bytes> {
+        self.stats.lock().expect("stats lock").fetch_blob_calls += 1;
+        self.blobs
+            .get(id)
+            .cloned()
+            .ok_or_else(|| hail_backend::Error::NotFound {
+                kind: "blob",
+                id: id.as_str().to_owned(),
+            })
     }
 
     async fn set_keywords(
@@ -146,6 +156,14 @@ async fn fixture(
     messages: Vec<RawMessage>,
     mode: MailCacheMode,
 ) -> (CachedMail, FakeBackend, TempDir) {
+    fixture_with_blobs(messages, HashMap::new(), mode).await
+}
+
+async fn fixture_with_blobs(
+    messages: Vec<RawMessage>,
+    blobs_by_ref: HashMap<BlobRef, Bytes>,
+    mode: MailCacheMode,
+) -> (CachedMail, FakeBackend, TempDir) {
     let pool = hail_db::connect("sqlite::memory:")
         .await
         .expect("connect in-memory sqlite");
@@ -154,7 +172,7 @@ async fn fixture(
 
     let tempdir = tempfile::tempdir().expect("create temp blob dir");
     let blobs = Arc::new(FilesystemBlobStore::new(tempdir.path())) as Arc<dyn BlobStore>;
-    let backend = FakeBackend::new(messages);
+    let backend = FakeBackend::with_blobs(messages, blobs_by_ref);
     let policy = CachePolicy::new(mode, 90, 50_000, 5 * 1024 * 1024, MailBackfill::Off);
     let cache = CachedMail::new(pool, blobs, Box::new(backend.clone()), policy);
     (cache, backend, tempdir)
@@ -215,17 +233,6 @@ async fn constructs_cached_mail_with_sqlite_blob_store_and_backend() {
     assert_eq!(cache.backend().capabilities(), &CAPABILITIES);
     let _: &SqlitePool = cache.db();
     let _: &dyn BlobStore = cache.blobs();
-
-    let err = cache
-        .get_message_body(&BackendMsgId::new("missing"))
-        .await
-        .expect_err("body cache is not implemented by metadata task");
-    assert!(matches!(
-        err,
-        CacheError::NotImplemented {
-            operation: "get_message_body"
-        }
-    ));
 }
 
 #[tokio::test]
@@ -351,19 +358,117 @@ async fn cache_off_proxies_backend_and_writes_no_rows() {
 }
 
 #[tokio::test]
+async fn bodies_body_miss_fetches_stores_and_second_read_hits_blob_store_without_backend() {
+    let message = raw_message("body-1", "Body", vec![MailClassification::Imbox.keyword()]);
+    let expected = message.rfc822.clone();
+    let (cache, backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+
+    let first = cache
+        .get_message_body(&BackendMsgId::new("body-1"))
+        .await
+        .expect("first body read fetches backend");
+    assert_eq!(first, expected);
+    assert_eq!(backend.stats().get_calls, 1);
+
+    let row: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT body_blob_id, body_text FROM messages WHERE backend_msg_id = 'body-1'",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("read body cache row");
+    assert!(row.0.as_deref().is_some_and(|id| id.ends_with(".eml")));
+    assert!(
+        row.1
+            .as_deref()
+            .is_some_and(|text| text.contains("body intentionally not cached"))
+    );
+
+    let second = cache
+        .get_message_body(&BackendMsgId::new("body-1"))
+        .await
+        .expect("second body read hits blob store");
+    assert_eq!(second, expected);
+    assert_eq!(backend.stats().get_calls, 1);
+}
+
+#[tokio::test]
+async fn bodies_cache_off_fetches_without_storing_rows_or_blobs() {
+    let message = raw_message(
+        "off-body-1",
+        "Off Body",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let expected = message.rfc822.clone();
+    let (cache, backend, tempdir) = fixture(vec![message], MailCacheMode::Off).await;
+
+    let got = cache
+        .get_message_body(&BackendMsgId::new("off-body-1"))
+        .await
+        .expect("off mode body read");
+    assert_eq!(got, expected);
+    assert_eq!(backend.stats().get_calls, 1);
+
+    let message_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+        .fetch_one(cache.db())
+        .await
+        .expect("count messages");
+    assert_eq!(message_rows, 0);
+    assert_eq!(
+        std::fs::read_dir(tempdir.path())
+            .expect("read temp blob root")
+            .count(),
+        0,
+        "off mode should not create blob files"
+    );
+}
+
+#[tokio::test]
+async fn bodies_attachment_blob_round_trips_through_blob_store() {
+    let message = raw_message(
+        "att-1",
+        "Attachment",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let backend_blob_ref = BlobRef::new("blob-att-1");
+    let expected = Bytes::from_static(b"attachment bytes");
+    let mut backend_blobs = HashMap::new();
+    backend_blobs.insert(backend_blob_ref.clone(), expected.clone());
+    let (cache, backend, _tempdir) =
+        fixture_with_blobs(vec![message], backend_blobs, MailCacheMode::Bounded).await;
+
+    cache
+        .get_message(&BackendMsgId::new("att-1"))
+        .await
+        .expect("populate metadata with backend blob ref");
+
+    let first = cache
+        .get_blob(&backend_blob_ref)
+        .await
+        .expect("first attachment read fetches backend blob");
+    assert_eq!(first, expected);
+    assert_eq!(backend.stats().fetch_blob_calls, 1);
+
+    let stored_blob_id: String = sqlx::query_scalar(
+        "SELECT attachments.blob_id FROM attachments \
+         JOIN messages ON messages.id = attachments.message_id \
+         WHERE messages.backend_msg_id = 'att-1'",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("read stored attachment blob id");
+    assert!(stored_blob_id.ends_with(".att"));
+
+    let second = cache
+        .get_blob(&BlobRef::new(stored_blob_id))
+        .await
+        .expect("second attachment read hits blob store");
+    assert_eq!(second, expected);
+    assert_eq!(backend.stats().fetch_blob_calls, 1);
+}
+
+#[tokio::test]
 async fn downstream_methods_remain_not_implemented() {
     let (cache, _backend, _tempdir) = fixture(Vec::new(), MailCacheMode::Bounded).await;
-
-    let blob_err = cache
-        .get_blob(&BlobRef::new("blob"))
-        .await
-        .expect_err("blob task is downstream");
-    assert!(matches!(
-        blob_err,
-        CacheError::NotImplemented {
-            operation: "get_blob"
-        }
-    ));
 
     let search_err = cache
         .search("hello", None, 10)
