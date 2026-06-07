@@ -389,6 +389,7 @@ impl hail_worker::provider_import_routing::Rfc822ImportRouter for BlockingRouter
 
 fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) -> RawGmailMessage {
     RawGmailMessage {
+        payload: None,
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),
@@ -402,6 +403,7 @@ fn raw_message(id: &str, thread_id: &str, history_id: &str, message_id: &str) ->
 
 fn raw_fixture_message(fixture: GmailImportFixture) -> RawGmailMessage {
     RawGmailMessage {
+        payload: None,
         id: fixture.gmail_id.to_owned(),
         thread_id: Some(fixture.thread_id.to_owned()),
         history_id: Some(fixture.history_id.to_owned()),
@@ -2085,6 +2087,7 @@ async fn failed_message_import_redacts_tokens_and_raw_body_from_mapping_and_audi
             result_size_estimate: Some(1),
         }],
         vec![RawGmailMessage {
+            payload: None,
             id: "gmail-hostile-leak".to_owned(),
             thread_id: Some("thread-hostile".to_owned()),
             history_id: Some("history-hostile".to_owned()),
@@ -2843,6 +2846,7 @@ fn raw_from_message(
     from: &str,
 ) -> RawGmailMessage {
     RawGmailMessage {
+        payload: None,
         id: id.to_owned(),
         thread_id: Some(thread_id.to_owned()),
         history_id: Some(history_id.to_owned()),

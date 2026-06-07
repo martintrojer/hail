@@ -78,6 +78,67 @@ pub trait SearchProvider: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>>;
 }
 
+pub struct CacheMailViewProvider;
+
+impl MailViewProvider for CacheMailViewProvider {
+    fn list<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        view: MailView,
+        cursor: Option<String>,
+        limit: usize,
+        opts: MailViewListOpts,
+    ) -> Pin<Box<dyn Future<Output = Result<MailViewPage, MailViewError>> + Send + 'a>> {
+        Box::pin(async move {
+            state
+                .mail
+                .list_view(view.into(), cursor, limit, opts.into())
+                .await
+                .map(Into::into)
+                .map_err(|err| MailViewError::provider(err.to_string()))
+        })
+    }
+
+    fn count<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        view: MailView,
+        unread_only: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<usize, MailViewError>> + Send + 'a>> {
+        Box::pin(async move {
+            state
+                .mail
+                .count_view(view.into(), unread_only)
+                .await
+                .map_err(|err| MailViewError::provider(err.to_string()))
+        })
+    }
+}
+
+pub struct CacheSearchProvider;
+
+impl SearchProvider for CacheSearchProvider {
+    fn search<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        q: &'a str,
+        mailbox: Option<SearchMailbox>,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
+        Box::pin(async move {
+            state
+                .mail
+                .search(q, mailbox.map(Into::into), limit)
+                .await
+                .map(|items| items.into_iter().map(Into::into).collect())
+                .map_err(|err| SearchError::provider(err.to_string()))
+        })
+    }
+}
+
 pub struct JmapMailViewProvider;
 
 impl MailViewProvider for JmapMailViewProvider {
@@ -375,16 +436,18 @@ fn group_mail_view_emails(
         .map(|(thread_id, (message_count, unread_count, email))| {
             let email_id = required_jmap_field(email.id(), "id")
                 .map_err(|err| MailViewError::malformed_email(err.field))?;
-            let feed_render = (view == MailView::Feed).then(|| render_feed_body(&email, feed_render_opts));
-            let (feed_html, feed_html_with_images, feed_blocked_trackers, feed_blocked_images) = match feed_render {
-                Some(render) => (
-                    Some(render.html),
-                    Some(render.html_with_remote_images),
-                    Some(render.blocked_trackers),
-                    Some(render.blocked_images),
-                ),
-                None => (None, None, None, None),
-            };
+            let feed_render =
+                (view == MailView::Feed).then(|| render_feed_body(&email, feed_render_opts));
+            let (feed_html, feed_html_with_images, feed_blocked_trackers, feed_blocked_images) =
+                match feed_render {
+                    Some(render) => (
+                        Some(render.html),
+                        Some(render.html_with_remote_images),
+                        Some(render.blocked_trackers),
+                        Some(render.blocked_images),
+                    ),
+                    None => (None, None, None, None),
+                };
             let received_at_sort = email.received_at().unwrap_or(0);
 
             Ok(GroupedMailViewThread {
@@ -652,8 +715,12 @@ impl SearchProvider for JmapSearchProvider {
                 .await
                 .map_err(|err| SearchError::provider(err.to_string()))?;
 
-            let grouped = group_mail_view_emails(response.take_list(), MailView::Imbox, FeedRenderOpts::default())
-                .map_err(|err| SearchError::provider(err.0))?;
+            let grouped = group_mail_view_emails(
+                response.take_list(),
+                MailView::Imbox,
+                FeedRenderOpts::default(),
+            )
+            .map_err(|err| SearchError::provider(err.0))?;
             Ok(grouped
                 .into_iter()
                 .take(limit)
@@ -679,14 +746,17 @@ impl SearchProvider for JmapSearchProvider {
 
 pub fn router() -> Router<AppState> {
     Router::from(openapi_router_with_providers(
-        Arc::new(JmapMailViewProvider),
-        Arc::new(JmapSearchProvider),
+        Arc::new(CacheMailViewProvider),
+        Arc::new(CacheSearchProvider),
     ))
 }
 
 /// Build the OpenAPI-tracked router for production mail views and search.
 pub fn openapi_router() -> OpenApiRouter<AppState> {
-    openapi_router_with_providers(Arc::new(JmapMailViewProvider), Arc::new(JmapSearchProvider))
+    openapi_router_with_providers(
+        Arc::new(CacheMailViewProvider),
+        Arc::new(CacheSearchProvider),
+    )
 }
 
 pub fn router_with_provider<P>(provider: Arc<P>) -> Router<AppState>
@@ -750,6 +820,137 @@ impl SearchProvider for EmptySearchProvider {
         _limit: usize,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MailSearchResult>, SearchError>> + Send + 'a>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+impl From<MailView> for hail_cache::MailView {
+    fn from(value: MailView) -> Self {
+        match value {
+            MailView::Imbox => Self::Imbox,
+            MailView::Feed => Self::Feed,
+            MailView::Papertrail => Self::Papertrail,
+            MailView::Drafts => Self::Drafts,
+            MailView::Trash => Self::Trash,
+            MailView::Spam => Self::Spam,
+            MailView::Archive => Self::Archive,
+        }
+    }
+}
+
+impl From<hail_cache::MailView> for MailViewClassification {
+    fn from(value: hail_cache::MailView) -> Self {
+        match value {
+            hail_cache::MailView::Imbox => Self::Imbox,
+            hail_cache::MailView::Feed => Self::Feed,
+            hail_cache::MailView::Papertrail => Self::Papertrail,
+            hail_cache::MailView::Drafts => Self::Drafts,
+            hail_cache::MailView::Trash => Self::Trash,
+            hail_cache::MailView::Spam => Self::Spam,
+            hail_cache::MailView::Archive => Self::Archive,
+        }
+    }
+}
+
+impl From<MailViewListOpts> for hail_cache::MailViewListOpts {
+    fn from(value: MailViewListOpts) -> Self {
+        Self {
+            feed_render: if value.feed_render.allow_remote_images {
+                hail_cache::FeedRenderMode::WithRemoteImages
+            } else {
+                hail_cache::FeedRenderMode::WithoutRemoteImages
+            },
+        }
+    }
+}
+
+impl From<SearchMailbox> for hail_cache::SearchMailbox {
+    fn from(value: SearchMailbox) -> Self {
+        match value {
+            SearchMailbox::Imbox => Self::Imbox,
+            SearchMailbox::Feed => Self::Feed,
+            SearchMailbox::Papertrail => Self::Papertrail,
+            SearchMailbox::Archive => Self::Archive,
+            SearchMailbox::Trash => Self::Trash,
+            SearchMailbox::Drafts => Self::Drafts,
+        }
+    }
+}
+
+impl From<hail_cache::MailViewPage> for MailViewPage {
+    fn from(value: hail_cache::MailViewPage) -> Self {
+        Self {
+            items: value.items.into_iter().map(Into::into).collect(),
+            next_cursor: value.next_cursor,
+        }
+    }
+}
+
+impl From<hail_cache::MailViewItem> for MailViewItem {
+    fn from(value: hail_cache::MailViewItem) -> Self {
+        Self {
+            thread_id: value.thread_id,
+            email_id: value.email_id,
+            from: value.from,
+            to: value.to,
+            cc: value.cc,
+            bcc: value.bcc,
+            subject: value.subject,
+            preview: value.preview,
+            received_at: value.received_at,
+            unread: value.unread,
+            message_count: value.message_count,
+            unread_count: value.unread_count,
+            classification: value.classification.into(),
+            has_notes: false,
+            labels: value.labels.into_iter().map(Into::into).collect(),
+            feed_html: value.feed_html,
+            feed_html_with_images: value.feed_html_with_images,
+            feed_blocked_trackers: value.feed_blocked_trackers.map(|trackers| {
+                trackers
+                    .into_iter()
+                    .map(|tracker| FeedBlockedTrackerResponse {
+                        src: tracker.src,
+                        reason: tracker.reason,
+                    })
+                    .collect()
+            }),
+            feed_blocked_images: value.feed_blocked_images,
+        }
+    }
+}
+
+impl From<hail_cache::MailSearchResult> for MailSearchResult {
+    fn from(value: hail_cache::MailSearchResult) -> Self {
+        Self {
+            thread_id: value.thread_id,
+            email_id: value.email_id,
+            from: value.from,
+            subject: value.subject,
+            preview: value.preview,
+            message_count: value.message_count,
+            unread_count: value.unread_count,
+            unread: value.unread,
+            received_at: value.received_at,
+            labels: value.labels.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<hail_cache::CachedLabel> for LabelResponse {
+    fn from(value: hail_cache::CachedLabel) -> Self {
+        let path_segments = value.name.split('/').map(str::to_owned).collect::<Vec<_>>();
+        Self {
+            id: value.id,
+            leaf_name: path_segments
+                .last()
+                .cloned()
+                .unwrap_or_else(|| value.name.clone()),
+            path_segments,
+            name: value.name,
+            source: crate::routes::labels::LabelSourceResponse::Manual,
+            color: value.color,
+            thread_count: 0,
+        }
     }
 }
 
@@ -898,19 +1099,19 @@ pub struct BubbleUpViewItem {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SearchResult {
-        Mail {
-            thread_id: String,
-            email_id: String,
-            from: String,
-            subject: String,
-            preview: String,
-            message_count: usize,
-            unread_count: usize,
-            unread: bool,
-            #[schema(value_type = Option<String>, format = DateTime)]
-            received_at: Option<DateTime<Utc>>,
-            labels: Vec<LabelResponse>,
-        },
+    Mail {
+        thread_id: String,
+        email_id: String,
+        from: String,
+        subject: String,
+        preview: String,
+        message_count: usize,
+        unread_count: usize,
+        unread: bool,
+        #[schema(value_type = Option<String>, format = DateTime)]
+        received_at: Option<DateTime<Utc>>,
+        labels: Vec<LabelResponse>,
+    },
     ContactNote {
         address: String,
         markdown: String,
@@ -1483,7 +1684,14 @@ async fn load_view_counts(
     provider: Arc<dyn MailViewProvider>,
 ) -> Result<ViewCountsResponse, String> {
     let imbox_page = provider
-        .list(state, user.jmap_token.clone(), MailView::Imbox, None, MAX_LIMIT, MailViewListOpts::default())
+        .list(
+            state,
+            user.jmap_token.clone(),
+            MailView::Imbox,
+            None,
+            MAX_LIMIT,
+            MailViewListOpts::default(),
+        )
         .await
         .map_err(|err| err.0)?;
     let imbox_new = count_imbox_new(state, user.id, imbox_page.items).await?;
@@ -1610,15 +1818,22 @@ async fn get_view(
     let limit = query.normalized_limit();
 
     let page = match provider
-        .list(&state, user.jmap_token.clone(), view, query.cursor, limit, MailViewListOpts {
-            feed_render: FeedRenderOpts {
-                allow_remote_images: view == MailView::Feed
-                    && crate::routes::users::load_user_prefs(&state.db, user.id)
-                        .await
-                        .map(|prefs| prefs.feed_load_remote_images)
-                        .unwrap_or(false),
+        .list(
+            &state,
+            user.jmap_token.clone(),
+            view,
+            query.cursor,
+            limit,
+            MailViewListOpts {
+                feed_render: FeedRenderOpts {
+                    allow_remote_images: view == MailView::Feed
+                        && crate::routes::users::load_user_prefs(&state.db, user.id)
+                            .await
+                            .map(|prefs| prefs.feed_load_remote_images)
+                            .unwrap_or(false),
+                },
             },
-        })
+        )
         .await
     {
         Ok(items) => items,
@@ -1745,7 +1960,14 @@ async fn get_unread_sectioned_view(
     };
 
     let mut page = provider
-        .list(state, user.jmap_token.clone(), view, None, fetch_limit, MailViewListOpts::default())
+        .list(
+            state,
+            user.jmap_token.clone(),
+            view,
+            None,
+            fetch_limit,
+            MailViewListOpts::default(),
+        )
         .await?;
     let mut items = std::mem::take(&mut page.items);
 
@@ -1792,8 +2014,8 @@ async fn get_unread_sectioned_view(
         }
     }
 
-    let next_cursor = (seen_total > seen_offset + seen.len())
-        .then(|| (seen_offset + seen.len()).to_string());
+    let next_cursor =
+        (seen_total > seen_offset + seen.len()).then(|| (seen_offset + seen.len()).to_string());
 
     Ok(LoadedSectionedMailView {
         response: SectionedMailViewResponse {

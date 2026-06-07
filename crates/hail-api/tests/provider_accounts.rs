@@ -132,10 +132,11 @@ async fn file_app_state() -> (AppState, [u8; hail_core::KEY_LEN]) {
     let mut config = fixture_config(db_url, &key);
     config.provider_import.gmail.oauth_client_id = Some("gmail-client-id".to_owned());
     let state = AppState {
-        db,
+        db: db.clone(),
         config,
         server_key: Arc::new(key),
         auth_rate_limiter: Arc::new(hail_api::middleware::rate_limit::IpRateLimiter::default()),
+        mail: hail_api::test_support::fake_cached_mail(db.clone()),
         events: hail_api::events::AppEventBus::default(),
     };
     (state, key)

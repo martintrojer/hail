@@ -6,7 +6,9 @@ use hail_backend::{BackendMsgId, BlobRef, Envelope, PageRequest, Query, RawMessa
 use hail_core::{MailCacheMode, MailClassification, SPAM_KEYWORD};
 use sqlx::{Row, Sqlite, Transaction};
 
-use crate::{CachedMessage, MailView, MailViewItem, MailViewListOpts, MailViewPage};
+use crate::{
+    CachedMessage, MailView, MailViewItem, MailViewListOpts, MailViewPage,
+};
 
 const SEEN_KEYWORD: &str = "$seen";
 const TRASH_KEYWORD: &str = "$trash";
@@ -113,6 +115,67 @@ impl CachedMail {
         upsert_raw_metadata(self.db(), self.account_id, raw).await?;
         Ok(cached)
     }
+
+    /// Fetch all messages belonging to a backend-native thread id.
+    pub async fn get_thread_readthrough(&self, thread_id: &str) -> Result<crate::Thread> {
+        if self.policy.mode == MailCacheMode::Off {
+            let page = self
+                .backend
+                .list_message_ids(
+                    &Query {
+                        scope: hail_backend::QueryScope::Thread,
+                        text: Some(thread_id.to_owned()),
+                        mailbox_role: None,
+                        keywords: Vec::new(),
+                        newer_than_epoch_secs: None,
+                        older_than_epoch_secs: None,
+                    },
+                    &PageRequest::first(u32::MAX),
+                )
+                .await?;
+            let mut messages = Vec::with_capacity(page.items.len());
+            for id in page.items {
+                messages.push(cached_message_from_raw(
+                    self.backend.get_message(&id).await?,
+                ));
+            }
+            return Ok(crate::Thread {
+                thread_id: thread_id.to_owned(),
+                messages,
+            });
+        }
+
+        let mut messages =
+            select_cached_thread_messages(self.db(), self.account_id, thread_id).await?;
+        if messages.is_empty() {
+            let page = self
+                .backend
+                .list_message_ids(
+                    &Query {
+                        scope: hail_backend::QueryScope::Thread,
+                        text: Some(thread_id.to_owned()),
+                        mailbox_role: None,
+                        keywords: Vec::new(),
+                        newer_than_epoch_secs: None,
+                        older_than_epoch_secs: None,
+                    },
+                    &PageRequest::first(u32::MAX),
+                )
+                .await?;
+            for id in page.items {
+                let raw = self.backend.get_message(&id).await?;
+                let cached = cached_message_from_raw(raw.clone());
+                upsert_raw_metadata(self.db(), self.account_id, raw).await?;
+                messages.push(cached);
+            }
+        }
+
+        Ok(crate::Thread {
+            thread_id: thread_id.to_owned(),
+            messages,
+        })
+    }
+
 
     async fn populate_metadata_page(&self, limit: usize) -> Result<()> {
         let page = self
@@ -331,6 +394,26 @@ async fn select_view_items(
         }
     }
     Ok(items)
+}
+
+async fn select_cached_thread_messages(
+    db: &sqlx::SqlitePool,
+    account_id: i64,
+    thread_id: &str,
+) -> Result<Vec<CachedMessage>> {
+    let rows = sqlx::query(
+        "SELECT id, backend_msg_id, thread_id, internal_date, from_addr, subject, preview, size_bytes \
+         FROM messages WHERE account_id = ?1 AND thread_id = ?2 ORDER BY internal_date ASC",
+    )
+    .bind(account_id)
+    .bind(thread_id)
+    .fetch_all(db)
+    .await?;
+    let mut messages = Vec::with_capacity(rows.len());
+    for row in rows {
+        messages.push(message_from_row(db, row).await?);
+    }
+    Ok(messages)
 }
 
 async fn count_cached_view(

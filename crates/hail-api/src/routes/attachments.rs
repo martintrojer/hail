@@ -160,6 +160,57 @@ impl AttachmentProvider for JmapAttachmentProvider {
     }
 }
 
+pub struct CacheAttachmentProvider;
+
+impl AttachmentProvider for CacheAttachmentProvider {
+    fn list<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        limit: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AttachmentItem>, AttachmentError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let page = state
+                .mail
+                .list_view(
+                    hail_cache::MailView::Imbox,
+                    None,
+                    limit,
+                    hail_cache::MailViewListOpts::default(),
+                )
+                .await
+                .map_err(|err| AttachmentError::provider(err.to_string()))?;
+            Ok(page
+                .items
+                .into_iter()
+                .flat_map(attachment_items_from_view_item)
+                .take(limit)
+                .collect())
+        })
+    }
+
+    fn download<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        blob_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<u8>>, AttachmentError>> + Send + 'a>> {
+        Box::pin(async move {
+            state
+                .mail
+                .get_blob(&hail_backend::BlobRef::new(blob_id.to_owned()))
+                .await
+                .map(|bytes| Some(bytes.to_vec()))
+                .map_err(|err| AttachmentError::provider(err.to_string()))
+        })
+    }
+}
+
+fn attachment_items_from_view_item(_item: hail_cache::MailViewItem) -> Vec<AttachmentItem> {
+    Vec::new()
+}
+
 #[derive(Debug)]
 pub struct AttachmentError(String);
 
@@ -170,7 +221,7 @@ impl AttachmentError {
 }
 
 pub fn router() -> OpenApiRouter<AppState> {
-    router_with_provider(Arc::new(JmapAttachmentProvider))
+    router_with_provider(Arc::new(CacheAttachmentProvider))
 }
 
 pub fn router_with_provider<P>(provider: Arc<P>) -> OpenApiRouter<AppState>

@@ -50,6 +50,111 @@ pub trait ThreadAssembler: Send + Sync + 'static {
 pub struct ThreadAssembleError(pub String);
 
 /// Production assembler backed by JMAP `Email/query` + `Email/get`.
+pub struct CacheThreadAssembler;
+
+impl ThreadAssembler for CacheThreadAssembler {
+    fn assemble<'a>(
+        &'a self,
+        state: &'a AppState,
+        _token: SecretString,
+        thread_id: &'a str,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Option<AssembledThread>, ThreadAssembleError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let thread = state
+                .mail
+                .get_thread(thread_id)
+                .await
+                .map_err(|err| ThreadAssembleError(err.to_string()))?;
+            if thread.messages.is_empty() {
+                return Ok(None);
+            }
+
+            let mut messages = Vec::with_capacity(thread.messages.len());
+            for message in thread.messages {
+                let rfc822 = state
+                    .mail
+                    .get_message_body(&message.id)
+                    .await
+                    .map_err(|err| ThreadAssembleError(err.to_string()))?;
+                let (html, text) = parsed_bodies_from_rfc822(&rfc822);
+                let attachments = message
+                    .blob_refs
+                    .into_iter()
+                    .map(|blob_ref| {
+                        let blob_id = blob_ref.as_str().to_owned();
+                        Attachment {
+                            filename: blob_id.clone(),
+                            size: 0,
+                            mime_type: "application/octet-stream".to_string(),
+                            download_url: format!(
+                                "/api/attachments/{}/download",
+                                urlencoding(&blob_id)
+                            ),
+                            blob_id,
+                            inline: false,
+                        }
+                    })
+                    .collect();
+                messages.push(AssembledMessage {
+                    email_id: message.id.as_str().to_owned(),
+                    from: participants_from_strings(std::slice::from_ref(&message.from)),
+                    to: participants_from_strings(&message.to),
+                    received_at: message.received_at,
+                    subject: message.subject,
+                    html,
+                    text,
+                    preview: message.preview,
+                    inline_images: Vec::new(),
+                    attachments,
+                });
+            }
+
+            let subject = messages
+                .iter()
+                .find_map(|message| (!message.subject.is_empty()).then(|| message.subject.clone()))
+                .unwrap_or_default();
+
+            Ok(Some(AssembledThread {
+                thread_id: thread.thread_id,
+                subject,
+                messages,
+            }))
+        })
+    }
+}
+
+fn parsed_bodies_from_rfc822(rfc822: &[u8]) -> (String, String) {
+    let Some(message) = mail_parser::MessageParser::default().parse(rfc822) else {
+        return (String::new(), String::from_utf8_lossy(rfc822).into_owned());
+    };
+    let mut html = Vec::new();
+    for index in 0..message.html_body_count() {
+        if let Some(body) = message.body_html(index) {
+            html.push(body.into_owned());
+        }
+    }
+    let mut text = Vec::new();
+    for index in 0..message.text_body_count() {
+        if let Some(body) = message.body_text(index) {
+            text.push(body.into_owned());
+        }
+    }
+    (html.join("\n\n"), text.join("\n\n"))
+}
+
+fn participants_from_strings(addresses: &[String]) -> Vec<Participant> {
+    addresses
+        .iter()
+        .filter(|address| !address.trim().is_empty())
+        .map(|address| Participant {
+            name: None,
+            email: address.clone(),
+        })
+        .collect()
+}
+
 pub struct JmapThreadAssembler;
 
 impl ThreadAssembler for JmapThreadAssembler {
@@ -204,7 +309,7 @@ pub const TAG: &str = "threads";
 
 /// Build protected thread-as-document routes.
 pub fn router() -> OpenApiRouter<AppState> {
-    router_with_assembler(Arc::new(JmapThreadAssembler))
+    router_with_assembler(Arc::new(CacheThreadAssembler))
 }
 
 /// Test/helper router that injects a fake thread assembler.

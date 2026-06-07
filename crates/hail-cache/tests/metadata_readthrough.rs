@@ -467,19 +467,16 @@ async fn bodies_attachment_blob_round_trips_through_blob_store() {
 }
 
 #[tokio::test]
-async fn get_thread_and_send_remain_not_implemented() {
+async fn send_remains_not_implemented() {
     let (cache, _backend, _tempdir) = fixture(Vec::new(), MailCacheMode::Bounded).await;
 
-    let thread_err = cache
+    // get_thread is now implemented (read-through); an empty cache yields an
+    // empty thread rather than NotImplemented.
+    let thread = cache
         .get_thread("thread-1")
         .await
-        .expect_err("thread rendering task is downstream");
-    assert!(matches!(
-        thread_err,
-        CacheError::NotImplemented {
-            operation: "get_thread"
-        }
-    ));
+        .expect("get_thread is implemented and returns an empty thread on a cold cache");
+    assert!(thread.messages.is_empty());
 
     let envelope = Envelope {
         mail_from: "me@example.test".to_owned(),
