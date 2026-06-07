@@ -377,13 +377,13 @@ fn build_operations(changes: Vec<OutboundChange>) -> Result<Vec<DrainOperation>,
                 .or_insert_with(|| {
                     KeywordDeltaBuilder::new(change.account_id, change.backend_msg_id.clone())
                 })
-                .push(change.id, None, Some(Keyword::new("$seen"))),
+                .push(change.id, Some(Keyword::new("$seen")), None),
             "unread" => keyword_groups
                 .entry((change.account_id, change.backend_msg_id.clone()))
                 .or_insert_with(|| {
                     KeywordDeltaBuilder::new(change.account_id, change.backend_msg_id.clone())
                 })
-                .push(change.id, Some(Keyword::new("$seen")), None),
+                .push(change.id, None, Some(Keyword::new("$seen"))),
             "keyword_add" | "keyword_remove" => {
                 let keyword = parse_keyword(&change)?;
                 let add = (change.change_type == "keyword_add").then_some(keyword.clone());
@@ -694,9 +694,29 @@ mod tests {
         label_path_separator: '/',
     };
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum BackendCall {
+        SetKeywords {
+            id: String,
+            add: Vec<String>,
+            remove: Vec<String>,
+        },
+        MoveToRole {
+            id: String,
+            role: MailboxRole,
+        },
+        DeletePermanently {
+            id: String,
+        },
+        Send {
+            rfc822: Vec<u8>,
+            envelope: Envelope,
+        },
+    }
+
     #[derive(Debug, Default)]
     struct FakeBackend {
-        calls: Arc<Mutex<Vec<String>>>,
+        calls: Arc<Mutex<Vec<BackendCall>>>,
         fail: Option<BackendError>,
     }
 
@@ -735,12 +755,20 @@ mod tests {
             add: &[Keyword],
             remove: &[Keyword],
         ) -> hail_backend::Result<()> {
-            self.calls.lock().expect("calls").push(format!(
-                "keywords:{}:+{}:-{}",
-                id.as_str(),
-                add.len(),
-                remove.len()
-            ));
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(BackendCall::SetKeywords {
+                    id: id.as_str().to_owned(),
+                    add: add
+                        .iter()
+                        .map(|keyword| keyword.as_str().to_owned())
+                        .collect(),
+                    remove: remove
+                        .iter()
+                        .map(|keyword| keyword.as_str().to_owned())
+                        .collect(),
+                });
             self.maybe_fail()
         }
         async fn move_to_role(
@@ -751,25 +779,30 @@ mod tests {
             self.calls
                 .lock()
                 .expect("calls")
-                .push(format!("role:{}:{role:?}", id.as_str()));
+                .push(BackendCall::MoveToRole {
+                    id: id.as_str().to_owned(),
+                    role,
+                });
             self.maybe_fail()
         }
         async fn delete_permanently(&self, id: &BackendMsgId) -> hail_backend::Result<()> {
             self.calls
                 .lock()
                 .expect("calls")
-                .push(format!("delete:{}", id.as_str()));
+                .push(BackendCall::DeletePermanently {
+                    id: id.as_str().to_owned(),
+                });
             self.maybe_fail()
         }
         async fn send(
             &self,
-            _rfc822: &[u8],
+            rfc822: &[u8],
             envelope: &Envelope,
         ) -> hail_backend::Result<SubmissionId> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .push(format!("send:{}", envelope.mail_from));
+            self.calls.lock().expect("calls").push(BackendCall::Send {
+                rfc822: rfc822.to_vec(),
+                envelope: envelope.clone(),
+            });
             self.maybe_fail()?;
             Ok(SubmissionId::new("fake"))
         }
@@ -878,7 +911,34 @@ mod tests {
             r#"{"keyword":"Work"}"#,
         )
         .await;
-        enqueue(&pool, account_id, "m2", "trash", r#"{"role":"trash"}"#).await;
+        enqueue(
+            &pool,
+            account_id,
+            "m1",
+            "keyword_remove",
+            r#"{"keyword":"Snoozed"}"#,
+        )
+        .await;
+        enqueue(&pool, account_id, "m2", "unread", "{}").await;
+        enqueue(
+            &pool,
+            account_id,
+            "m3",
+            "role_move",
+            r#"{"role":"archive"}"#,
+        )
+        .await;
+        enqueue(&pool, account_id, "m4", "trash", "{}").await;
+        enqueue(&pool, account_id, "m5", "untrash", "{}").await;
+        enqueue(&pool, account_id, "m6", "permanent_delete", "{}").await;
+        enqueue(
+            &pool,
+            account_id,
+            "draft-1",
+            "send",
+            r#"{"rfc822_base64":"UmF3IG1lc3NhZ2U=","envelope":{"mail_from":"outbox@example.com","rcpt_to":["to@example.com"]}}"#,
+        )
+        .await;
 
         let backend = FakeBackend::default();
         let mut backends: BTreeMap<i64, &(dyn MailBackend + Send + Sync)> = BTreeMap::new();
@@ -888,11 +948,44 @@ mod tests {
             run_outbox_drain_once(&pool, &backends, Utc::now(), &CancellationToken::new())
                 .await
                 .expect("drain");
-        assert_eq!(summary.applied, 3);
+        assert_eq!(summary.applied, 9);
         assert_eq!(summary.failed, 0);
         assert_eq!(
             backend.calls.lock().expect("calls").clone(),
-            vec!["keywords:m1:+1:-1", "role:m2:Trash"]
+            vec![
+                BackendCall::SetKeywords {
+                    id: "m1".to_owned(),
+                    add: vec!["$seen".to_owned(), "Work".to_owned()],
+                    remove: vec!["Snoozed".to_owned()],
+                },
+                BackendCall::SetKeywords {
+                    id: "m2".to_owned(),
+                    add: Vec::new(),
+                    remove: vec!["$seen".to_owned()],
+                },
+                BackendCall::MoveToRole {
+                    id: "m3".to_owned(),
+                    role: MailboxRole::Archive,
+                },
+                BackendCall::MoveToRole {
+                    id: "m4".to_owned(),
+                    role: MailboxRole::Trash,
+                },
+                BackendCall::MoveToRole {
+                    id: "m5".to_owned(),
+                    role: MailboxRole::Inbox,
+                },
+                BackendCall::DeletePermanently {
+                    id: "m6".to_owned(),
+                },
+                BackendCall::Send {
+                    rfc822: b"Raw message".to_vec(),
+                    envelope: Envelope {
+                        mail_from: "outbox@example.com".to_owned(),
+                        rcpt_to: vec!["to@example.com".to_owned()],
+                    },
+                },
+            ]
         );
         let pending: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM outbound_changes WHERE applied_at IS NULL")
