@@ -1002,6 +1002,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hail-cache"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures-util",
+ "hail-backend",
+ "hail-blob-store",
+ "hail-core",
+ "hail-db",
+ "serde",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "hail-core"
 version = "0.1.0"
 dependencies = [

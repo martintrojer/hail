@@ -1,0 +1,25 @@
+[package]
+name = "hail-cache"
+description = "Read-through/write-through mail cache facade for hail."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytes = { version = "1", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+hail-backend = { path = "../hail-backend" }
+hail-blob-store = { path = "../hail-blob-store" }
+hail-core = { path = "../hail-core" }
+hail-db = { path = "../hail-db" }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+thiserror = "2"
+
+[dev-dependencies]
+async-trait = "0.1"
+futures-util = "0.3"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
