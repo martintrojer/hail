@@ -398,3 +398,179 @@ async fn writethrough_cache_off_enqueues_without_message_rows() {
         )]
     );
 }
+
+#[tokio::test]
+async fn sync_message_created_upserts_metadata_without_body_blob() {
+    let message = raw_message(
+        "msg-created",
+        "thread-created",
+        vec![MailClassification::Imbox.keyword(), "$seen"],
+    );
+    let (cache, backend, _tempdir) = fixture(vec![message.clone()], MailCacheMode::Bounded).await;
+
+    cache
+        .apply_change(Change::MessageCreated {
+            id: BackendMsgId::new("msg-created"),
+            raw_ref: Some(message),
+        })
+        .await
+        .expect("apply created");
+
+    assert_eq!(backend.mutation_calls(), 0);
+    let row: (String, Option<String>) = sqlx::query_as(
+        "SELECT subject, body_blob_id FROM messages WHERE backend_msg_id = 'msg-created'",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("message row");
+    assert_eq!(row.0, "msg-created");
+    assert_eq!(row.1, None);
+    assert_eq!(
+        message_keywords(&cache, "msg-created").await,
+        vec!["$hail_imbox", "$seen"]
+    );
+}
+
+#[tokio::test]
+async fn sync_message_updated_mutates_keywords() {
+    let message = raw_message(
+        "msg-update",
+        "thread-update",
+        vec![MailClassification::Imbox.keyword(), "$seen", "$old"],
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+    cache_message(&cache, "msg-update").await;
+
+    cache
+        .apply_change(Change::MessageUpdated {
+            id: BackendMsgId::new("msg-update"),
+            keywords_added: vec![Keyword::new("$new")],
+            keywords_removed: vec![Keyword::new("$seen"), Keyword::new("$old")],
+        })
+        .await
+        .expect("apply update");
+
+    assert_eq!(
+        message_keywords(&cache, "msg-update").await,
+        vec!["$hail_imbox", "$new"]
+    );
+}
+
+#[tokio::test]
+async fn sync_message_deleted_removes_cached_row() {
+    let message = raw_message(
+        "msg-delete",
+        "thread-delete",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+    cache_message(&cache, "msg-delete").await;
+
+    cache
+        .apply_change(Change::MessageDeleted {
+            id: BackendMsgId::new("msg-delete"),
+        })
+        .await
+        .expect("apply delete");
+
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE backend_msg_id = 'msg-delete'")
+            .fetch_one(cache.db())
+            .await
+            .expect("count messages");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn sync_lww_keeps_newer_pending_local_change() {
+    let message = raw_message(
+        "msg-lww",
+        "thread-lww",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+    cache_message(&cache, "msg-lww").await;
+    sqlx::query(
+        r#"INSERT INTO outbound_changes (account_id, backend_msg_id, change_type, payload_json, created_at)
+           VALUES (1, 'msg-lww', 'read', '{"keyword":"$seen"}', ?1)"#,
+    )
+    .bind((chrono::Utc::now() + chrono::Duration::seconds(10)).to_rfc3339())
+    .execute(cache.db())
+    .await
+    .expect("insert newer pending row");
+
+    cache
+        .apply_change(Change::MessageUpdated {
+            id: BackendMsgId::new("msg-lww"),
+            keywords_added: vec![Keyword::new("$seen")],
+            keywords_removed: Vec::new(),
+        })
+        .await
+        .expect("apply older incoming update");
+
+    assert_eq!(
+        message_keywords(&cache, "msg-lww").await,
+        vec!["$hail_imbox"]
+    );
+}
+
+#[tokio::test]
+async fn sync_ignores_recent_self_applied_change_within_sixty_seconds() {
+    let message = raw_message(
+        "msg-loop",
+        "thread-loop",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let (cache, _backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+    cache_message(&cache, "msg-loop").await;
+    sqlx::query(
+        r#"INSERT INTO outbound_changes (account_id, backend_msg_id, change_type, payload_json, created_at, applied_at)
+           VALUES (1, 'msg-loop', 'read', '{"keyword":"$seen"}', ?1, ?1)"#,
+    )
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(cache.db())
+    .await
+    .expect("insert applied row");
+
+    cache
+        .apply_change(Change::MessageUpdated {
+            id: BackendMsgId::new("msg-loop"),
+            keywords_added: vec![Keyword::new("$seen")],
+            keywords_removed: Vec::new(),
+        })
+        .await
+        .expect("apply self echo");
+
+    assert_eq!(
+        message_keywords(&cache, "msg-loop").await,
+        vec!["$hail_imbox"]
+    );
+}
+
+#[tokio::test]
+async fn sync_trash_is_not_permanently_deleted_or_untrashed() {
+    let message = raw_message("msg-trash", "thread-trash", vec!["$trash"]);
+    let (cache, _backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+    cache_message(&cache, "msg-trash").await;
+
+    cache
+        .apply_changes([
+            Change::MailboxRoleChanged {
+                id: BackendMsgId::new("msg-trash"),
+                role: MailboxRole::Inbox,
+            },
+            Change::MessageDeleted {
+                id: BackendMsgId::new("msg-trash"),
+            },
+        ])
+        .await
+        .expect("apply trash-conflicting changes");
+
+    assert_eq!(message_keywords(&cache, "msg-trash").await, vec!["$trash"]);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE backend_msg_id = 'msg-trash'")
+            .fetch_one(cache.db())
+            .await
+            .expect("count messages");
+    assert_eq!(count, 1);
+}
