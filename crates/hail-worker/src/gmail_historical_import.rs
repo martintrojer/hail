@@ -1001,7 +1001,7 @@ async fn load_cursor(
     provider_account_id: i64,
 ) -> Result<Option<GmailHistoricalBackfillCursor>, GmailHistoricalImportError> {
     let value: Option<String> =
-        sqlx::query_scalar("SELECT backfill_cursor_json FROM provider_accounts WHERE id = ?1")
+        sqlx::query_scalar("SELECT backfill_cursor_json FROM mail_accounts WHERE id = ?1")
             .bind(provider_account_id)
             .fetch_one(db)
             .await?;
@@ -1019,7 +1019,7 @@ async fn save_cursor(
     let now = chrono::Utc::now().to_rfc3339();
     let cursor_json = serde_json::to_string(cursor)?;
     sqlx::query(
-        "UPDATE provider_accounts SET backfill_cursor_json = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE mail_accounts SET backfill_cursor_json = ?1, updated_at = ?2 WHERE id = ?3",
     )
     .bind(cursor_json)
     .bind(now)
@@ -1035,7 +1035,7 @@ async fn mark_sync_attempt_started(
 ) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE provider_accounts SET sync_status = 'initial_sync', last_sync_attempted_at = ?1, last_error_class = NULL, last_error_message = NULL, updated_at = ?1 WHERE id = ?2",
+        "UPDATE mail_accounts SET sync_status = 'initial_sync', last_sync_attempted_at = ?1, last_error_class = NULL, last_error_message = NULL, updated_at = ?1 WHERE id = ?2",
     )
     .bind(now)
     .bind(provider_account_id)
@@ -1056,7 +1056,7 @@ async fn mark_sync_succeeded(
         "initial_sync"
     };
     sqlx::query(
-        "UPDATE provider_accounts SET sync_status = ?1, initial_sync_completed_at = CASE WHEN ?2 THEN COALESCE(initial_sync_completed_at, ?3) ELSE initial_sync_completed_at END, last_sync_succeeded_at = ?3, last_error_class = NULL, last_error_message = NULL, updated_at = ?3 WHERE id = ?4",
+        "UPDATE mail_accounts SET sync_status = ?1, initial_sync_completed_at = CASE WHEN ?2 THEN COALESCE(initial_sync_completed_at, ?3) ELSE initial_sync_completed_at END, last_sync_succeeded_at = ?3, last_error_class = NULL, last_error_message = NULL, updated_at = ?3 WHERE id = ?4",
     )
     .bind(status)
     .bind(summary.completed)
@@ -1080,7 +1080,7 @@ async fn mark_sync_error(
         "error"
     };
     sqlx::query(
-        "UPDATE provider_accounts SET sync_status = ?1, last_error_class = ?2, last_error_message = ?3, updated_at = ?4 WHERE id = ?5",
+        "UPDATE mail_accounts SET sync_status = ?1, last_error_class = ?2, last_error_message = ?3, updated_at = ?4 WHERE id = ?5",
     )
     .bind(status)
     .bind(class)
