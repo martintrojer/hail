@@ -20,8 +20,9 @@
 #   See deploy/.env.example for required variables.
 #
 # Volume layout:
-#   stalwart-data -> /opt/stalwart   (Stalwart config/state/data)
-#   hail-data     -> /var/lib/hail   (hail SQLite sidecar: hail.db)
+#   stalwart-data -> /opt/stalwart          (Stalwart config/state/data)
+#   hail-data     -> /var/lib/hail         (hail SQLite sidecar: hail.db)
+#   hail-blobs    -> /var/lib/hail/blobs   (hail content-addressed blob store)
 #
 # Optional hail.db backups: add docker-compose.litestream.yml; see docs/backup.md.
 #
@@ -88,10 +89,12 @@ services:
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=${HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES:-}
+      - HAIL_MAIL__CACHE__BLOB_ROOT=${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}
     ports:
       - "8080:8080"   # SPA + REST + WS (reverse-proxy / CF tunnel terminates TLS upstream)
     volumes:
       - hail-data:/var/lib/hail
+      - hail-blobs:/var/lib/hail/blobs
       - ./hail.example.toml:/etc/hail/hail.toml:ro
     restart: unless-stopped
 
@@ -116,10 +119,13 @@ services:
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=${HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES:-}
+      - HAIL_MAIL__CACHE__BLOB_ROOT=${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}
     volumes:
       - hail-data:/var/lib/hail   # shared with hail-api (SQLite file)
+      - hail-blobs:/var/lib/hail/blobs   # shared with hail-api (blob store)
     restart: unless-stopped
 
 volumes:
   stalwart-data: {}
   hail-data: {}
+  hail-blobs: {}

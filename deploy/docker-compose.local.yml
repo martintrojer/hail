@@ -11,7 +11,8 @@
 # Production/direct SMTP still needs the canonical low-port mapping in
 # deploy/docker-compose.yml or a reverse/proxy/mail-routing setup.
 #
-# Optional hail.db backups: add docker-compose.litestream.yml; see docs/backup.md.
+# Optional hail.db + blob backups: add docker-compose.litestream.yml and back
+# up hail-blobs alongside hail-data; see docs/backup.md.
 
 services:
   stalwart:
@@ -73,10 +74,12 @@ services:
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=${HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES:-}
+      - HAIL_MAIL__CACHE__BLOB_ROOT=${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}
     ports:
       - "8080:8080"
     volumes:
       - hail-data:/var/lib/hail
+      - hail-blobs:/var/lib/hail/blobs
       - ./hail.example.toml:/etc/hail/hail.toml:ro
     restart: unless-stopped
 
@@ -101,10 +104,13 @@ services:
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_ID:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET=${HAIL_PROVIDER_IMPORT__GMAIL__OAUTH_CLIENT_SECRET:-}
       - HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES=${HAIL_PROVIDER_IMPORT__GMAIL__INITIAL_IMPORT_MAX_MESSAGES:-}
+      - HAIL_MAIL__CACHE__BLOB_ROOT=${HAIL_BLOB_ROOT:-/var/lib/hail/blobs}
     volumes:
       - hail-data:/var/lib/hail
+      - hail-blobs:/var/lib/hail/blobs
     restart: unless-stopped
 
 volumes:
   stalwart-data: {}
   hail-data: {}
+  hail-blobs: {}

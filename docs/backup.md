@@ -1,13 +1,18 @@
 # Back up and restore hail
 
-Back up two things:
+Back up three things:
 
 1. `hail.db` in `/var/lib/hail`, the SQLite sidecar used by hail-api and
    hail-worker.
-2. The Stalwart data volume, especially the filesystem blob store with raw
-   messages and attachments.
+2. The `hail-blobs` volume mounted at `/var/lib/hail/blobs`, hail's
+   content-addressed zstd-compressed RFC822 body and attachment store.
+3. The Stalwart data volume for Stalwart config/state and server-owned mail
+   data.
 
-Litestream protects `hail.db`. A scheduled tarball protects `stalwart-data`.
+Litestream protects `hail.db`. Back up the blob volume alongside `hail.db` so
+SQLite blob references and on-disk blobs remain consistent at restore time. A
+scheduled archive or deduplicating backup protects `hail-blobs` and
+`stalwart-data`.
 
 ## SQLite and Litestream
 
@@ -147,6 +152,48 @@ dbs:
         path: /backup/hail.db
 ```
 
+## Blob volume backup
+
+The shipped Compose stacks define `hail-blobs` and mount it into both
+`hail-api` and `hail-worker` at `/var/lib/hail/blobs`. The config value
+`mail.cache.blob_root` / `HAIL_BLOB_ROOT` should continue to point at that
+mount path.
+
+The blob store is content-addressed by BLAKE3 over uncompressed bytes and files
+are zstd-compressed at rest. That makes it friendly to `rsync`, `restic`, Borg,
+and block-deduplicating storage: unchanged blob files do not need to be copied
+again, and duplicate attachments naturally share one file.
+
+For consistent restores, take a blob backup from the same point in time as the
+`hail.db` backup, or at least ensure the blob backup is not older than the
+SQLite snapshot you intend to restore. If `hail.db` references a blob file that
+is missing from `hail-blobs`, cached message bodies or attachments will be
+unreadable until they can be refetched from the backend, and full/offline cache
+semantics are lost.
+
+Simple scheduled tarball backup:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p /srv/backups/hail
+podman run --rm \
+  -v hail-blobs:/data:ro \
+  -v /srv/backups/hail:/backup \
+  docker.io/library/alpine:3.20 \
+  tar -C /data -czf /backup/hail-blobs-${stamp}.tar.gz .
+```
+
+For Docker, replace `podman run` with `docker run`. For large stores, prefer a
+file-aware deduplicating tool instead of repeated full tarballs, for example:
+
+```bash
+restic backup --tag hail-blobs /var/lib/containers/storage/volumes/hail-blobs/_data
+```
+
+Adjust the host volume path for your container engine and storage driver.
+
 ## Stalwart volume backup
 
 Archive the `stalwart-data` volume on a schedule:
@@ -191,7 +238,17 @@ For Docker, replace `podman run` with `docker run`.
      docker.io/library/alpine:3.20 sh -c 'cp /restore/hail.db /data/hail.db'
    ```
 
-3. Extract the Stalwart tarball into a fresh volume:
+3. Extract the hail blob tarball into a fresh volume:
+
+   ```bash
+   podman volume rm hail-blobs
+   podman volume create hail-blobs
+   podman run --rm -v hail-blobs:/data -v /srv/backups/hail:/backup:ro \
+     docker.io/library/alpine:3.20 \
+     tar -C /data -xzf /backup/hail-blobs-YYYYMMDDTHHMMSSZ.tar.gz
+   ```
+
+4. Extract the Stalwart tarball into a fresh volume:
 
    ```bash
    podman volume rm stalwart-data
@@ -201,14 +258,15 @@ For Docker, replace `podman run` with `docker run`.
      tar -C /data -xzf /backup/stalwart-data-YYYYMMDDTHHMMSSZ.tar.gz
    ```
 
-4. Start containers and check readiness:
+5. Start containers and check readiness:
 
    ```bash
    podman compose -f deploy/docker-compose.yml up -d
    curl -i http://127.0.0.1:8080/readyz
    ```
 
-5. Sign in and confirm recent mail and Screener state are present.
+6. Sign in and confirm recent mail, cached bodies/attachments, and Screener
+   state are present.
 
 ## Restore drill frequency
 
