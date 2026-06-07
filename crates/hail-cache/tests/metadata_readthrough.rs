@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -10,7 +11,7 @@ use hail_backend::{
 };
 use hail_blob_store::{BlobStore, FilesystemBlobStore};
 use hail_cache::{CacheError, CachePolicy, CachedMail, MailView, MailViewListOpts};
-use hail_core::{MailBackfill, MailCacheMode, MailClassification};
+use hail_core::{BlobId, MailBackfill, MailCacheMode, MailClassification};
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 
@@ -226,6 +227,40 @@ fn raw_message(id: &str, subject: &str, keywords: Vec<&str>) -> RawMessage {
     }
 }
 
+async fn assert_blob_file_round_trips(
+    root: &Path,
+    store: &dyn BlobStore,
+    stored_blob_id: &str,
+    expected: &Bytes,
+) {
+    let blob_id = BlobId::parse(stored_blob_id).expect("stored blob id should be parseable");
+    let path = root
+        .join(&blob_id.hex()[0..2])
+        .join(&blob_id.hex()[2..4])
+        .join(blob_id.file_name());
+    assert!(
+        path.is_file(),
+        "expected blob file {} to exist on disk",
+        path.display()
+    );
+
+    let round_tripped = store.get(&blob_id).await.expect("read blob file through store");
+    assert_eq!(round_tripped, expected.as_ref());
+}
+
+async fn assert_blob_root_empty(root: &Path) {
+    let entries = std::fs::read_dir(root)
+        .expect("read temp blob root")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect temp blob root entries");
+    assert!(
+        entries.is_empty(),
+        "expected no blob files under {}, found {} entries",
+        root.display(),
+        entries.len()
+    );
+}
+
 #[tokio::test]
 async fn constructs_cached_mail_with_sqlite_blob_store_and_backend() {
     let (cache, _backend, _tempdir) = fixture(Vec::new(), MailCacheMode::Bounded).await;
@@ -361,7 +396,7 @@ async fn cache_off_proxies_backend_and_writes_no_rows() {
 async fn bodies_body_miss_fetches_stores_and_second_read_hits_blob_store_without_backend() {
     let message = raw_message("body-1", "Body", vec![MailClassification::Imbox.keyword()]);
     let expected = message.rfc822.clone();
-    let (cache, backend, _tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
+    let (cache, backend, tempdir) = fixture(vec![message], MailCacheMode::Bounded).await;
 
     let first = cache
         .get_message_body(&BackendMsgId::new("body-1"))
@@ -376,7 +411,11 @@ async fn bodies_body_miss_fetches_stores_and_second_read_hits_blob_store_without
     .fetch_one(cache.db())
     .await
     .expect("read body cache row");
-    assert!(row.0.as_deref().is_some_and(|id| id.ends_with(".eml")));
+    let body_blob_id = row
+        .0
+        .expect("body_blob_id should be set after body read-through");
+    assert!(body_blob_id.ends_with(".eml"));
+    assert_blob_file_round_trips(tempdir.path(), cache.blobs(), &body_blob_id, &expected).await;
     assert!(
         row.1
             .as_deref()
@@ -389,6 +428,33 @@ async fn bodies_body_miss_fetches_stores_and_second_read_hits_blob_store_without
         .expect("second body read hits blob store");
     assert_eq!(second, expected);
     assert_eq!(backend.stats().get_calls, 1);
+}
+
+#[tokio::test]
+async fn bodies_full_mode_body_miss_writes_blob_file() {
+    let message = raw_message(
+        "full-body-1",
+        "Full Body",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let expected = message.rfc822.clone();
+    let (cache, backend, tempdir) = fixture(vec![message], MailCacheMode::Full).await;
+
+    let got = cache
+        .get_message_body(&BackendMsgId::new("full-body-1"))
+        .await
+        .expect("full mode body read fetches backend");
+    assert_eq!(got, expected);
+    assert_eq!(backend.stats().get_calls, 1);
+
+    let body_blob_id: String = sqlx::query_scalar(
+        "SELECT body_blob_id FROM messages WHERE backend_msg_id = 'full-body-1'",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("read full mode body blob id");
+    assert!(body_blob_id.ends_with(".eml"));
+    assert_blob_file_round_trips(tempdir.path(), cache.blobs(), &body_blob_id, &expected).await;
 }
 
 #[tokio::test]
@@ -413,13 +479,7 @@ async fn bodies_cache_off_fetches_without_storing_rows_or_blobs() {
         .await
         .expect("count messages");
     assert_eq!(message_rows, 0);
-    assert_eq!(
-        std::fs::read_dir(tempdir.path())
-            .expect("read temp blob root")
-            .count(),
-        0,
-        "off mode should not create blob files"
-    );
+    assert_blob_root_empty(tempdir.path()).await;
 }
 
 #[tokio::test]
@@ -433,7 +493,7 @@ async fn bodies_attachment_blob_round_trips_through_blob_store() {
     let expected = Bytes::from_static(b"attachment bytes");
     let mut backend_blobs = HashMap::new();
     backend_blobs.insert(backend_blob_ref.clone(), expected.clone());
-    let (cache, backend, _tempdir) =
+    let (cache, backend, tempdir) =
         fixture_with_blobs(vec![message], backend_blobs, MailCacheMode::Bounded).await;
 
     cache
@@ -457,6 +517,7 @@ async fn bodies_attachment_blob_round_trips_through_blob_store() {
     .await
     .expect("read stored attachment blob id");
     assert!(stored_blob_id.ends_with(".att"));
+    assert_blob_file_round_trips(tempdir.path(), cache.blobs(), &stored_blob_id, &expected).await;
 
     let second = cache
         .get_blob(&BlobRef::new(stored_blob_id))
@@ -464,6 +525,44 @@ async fn bodies_attachment_blob_round_trips_through_blob_store() {
         .expect("second attachment read hits blob store");
     assert_eq!(second, expected);
     assert_eq!(backend.stats().fetch_blob_calls, 1);
+}
+
+#[tokio::test]
+async fn bodies_full_mode_attachment_blob_writes_blob_file() {
+    let message = raw_message(
+        "full-att-1",
+        "Full Attachment",
+        vec![MailClassification::Imbox.keyword()],
+    );
+    let backend_blob_ref = BlobRef::new("blob-full-att-1");
+    let expected = Bytes::from_static(b"full mode attachment bytes");
+    let mut backend_blobs = HashMap::new();
+    backend_blobs.insert(backend_blob_ref.clone(), expected.clone());
+    let (cache, backend, tempdir) =
+        fixture_with_blobs(vec![message], backend_blobs, MailCacheMode::Full).await;
+
+    cache
+        .get_message(&BackendMsgId::new("full-att-1"))
+        .await
+        .expect("populate full mode metadata with backend blob ref");
+
+    let got = cache
+        .get_blob(&backend_blob_ref)
+        .await
+        .expect("full mode attachment read fetches backend blob");
+    assert_eq!(got, expected);
+    assert_eq!(backend.stats().fetch_blob_calls, 1);
+
+    let stored_blob_id: String = sqlx::query_scalar(
+        "SELECT attachments.blob_id FROM attachments \
+         JOIN messages ON messages.id = attachments.message_id \
+         WHERE messages.backend_msg_id = 'full-att-1'",
+    )
+    .fetch_one(cache.db())
+    .await
+    .expect("read full mode stored attachment blob id");
+    assert!(stored_blob_id.ends_with(".att"));
+    assert_blob_file_round_trips(tempdir.path(), cache.blobs(), &stored_blob_id, &expected).await;
 }
 
 #[tokio::test]
