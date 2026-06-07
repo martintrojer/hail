@@ -44,6 +44,10 @@ const ENV_NESTED_SEP: &str = "__";
 pub struct Config {
     /// sqlx URL for the SQLite sidecar. e.g. `sqlite:///var/lib/hail/hail.db`.
     pub database_url: String,
+    /// Mail backend flavour and cache policy. Defaults preserve the existing
+    /// self-host/JMAP deployment shape when `[mail]` is omitted.
+    #[serde(default)]
+    pub mail: MailConfig,
     /// Stalwart JMAP / management endpoints.
     pub stalwart: StalwartConfig,
     /// HTTP server bind + public URL (for cookie scope / CORS).
@@ -169,6 +173,238 @@ pub struct SecretsConfig {
     pub server_key: SecretString,
 }
 
+/// Mail backend flavour and cache policy.
+#[derive(Debug, Clone)]
+pub struct MailConfig {
+    pub backend: MailBackend,
+    pub gmail: MailGmailConfig,
+    pub jmap: MailJmapConfig,
+    pub cache: MailCacheConfig,
+}
+
+impl Default for MailConfig {
+    fn default() -> Self {
+        Self::default_for_backend(MailBackend::Jmap)
+    }
+}
+
+impl<'de> Deserialize<'de> for MailConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMailConfig {
+            #[serde(default)]
+            backend: Option<MailBackend>,
+            #[serde(default)]
+            gmail: Option<MailGmailConfig>,
+            #[serde(default)]
+            jmap: Option<MailJmapConfig>,
+            #[serde(default)]
+            cache: Option<RawMailCacheConfig>,
+        }
+
+        let raw = RawMailConfig::deserialize(deserializer)?;
+        let backend = raw.backend.unwrap_or_default();
+        Ok(Self {
+            backend,
+            gmail: raw.gmail.unwrap_or_default(),
+            jmap: raw.jmap.unwrap_or_default(),
+            cache: raw
+                .cache
+                .map(|cache| cache.into_config(backend))
+                .unwrap_or_else(|| MailCacheConfig::default_for_backend(backend)),
+        })
+    }
+}
+
+impl MailConfig {
+    fn default_for_backend(backend: MailBackend) -> Self {
+        Self {
+            backend,
+            gmail: MailGmailConfig::default(),
+            jmap: MailJmapConfig::default(),
+            cache: MailCacheConfig::default_for_backend(backend),
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.cache.backfill == MailBackfill::Incremental && self.cache.mode == MailCacheMode::Off
+        {
+            return Err(ConfigError::InvalidMail(
+                "mail.cache.backfill=incremental requires mail.cache.mode to be bounded or full"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailBackend {
+    Gmail,
+    Jmap,
+}
+
+impl Default for MailBackend {
+    fn default() -> Self {
+        Self::Jmap
+    }
+}
+
+#[derive(Clone, Deserialize, Default)]
+pub struct MailGmailConfig {
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    #[serde(default)]
+    pub oauth_client_secret: Option<SecretString>,
+    #[serde(default)]
+    pub oauth_auth_url: Option<String>,
+    #[serde(default)]
+    pub oauth_token_url: Option<String>,
+    #[serde(default)]
+    pub oauth_revoke_url: Option<String>,
+}
+
+impl std::fmt::Debug for MailGmailConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MailGmailConfig")
+            .field("oauth_client_id", &self.oauth_client_id)
+            .field(
+                "oauth_client_secret",
+                &self.oauth_client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("oauth_auth_url", &self.oauth_auth_url)
+            .field("oauth_token_url", &self.oauth_token_url)
+            .field("oauth_revoke_url", &self.oauth_revoke_url)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MailJmapConfig {
+    pub jmap_url: String,
+    #[serde(default)]
+    pub management_url: Option<String>,
+}
+
+impl Default for MailJmapConfig {
+    fn default() -> Self {
+        Self {
+            jmap_url: "http://stalwart:8080".to_string(),
+            management_url: Some("http://stalwart:8080".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MailCacheConfig {
+    pub mode: MailCacheMode,
+    pub keep_days: u32,
+    pub keep_max_msgs: u64,
+    pub keep_max_bytes: u64,
+    pub backfill: MailBackfill,
+    pub blob_root: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct RawMailCacheConfig {
+    #[serde(default)]
+    mode: Option<MailCacheMode>,
+    #[serde(default)]
+    keep_days: Option<u32>,
+    #[serde(default)]
+    keep_max_msgs: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_human_size")]
+    keep_max_bytes: Option<u64>,
+    #[serde(default)]
+    backfill: Option<MailBackfill>,
+    #[serde(default)]
+    blob_root: Option<PathBuf>,
+}
+
+impl RawMailCacheConfig {
+    fn into_config(self, backend: MailBackend) -> MailCacheConfig {
+        let defaults = MailCacheConfig::default_for_backend(backend);
+        MailCacheConfig {
+            mode: self.mode.unwrap_or(defaults.mode),
+            keep_days: self.keep_days.unwrap_or(defaults.keep_days),
+            keep_max_msgs: self.keep_max_msgs.unwrap_or(defaults.keep_max_msgs),
+            keep_max_bytes: self.keep_max_bytes.unwrap_or(defaults.keep_max_bytes),
+            backfill: self.backfill.unwrap_or(defaults.backfill),
+            blob_root: self.blob_root.unwrap_or(defaults.blob_root),
+        }
+    }
+}
+
+impl MailCacheConfig {
+    fn default_for_backend(backend: MailBackend) -> Self {
+        Self {
+            mode: MailCacheMode::Bounded,
+            keep_days: default_cache_keep_days(),
+            keep_max_msgs: default_cache_keep_max_msgs(),
+            keep_max_bytes: default_cache_keep_max_bytes(),
+            backfill: match backend {
+                MailBackend::Gmail => MailBackfill::Incremental,
+                MailBackend::Jmap => MailBackfill::Off,
+            },
+            blob_root: default_blob_root(),
+        }
+    }
+}
+
+impl Default for MailCacheConfig {
+    fn default() -> Self {
+        Self::default_for_backend(MailBackend::Jmap)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailCacheMode {
+    Off,
+    Bounded,
+    Full,
+}
+
+impl Default for MailCacheMode {
+    fn default() -> Self {
+        Self::Bounded
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailBackfill {
+    Off,
+    Incremental,
+}
+
+impl Default for MailBackfill {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+fn default_cache_keep_days() -> u32 {
+    90
+}
+
+fn default_cache_keep_max_msgs() -> u64 {
+    50_000
+}
+
+fn default_cache_keep_max_bytes() -> u64 {
+    5 * 1024 * 1024 * 1024
+}
+
+fn default_blob_root() -> PathBuf {
+    PathBuf::from("/var/lib/hail/blobs")
+}
+
 /// Errors surfaced by [`Config::load`].
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -184,6 +420,9 @@ pub enum ConfigError {
     /// `secrets.server_key` was empty or invalid.
     #[error("invalid server_key: {0}")]
     InvalidServerKey(String),
+    /// Cross-field mail/cache validation failed.
+    #[error("invalid mail config: {0}")]
+    InvalidMail(String),
 }
 
 impl Config {
@@ -214,6 +453,7 @@ impl Config {
         })?;
 
         validate_server_key(&cfg.secrets.server_key)?;
+        cfg.mail.validate()?;
         Ok(cfg)
     }
 }
@@ -316,6 +556,116 @@ where
     }
 
     deserializer.deserialize_any(OptionalUsizeVisitor)
+}
+
+fn deserialize_optional_human_size<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptionalHumanSizeVisitor;
+
+    impl<'de> de::Visitor<'de> for OptionalHumanSizeVisitor {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a byte count, a humanized size string, null, or an empty string")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            u64::try_from(value).map(Some).map_err(E::custom)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                parse_human_size(trimmed).map(Some).map_err(E::custom)
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    deserializer.deserialize_any(OptionalHumanSizeVisitor)
+}
+
+fn parse_human_size(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("size must not be empty".to_string());
+    }
+
+    let mut number_end = 0;
+    for (idx, ch) in value.char_indices() {
+        if ch.is_ascii_digit() || ch == '_' {
+            number_end = idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if number_end == 0 {
+        return Err(format!("invalid size {value:?}: missing number"));
+    }
+
+    let number = value[..number_end].replace('_', "");
+    let amount = number.parse::<u64>().map_err(|err| err.to_string())?;
+    let unit = value[number_end..].trim().to_ascii_lowercase();
+    let multiplier = match unit.as_str() {
+        "" | "b" | "byte" | "bytes" => 1,
+        "kb" | "kib" => 1024,
+        "mb" | "mib" => 1024_u64.pow(2),
+        "gb" | "gib" => 1024_u64.pow(3),
+        "tb" | "tib" => 1024_u64.pow(4),
+        other => {
+            return Err(format!(
+                "invalid size unit {other:?}; expected B, KiB, MiB, GiB, or TiB"
+            ));
+        }
+    };
+
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("size {value:?} overflows u64 bytes"))
 }
 
 /// Validate the server key by using the same parser that runtime crypto uses.

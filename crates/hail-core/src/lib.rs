@@ -14,8 +14,9 @@ pub mod screener;
 
 pub use blob::{BlobId, BlobIdParseError, BlobKind};
 pub use config::{
-    AdminConfig, Config, ConfigError, GmailProviderConfig, ProviderImportConfig, SecretsConfig,
-    ServerConfig, SetupConfig, StalwartConfig,
+    AdminConfig, Config, ConfigError, GmailProviderConfig, MailBackend, MailBackfill,
+    MailCacheConfig, MailCacheMode, MailConfig, MailGmailConfig, MailJmapConfig,
+    ProviderImportConfig, SecretsConfig, ServerConfig, SetupConfig, StalwartConfig,
 };
 pub use crypto::{
     CryptoError, KEY_LEN, NONCE_LEN, TAG_LEN, open, open_with_aad, parse_server_key, seal,

@@ -18,7 +18,7 @@ fn env_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
-use hail_core::{Config, ConfigError};
+use hail_core::{Config, ConfigError, MailBackend, MailBackfill, MailCacheMode};
 use secrecy::ExposeSecret;
 
 /// Clear every `HAIL_*` env var so prior tests / the host shell don't bleed
@@ -73,6 +73,28 @@ oauth_client_id = "gmail-client-id.apps.googleusercontent.com"
 oauth_client_secret = "gmail-client-secret"
 initial_import_max_messages = 37
 
+[mail]
+backend = "gmail"
+
+[mail.gmail]
+oauth_client_id = "new-gmail-client-id.apps.googleusercontent.com"
+oauth_client_secret = "new-gmail-client-secret"
+oauth_auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+oauth_token_url = "https://oauth2.googleapis.com/token"
+oauth_revoke_url = "https://oauth2.googleapis.com/revoke"
+
+[mail.jmap]
+jmap_url = "http://mail-jmap.local:8080"
+management_url = "http://mail-jmap.local:8080/manage"
+
+[mail.cache]
+mode = "full"
+keep_days = 120
+keep_max_msgs = 75000
+keep_max_bytes = "7 GiB"
+backfill = "incremental"
+blob_root = "/tmp/hail-blobs"
+
 [secrets]
 server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 "#;
@@ -126,6 +148,46 @@ fn loads_full_toml_fields() {
         cfg.provider_import.gmail.initial_import_max_messages,
         Some(37)
     );
+    assert_eq!(cfg.mail.backend, MailBackend::Gmail);
+    assert_eq!(
+        cfg.mail.gmail.oauth_client_id.as_deref(),
+        Some("new-gmail-client-id.apps.googleusercontent.com")
+    );
+    assert_eq!(
+        cfg.mail
+            .gmail
+            .oauth_client_secret
+            .as_ref()
+            .expect("mail gmail client secret")
+            .expose_secret(),
+        "new-gmail-client-secret"
+    );
+    assert_eq!(
+        cfg.mail.gmail.oauth_auth_url.as_deref(),
+        Some("https://accounts.google.com/o/oauth2/v2/auth")
+    );
+    assert_eq!(
+        cfg.mail.gmail.oauth_token_url.as_deref(),
+        Some("https://oauth2.googleapis.com/token")
+    );
+    assert_eq!(
+        cfg.mail.gmail.oauth_revoke_url.as_deref(),
+        Some("https://oauth2.googleapis.com/revoke")
+    );
+    assert_eq!(cfg.mail.jmap.jmap_url, "http://mail-jmap.local:8080");
+    assert_eq!(
+        cfg.mail.jmap.management_url.as_deref(),
+        Some("http://mail-jmap.local:8080/manage")
+    );
+    assert_eq!(cfg.mail.cache.mode, MailCacheMode::Full);
+    assert_eq!(cfg.mail.cache.keep_days, 120);
+    assert_eq!(cfg.mail.cache.keep_max_msgs, 75_000);
+    assert_eq!(cfg.mail.cache.keep_max_bytes, 7 * 1024 * 1024 * 1024);
+    assert_eq!(cfg.mail.cache.backfill, MailBackfill::Incremental);
+    assert_eq!(
+        cfg.mail.cache.blob_root.as_path(),
+        std::path::Path::new("/tmp/hail-blobs")
+    );
 
     assert_eq!(cfg.secrets.server_key.expose_secret(), VALID_KEY_HEX);
 }
@@ -139,12 +201,18 @@ fn env_overrides_toml() {
     unsafe {
         std::env::set_var("HAIL_SECRETS__SERVER_KEY", override_key);
         std::env::set_var("HAIL_STALWART__JMAP_URL", "http://override:9999");
+        std::env::set_var("HAIL_MAIL__CACHE__MODE", "bounded");
+        std::env::set_var("HAIL_MAIL__CACHE__BACKFILL", "off");
+        std::env::set_var("HAIL_MAIL__CACHE__KEEP_MAX_BYTES", "9 MiB");
     }
     let (_dir, path) = write_toml(FULL_TOML);
     let cfg = Config::load_from(Some(&path)).expect("load");
 
     assert_eq!(cfg.secrets.server_key.expose_secret(), override_key);
     assert_eq!(cfg.stalwart.jmap_url, "http://override:9999");
+    assert_eq!(cfg.mail.cache.mode, MailCacheMode::Bounded);
+    assert_eq!(cfg.mail.cache.backfill, MailBackfill::Off);
+    assert_eq!(cfg.mail.cache.keep_max_bytes, 9 * 1024 * 1024);
     // Unrelated fields still come from TOML.
     assert_eq!(cfg.server.bind, "0.0.0.0:8080");
 
@@ -262,6 +330,107 @@ server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00
     let (_dir, path) = write_toml(toml);
     let err = Config::load_from(Some(&path)).expect_err("must reject 66-char hex key");
     assert!(matches!(err, ConfigError::InvalidServerKey(_)));
+}
+
+#[test]
+fn mail_defaults_follow_backend_flavour() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let gmail_toml = r#"
+database_url = "sqlite::memory:"
+[mail]
+backend = "gmail"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(gmail_toml);
+    let cfg = Config::load_from(Some(&path)).expect("load gmail defaults");
+    assert_eq!(cfg.mail.backend, MailBackend::Gmail);
+    assert_eq!(cfg.mail.cache.mode, MailCacheMode::Bounded);
+    assert_eq!(cfg.mail.cache.backfill, MailBackfill::Incremental);
+
+    let jmap_toml = r#"
+database_url = "sqlite::memory:"
+[mail]
+backend = "jmap"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(jmap_toml);
+    let cfg = Config::load_from(Some(&path)).expect("load jmap defaults");
+    assert_eq!(cfg.mail.backend, MailBackend::Jmap);
+    assert_eq!(cfg.mail.cache.mode, MailCacheMode::Bounded);
+    assert_eq!(cfg.mail.cache.backfill, MailBackfill::Off);
+}
+
+#[test]
+fn mail_gmail_debug_redacts_oauth_secret() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let (_dir, path) = write_toml(FULL_TOML);
+    let cfg = Config::load_from(Some(&path)).expect("load");
+    let debug = format!("{:?}", cfg.mail.gmail);
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("new-gmail-client-secret"));
+}
+
+#[test]
+fn mail_cache_parses_humanized_sizes() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let toml = r#"
+database_url = "sqlite::memory:"
+[mail.cache]
+keep_max_bytes = "512 MiB"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let cfg = Config::load_from(Some(&path)).expect("load humanized size");
+    assert_eq!(cfg.mail.cache.keep_max_bytes, 512 * 1024 * 1024);
+}
+
+#[test]
+fn mail_cache_rejects_incremental_backfill_when_cache_is_off() {
+    let _guard = env_lock();
+    clear_hail_env();
+    let toml = r#"
+database_url = "sqlite::memory:"
+[mail.cache]
+mode = "off"
+backfill = "incremental"
+[stalwart]
+jmap_url = "http://x"
+[server]
+bind = "0.0.0.0:8080"
+public_url = "https://x"
+[secrets]
+server_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+"#;
+    let (_dir, path) = write_toml(toml);
+    let err = Config::load_from(Some(&path)).expect_err("must reject impossible cache policy");
+    match err {
+        ConfigError::InvalidMail(msg) => assert!(
+            msg.contains("backfill=incremental") && msg.contains("cache.mode"),
+            "expected clear mail/cache policy error, got: {msg}"
+        ),
+        other => panic!("expected InvalidMail, got {other:?}"),
+    }
 }
 
 #[test]
