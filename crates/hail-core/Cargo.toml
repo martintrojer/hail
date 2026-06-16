@@ -18,7 +18,7 @@ utoipa = "5"
 # Inbound mail render pipeline: parse unsafe fragments, strip tracking
 # images, then sanitize before thread panes render inside the SPA origin.
 ammonia = "4"
-html5ever = "0.35"
+html5ever = "0.39"
 markup5ever_rcdom = "0.35"
 regex = "1"
 
