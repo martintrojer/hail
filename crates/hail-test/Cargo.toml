@@ -9,7 +9,7 @@ authors.workspace = true
 
 [dependencies]
 axum = { version = "0.8", features = ["multipart", "ws"] }
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hail-api = { path = "../hail-api" }
 hail-core = { path = "../hail-core" }
