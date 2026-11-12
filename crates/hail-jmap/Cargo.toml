@@ -15,7 +15,7 @@ futures-util = "0.3"
 hail-backend = { path = "../hail-backend" }
 jmap-client = { version = "0.4", features = ["async", "websockets"] }
 hex = "0.4"
-rand = "0.9"
+rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json", "form"] }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
